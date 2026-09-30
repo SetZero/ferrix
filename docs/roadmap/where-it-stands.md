@@ -51,7 +51,8 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 **Next**, in the order the customer last gave: test and gate run time
 (the rest of cut 2, then architectures in parallel and KVM by default on
 x86-64); Steam, retiring its workarounds, with namespaces N3 to N6 under
-them; W-8's 21b, 21c and file 24; the desktop's hyprlock P1.5 and hypridle.
+them; W-8's 21b, 21c and file 24; the desktop's hyprlock P1.5 and fuzzel's
+second-press toggle.
 
 **Waiting on the customer** (`docs/BACKLOG.md`, *Waiting on the customer*):
 F-43 (W^X for programs, or a narrower claim), the Common Criteria version
@@ -188,12 +189,14 @@ second-pass effects; Mesa and `zwp_linux_dmabuf`, for clients that draw on
 the GPU themselves, are priced beside it.
 
 The desktop's own clients -- waybar, fuzzel, hyprlock and hypridle, written in
-Rust -- are half done. waybar and fuzzel are on `main` (2026-09-27):
+Rust -- are three quarters done. waybar and fuzzel are on `main` (2026-09-27):
 `cargo xtask run-compositor --everything` boots the customer's own
 `hyprland.conf`, dotfiles, fonts and monitor EDID, waybar draws their bar,
 SUPER+R runs their launcher script into fuzzel, and the clipboard is shared
-with the host's through xtask. hyprlock's lock over `authd` (P1.5) is parked
-on branch `hyprlock`, and hypridle is not started.
+with the host's through xtask. hypridle is on `main` too (2026-09-26), its
+`idle` boots passing on x86-64 and AArch64. hyprlock's library is on
+`main`; its program and its lock over `authd` (P1.5) are parked on branch
+`hyprlock`.
 
 Stage 21 is bare metal with a card of Ferrix's own, and stage 22 is Steam,
 whose 32-bit x86 ABI is under way (`docs/I386.md`): I1 to I4 are on `main`

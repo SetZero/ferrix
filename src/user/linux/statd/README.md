@@ -49,9 +49,11 @@ is the watchdog's reset back to Android.
   those to the kernel. The options can also be compiled into the loader,
   with `FERRIX_PIXEL7_CMDLINE_EXTRA="…" $P/build-run.sh <name>`. Either way
   give it a number of seconds: the kernel feeds the watchdog while it runs,
-  so a service that never ends keeps the phone in Ferrix. Nothing reaches the
-  PC while Ferrix runs, because it has no USB, so the graphs come from the
-  `ramoops` record once Android is back.
+  so a service that never ends keeps the phone in Ferrix. Since 2026-09-26
+  Ferrix's `usbdev` presents a USB serial port during a native boot, and the
+  monitor streams its lines, these among them, into the Ferrix stats tab
+  while Ferrix runs (`tools/vendor/google/pixel7/monitor`); the `ramoops`
+  record once Android is back still has them too.
 * **QEMU**: `cargo xtask test-boot --arch aarch64 --statd --kernel-option
   ferrix.init=/sbin/ferrix-statd --kernel-option ferrix.statd.seconds=3`.
 

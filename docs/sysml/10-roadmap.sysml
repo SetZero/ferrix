@@ -654,8 +654,8 @@ package FerrixRoadmap {
              * Rust, reading their own configuration files unchanged, over a
              * shared foundation of 21 points. waybar and fuzzel are on
              * main (2026-09-27) and run the customer's own configuration
-             * on run-compositor --everything; hyprlock is on a branch,
-             * hypridle not started. */
+             * on run-compositor --everything, and hypridle is on main
+             * (2026-09-26); hyprlock's program is on a branch. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {

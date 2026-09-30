@@ -116,7 +116,7 @@ it weak in assembly, and which stable Rust cannot express for a
 
 These are the utilities that replace busybox's, and since 2026-09-18 they are
 what `/bin` holds: every name uutils provides is uutils', `/bin/sh` is zinc,
-and busybox keeps the rest. `../../../../docs/UUTILS.md` is the plan, including §6a on
+and busybox keeps the rest. [docs/UUTILS.md](../../../../docs/UUTILS.md) is the plan, including §6a on
 the two projects of the family that do not build for this target.
 
 ## busybox
@@ -152,7 +152,8 @@ replaced by the real functions on 2026-09-16, and the file is gone.
 ## Ports
 
 `tools/ports/` builds other programs against this library the way
-`tools/busybox/` builds busybox: static x86-64 programs with the host's gcc,
+`tools/busybox/` builds busybox: static programs with the host's gcc, for
+x86-64 and, where a port takes `--arch`, the Arm targets too,
 from sources pinned by checksum, downloaded and built under
 `~/.local/share/ferrix/ports/ferrousli` (or `$FERRIX_PORTS`). `common.sh` holds
 what they share: the pinned download, the release library, and compiler
@@ -169,8 +170,13 @@ busybox's does.
 | `btop` | btop 1.4.7, C++23, over `libcxx` | `bin/btop` |
 | `zlib` | zlib 1.3.2, for git | `include/zlib.h`, `lib/libz.a` |
 | `git` | git 2.55.0 over `zlib` and `curl`'s libcurl, without Perl, Python, Tcl, gettext, iconv or its Rust half | `usr/bin/git` with a `bin/git` link, `usr/libexec/git-core`, `usr/share/git-core/templates` |
+| `sshdt` | sshdt 0.4.2, an SSH server in Rust, linked as the uutils are, taking its listening socket from init's socket activation | `bin/sshdt` |
+| `foot` | foot 1.24.0, a Wayland terminal nobody here wrote, with every library it links and DejaVu Sans Mono (`docs/CHROME.md` §6) | `bin/foot`, `bin/footclient`, `etc/fonts/fonts.conf`, the font |
+| `vkgears` | mesa-demos' Vulkan gears with Mesa's Venus driver linked in, since a static program cannot `dlopen` a driver with thread-local storage (`docs/GPU.md` §6.1) | `bin/vkgears` |
+| `alsa-lib` | alsa-lib 1.2.16.1 (`docs/AUDIO.md`, U1) | `include/alsa/`, `lib/libasound.a`, `usr/share/ferrousli/alsa/` |
+| `alsa-utils` | alsa-utils 1.2.16's `aplay` and `speaker-test`, over `alsa-lib` | `bin/aplay`, `bin/arecord`, `bin/speaker-test` |
 
-`cargo xtask ports` runs them in that order, on a Linux host. Every image that carries a
+`cargo xtask ports` runs them, on a Linux host. Every image that carries a
 busybox carries the ports that are installed, on x86_64, and `cargo xtask
 test-net` fetches with curl as well as with `wget` when curl is there.
 
@@ -211,6 +217,14 @@ share one interface, `__ferrousli_loader` (`ld/src/interface.rs` and
 which the library asks the loader to run once it has started. A statically
 linked program sees none of this: the reference is weak, and null there.
 
+Since then the rust-lang.org `rustc` and `cargo`, with LLVM and GCC's
+runtime beneath them, run there too, and so does Google's Chrome, headless
+and on the desktop, playing sound through libpulse (2026-09-26 and 27);
+what each needed from glibc beyond POSIX -- `rawmemchr`, `backtrace`,
+glibc's double-underscore locale names, `pthread_mutex_t` in glibc's own
+layout -- is in the library now. gcc links C against it, since the loader
+is marked a shared object.
+
 Two things changed for every program with it. `regex_t` and `regmatch_t`
 have glibc's layout, which a program built against glibc allocates; and
 `environ` is glibc's `__environ` with `environ` and `_environ` as weak
@@ -220,8 +234,8 @@ it: `ld-ferrousli: undefined symbol` names it.
 
 ## Headers
 
-`include/` holds musl 1.2.5's headers, unmodified. See
-[include/README.md](include/README.md).
+`include/` holds musl 1.2.5's headers, unmodified but for five marked edits.
+See [include/README.md](include/README.md).
 
 ## Where it stands
 
@@ -251,31 +265,31 @@ because ARMv7-A's kernel builds it an old-style frame.
 | Area | There | Not yet |
 |---|---|---|
 | Startup | `_start`, `__libc_start_main`, `environ`, the auxiliary vector, `.preinit_array` and `.init_array` | position-independent static programs |
-| Threads | a control block in glibc's layout for every thread, static TLS, the stack protector's canary; `pthread_create`, `pthread_join`, `pthread_detach`, `pthread_exit`, attributes, names, `gettid`, `pthread_sigqueue`; mutexes, including recursive, error-checking, robust and priority-inheriting ones; condition variables, read-write locks, keys and `pthread_once`; barriers, private and process-shared, and spin locks; scheduling policy, priority and affinity per thread, `sched.h`'s policy calls, `pthread_getcpuclockid`; semaphores, unnamed, process-shared and named in `/dev/shm`, with `sem_clockwait`; C11's `threads.h` over the `pthread.h` objects; a futex lock for the library's own state; cancellation, deferred and asynchronous, with `pthread_cancel`, `pthread_testcancel` and musl's cancellation points on the blocking calls, the library's own internal uses of them guarded | `pthread_atfork`, `set*id` across threads |
+| Threads | a control block in glibc's layout for every thread, static TLS, the stack protector's canary; `pthread_create`, `pthread_join`, `pthread_detach`, `pthread_exit`, attributes, names, `gettid`, `pthread_sigqueue`; mutexes, including recursive, error-checking, robust and priority-inheriting ones; condition variables, read-write locks, keys and `pthread_once`; barriers, private and process-shared, and spin locks; scheduling policy, priority and affinity per thread, `sched.h`'s policy calls, `pthread_getcpuclockid`; semaphores, unnamed, process-shared and named in `/dev/shm`, with `sem_clockwait`; C11's `threads.h` over the `pthread.h` objects; a futex lock for the library's own state; cancellation, deferred and asynchronous, with `pthread_cancel`, `pthread_testcancel` and musl's cancellation points on the blocking calls, the library's own internal uses of them guarded; `pthread_atfork`; `set*id` run on every thread, as musl's `__setxid` does | |
 | Memory | the `malloc` family, on `mmap`, with size classes and integrity checks | returning empty regions to the kernel |
 | `stdlib.h` | `exit`, `_Exit`, `atexit` without a limit, `abort`, the environment functions; `strtol` and `strtod` families, correctly rounded for `float`, `double` and x87 `long double`, with glibc's `__isoc23_` names; `qsort`, `qsort_r`, `bsearch`; `abs` and `div` families; `rand`, `random` and `rand48` families; `quick_exit` and `at_quick_exit`; `secure_getenv`, `a64l`, `l64a` and `getsubopt` | `ecvt`, `fcvt`, `gcvt`; NaN payloads and rounding modes in parsing |
 | `assert.h` | `assert`, whose `__assert_fail` writes musl's message straight to standard error and aborts | |
 | `endian.h` | all 12 host, big-endian and little-endian conversions, both as macros and callable functions | |
 | `stdatomic.h` | C atomic types, memory orders, fences, compare-exchange, exchange, load, store, fetch operations and flags over the compiler's atomic builtins | |
-| `math.h`, `fenv.h` | the floating-point environment; rounding (`rint`, `nearbyint`, `lrint`, `lround` and the rest), manipulation (`frexp`, `ldexp`, `scalbn`, `logb`, `modf`, `nextafter`, `nan`), `fmod`, `remainder`, `remquo` and `fma` for `double` and `float`; the error and gamma functions with `signgam`, and the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos` and `atan` for `double`, and the trigonometric functions for `float`; `exp2`, `expm1`, `log2`, `log10` and `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, ported from musl and giving its bits and exceptions in every rounding mode; `fpclassify`, `isinf`, `isnan`, `isnormal`, `isfinite`, `signbit`, `isunordered` and the comparison macros for `float`, `double` and x87 `long double`; `math_errhandling` is `MATH_ERREXCEPT`, as in musl | the `long double` functions, `nexttoward`, `errno` set by math functions as glibc does |
+| `math.h`, `fenv.h` | the floating-point environment; rounding (`rint`, `nearbyint`, `lrint`, `lround` and the rest), manipulation (`frexp`, `ldexp`, `scalbn`, `logb`, `modf`, `nextafter`, `nan`), `fmod`, `remainder`, `remquo` and `fma` for `double` and `float`; the error and gamma functions with `signgam`, and the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos` and `atan` for `double`, and the trigonometric functions for `float`; `exp2`, `expm1`, `log2`, `log10` and `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, ported from musl and giving its bits and exceptions in every rounding mode; `fpclassify`, `isinf`, `isnan`, `isnormal`, `isfinite`, `signbit`, `isunordered` and the comparison macros for `float`, `double` and x87 `long double`; `math_errhandling` is `MATH_ERREXCEPT`, as in musl; for `long double`, on x86-64's x87 format and AArch64's binary128, rounding, manipulation, classification, `fmod`, `remainder`, `remquo`, `sqrt`, `fdim`, `fmin`, `fmax`, `nextafterl` and the `nexttoward` family | the `long double` transcendental functions (`logl` and `powl` are computed in `double` and widened, on x86-64), `errno` set by math functions as glibc does |
 | `complex.h` | every `double complex` and `float complex` function, `cabs` to `ctanh` and `cabsf` to `ctanhf`, with `creal`, `cimag` and their `float` forms callable | the `long double complex` functions |
 | `string.h`, `strings.h` | everything, with word-at-a-time scans and two-way `strstr` and `memmem`; on AArch64, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr`, `strlen` and `strchrnul` sixteen bytes at a time in Advanced SIMD (`src/string/aarch64.rs`); `strcoll_l`, `strxfrm_l`, `strcasecmp_l` and `strncasecmp_l` | |
 | `ctype.h` | the C locale, glibc's `__ctype_b_loc` tables, and the `_l` forms | |
 | `locale.h`, `langinfo.h` | `setlocale`, `localeconv`, `newlocale`, `duplocale`, `freelocale`, `uselocale`, `nl_langinfo`; musl's C and C.UTF-8 locales, any other name behaving as UTF-8; `nl_types.h`'s message catalogues, `catopen`, `catgets` and `catclose`, reading `gencat`'s files as musl does; `strtod_l`, `strtof_l` and `strtold_l` | glibc's `locale_t` layout |
-| Multibyte and wide characters | UTF-8 conversion in `stdlib.h`, `wchar.h` and `uchar.h`, strict as musl's; `wctype.h`'s classes, case mappings and `wcwidth` from musl's Unicode 12.1 tables, with every difference from glibc recorded; `wchar.h`'s string and memory functions, with `wcslcpy` and `wcslcat`; the `wcstol` and `wcstod` families, `wcstoimax` and `wcstoumax`, through the narrow parsers; `wcsftime`; wide-character stream I/O, `fgetwc` to `ungetwc` and `fwide`, with glibc's `_unlocked` names; the `wprintf` family, through the narrow formatter; the `wscanf` family, through the narrow scanner; `open_wmemstream` | `iconv` |
+| Multibyte and wide characters | UTF-8 conversion in `stdlib.h`, `wchar.h` and `uchar.h`, strict as musl's; `wctype.h`'s classes, case mappings and `wcwidth` from musl's Unicode 12.1 tables, with every difference from glibc recorded; `wchar.h`'s string and memory functions, with `wcslcpy` and `wcslcat`; the `wcstol` and `wcstod` families, `wcstoimax` and `wcstoumax`, through the narrow parsers; `wcsftime`; wide-character stream I/O, `fgetwc` to `ungetwc` and `fwide`, with glibc's `_unlocked` names; the `wprintf` family, through the narrow formatter; the `wscanf` family, through the narrow scanner; `open_wmemstream`; `iconv.h` between UTF-8, ASCII, ISO-8859-1, CP1252, UTF-16, UCS-2, UTF-32, UCS-4 and `WCHAR_T`, under glibc's names, with `//IGNORE` and `//TRANSLIT` | glibc's transliteration tables, and other character sets |
 | Error text | `strerror`, `strerror_l`, `strerror_r` (XSI), `__xpg_strerror_r`, `strsignal` | glibc's GNU `strerror_r` |
-| `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall`; `chown` and its `l`, `f` and `at` forms, `utimes`, `gethostid`; `pathconf` and `fpathconf`, from musl's table; `copy_file_range` | `getcwd(NULL, 0)`, `set*id` across threads |
+| `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall`; `chown` and its `l`, `f` and `at` forms, `utimes`, `gethostid`; `pathconf` and `fpathconf`, from musl's table; `copy_file_range`; `set*id` on every thread | `getcwd(NULL, 0)` |
 | `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names; `utime.h`'s `utime`; Linux's `sync_file_range` | |
 | Mounts and file systems | `mount`, `umount`, `umount2`, `pivot_root`, `chroot`, `swapon`, `swapoff`, `sync`, `syncfs`, `readahead`; `statfs`, `statvfs` and their `f` forms, with glibc's `64` names; `mntent.h`'s `setmntent`, `getmntent`, `getmntent_r`, `endmntent` and `hasmntopt`, with octal escapes | `addmntent` |
 | Sockets and addresses | `socket`, `socketpair`, `bind`, `connect`, `listen`, `accept`, `accept4`, `getsockname`, `getpeername`, `getsockopt`, `setsockopt`, `shutdown`, `send`, `sendto`, `sendmsg`, `recv`, `recvfrom`, `recvmsg`, `sockatmark`; `inet_aton`, `inet_addr`, `inet_ntoa`, `inet_ntop`, `inet_pton`, the byte order functions, `in6addr_any`, `in6addr_loopback` | `inet_network`, `inet_makeaddr`, `inet_netof`, `inet_lnaof` |
 | Name resolution | `getaddrinfo`, `freeaddrinfo`, `getnameinfo`, `gai_strerror`; `gethostbyname`, `gethostbyname2`, `gethostbyaddr` and their `_r` forms, `getservbyname`, `getservbyport` and theirs, `h_errno`, `hstrerror`, `herror`; the hosts, networks, protocols and services databases; the stub resolver over `/etc/resolv.conf`, `res_query`, `res_send`, `dn_expand` and the `ns_` parser | a hosts-file cache, `/etc/nsswitch.conf`, DNSSEC |
 | Interfaces and hardware addresses | `if_nametoindex`, `if_indextoname`, `if_nameindex`, `if_freenameindex`; `getifaddrs` and `freeifaddrs` over route netlink, falling back to `SIOCGIFCONF`; the `ether_` conversions and `/etc/ethers` | interface statistics through `ifa_data` |
-| System V IPC | shared memory, semaphores and message queues, every function | `ftok` |
-| Linux's own calls | `prctl`, `capget`, `capset`, `personality`, `setns`, `unshare`, `reboot`, `klogctl`, `inotify_init`, `inotify_init1`, `inotify_add_watch`, `inotify_rm_watch`, `sendfile`, `sysinfo`, `getloadavg`, `flock`; `sched_yield`, `sched_getaffinity`, `sched_setaffinity`, `CPU_COUNT` | `signalfd`, `timerfd` |
-| `termios.h` | every function: attributes, the `cf*speed` calls, `cfmakeraw`, `tcdrain`, `tcflow`, `tcflush`, `tcsendbreak`, `tcgetsid`, and POSIX.1-2024's `tcgetwinsize` and `tcsetwinsize`; `unistd.h`'s `tcgetpgrp`, `tcsetpgrp`, `ttyname` and `ttyname_r` | `posix_openpt` and the rest of the pseudo-terminal calls |
-| Running programs and temporary files | `system`, `popen`, `pclose`, `execl`, `execle`, `execlp`, `daemon`; `mkstemp`, `mkostemp`, `mkstemps`, `mkostemps` and their `64` names, `mkdtemp`, `mktemp`; `realpath` | `posix_spawn`, so `system` and `popen` fork |
+| System V IPC | shared memory, semaphores and message queues, every function, and `ftok`; POSIX's `shm_open` and `shm_unlink` | |
+| Linux's own calls | `prctl`, `capget`, `capset`, `personality`, `setns`, `unshare`, `reboot`, `klogctl`, `inotify_init`, `inotify_init1`, `inotify_add_watch`, `inotify_rm_watch`, `sendfile`, `sysinfo`, `getloadavg`, `flock`; `sched_yield`, `sched_getaffinity`, `sched_setaffinity`, `CPU_COUNT`; `signalfd`; `timerfd_create`, `timerfd_settime` and `timerfd_gettime` | |
+| `termios.h` | every function: attributes, the `cf*speed` calls, `cfmakeraw`, `tcdrain`, `tcflow`, `tcflush`, `tcsendbreak`, `tcgetsid`, and POSIX.1-2024's `tcgetwinsize` and `tcsetwinsize`; `unistd.h`'s `tcgetpgrp`, `tcsetpgrp`, `ttyname` and `ttyname_r`; the pseudo-terminal calls, `posix_openpt`, `grantpt`, `unlockpt` and `ptsname` | |
+| Running programs and temporary files | `system`, `popen`, `pclose`, `execl`, `execle`, `execlp`, `daemon`; `mkstemp`, `mkostemp`, `mkstemps`, `mkostemps` and their `64` names, `mkdtemp`, `mktemp`; `realpath`; `posix_spawn` and `posix_spawnp` with their file actions and attributes | |
 | Users and groups | `getpwnam`, `getpwuid`, `getpwent`, `setpwent`, `endpwent`, `getpwnam_r`, `getpwuid_r`; `getgrnam`, `getgrgid`, `getgrent`, `setgrent`, `endgrent`, `getgrnam_r`, `getgrgid_r`, `getgrouplist`, `initgroups`; `getspnam_r`; `getlogin`, `getlogin_r`; `getusershell`, `setusershell`, `endusershell` | nscd, `fgetpwent` and `putpwent`, the rest of `shadow.h` |
-| Password hashing | `crypt` and `crypt_r`: the traditional DES hash and BSDi's extended `_` form, with musl's reading of salts outside the alphabet and its self test; `$1$` MD5, `$5$` SHA-256 and `$6$` SHA-512, with musl's key, salt and `rounds=` limits; checked against musl's, Drepper's and libxcrypt's vectors | `$2*$` blowfish, which gives `"*"` until it is here; `encrypt`, `setkey` |
+| Password hashing | `crypt` and `crypt_r`: the traditional DES hash and BSDi's extended `_` form, with musl's reading of salts outside the alphabet and its self test; `$1$` MD5, `$5$` SHA-256 and `$6$` SHA-512, with musl's key, salt and `rounds=` limits; checked against musl's, Drepper's and libxcrypt's vectors; `setkey` and `encrypt` | `$2*$` blowfish, which gives `"*"` until it is here |
 | Logging and login records | `openlog`, `syslog`, `vsyslog`, `setlogmask`, `closelog`, as datagrams to `/dev/log`; `utmpx.h` and `utmp.h`, which keep no records, as musl's do | a logger over the network |
 | Clocks | `time`, `clock_gettime` and the rest, `gettimeofday`, `settimeofday`, `nanosleep`, `clock`, `times`, `setitimer`, `getitimer`, `adjtimex`, `clock_adjtime` | the vDSO |
 | Calendar time | `gmtime`, `localtime`, `mktime`, `timegm`, `difftime`, `asctime` and `ctime`, with their `_r` forms, over the whole 64-bit `time_t`; `tzset`, `tzname`, `timezone` and `daylight`, from POSIX `TZ` strings or validated TZif files; `strftime`, `strftime_l`, `strptime` | `getdate`, `wcsftime`, leap seconds |
@@ -293,15 +307,20 @@ because ARMv7-A's kernel builds it an old-style frame.
 | `regex.h` | `regcomp`, `regexec`, `regerror`, `regfree`: basic and extended expressions with musl's grammar, `REG_ICASE`, `REG_NEWLINE`, `REG_NOSUB`, `REG_NOTBOL`, `REG_NOTEOL`, back-references, and POSIX's leftmost-longest match with its submatches, found by simulating the whole automaton at once rather than backtracking; glibc's `regex_t` and `regmatch_t` layouts and `REG_STARTEND`, and GNU's `re_compile_pattern`, `re_search` and `re_syntax_options` | multibyte characters and collating elements, which wait for a locale other than C |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
-| C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program; `dl_iterate_phdr` and `dladdr` over the program's own headers, which libunwind finds unwind tables by, and over every loaded object when `ld-ferrousli` loaded the library, with `dlopen`, `dlsym`, `dlclose` and `dlerror` too. LLVM's libc++, libc++abi and libunwind build against it (`tools/ports/libcxx`) | `__cxa_thread_atexit_impl`, which libc++abi does without |
+| C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program; `dl_iterate_phdr` and `dladdr` over the program's own headers, which libunwind finds unwind tables by, and over every loaded object when `ld-ferrousli` loaded the library, with `dlopen`, `dlsym`, `dlclose` and `dlerror` too; `__cxa_thread_atexit_impl`; `backtrace` and `backtrace_symbols_fd` over libgcc's unwinder. LLVM's libc++, libc++abi and libunwind build against it (`tools/ports/libcxx`) | |
+| glibc's own extensions | the obstack functions, weak so that a program's own copy wins, as git's does; `random_r`, `srandom_r`, `initstate_r` and `setstate_r` with `struct random_data` in glibc's layout; `rawmemchr`, `get_nprocs`, `futimes`, `sbrk` | |
 
 ## Next
 
-1. In progress: **`long double` math**.
+1. In progress: **`long double` math**: the transcendental functions, musl's
+   x87 port first so that `logl` and `powl` stop going through `double`, and
+   with them `complex.h`'s `long double` forms.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
-3. **`long double` math, and with it `complex.h`'s `long double` forms.**
-4. **Dynamic linking**: a loader, then glibc's symbol versions. Both run on
-   all three architectures (below), with general-dynamic TLS and
-   `dlfcn.h`; on ARMv7-A `libc.so.6` answers glibc's time64 names, and
-   leaves out the ones glibc keeps for a 32-bit `time_t`.
+3. **POSIX.1-2024**, interface by interface, in the order
+   `docs/POSIX-2024.md` gives.
+
+Done since this list was first written: **dynamic linking**, a loader and
+glibc's symbol versions, on all three architectures, with general-dynamic
+TLS and `dlfcn.h`; on ARMv7-A `libc.so.6` answers glibc's time64 names, and
+leaves out the ones glibc keeps for a 32-bit `time_t`.

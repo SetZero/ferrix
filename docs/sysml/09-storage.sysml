@@ -161,7 +161,13 @@ package FerrixStorage {
              * or unbind is sent to devmgr to decide. Mounted on /sys at
              * boot; cgroup2 mounts on its fs/cgroup. */
     }
-    #planned part def Cgroupfs :> Filesystem { @stage { number = 13; } }
+    #implemented part def Cgroupfs :> Filesystem {
+        @stage { number = 13; }
+        doc /* src/lib/fs/cgroupfs, mounted as cgroup2 since 2026-09-23: a
+             * view of the job tree that stores nothing, with cgroup.events,
+             * delegation by chown, and the pids, memory and cpu files over
+             * each job's quota slot (docs/CGROUPS.md). */
+    }
 
     #implemented part def InitramfsUnpack {
         @stage { number = 8; }
@@ -242,7 +248,7 @@ package FerrixStorage {
         part devfs : Devfs;
         part procfs : Procfs;
         part sysfs : Sysfs;
-        #planned part cgroupfs : Cgroupfs;
+        part cgroupfs : Cgroupfs;
         part btrfs : Btrfs;
         part initramfs : InitramfsUnpack;
     }

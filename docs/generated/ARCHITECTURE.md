@@ -99,7 +99,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixMemory` | `04-memory.sysml` | docs/ARCHITECTURE.md §4. The physical allocator, the heap, the page-table arithmetic and the kernel arena since stage 2; VMOs, process address spaces, demand paging and copy-on-write since stage 6, file mappings since stage 8. Reclaim is stage 13's and not built. |
 | `FerrixScheduling` | `05-scheduling.sysml` | Stages 3 to 5 run today: interrupts, a clock, every processor online, IPIs, TLB shootdown, grace periods, fair locks, and tasks scheduled by EEVDF in one Throughput domain. Stage 14's real-time domains are designed here (docs/ARCHITECTURE.md §5) and not yet written. |
 | `FerrixObjects` | `06-objects.sysml` | docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in src/lib/proto/linux-abi and for the native half in src/lib/proto/native-abi. The objects a handle can name exist in src/kernel/src/object, the core half of a process among them; the POSIX half and threads in src/kernel/src/syscall. No handle names an address space or a thread yet. |
-| `FerrixIsolation` | `07-isolation.sysml` | docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. Only the credentials exist, since stage 7; namespaces, cgroups and seccomp are not built, and unshare and setns answer as a Linux built without namespaces does. |
+| `FerrixIsolation` | `07-isolation.sysml` | docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. The credentials exist since stage 7, and cgroup v2 since 2026-09-23 (docs/CGROUPS.md), over the job tree. Of the namespaces, the mount table's groundwork is in (docs/NAMESPACES.md, N1 and N2) and the namespaces themselves are not, so unshare and setns still answer as a Linux built without namespaces does. Seccomp is not built. |
 | `FerrixDrivers` | `08-drivers.sysml` | docs/ARCHITECTURE.md §7. The kernel enumerates buses because that needs ACPI or a device tree and privileged access; it does not drive devices. Everything from the device node outward is stage 10, which is done: the drivers are processes devmgr starts. What it still owes is named on the part that owes it. |
 | `FerrixStorage` | `09-storage.sysml` | docs/ARCHITECTURE.md §8. Block core, VFS, the small in-kernel filesystems and btrfs in three stages. What exists today is marked on each part. |
 | `FerrixRoadmap` | `10-roadmap.sysml` | docs/ROADMAP.md as requirements: one per stage, each with its exit criterion, its status, the boot test that verifies it, and the part of the system that satisfies or will satisfy it. Each stage's status keyword says whether it is done; docs/ROADMAP.md's "Where it stands" is the prose this follows. |
@@ -116,14 +116,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of src/kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (src/kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of src/kernel/src/console.rs and src/kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (src/kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-23 files, 103 packages, 5261 elements, 212 relations. Model digest `6bbe9b953dda7fc2`.
+23 files, 103 packages, 5261 elements, 212 relations. Model digest `a2e512c6a2ffab5d`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 273 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 11 | The owning stage has started; part of the element runs. |
-| `#writtenAhead` | 3 | A src/lib/ crate exists and passes its host tests, but nothing in src/kernel/ calls it yet. |
-| `#planned` | 37 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#implemented` | 277 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 15 | The owning stage has started; part of the element runs. |
+| `#writtenAhead` | 1 | A src/lib/ crate exists and passes its host tests, but nothing in src/kernel/ calls it yet. |
+| `#planned` | 30 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 20 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -405,7 +405,7 @@ kernel : Kernel
     devfs : Devfs
     procfs : Procfs
     sysfs : Sysfs
-    cgroupfs : Cgroupfs  [planned]
+    cgroupfs : Cgroupfs
     btrfs : Btrfs
       parsing : BtrfsParsing
       read : BtrfsRead
@@ -416,10 +416,10 @@ kernel : Kernel
     queues : RequestQueue
     ioScheduler : IoScheduler
   netCore : NetCore  [implemented]
-  namespaces : Namespaces  [planned]
+  namespaces : Namespaces  [in progress]
     every : Namespace
       parent : Namespace
-  cgroups : Cgroups  [planned]
+  cgroups : Cgroups  [in progress]
     root : Cgroup
   seccomp : Seccomp  [planned]
     interpreter : ClassicBpfInterpreter
@@ -438,7 +438,7 @@ initramfs : Initramfs  [implemented]
   virtioSndDriver : UserBinary
   init : UserBinary
 userland : Userland  [in progress]
-  init : UserProcess  [in progress]
+  init : UserProcess  [implemented]
   shell : UserProcess  [implemented]
   devmgr : UserProcess  [implemented]
   drivers : DriverProcess  [implemented]
@@ -566,8 +566,8 @@ src/kernel/: monolithic core, capability seams, userspace device drivers. Entere
 | `filesystems` | `Filesystems` | `#implemented` | — |  |
 | `blockCore` | `BlockCore` | `#implemented` | — |  |
 | `netCore` | `NetCore` | `#implemented` | — |  |
-| `namespaces` | `Namespaces` | `#planned` | — |  |
-| `cgroups` | `Cgroups` | `#planned` | — |  |
+| `namespaces` | `Namespaces` | `#inProgress` | — |  |
+| `cgroups` | `Cgroups` | `#inProgress` | — |  |
 | `seccomp` | `Seccomp` | `#planned` | — |  |
 | `devices` | `DeviceEnumeration` | `#implemented` | — |  |
 | `iommu` | `IommuDomains` | `#implemented` | — |  |
@@ -636,9 +636,11 @@ flowchart LR
   n0_FerrixStructure_Kernel -- "part of" --> n29_FerrixStructure_Kernel_devices
   n0_FerrixStructure_Kernel -- "part of" --> n30_FerrixStructure_Kernel_iommu
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
+  classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n2_FerrixStructure_Kernel_printer,n3_FerrixStructure_Kernel_early,n4_FerrixStructure_Kernel_trap,n5_FerrixStructure_Kernel_mm,n6_FerrixStructure_Kernel_vmap,n7_FerrixStructure_Kernel_mmio,n8_FerrixStructure_Kernel_irq,n9_FerrixStructure_Kernel_timer,n10_FerrixStructure_Kernel_smp,n11_FerrixStructure_Kernel_acpi,n12_FerrixStructure_Kernel_fdt,n13_FerrixStructure_Kernel_tasks,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_vm,n16_FerrixStructure_Kernel_syscalls,n17_FerrixStructure_Kernel_native,n18_FerrixStructure_Kernel_futex,n19_FerrixStructure_Kernel_signals,n20_FerrixStructure_Kernel_ipc,n21_FerrixStructure_Kernel_vfs,n22_FerrixStructure_Kernel_pageCache,n23_FerrixStructure_Kernel_filesystems,n24_FerrixStructure_Kernel_blockCore,n25_FerrixStructure_Kernel_netCore,n29_FerrixStructure_Kernel_devices,n30_FerrixStructure_Kernel_iommu implemented
-  class n26_FerrixStructure_Kernel_namespaces,n27_FerrixStructure_Kernel_cgroups,n28_FerrixStructure_Kernel_seccomp planned
+  class n26_FerrixStructure_Kernel_namespaces,n27_FerrixStructure_Kernel_cgroups inProgress
+  class n28_FerrixStructure_Kernel_seccomp planned
 ```
 
 **Figure 4 — Kernel and its parts.** The parts `Kernel` is made of, coloured by the lifecycle keyword each carries. [SVG](diagrams/ferrix-structure-kernel.svg) Source: `02-structure.sysml`.
@@ -2155,7 +2157,7 @@ The item answers every call on the core's objects in a match the compiler holds 
 
 ### Isolation
 
-docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. Only the credentials exist, since stage 7; namespaces, cgroups and seccomp are not built, and unshare and setns answer as a Linux built without namespaces does.
+docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. The credentials exist since stage 7, and cgroup v2 since 2026-09-23 (docs/CGROUPS.md), over the job tree. Of the namespaces, the mount table's groundwork is in (docs/NAMESPACES.md, N1 and N2) and the namespaces themselves are not, so unshare and setns still answer as a Linux built without namespaces does. Seccomp is not built.
 
 **NamespaceKind** — `Pid`, `Mount`, `Uts`, `Ipc`, `Net`, `User`, `Cgroup` and `Time`. 
 
@@ -2180,7 +2182,9 @@ One namespace of each kind, held by every task. Every table that would otherwise
 
 #### Namespaces
 
-`#planned`  ·  stage 13
+`#inProgress`  ·  stage 13
+
+Steam's user and mount namespaces first (docs/NAMESPACES.md, N1 to N6). N1 (2026-09-28): every mount's own flags enforced, MS_REMOUNT, and mountinfo. N2 (2026-09-30): binds of directories, files and sockets, MS_REC, MNT_DETACH of a subtree, and a superblock per filesystem. N3, mount namespaces themselves, is next.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2192,7 +2196,7 @@ One namespace of each kind, held by every task. Every table that would otherwise
 
 #### Cgroup
 
-`#planned`  ·  stage 13
+`#inProgress`  ·  stage 13
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2204,9 +2208,11 @@ One namespace of each kind, held by every task. Every table that would otherwise
 
 #### Cgroups
 
-`#planned`  ·  stage 13
+`#inProgress`  ·  stage 13
 
 One unified hierarchy (v2), exposed as cgroupfs. cpu is not a separate mechanism: it is bandwidth and weight handed to the scheduling classes. memory scopes reclaim and the OOM kill.
+
+Built (docs/CGROUPS.md, 55 of its 85 points): every cgroup a Job, cgroupfs mounted as cgroup2, cgroup.events, clone3 into a cgroup, delegation by chown; pids, memory's charging and its scoped OOM kill, and cpu.weight, over the certification's job quotas. Left: the rest of memory.stat, memory's reclaim, freezing, cpu.max and io.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2228,7 +2234,7 @@ Classic BPF filters evaluated on syscall entry. The interpreter is a pure functi
 
 `#planned`  ·  stage 13
 
-libs/seccomp, owed before stage 13 starts.
+src/lib/kernel/seccomp, owed before seccomp is built.
 
 #### Credentials
 
@@ -2502,9 +2508,7 @@ flowchart TB
   n5_FerrixStorage_Cgroupfs -- "specializes" --> n0_FerrixStorage_Filesystem
   n6_FerrixStorage_Btrfs -- "specializes" --> n0_FerrixStorage_Filesystem
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixStorage_Filesystem,n1_FerrixStorage_Tmpfs,n2_FerrixStorage_Devfs,n3_FerrixStorage_Procfs,n4_FerrixStorage_Sysfs,n6_FerrixStorage_Btrfs implemented
-  class n5_FerrixStorage_Cgroupfs planned
+  class n0_FerrixStorage_Filesystem,n1_FerrixStorage_Tmpfs,n2_FerrixStorage_Devfs,n3_FerrixStorage_Procfs,n4_FerrixStorage_Sysfs,n5_FerrixStorage_Cgroupfs,n6_FerrixStorage_Btrfs implemented
 ```
 
 **Figure 15 — Filesystem and its subtypes.** 6 definitions specialize `Filesystem`; the hollow arrow points at what they have in common. [SVG](diagrams/ferrix-storage-filesystem.svg) Source: `09-storage.sysml`.
@@ -2633,7 +2637,9 @@ src/kernel/src/fs/sysfs.rs over src/lib/fs/sysfs's text, a view that stores noth
 
 #### Cgroupfs
 
-`#planned`  ·  stage 13  ·  specialises `Filesystem`
+`#implemented`  ·  stage 13  ·  specialises `Filesystem`
+
+src/lib/fs/cgroupfs, mounted as cgroup2 since 2026-09-23: a view of the job tree that stores nothing, with cgroup.events, delegation by chown, and the pids, memory and cpu files over each job's quota slot (docs/CGROUPS.md).
 
 #### InitramfsUnpack
 
@@ -2698,7 +2704,7 @@ Stage C: subvolumes and snapshots, then the rest. The reader mounts the default 
 | `devfs` | part | `Devfs` |  |  |
 | `procfs` | part | `Procfs` |  |  |
 | `sysfs` | part | `Sysfs` |  |  |
-| `cgroupfs` | part | `Cgroupfs` | `#planned` |  |
+| `cgroupfs` | part | `Cgroupfs` |  |  |
 | `btrfs` | part | `Btrfs` |  |  |
 | `initramfs` | part | `InitramfsUnpack` |  |  |
 
@@ -2713,57 +2719,57 @@ docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and is the only co
 | `src/lib/kernel/frame` | `#implemented` | — | `forbid` | — |  |
 | `src/lib/kernel/heap` | `#implemented` | — | allowed | — | The body has no unsafe; the crate cannot forbid it because declaring Backing as an unsafe trait is the point. |
 | `src/lib/kernel/paging` | `#implemented` | — | allowed | — |  |
-| `src/lib/platform/acpi` | `#implemented` | — | `forbid` | 81 | Reached at stage 3: the MADT walk the interrupt controller needed. |
-| `src/lib/platform/fdt` | `#implemented` | — | `forbid` | 87 | Reached at stage 1 on ARMv7-A: console, GIC, timer interrupt and PSCI conduit come from it there. |
-| `src/lib/kernel/sync` | `#implemented` | — | allowed | 27 | Reached at stage 4: its ticket locks guard every shared kernel structure, the kernel's SpinLock being PreemptSpinLock, which holds off preemption, and IrqSpinLock masking interrupts as well. |
+| `src/lib/platform/acpi` | `#implemented` | — | `forbid` | 83 | Reached at stage 3: the MADT walk the interrupt controller needed. |
+| `src/lib/platform/fdt` | `#implemented` | — | `forbid` | 93 | Reached at stage 1 on ARMv7-A: console, GIC, timer interrupt and PSCI conduit come from it there. |
+| `src/lib/kernel/sync` | `#implemented` | — | allowed | 30 | Reached at stage 4: its ticket locks guard every shared kernel structure, the kernel's SpinLock being PreemptSpinLock, which holds off preemption, and IrqSpinLock masking interrupts as well. |
 | `src/lib/kernel/crng` | `#implemented` | — | `forbid` | 9 | Reached with curl's HTTPS: ChaCha20 with fast key erasure behind getrandom, /dev/urandom and AT_RANDOM, seeded from firmware, the CPU and timer jitter. |
-| `src/lib/kernel/sched` | `#implemented` | 5 | `forbid` | 72 | The half of the scheduler that is arithmetic: the EEVDF tree, weights, lag, the domain partition. cargo test drives a run queue through hundreds of thousands of decisions. |
-| `src/lib/kernel/vma` | `#implemented` | — | `forbid` | 66 | Written for stage 6; reached at stage 2 as the vmap arena's range map, and since stage 6 every process's address space. |
-| `src/lib/proto/linux-abi` | `#implemented` | 7 | `forbid` | 126 | Three system call number tables, not two: x86-64's own, AArch64's generic one, and ARMv7-A's EABI one. |
+| `src/lib/kernel/sched` | `#implemented` | 5 | `forbid` | 77 | The half of the scheduler that is arithmetic: the EEVDF tree, weights, lag, the domain partition. cargo test drives a run queue through hundreds of thousands of decisions. |
+| `src/lib/kernel/vma` | `#implemented` | — | `forbid` | 72 | Written for stage 6; reached at stage 2 as the vmap arena's range map, and since stage 6 every process's address space. |
+| `src/lib/proto/linux-abi` | `#implemented` | 7 | `forbid` | 146 | Three system call number tables, not two: x86-64's own, AArch64's generic one, and ARMv7-A's EABI one. |
 | `src/lib/kernel/ustack` | `#implemented` | 7 | `forbid` | 22 | The initial process stack image: argc, argv, envp and the auxiliary vector, laid out as a program's \_start reads them, at both pointer widths. |
 | `src/lib/fs/cpio` | `#implemented` | 8 | `forbid` | 45 | The newc reader the initramfs is unpacked with, reached through src/lib/fs/vfs. |
-| `src/lib/fs/vfs` | `#implemented` | 8 | `forbid` | 101 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, pipes and socket buffers, the permission rules as pure functions, initramfs unpacking and the getdents64 packer. |
-| `src/lib/fs/procfs` | `#implemented` | 8 | `forbid` | 33 | The text of /proc as pure functions: maps lines padded to their name column at both pointer widths, meminfo, status, stat and mounts, pinned byte for byte against lines a real Linux printed, and the maps parser the kernel's boot check reads its own output… |
+| `src/lib/fs/vfs` | `#implemented` | 8 | `forbid` | 128 | Dentries with negative entries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store the kernel supplies, pipes and socket buffers, the permission rules as pure functions, initramfs unpacking and the getdents64 packer. |
+| `src/lib/fs/procfs` | `#implemented` | 8 | `forbid` | 36 | The text of /proc as pure functions: maps lines padded to their name column at both pointer widths, meminfo, status, stat and mounts, pinned byte for byte against lines a real Linux printed, and the maps parser the kernel's boot check reads its own output… |
 | `src/lib/fs/sysfs` | `#implemented` | — | `forbid` | 15 | The text of /sys as pure functions (docs/SYSFS.md): PCI identifiers, modalias and uevent, processor lists, input capability bitmaps in words of the kernel's long, connector names, kernfs's relative link targets, and the name a write to bind or unbind gives;… |
-| `src/lib/drivers/virtio` | `#implemented` | 10 | allowed | 164 | The split virtqueue as logic over an abstract shared memory, the PCI transport's status protocol, and each device class's own protocol: blk, net, gpu, input and console. |
+| `src/lib/drivers/virtio` | `#implemented` | 10 | allowed | 180 | The split virtqueue as logic over an abstract shared memory, the PCI transport's status protocol, and each device class's own protocol: blk, net, gpu, input and console. |
 | `src/lib/network/netwire` | `#implemented` | — | `forbid` | 54 | The byte-level half of the net core, written ahead of the networking stage: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP headers with their negotiated… |
 | `src/lib/network/nettcp` | `#implemented` | — | `forbid` | 31 | The TCP state machine, written ahead of the networking stage and above netwire: the eleven states of RFC 9293 in the standard's order, reassembly of what arrives out of order, window scaling, selective acknowledgment blocks, Nagle, delayed acknowledgments,… |
-| `src/lib/network/net` | `#implemented` | — | `forbid` | 69 | The net core, written ahead of the networking stage: interfaces and the addresses on them, one routing table for both families, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way, IPv4 fragmentation and reassembly under a… |
+| `src/lib/network/net` | `#implemented` | — | `forbid` | 72 | The net core, written ahead of the networking stage: interfaces and the addresses on them, one routing table for both families, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way, IPv4 fragmentation and reassembly under a… |
 | `src/lib/drivers/net/netserve` | `#implemented` | — | `forbid` | 12 | A ring-3 network driver's serve loop: the net ring on one side, a virtio-net device on the other, and the rules where they meet. |
 | `src/lib/proto/netring` | `#implemented` | — | `forbid` | 32 | The net ring: the memory the kernel shares with a ring-3 network driver, specified in docs/NET-RING.md. |
 | `src/lib/network/netlink` | `#implemented` | — |  | 48 | The byte-level half of netlink, over linux-abi's headers: walking a buffer of messages and the attributes after each fixed header, and building replies into a caller's buffer with every length and pad computed rather than taken. |
 | `src/lib/drivers/net/virtio-net` | `#implemented` | 10 |  | 22 | The virtio-net driver logic, written ahead of the network device it drives from src/user/native/drivers/net/virtio-net: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every frame in… |
-| `src/lib/drivers/display/virtio-gpu` | `#implemented` | 17 |  | 16 | The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from src/user/native/drivers/display/virtio-gpu since: bring-up with the control queue alone, one command at a time, every response checked,… |
-| `src/lib/drivers/sound/virtio-snd` | `#implemented` | — |  | 13 | The virtio-snd driver logic, written ahead of the driver process for the audio iteration (docs/AUDIO.md L4): bring-up with DRIVER_OK before HELLO, since a sound device describes its streams only through its control queue; READY into SET_PARAMS and PREPARE;… |
+| `src/lib/drivers/display/virtio-gpu` | `#implemented` | 17 |  | 31 | The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from src/user/native/drivers/display/virtio-gpu since: bring-up with the control queue alone, one command at a time, every response checked,… |
+| `src/lib/drivers/sound/virtio-snd` | `#implemented` | — |  | 14 | The virtio-snd driver logic, written ahead of the driver process for the audio iteration (docs/AUDIO.md L4): bring-up with DRIVER_OK before HELLO, since a sound device describes its streams only through its control queue; READY into SET_PARAMS and PREPARE;… |
 | `src/lib/drivers/input/virtio-input` | `#implemented` | 17 |  | 28 | The virtio-input driver logic, written ahead of the driver process for the input iteration (docs/INPUT.md) and driven from src/user/native/drivers/input/virtio-input since: bring-up that stops at FEATURES_OK so no event is discarded before the core has… |
-| `src/lib/proto/displayctl` | `#implemented` | 17 | `forbid` | 12 | The control protocol between the kernel's display core and a ring-3 display driver, written ahead of both for the compositor's first iteration (docs/DISPLAY.md). |
-| `src/lib/proto/inputctl` | `#implemented` | 17 | `forbid` | 25 | The control protocol between the kernel's input core and a ring-3 input driver, and evdev's per-open queues, written ahead of both for the input iteration (docs/INPUT.md). |
+| `src/lib/proto/displayctl` | `#implemented` | 17 | `forbid` | 33 | The control protocol between the kernel's display core and a ring-3 display driver, written ahead of both for the compositor's first iteration (docs/DISPLAY.md). |
+| `src/lib/proto/inputctl` | `#implemented` | 17 | `forbid` | 26 | The control protocol between the kernel's input core and a ring-3 input driver, and evdev's per-open queues, written ahead of both for the input iteration (docs/INPUT.md). |
 | `src/lib/proto/sndctl` | `#implemented` | — | `forbid` | 30 | The control protocol between the kernel's audio core and a ring-3 sound driver, and a PCM stream's state as ALSA keeps it, written ahead of both for the audio iteration (docs/AUDIO.md L3). |
 | `src/lib/proto/logctl` | `#implemented` | — | `forbid` | 12 | The log control protocol: how a ring-3 driver reads the kernel log over a control channel, for the Pixel 7's USB serial port (docs/vendor/google/pixel7/USB-HANDOVER.md phase 4). |
 | `src/lib/proto/audit` | `#implemented` | — | `forbid` | 7 | The audit record's 64-byte layout, shared by the kernel's store (src/kernel/src/audit.rs) and the reader it hands the records to (docs/certification/AUDIT.md §2): the classes, the events, the configuration keys, and the start-up record that carries the… |
-| `src/lib/platform/pci` | `#implemented` | 10 | `forbid` | 47 | PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. |
-| `src/lib/proto/native-abi` | `#implemented` | 9 | `forbid` | 14 | The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. |
-| `src/lib/kernel/objects` | `#implemented` | 9 | `forbid` | 24 | The handle table and the channel message queue, generic over what a handle names. |
+| `src/lib/platform/pci` | `#implemented` | 10 | `forbid` | 51 | PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. |
+| `src/lib/proto/native-abi` | `#implemented` | 9 | `forbid` | 23 | The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. |
+| `src/lib/kernel/objects` | `#implemented` | 9 | `forbid` | 29 | The handle table and the channel message queue, generic over what a handle names. |
 | `src/lib/fs/btrfs` | `#implemented` | 11 | `forbid` | 167 | The btrfs read path, allocating nothing: parsing, mount bootstrap, lookup, readdir and read with every data sector checked against the checksum tree, and zlib, LZO and zstd decoders. |
 | `src/lib/fs/btrfs-write` | `#implemented` | 12 | `forbid` | 32 | The btrfs write path: copy-on-write trees, delayed refs, extent and free-space-tree bookkeeping, chunk allocation, the commit with its flush before the superblock, file operations, and the log tree fsync writes and the mount replays. |
-| `src/lib/fs/btrfs-vfs` | `#implemented` | 11 | `forbid` | 32 | btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only and holding no lock across I/O, and a writable mount over src/lib/fs/btrfs-write behind one sleeping lock, whose writes become extents at the commit. |
-| `src/lib/fs/block` | `#implemented` | 11 | `forbid` | 36 | The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. |
-| `src/lib/proto/blkring` | `#implemented` | 10 | `forbid` | 52 | The block ring, docs/BLOCK-RING.md in code: the memory the kernel shares with a ring-3 block driver, every index and entry the other side writes checked before it is used, doorbells over ports, and the HELLO, READY and START messages, linked by both the… |
-| `src/lib/drivers/block/blkserve` | `#implemented` | 10 | `forbid` | 6 | A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; src/user/native/drivers/block/virtio-blk adds only the handles. |
+| `src/lib/fs/btrfs-vfs` | `#implemented` | 11 | `forbid` | 35 | btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only and holding no lock across I/O, and a writable mount over src/lib/fs/btrfs-write behind one sleeping lock, whose writes become extents at the commit. |
+| `src/lib/fs/block` | `#implemented` | 11 | `forbid` | 37 | The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. |
+| `src/lib/proto/blkring` | `#implemented` | 10 | `forbid` | 66 | The block ring, docs/BLOCK-RING.md in code: the memory the kernel shares with a ring-3 block driver, every index and entry the other side writes checked before it is used, doorbells over ports, and the HELLO, READY and START messages, linked by both the… |
+| `src/lib/drivers/block/blkserve` | `#implemented` | 10 | `forbid` | 8 | A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; src/user/native/drivers/block/virtio-blk adds only the handles. |
 | `src/lib/drivers/block/virtio-blk` | `#implemented` | 10 |  | 39 | The virtio-blk driver logic over a transport and DMA memory it is handed: bring-up to DRIVER_OK, read, write and flush, each completion counted once even from a hostile device, and memory handed back only after the device's reset. |
-| `src/lib/proto/devmgr-proto` | `#implemented` | 10 | `forbid` | 5 | The messages between the kernel and devmgr on its bootstrap channel as docs/DEVMGR.md fixes them -- DEVICES, REPORT, PUBLISHED, DIED and RESTARTED -- so the kernel and the program share one definition. |
-| `src/lib/proto/native` | `#implemented` | — | `forbid` | 28 | Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: src/user/native/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part. |
-| `src/lib/proto/renderctl` | `#implemented` | 19 | `forbid` | 19 | The render control protocol between the kernel's render core and a ring-3 GPU driver (docs/GPU.md §3.3), in displayctl's shape: fixed messages decoded strictly, command buffers passed through as bytes the driver understands and the core does not, and the… |
+| `src/lib/proto/devmgr-proto` | `#implemented` | 10 | `forbid` | 7 | The messages between the kernel and devmgr on its bootstrap channel as docs/DEVMGR.md fixes them -- DEVICES, REPORT, PUBLISHED, DIED and RESTARTED -- so the kernel and the program share one definition. |
+| `src/lib/proto/native` | `#implemented` | — | `forbid` | 30 | Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: src/user/native/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part. |
+| `src/lib/proto/renderctl` | `#implemented` | 19 | `forbid` | 22 | The render control protocol between the kernel's render core and a ring-3 GPU driver (docs/GPU.md §3.3), in displayctl's shape: fixed messages decoded strictly, command buffers passed through as bytes the driver understands and the core does not, and the… |
 | `src/lib/drivers/gpu/gc400` | `#implemented` | 19 | `forbid` | 28 | The STM32MP157's Vivante GC400T as logic over registers and command memory (docs/GPU.md §6.3): the registers and the command stream from the etnaviv project's MIT-licensed register database, the identity, reset and initialisation in the order Linux's etnaviv… |
 | `src/lib/kernel/fbtext` | `#implemented` | — | `forbid` | 30 | Text and filled rectangles on a linear framebuffer, with an embedded Spleen 8x16 font, clipped rather than refused and allocating nothing: what the panic screen (src/kernel/src/panic/screen.rs) draws with, and src/user/linux/compositor/term as well. |
 | `src/lib/kernel/qr` | `#implemented` | — | `forbid` | 20 | A QR code encoder with no heap, ported from Linux's drm_panic_qr.rs, for the panic screen's report. |
-| `src/lib/drivers/console/vdagent` | `#writtenAhead` | — | `forbid` | 16 | SPICE's vdagent protocol as bytes, the chunk framing and the clipboard messages (docs/CLIPBOARD.md §4), written ahead of the clipboard agent that will speak it; nothing links it yet. |
-| `src/lib/drivers/console/virtio-console` | `#writtenAhead` | — | allowed | 14 | The virtio-console driver: bring-up, the control conversation until a named port is open, and that port's bytes (docs/CLIPBOARD.md §3). |
-| `libs/seccomp` | `#planned` | 13 | `forbid` | — | The classic-BPF interpreter as a pure function over bytes. |
-| `boot` | `#implemented` | — | allowed | — |  |
-| `kernel` | `#implemented` | — | allowed | — |  |
-| `xtask` | `#implemented` | — | allowed | 242 | Cross-compiles both halves and the native programs, writes the FAT32 image and the initramfs with its own writers, converts the ARMv7-A loader ELF to PE32, drives QEMU, runs the NAT gateway the network tests sit behind, and runs every gate. |
-| `fuzz` | `#implemented` | — | allowed | — |  |
+| `src/lib/drivers/console/vdagent` | `#implemented` | — | `forbid` | 17 | SPICE's vdagent protocol as bytes, the chunk framing and the clipboard messages (docs/CLIPBOARD.md §4). |
+| `src/lib/drivers/console/virtio-console` | `#implemented` | — | allowed | 15 | The virtio-console driver: bring-up, the control conversation until a named port is open, and that port's bytes (docs/CLIPBOARD.md §3). |
+| `src/lib/kernel/seccomp` | `#planned` | 13 | `forbid` | — | The classic-BPF interpreter as a pure function over bytes. |
+| `src/boot/common/uefi` | `#implemented` | — | allowed | — |  |
+| `src/kernel` | `#implemented` | — | allowed | — |  |
+| `tools/common/xtask` | `#implemented` | — | allowed | 395 | Cross-compiles both halves and the native programs, writes the FAT32 image and the initramfs with its own writers, converts the ARMv7-A loader ELF to PE32, drives QEMU, runs the NAT gateway the network tests sit behind, and runs every gate. |
+| `src/tests/fuzz` | `#implemented` | — | allowed | — |  |
 
 ### Dependency edges
 
@@ -2820,11 +2826,11 @@ flowchart LR
   n48_FerrixStructure_Workspace_qr["qr<br>src/lib/kernel/qr"]
   n49_FerrixStructure_Workspace_vdagent["vdagent<br>src/lib/drivers/console/vdagent"]
   n50_FerrixStructure_Workspace_virtioConsole["virtioConsole<br>src/lib/drivers/console/virtio-console"]
-  n51_FerrixStructure_Workspace_seccompBpf["seccompBpf<br>libs/seccomp"]
-  n52_FerrixStructure_Workspace_bootCrate["bootCrate<br>boot"]
-  n53_FerrixStructure_Workspace_kernelCrate["kernelCrate<br>kernel"]
-  n54_FerrixStructure_Workspace_xtask["xtask<br>xtask"]
-  n55_FerrixStructure_Workspace_fuzz["fuzz<br>fuzz"]
+  n51_FerrixStructure_Workspace_seccompBpf["seccompBpf<br>src/lib/kernel/seccomp"]
+  n52_FerrixStructure_Workspace_bootCrate["bootCrate<br>src/boot/common/uefi"]
+  n53_FerrixStructure_Workspace_kernelCrate["kernelCrate<br>src/kernel"]
+  n54_FerrixStructure_Workspace_xtask["xtask<br>tools/common/xtask"]
+  n55_FerrixStructure_Workspace_fuzz["fuzz<br>src/tests/fuzz"]
   n53_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n5_FerrixStructure_Workspace_acpi
   n53_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n40_FerrixStructure_Workspace_blkRing
   n53_FerrixStructure_Workspace_kernelCrate -. "depends on" .-> n39_FerrixStructure_Workspace_blockQueue
@@ -2940,10 +2946,8 @@ flowchart LR
   n26_FerrixStructure_Workspace_virtioSnd -. "depends on" .-> n17_FerrixStructure_Workspace_virtio
   n24_FerrixStructure_Workspace_virtioNet -. "depends on" .-> n17_FerrixStructure_Workspace_virtio
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  classDef writtenAhead fill:#e5dff0,stroke:#6b4fa0,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_crng,n9_FerrixStructure_Workspace_sched,n10_FerrixStructure_Workspace_vma,n11_FerrixStructure_Workspace_linuxAbi,n12_FerrixStructure_Workspace_ustack,n13_FerrixStructure_Workspace_cpio,n14_FerrixStructure_Workspace_vfs,n15_FerrixStructure_Workspace_procfs,n16_FerrixStructure_Workspace_sysfs,n17_FerrixStructure_Workspace_virtio,n18_FerrixStructure_Workspace_netwire,n19_FerrixStructure_Workspace_nettcp,n20_FerrixStructure_Workspace_netCore,n21_FerrixStructure_Workspace_netServe,n22_FerrixStructure_Workspace_netRing,n23_FerrixStructure_Workspace_netlink,n24_FerrixStructure_Workspace_virtioNet,n25_FerrixStructure_Workspace_virtioGpu,n26_FerrixStructure_Workspace_virtioSnd,n27_FerrixStructure_Workspace_virtioInput,n28_FerrixStructure_Workspace_displayctl,n29_FerrixStructure_Workspace_inputctl,n30_FerrixStructure_Workspace_sndctl,n31_FerrixStructure_Workspace_logctl,n32_FerrixStructure_Workspace_audit,n33_FerrixStructure_Workspace_pci,n34_FerrixStructure_Workspace_nativeAbi,n35_FerrixStructure_Workspace_objects,n36_FerrixStructure_Workspace_btrfs,n37_FerrixStructure_Workspace_btrfsWrite,n38_FerrixStructure_Workspace_btrfsVfs,n39_FerrixStructure_Workspace_blockQueue,n40_FerrixStructure_Workspace_blkRing,n41_FerrixStructure_Workspace_blkServe,n42_FerrixStructure_Workspace_virtioBlk,n43_FerrixStructure_Workspace_devmgrProto,n44_FerrixStructure_Workspace_nativeCrate,n45_FerrixStructure_Workspace_renderctl,n46_FerrixStructure_Workspace_gc400,n47_FerrixStructure_Workspace_fbtext,n48_FerrixStructure_Workspace_qr,n52_FerrixStructure_Workspace_bootCrate,n53_FerrixStructure_Workspace_kernelCrate,n54_FerrixStructure_Workspace_xtask,n55_FerrixStructure_Workspace_fuzz implemented
-  class n49_FerrixStructure_Workspace_vdagent,n50_FerrixStructure_Workspace_virtioConsole writtenAhead
+  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_crng,n9_FerrixStructure_Workspace_sched,n10_FerrixStructure_Workspace_vma,n11_FerrixStructure_Workspace_linuxAbi,n12_FerrixStructure_Workspace_ustack,n13_FerrixStructure_Workspace_cpio,n14_FerrixStructure_Workspace_vfs,n15_FerrixStructure_Workspace_procfs,n16_FerrixStructure_Workspace_sysfs,n17_FerrixStructure_Workspace_virtio,n18_FerrixStructure_Workspace_netwire,n19_FerrixStructure_Workspace_nettcp,n20_FerrixStructure_Workspace_netCore,n21_FerrixStructure_Workspace_netServe,n22_FerrixStructure_Workspace_netRing,n23_FerrixStructure_Workspace_netlink,n24_FerrixStructure_Workspace_virtioNet,n25_FerrixStructure_Workspace_virtioGpu,n26_FerrixStructure_Workspace_virtioSnd,n27_FerrixStructure_Workspace_virtioInput,n28_FerrixStructure_Workspace_displayctl,n29_FerrixStructure_Workspace_inputctl,n30_FerrixStructure_Workspace_sndctl,n31_FerrixStructure_Workspace_logctl,n32_FerrixStructure_Workspace_audit,n33_FerrixStructure_Workspace_pci,n34_FerrixStructure_Workspace_nativeAbi,n35_FerrixStructure_Workspace_objects,n36_FerrixStructure_Workspace_btrfs,n37_FerrixStructure_Workspace_btrfsWrite,n38_FerrixStructure_Workspace_btrfsVfs,n39_FerrixStructure_Workspace_blockQueue,n40_FerrixStructure_Workspace_blkRing,n41_FerrixStructure_Workspace_blkServe,n42_FerrixStructure_Workspace_virtioBlk,n43_FerrixStructure_Workspace_devmgrProto,n44_FerrixStructure_Workspace_nativeCrate,n45_FerrixStructure_Workspace_renderctl,n46_FerrixStructure_Workspace_gc400,n47_FerrixStructure_Workspace_fbtext,n48_FerrixStructure_Workspace_qr,n49_FerrixStructure_Workspace_vdagent,n50_FerrixStructure_Workspace_virtioConsole,n52_FerrixStructure_Workspace_bootCrate,n53_FerrixStructure_Workspace_kernelCrate,n54_FerrixStructure_Workspace_xtask,n55_FerrixStructure_Workspace_fuzz implemented
   class n51_FerrixStructure_Workspace_seccompBpf planned
 ```
 
@@ -3361,7 +3365,7 @@ Of the 178, about 16 are left: the desktop's speed as it is watched (client page
 
 Gears, the customer's order of 2026-09-24 (docs/GPU.md 6): vkgears through Venus -- Mesa's Vulkan driver in the guest, the host's GPU under virglrenderer's render server -- on the Linux host, 39 points, done the same day: vkgears draws on the host's RADV (cargo xtask test-vkgears); and gears drawn by the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no Vulkan in any driver, through a ring-3 driver of Ferrix's own, 32 points, of which G1 and G2 (11) ran on the board the same day: the core runs a command buffer, its events by interrupt.
 
-The desktop's own clients, begun on 2026-09-26 at the customer's request: waybar, fuzzel, hyprlock and hypridle in Rust, reading their own configuration files unchanged, over a shared foundation of 21 points. waybar and fuzzel are on main (2026-09-27) and run the customer's own configuration on run-compositor --everything; hyprlock is on a branch, hypridle not started.
+The desktop's own clients, begun on 2026-09-26 at the customer's request: waybar, fuzzel, hyprlock and hypridle in Rust, reading their own configuration files unchanged, over a shared foundation of 21 points. waybar and fuzzel are on main (2026-09-27) and run the customer's own configuration on run-compositor --everything, and hypridle is on main (2026-09-26); hyprlock's program is on a branch.
 
 ### S21 — Stage 21 bare metal gpu
 
@@ -3630,8 +3634,8 @@ flowchart LR
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n17_FerrixStructure_Kernel_vm,n18_FerrixRoadmap_stage7LinuxAbi,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n21_FerrixStructure_Kernel_futex,n22_FerrixRoadmap_stage8Vfs,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n25_FerrixRoadmap_stageSysfs,n28_FerrixRoadmap_stage9NativeAbi,n29_FerrixStructure_Kernel_native,n30_FerrixRoadmap_stage10UserspaceDrivers,n33_FerrixRoadmap_stage11BtrfsRead,n34_FerrixStructure_Kernel_blockCore,n35_FerrixRoadmap_stageNetworking,n36_FerrixStructure_Kernel_netCore,n37_FerrixRoadmap_stageDynamicLinking,n44_FerrixRoadmap_stage16Rustc,n45_FerrixStructure_Userland_rustc implemented
-  class n26_FerrixRoadmap_stageChrome,n27_FerrixStructure_Ferrix_userland,n38_FerrixRoadmap_stage13Isolation,n43_FerrixRoadmap_stage15Userland inProgress
-  class n39_FerrixStructure_Kernel_namespaces,n40_FerrixStructure_Kernel_cgroups,n41_FerrixStructure_Kernel_seccomp,n42_FerrixRoadmap_stage14RealTime planned
+  class n26_FerrixRoadmap_stageChrome,n27_FerrixStructure_Ferrix_userland,n38_FerrixRoadmap_stage13Isolation,n39_FerrixStructure_Kernel_namespaces,n40_FerrixStructure_Kernel_cgroups,n43_FerrixRoadmap_stage15Userland inProgress
+  class n41_FerrixStructure_Kernel_seccomp,n42_FerrixRoadmap_stage14RealTime planned
 ```
 
 **Figure 19 — Stages and the parts that answer them.** Each line carries the word the model wrote: `satisfy` where the part exists, `allocate` where it is one the stage still owes. [SVG](diagrams/stages-and-parts.svg) Source: `10-roadmap.sysml`.
@@ -4626,12 +4630,12 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 13 | `FerrixObjects::LinuxSyscallLayer::seccompCheck` | action | `#planned` |
 | 13 | `FerrixIsolation::Namespace` | part | `#planned` |
 | 13 | `FerrixIsolation::NsSet` | part | `#planned` |
-| 13 | `FerrixIsolation::Namespaces` | part | `#planned` |
-| 13 | `FerrixIsolation::Cgroup` | part | `#planned` |
-| 13 | `FerrixIsolation::Cgroups` | part | `#planned` |
+| 13 | `FerrixIsolation::Namespaces` | part | `#inProgress` |
+| 13 | `FerrixIsolation::Cgroup` | part | `#inProgress` |
+| 13 | `FerrixIsolation::Cgroups` | part | `#inProgress` |
 | 13 | `FerrixIsolation::Seccomp` | part | `#planned` |
 | 13 | `FerrixIsolation::ClassicBpfInterpreter` | part | `#planned` |
-| 13 | `FerrixStorage::Cgroupfs` | part | `#planned` |
+| 13 | `FerrixStorage::Cgroupfs` | part | `#implemented` |
 | 14 | `FerrixScheduling::Task::schedClass` | attribute | `#planned` |
 | 14 | `FerrixScheduling::Task::priority` | attribute | `#planned` |
 | 14 | `FerrixScheduling::Task::bandwidth` | attribute | `#planned` |
@@ -4640,7 +4644,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 14 | `FerrixScheduling::Scheduler::edf` | part | `#planned` |
 | 14 | `FerrixScheduling::Scheduler::switchDomainMode` | action | `#planned` |
 | 14 | `FerrixAssurance::CyclicTest` | verification | `#planned` |
-| 15 | `FerrixStructure::Userland::init` | part | `#inProgress` |
+| 15 | `FerrixStructure::Userland::init` | part | `#implemented` |
 | 15 | `FerrixObjects::PosixIpc` | part | `#implemented` |
 | 17 | `FerrixStructure::Workspace::virtioGpu` | part | `#implemented` |
 | 17 | `FerrixStructure::Workspace::virtioInput` | part | `#implemented` |

@@ -5,7 +5,8 @@ whose acceptance test is that it compiles Rust. Not "has a shell", not "draws a
 window": it hosts `rustc`, which is the hardest thing a general-purpose OS is
 routinely asked to do and the only goal that forces every subsystem to be real.
 
-This document is the design. `docs/ROADMAP.md` is the order it gets built in.
+This document is the design. The roadmap, `docs/roadmap/`, is the order it
+gets built in, and `docs/LAYOUT.md` says where each part lives in the tree.
 
 ---
 
@@ -311,7 +312,13 @@ that lives on the root filesystem. The loader breaks the cycle: it loads an
 initramfs into RAM containing `devmgr`, the virtio-blk driver and `init`. The
 kernel mounts that as root, starts init, drivers come up, and the system pivots
 onto btrfs. This is exactly Linux's answer, and it works for exactly the same
-reason.
+reason. On an image that boots `/sbin/init`, the kernel starts init alone and
+init starts `devmgr` as a service (`docs/INIT.md`, L12): the kernel gives pid 1
+a starter token that can start `devmgr` and nothing else, and the channel that
+carries every device's authority goes from the kernel to `devmgr` without
+passing through init. A driver that dies is started again by `devmgr` under
+the service manager's restart policy (`src/lib/init/restart`), and its
+device's pins are kept until the next driver has reset it.
 
 **IOMMU is not optional here.** A userspace driver without an IOMMU is a
 userspace process that can write to any physical address, which is worse than an
@@ -404,20 +411,24 @@ test that a CoW filesystem actually has to pass.
 | Byte-level logic: ELF, cpio, btrfs item parsing, seccomp BPF, page-table arithmetic, allocators | `src/lib/` | `cargo test`, Miri, fuzzers |
 | Loader | `src/boot/common/uefi/` | QEMU boot test |
 | Kernel | `src/kernel/` | QEMU boot test, in-kernel test harness |
-| Ring-3 programs: the native runtime, `devmgr`, drivers, test programs | `src/user/native/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test or `test-shell` once native process creation lands |
-| Host tooling | `tools/common/xtask/` | `cargo test` |
+| Ring-3 programs on Ferrix's own ABI: the native runtime, `devmgr`, drivers, test programs | `src/user/native/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test |
+| Ring-3 programs on the Linux ABI: init, `authd`, the compositor and its clients, ferrousli, zinc, the installer, the media player and sound server, `statd`, `adbd` | `src/user/linux/`, each its own cargo workspace | `cargo test` on the host, and the `test-*` boots on Ferrix |
+| Test programs and fuzzing outside any one crate | `src/tests/` | the boots, and `cargo fuzz` |
+| Host tooling | `tools/common/`, and `tools/vendor/` for one vendor's hardware | `cargo test`, and the gates that run them |
 
 The split is not cosmetic. Nothing in `src/kernel/` can be run by `cargo test`,
 Miri cannot interpret a privileged instruction, and a fuzzer cannot drive a
 page fault handler. So anything expressible as a pure function of bytes is
-written as one, in `src/lib/`, where all three tools reach it. `scripts/
-check-crate-layering.sh` keeps that from eroding.
+written as one, in `src/lib/`, where all three tools reach it.
+`tools/common/check/check-crate-layering.sh` keeps that from eroding.
 
 Architecture-specific code lives under `arch/` and is reached through one
 facade. Generic code never names an architecture, and no
 `#[cfg(target_arch)]` appears outside those directories — both enforced by the
 same script, because a facade maintained by convention is a facade for about six
-weeks.
+weeks. One system on chip's devices are not an architecture: they go under
+`platform/<vendor>/<soc>/`, which compiles everywhere and does nothing on a
+machine whose device tree does not name that chip (`docs/LAYOUT.md`).
 
 ---
 

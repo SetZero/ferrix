@@ -248,6 +248,21 @@ seal. The boot check runs it all twice, from a process of its own:
   memfd    4 seals added and enforced, 14 calls refused as Linux refuses them, a write seal refused while a shared mapping could write, a fork's copy included; 0 frames leaked
 ```
 
+**Done — packet pipes, `/dev`'s fd links, and `/proc` a 32-bit program can
+read (2026-09-28 and 29, for the Steam client).** `pipe2` takes `O_DIRECT`
+and makes a packet pipe, as Linux has since 3.4: a write of up to
+`PIPE_BUF` bytes is one packet, a larger one is cut into packets of
+`PIPE_BUF`, and a read takes one packet at most. `/dev` carries `fd`,
+`stdin`, `stdout` and `stderr` as links into `/proc/self/fd`, the links
+userspace makes on Linux, so bash's process substitution hands a command a
+path that opens. `/proc/<pid>/fd/<n>` is a magic link, as Linux's
+`proc_fd_link` makes it: followed, it is the open file itself, so a pipe
+opens again through it and `stat` of a socket's link is the socket's
+`fstat`; opening a socket or an anonymous file through it is `ENXIO`, as on
+Linux. `/proc`'s inode numbers and its directory offsets fit in 32 bits,
+each held by a compile-time assertion, since an i386 glibc `readdir` fails
+with `EOVERFLOW` at the first number past them.
+
 **The exit test, and how far it gets.** `cargo xtask test-vfs --init PATH`
 puts a static musl busybox into the initramfs and has init run the exit
 criterion's commands from it, checking their output after the boot marker. It

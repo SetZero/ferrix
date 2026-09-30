@@ -247,6 +247,17 @@ saw it. The check also covers the refusals; a child killed before its start; an
 unstarted child's handle dropped with the channel message carrying it; and one
 whose only handle is closed, which must be heard and freed.
 
+**Done — pid 1 starts `devmgr` (2026-09-27, `docs/INIT.md` L12).** On an
+image booted with `ferrix.devmgr=init`, the kernel writes pid 1 a second
+message after its hello carrying a starter: a token with `MANAGE` alone,
+no `TRANSFER` and no `DUPLICATE`, so it never leaves pid 1's table. The new
+native call `devmgr_start(starter, job)` (0x1052) loads `/sbin/devmgr` in
+that job and starts it, with the channel that carries every device's
+authority going straight into `devmgr`'s table; pid 1 gets back a handle
+with `PROCESS` rights, which reach nothing inside it. A second start while
+`devmgr` lives is `ALREADY_BOUND` (FX-1009). The certified configuration
+keeps the kernel starting `devmgr` itself.
+
 **Left for later stages**, none of it on the exit criterion's path:
 
 * **No native handle to a Linux mapping's object or a file's VMO until

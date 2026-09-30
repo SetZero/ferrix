@@ -421,8 +421,11 @@ which reads the real `~/.config/fuzzel/fuzzel.ini` and `.desktop` files on
 the host. Against example's files it finds 144 entries, 67 shown, and ranks
 Terminal first for `term`.
 
-On branch `fuzzel-window`: the window, the hyprix focus change, the image's
-entries and icons, and `test-compositor --boot fuzzel`. The boot starts
+On `main` since 2026-09-27 (`f4b18cb5`, `e40a5a0a`, `1413d5f9`): the window,
+a layer surface drawn as upstream's `render.c` draws it, the hyprix focus
+change, the image's entries and icons, and `test-compositor --boot fuzzel`.
+The user's `SUPER R` runs their own `hypr-launcher` script, carried
+unchanged, into `/bin/fuzzel` (`--boot fuzzel-user`). The boot starts
 fuzzel with `data/boot/fuzzel.ini` (the user's settings in Liberation Serif,
 `dpi-aware=no`, `terminal=/bin/term`). It has `/bin/vkbd` type `pat` and
 then Return, and requires three screendumps pixel for pixel: the list with
@@ -439,9 +442,11 @@ took about 30 seconds from start to window with 20 host font files. The
 boot's tree font took about 4. `--print-timing-info` is in the boot now to
 say which stage it is. Suspect the font scan under TCG.
 
-Left: the clipboard pastes (need `wl_data_device` in the toolkit); taking
-the keyboard back from an `on-demand` fuzzel when another window is clicked
-(hyprix); the startup time above; aarch64 boot.
+Left: the clipboard pastes (need `wl_data_device` in the toolkit, which has
+only `ext-data-control` so far); the launcher script's second `SUPER R`,
+whose `pkill -x fuzzel` does not close fuzzel yet (`docs/BACKLOG.md`);
+taking the keyboard back from an `on-demand` fuzzel when another window is
+clicked (hyprix); the startup time above; aarch64 boot.
 
 ## 5. hyprlock
 
@@ -569,14 +574,16 @@ no diagnostic and no unsupported line
 not one of their three `desc:` monitors, upstream's rule gives only the
 clock panel, `$TIME` and the date, and their Lenovo gets all 8 widgets.
 
-**On branch `hyprlock`, next:** the program (`/bin/hyprlock` on
-`compositor/toolkit`, text through `compositor/text`), `hyprlock-gate`,
-and the `hyprlock` boot of `test-compositor` (lock, five dots, a wrong
-password in `fail_color` with its text, the right one typed on a German
-keyboard, unlock), which passed pixel for pixel on x86_64 before the
-relayout. It lands when `compositor/text` is on main. After that: the
-`Service` backend over `authd` (`docs/AUTH.md` P1.5), once
-`src/lib/proto/auth-proto` lands.
+**On branch `hyprlock`, parked at the 2026-09-27 wind-down:** the program
+(`/bin/hyprlock` on `compositor/toolkit`, text through `compositor/text`),
+`hyprlock-gate`, and the `hyprlock` boot of `test-compositor` (lock, five
+dots, a wrong password in `fail_color` with its text, the right one typed
+on a German keyboard, unlock), which passed pixel for pixel on x86_64
+before the relayout; and the `Service` backend over `authd` (`docs/AUTH.md`
+P1.5) with the desktop's `authd` and a no-password boot beside the
+`hyprlock` boot. Everything it waited on is on `main` now --
+`compositor/text`, `src/lib/proto/auth-proto` and `authd` -- so what is
+left is a rebase onto the relaid tree and its boots.
 
 ## 6. hypridle
 
@@ -715,10 +722,14 @@ shell says it does, and the program reports it.
   and comes off at unlock, and timers, children, signals and the waker come
   back as events. Two things are not tried end to end: the keyboard, since
   a headless seat has no keyboard (the key translation is tested as a
-  function against `src/user/linux/compositor/xkb`'s `us` and `de` tables), and popups,
-  since hyprix refuses an `xdg_popup` whose parent comes from
-  `zwlr_layer_surface_v1.get_popup` -- a gap in the compositor, which the
-  waybar stream is fixing; the test for it is `#[ignore]`d with that reason.
+  function against `src/user/linux/compositor/xkb`'s `us` and `de` tables).
+  Popups are tried since 2026-09-27: hyprix takes an `xdg_popup` whose
+  parent comes from `zwlr_layer_surface_v1.get_popup` (`7506dc0a`, for
+  waybar's tooltips), and `tests/against_hyprix.rs`'s popup test runs.
+  Since 2026-09-28 the toolkit also shows a client's own cursor picture,
+  gives windows and dialogs their menus and floats dialogs, and lets a
+  program with its own loop poll its socket, for yserver
+  (`docs/YSERVER.md`).
 * **`src/user/linux/compositor/hyprlang` and `src/user/linux/compositor/image` are on
   `main`** (2026-09-26). hyprlang's tests pin each place config.cpp behaves
   unexpectedly (a top-level name no keyword takes is accepted silently; a

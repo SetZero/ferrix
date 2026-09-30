@@ -535,6 +535,18 @@ too. The stage 7 check stages such a timeout with `0xDEADBEEF` above
 `tv_nsec`. Its negative control, not committed: with `read_pair` taking the
 field whole again, the ARMv7-A boot failed that check.
 
+**Done — a socket's owner, and `accept4`'s flag (2026-09-28).**
+`/proc/net/tcp`, `udp`, `tcp6` and `udp6` print the socket file's own inode,
+the one `/proc/<pid>/fd` links it by, and the uid that opened or accepted
+it, where they printed the net stack's id and 0: `lsof -i`, `ss -p` and
+`netstat -p` can now say which process holds a connection, which the Steam
+client asks of its web helper's websocket. And an accepted socket is
+non-blocking only when `accept4`'s `SOCK_NONBLOCK` says so; the listener's
+`O_NONBLOCK` decides only whether `accept` waits, as on Linux. It had been
+given the listener's flag, so a server that accepted on a non-blocking
+listener and then read with a timeout saw `EAGAIN` before the client's bytes
+arrived. The boot checks ask both families.
+
 **Exit, and it is met:** under `xtask`'s gateway — which is where this
 criterion's *"under QEMU's user-mode network"* now reads — busybox configures
 `eth0` with `ip`, and `route` and `netstat` report through `/proc/net`. `wget`

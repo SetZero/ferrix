@@ -39,16 +39,22 @@ are unfinished, so it is not ready to be your everyday OS.
 
 ## What works
 
-- **Linux programs:** Chrome, `rustc`, `git`, `curl` and other tested binaries
-  run without patches. Ferrix implements the Linux system calls they need. It
-  also has its own C library, ferrousli, for native userland programs.
+- **Linux programs:** Chrome, `rustc`, `git`, `curl`, Valve's `steamcmd` and
+  other tested binaries run without patches, 32-bit x86 programs included.
+  Valve's Steam client starts and shows its sign-in window. Ferrix implements
+  the Linux system calls they need. It also has its own C library, ferrousli,
+  for native userland programs.
 - **A desktop:** The hyprix Wayland compositor tiles windows and starts with a
-  terminal running the zinc shell. Chrome can play video with sound.
-- **Drivers outside the kernel:** Disk, network, graphics, input and console
-  drivers run as processes. On x86-64 and AArch64, an IOMMU limits their device
+  terminal running the zinc shell. Chrome can play video with sound. X11
+  programs appear as ordinary windows through yserver, an X server written in
+  Rust. The bar, launcher and idle daemon are Rust rewrites of waybar, fuzzel
+  and hypridle that read their usual configuration files.
+- **Drivers outside the kernel:** Disk, network, graphics, input, sound and
+  console drivers run as processes. On x86-64 and AArch64, an IOMMU limits their device
   access. Ferrix can restart them after a crash.
-- **Persistent storage and networking:** The root filesystem is btrfs. Inside
-  Ferrix, `git` can clone a repository and `curl` can fetch over HTTPS.
+- **Persistent storage and networking:** The root filesystem is btrfs, and an
+  installer can put Ferrix on a virtual machine's own disk. Inside Ferrix,
+  `git` can clone a repository and `curl` can fetch over HTTPS.
 - **Three architectures:** Boot tests cover x86-64, AArch64 and ARMv7-A.
   Ferrix has also booted on an STM32MP157D-DK1 board and a Pixel 7.
 

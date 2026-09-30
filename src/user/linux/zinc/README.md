@@ -84,10 +84,11 @@ Not every theme is right yet. Of ten measured against zsh 5.9 by rendering
 `$PROMPT` in the same home, `robbyrussell` -- the one the image boots with
 -- `avit` and `simple` come out byte for byte. The other seven differ in
 three ways: a bold attribute zinc writes where zsh writes none, the
-256-colour escapes `spectrum.zsh` builds, and `vcs_info`, which reaches
-`zformat` and stops.
+256-colour escapes `spectrum.zsh` builds, and `vcs_info`, which reached
+`zformat` and stopped until 2026-09-27. `zformat` is zsh 5.9's now, and
+agnoster's prompt names a repository's branch
+(`tests/pty_prompt_git.py`, run by `check --zinc`).
 
 Next, in the order the themes above need them: the bold attribute and the
-256-colour escapes; `zformat` and `zparseopts`, which is where `vcs_info`
-stops; the rest of the expansion flags and glob qualifiers; `zmodload` and
+256-colour escapes; `zparseopts`; the rest of the expansion flags and glob qualifiers; `zmodload` and
 the special parameter hashes; the completion system proper.

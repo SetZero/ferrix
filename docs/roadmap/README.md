@@ -28,9 +28,9 @@ The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
   (`docs/AUTH.md` phase 1), and hyprlock's lock over it is parked on a branch.
 - **Stage 19:** the desktop composites on the GPU, and yserver, an X server
   in Rust, shows X windows on it; client pages as texture backing and the
-  second-pass effects are left. waybar and fuzzel, rewritten in Rust, run the
-  customer's own config on `run-compositor --everything`; hyprlock and hypridle
-  are left.
+  second-pass effects are left. waybar, fuzzel and hypridle, rewritten in
+  Rust, run the customer's own config on `run-compositor --everything`;
+  hyprlock is parked on a branch.
 - **Stage 20:** Ferrix builds its own x86-64 image.
 - **Stage 22 (Steam):** sound plays through `/dev/snd` and a PulseAudio-protocol
   server, Chrome plays video with sound, 32-bit x86 programs run, and Valve's

@@ -1,7 +1,10 @@
 # Headers
 
 These are musl 1.2.5's headers, as its `make install-headers` generates them,
-unmodified. musl is MIT licensed; its copyright notice is in
+unmodified but for five edits: glibc's type flags and `FTW_ACTIONRETVAL` in
+`ftw.h`, `sem_clockwait` in `semaphore.h` and `wcslcpy` and `wcslcat` in
+`wchar.h` (both POSIX.1-2024's), glibc's `epoll_pwait2` in `sys/epoll.h`, and
+glibc's `random_r` family and `struct random_data` in `stdlib.h`. musl is MIT licensed; its copyright notice is in
 [COPYRIGHT.musl](COPYRIGHT.musl).
 
 Most of musl's headers are the same on every architecture. The 22 in `bits/`
@@ -17,4 +20,5 @@ API a C program is compiled against. Binary compatibility with glibc, meaning
 the symbols and layouts a program built against glibc expects, is a separate
 matter: it is held in the library, not here.
 
-A header edited to match ferrousli rather than musl says so at the edit.
+A header edited to match ferrousli rather than musl says so at the edit, in a
+comment that begins "Ferrousli, not musl 1.2.5".

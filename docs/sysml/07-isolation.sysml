@@ -3,9 +3,11 @@
  *
  * docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials.
  * Stage 13, designed in from the start so that no global table has to be
- * found later. Only the credentials exist, since stage 7; namespaces,
- * cgroups and seccomp are not built, and unshare and setns answer as a
- * Linux built without namespaces does.
+ * found later. The credentials exist since stage 7, and cgroup v2 since
+ * 2026-09-23 (docs/CGROUPS.md), over the job tree. Of the namespaces, the
+ * mount table's groundwork is in (docs/NAMESPACES.md, N1 and N2) and the
+ * namespaces themselves are not, so unshare and setns still answer as a
+ * Linux built without namespaces does. Seccomp is not built.
  */
 package FerrixIsolation {
     private import ScalarValues::*;
@@ -29,8 +31,14 @@ package FerrixIsolation {
         ref part namespaces : Namespace[8];
     }
 
-    #planned part def Namespaces {
+    #inProgress part def Namespaces {
         @stage { number = 13; }
+        doc /* Steam's user and mount namespaces first (docs/NAMESPACES.md,
+             * N1 to N6). N1 (2026-09-28): every mount's own flags enforced,
+             * MS_REMOUNT, and mountinfo. N2 (2026-09-30): binds of
+             * directories, files and sockets, MS_REC, MNT_DETACH of a
+             * subtree, and a superblock per filesystem. N3, mount namespaces
+             * themselves, is next. */
         part every : Namespace[8..*];
         action unshare;
         action setns;
@@ -43,7 +51,7 @@ package FerrixIsolation {
         Pids;
     }
 
-    #planned part def Cgroup {
+    #inProgress part def Cgroup {
         @stage { number = 13; }
         attribute controllers : CgroupController[0..*];
         part children : Cgroup[0..*];
@@ -52,11 +60,18 @@ package FerrixIsolation {
         attribute pidsMax : Natural[0..1];
     }
 
-    #planned part def Cgroups {
+    #inProgress part def Cgroups {
         @stage { number = 13; }
         doc /* One unified hierarchy (v2), exposed as cgroupfs. cpu is not a
              * separate mechanism: it is bandwidth and weight handed to the
-             * scheduling classes. memory scopes reclaim and the OOM kill. */
+             * scheduling classes. memory scopes reclaim and the OOM kill.
+             *
+             * Built (docs/CGROUPS.md, 55 of its 85 points): every cgroup a
+             * Job, cgroupfs mounted as cgroup2, cgroup.events, clone3 into a
+             * cgroup, delegation by chown; pids, memory's charging and its
+             * scoped OOM kill, and cpu.weight, over the certification's job
+             * quotas. Left: the rest of memory.stat, memory's reclaim,
+             * freezing, cpu.max and io. */
         part root : Cgroup;
     }
 
@@ -71,7 +86,7 @@ package FerrixIsolation {
 
     #planned part def ClassicBpfInterpreter {
         @stage { number = 13; }
-        doc /* libs/seccomp, owed before stage 13 starts. */
+        doc /* src/lib/kernel/seccomp, owed before seccomp is built. */
     }
 
     #implemented attribute def Credentials {

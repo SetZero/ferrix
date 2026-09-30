@@ -149,8 +149,9 @@ int clearenv(void);
 #define WIFCONTINUED(s) ((s) == 0xffff)
 void *reallocarray (void *, size_t, size_t);
 void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
-/* glibc's reentrant random(), with its state in the caller's struct, in
-   glibc's layout; fontconfig uses them when it finds them. */
+/* Ferrousli, not musl 1.2.5: glibc's reentrant random(), with its state in
+   the caller's struct, in glibc's layout; fontconfig uses them when it
+   finds them. */
 struct random_data {
 	int *fptr;
 	int *rptr;

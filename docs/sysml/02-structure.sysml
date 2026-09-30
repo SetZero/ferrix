@@ -276,8 +276,8 @@ package FerrixStructure {
         #implemented part filesystems : Filesystems;
         #implemented part blockCore : BlockCore;
         #implemented part netCore : NetCore;
-        #planned part namespaces : Namespaces;
-        #planned part cgroups : Cgroups;
+        #inProgress part namespaces : Namespaces;
+        #inProgress part cgroups : Cgroups;
         #planned part seccomp : Seccomp;
         #implemented part devices : DeviceEnumeration;
         #implemented part iommu : IommuDomains;
@@ -369,12 +369,12 @@ package FerrixStructure {
         doc /* Linux binaries speaking the Linux ABI -- zinc, the uutils
              * family and C programs ported over ferrousli, somebody else's
              * busybox, rustc -- and devmgr and its drivers, native programs
-             * that speak the native ABI as well, and /sbin/init, which
-             * test-init alone boots so far. */
+             * that speak the native ABI as well, and /sbin/init, pid 1 of
+             * every image since 2026-09-26. */
         port posix : ~LinuxSyscallPort;
         port native : ~NativeSyscallPort;
 
-        #inProgress part init : UserProcess {
+        #implemented part init : UserProcess {
             @stage { number = 15; }
             doc /* /sbin/init (src/user/linux/init/, docs/INIT.md), since 2026-09-26: pid 1
                  * around src/lib/init/svc's manager. It mounts /run and cgroup2, runs
@@ -388,7 +388,11 @@ package FerrixStructure {
                  * ones in their cgroup's job, and routes the directory's
                  * OPENs. It is pid 1 of cargo xtask run and of every desktop
                  * image, where the compositor is hyprix.service and each
-                 * program it starts is in a scope of its own (L10). */
+                 * program it starts is in a scope of its own (L10). devmgr
+                 * restarts drivers by its restart policy (L11), and on an
+                 * image booted with ferrix.devmgr=init pid 1 starts devmgr
+                 * itself, through the kernel's starter (L12, 2026-09-27).
+                 * L13, the sandboxing keys, waits for the rest of stage 13. */
         }
         #implemented part shell : UserProcess {
             doc /* busybox sh was the first foreign binary to run on Ferrix:
@@ -863,7 +867,7 @@ package FerrixStructure {
         #implemented part acpi : LibraryCrate {
             attribute :>> path = "src/lib/platform/acpi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 81;
+            attribute :>> hostTests = 83;
             doc /* Reached at stage 3: the MADT walk the interrupt controller
                  * needed. Stage 10 uses the rest: the MCFG, GICv2m frames,
                  * the DMAR and the IORT. The acpi_tables fuzz target reads
@@ -873,7 +877,7 @@ package FerrixStructure {
         #implemented part fdt : LibraryCrate {
             attribute :>> path = "src/lib/platform/fdt";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 87;
+            attribute :>> hostTests = 93;
             doc /* Reached at stage 1 on ARMv7-A: console, GIC, timer
                  * interrupt and PSCI conduit come from it there. The
                  * fdt_parse fuzz target holds it to a second walk of the
@@ -882,7 +886,7 @@ package FerrixStructure {
         #implemented part sync : LibraryCrate {
             attribute :>> path = "src/lib/kernel/sync";
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 27;
+            attribute :>> hostTests = 30;
             doc /* Reached at stage 4: its ticket locks guard every shared
                  * kernel structure, the kernel's SpinLock being
                  * PreemptSpinLock, which holds off preemption, and
@@ -902,7 +906,7 @@ package FerrixStructure {
         #implemented part sched : LibraryCrate {
             attribute :>> path = "src/lib/kernel/sched";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 72;
+            attribute :>> hostTests = 77;
             @stage { number = 5; }
             doc /* The half of the scheduler that is arithmetic: the EEVDF
                  * tree, weights, lag, the domain partition. cargo test drives
@@ -911,7 +915,7 @@ package FerrixStructure {
         #implemented part vma : LibraryCrate {
             attribute :>> path = "src/lib/kernel/vma";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 66;
+            attribute :>> hostTests = 72;
             doc /* Written for stage 6; reached at stage 2 as the vmap arena's
                  * range map, and since stage 6 every process's address
                  * space. */
@@ -921,7 +925,7 @@ package FerrixStructure {
         #implemented part linuxAbi : LibraryCrate {
             attribute :>> path = "src/lib/proto/linux-abi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 126;
+            attribute :>> hostTests = 146;
             @stage { number = 7; }
             doc /* Three system call number tables, not two: x86-64's own,
                  * AArch64's generic one, and ARMv7-A's EABI one. The 32-bit
@@ -960,7 +964,7 @@ package FerrixStructure {
         #implemented part vfs : LibraryCrate {
             attribute :>> path = "src/lib/fs/vfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 101;
+            attribute :>> hostTests = 128;
             @stage { number = 8; }
             doc /* Dentries with negative entries, mounts, the path walk, open
                  * file descriptions, descriptor tables, tmpfs over a page
@@ -972,7 +976,7 @@ package FerrixStructure {
         #implemented part procfs : LibraryCrate {
             attribute :>> path = "src/lib/fs/procfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 33;
+            attribute :>> hostTests = 36;
             @stage { number = 8; }
             doc /* The text of /proc as pure functions: maps lines padded to
                  * their name column at both pointer widths, meminfo, status,
@@ -994,7 +998,7 @@ package FerrixStructure {
         #implemented part virtio : LibraryCrate {
             attribute :>> path = "src/lib/drivers/virtio";
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 164;
+            attribute :>> hostTests = 180;
             @stage { number = 10; }
             doc /* The split virtqueue as logic over an abstract shared memory,
                  * the PCI transport's status protocol, and each device
@@ -1037,7 +1041,7 @@ package FerrixStructure {
         #implemented part netCore : LibraryCrate {
             attribute :>> path = "src/lib/network/net";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 69;
+            attribute :>> hostTests = 72;
             doc /* The net core, written ahead of the networking stage:
                  * interfaces and the addresses on them, one routing table for
                  * both families, a neighbour cache that answers ARP's
@@ -1121,7 +1125,7 @@ package FerrixStructure {
         }
         #implemented part virtioGpu : LibraryCrate {
             attribute :>> path = "src/lib/drivers/display/virtio-gpu";
-            attribute :>> hostTests = 16;
+            attribute :>> hostTests = 31;
             @stage { number = 17; }
             doc /* The virtio-gpu 2D driver logic, written ahead of the driver
                  * process for the compositor's first iteration and driven
@@ -1137,7 +1141,7 @@ package FerrixStructure {
         }
         #implemented part virtioSnd : LibraryCrate {
             attribute :>> path = "src/lib/drivers/sound/virtio-snd";
-            attribute :>> hostTests = 13;
+            attribute :>> hostTests = 14;
             doc /* The virtio-snd driver logic, written ahead of the driver
                  * process for the audio iteration (docs/AUDIO.md L4): bring-up
                  * with DRIVER_OK before HELLO, since a sound device describes
@@ -1173,7 +1177,7 @@ package FerrixStructure {
         #implemented part displayctl : LibraryCrate {
             attribute :>> path = "src/lib/proto/displayctl";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 12;
+            attribute :>> hostTests = 33;
             @stage { number = 17; }
             doc /* The control protocol between the kernel's display core and
                  * a ring-3 display driver, written ahead of both for the
@@ -1190,7 +1194,7 @@ package FerrixStructure {
         #implemented part inputctl : LibraryCrate {
             attribute :>> path = "src/lib/proto/inputctl";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 25;
+            attribute :>> hostTests = 26;
             @stage { number = 17; }
             doc /* The control protocol between the kernel's input core and a
                  * ring-3 input driver, and evdev's per-open queues, written
@@ -1256,7 +1260,7 @@ package FerrixStructure {
         #implemented part pci : LibraryCrate {
             attribute :>> path = "src/lib/platform/pci";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 47;
+            attribute :>> hostTests = 51;
             @stage { number = 10; }
             doc /* PCI configuration space over a ConfigSpace the caller
                  * implements: ECAM geometry, headers, BAR decoding and sizing,
@@ -1269,7 +1273,7 @@ package FerrixStructure {
         #implemented part nativeAbi : LibraryCrate {
             attribute :>> path = "src/lib/proto/native-abi";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 14;
+            attribute :>> hostTests = 23;
             @stage { number = 9; }
             doc /* The native ABI's numbers, handle values, rights, signals,
                  * errno names and repr(C) layouts. One table on every
@@ -1279,7 +1283,7 @@ package FerrixStructure {
         #implemented part objects : LibraryCrate {
             attribute :>> path = "src/lib/kernel/objects";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 24;
+            attribute :>> hostTests = 29;
             @stage { number = 9; }
             doc /* The handle table and the channel message queue, generic
                  * over what a handle names. A handle is a slot and a
@@ -1316,7 +1320,7 @@ package FerrixStructure {
         #implemented part btrfsVfs : LibraryCrate {
             attribute :>> path = "src/lib/fs/btrfs-vfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 32;
+            attribute :>> hostTests = 35;
             @stage { number = 11; }
             doc /* btrfs mounted into the VFS: FileSystem and Inode over the
                  * read path, read-only and holding no lock across I/O, and a
@@ -1326,7 +1330,7 @@ package FerrixStructure {
         #implemented part blockQueue : LibraryCrate {
             attribute :>> path = "src/lib/fs/block";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 36;
+            attribute :>> hostTests = 37;
             @stage { number = 11; }
             doc /* The block core's request queue: merging, flush and FUA
                  * barriers no request crosses, deadline scheduling. In front
@@ -1336,7 +1340,7 @@ package FerrixStructure {
         #implemented part blkRing : LibraryCrate {
             attribute :>> path = "src/lib/proto/blkring";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 52;
+            attribute :>> hostTests = 66;
             @stage { number = 10; }
             doc /* The block ring, docs/BLOCK-RING.md in code: the memory the
                  * kernel shares with a ring-3 block driver, every index and
@@ -1349,7 +1353,7 @@ package FerrixStructure {
         #implemented part blkServe : LibraryCrate {
             attribute :>> path = "src/lib/drivers/block/blkserve";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 6;
+            attribute :>> hostTests = 8;
             @stage { number = 10; }
             doc /* A ring-3 block driver's serve loop between the block ring and
                  * a virtio-blk device, written against a trait so it runs on
@@ -1369,7 +1373,7 @@ package FerrixStructure {
         #implemented part devmgrProto : LibraryCrate {
             attribute :>> path = "src/lib/proto/devmgr-proto";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 5;
+            attribute :>> hostTests = 7;
             @stage { number = 10; }
             doc /* The messages between the kernel and devmgr on its bootstrap
                  * channel as docs/DEVMGR.md fixes them -- DEVICES, REPORT,
@@ -1379,7 +1383,7 @@ package FerrixStructure {
         #implemented part nativeCrate : LibraryCrate {
             attribute :>> path = "src/lib/proto/native";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 28;
+            attribute :>> hostTests = 30;
             doc /* Typed, safe wrappers over every native system call, with
                  * owned handles, written against a raw call trait: src/user/native/rt
                  * implements it with the trap instruction, and the tests with
@@ -1388,7 +1392,7 @@ package FerrixStructure {
         #implemented part renderctl : LibraryCrate {
             attribute :>> path = "src/lib/proto/renderctl";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 19;
+            attribute :>> hostTests = 22;
             @stage { number = 19; }
             doc /* The render control protocol between the kernel's render core
                  * and a ring-3 GPU driver (docs/GPU.md §3.3), in displayctl's
@@ -1428,52 +1432,53 @@ package FerrixStructure {
             doc /* A QR code encoder with no heap, ported from Linux's
                  * drm_panic_qr.rs, for the panic screen's report. */
         }
-        #writtenAhead part vdagent : LibraryCrate {
+        #implemented part vdagent : LibraryCrate {
             attribute :>> path = "src/lib/drivers/console/vdagent";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 16;
+            attribute :>> hostTests = 17;
             doc /* SPICE's vdagent protocol as bytes, the chunk framing and the
-                 * clipboard messages (docs/CLIPBOARD.md §4), written ahead of
-                 * the clipboard agent that will speak it; nothing links it
-                 * yet. */
+                 * clipboard messages (docs/CLIPBOARD.md §4). Written ahead of
+                 * the clipboard agent; since 2026-09-27 that agent,
+                 * src/user/linux/compositor/vdagent, speaks it, and cargo
+                 * xtask test-clipboard drives it both ways. */
         }
-        #writtenAhead part virtioConsole : LibraryCrate {
+        #implemented part virtioConsole : LibraryCrate {
             attribute :>> path = "src/lib/drivers/console/virtio-console";
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 14;
+            attribute :>> hostTests = 15;
             doc /* The virtio-console driver: bring-up, the control
                  * conversation until a named port is open, and that port's
                  * bytes (docs/CLIPBOARD.md §3). Linked by src/user/native/drivers/console/vport, which
                  * devmgr starts when --clipboard puts the device on the bus;
-                 * no gate drives it yet. */
+                 * cargo xtask test-clipboard drives it (2026-09-27). */
         }
 
         // Owed by later stages.
         #planned part seccompBpf : LibraryCrate {
-            attribute :>> path = "libs/seccomp";
+            attribute :>> path = "src/lib/kernel/seccomp";
             attribute :>> forbidsUnsafe = true;
             @stage { number = 13; }
             doc /* The classic-BPF interpreter as a pure function over bytes. */
         }
 
         #implemented part bootCrate : Crate {
-            attribute :>> path = "boot";
+            attribute :>> path = "src/boot/common/uefi";
             attribute :>> kind = CrateKind::Loader;
             attribute :>> hostTestable = false;
             attribute :>> forbidsUnsafe = false;
         }
         #implemented part kernelCrate : Crate {
-            attribute :>> path = "kernel";
+            attribute :>> path = "src/kernel";
             attribute :>> kind = CrateKind::Kernel;
             attribute :>> hostTestable = false;
             attribute :>> forbidsUnsafe = false;
         }
         #implemented part xtask : Crate {
-            attribute :>> path = "xtask";
+            attribute :>> path = "tools/common/xtask";
             attribute :>> kind = CrateKind::HostTool;
             attribute :>> hostTestable = true;
             attribute :>> forbidsUnsafe = false;
-            attribute :>> hostTests = 242;
+            attribute :>> hostTests = 395;
             doc /* Cross-compiles both halves and the native programs, writes
                  * the FAT32 image and the initramfs with its own writers,
                  * converts the ARMv7-A loader ELF to PE32, drives QEMU, runs
@@ -1481,10 +1486,10 @@ package FerrixStructure {
                  * gate. Nothing from crates.io. It no longer forbids unsafe:
                  * a few calls into Windows, for the console and an ICMP echo,
                  * each with its SAFETY comment. */
-            attribute commands : String[36] = ("build", "run", "test-btrfs", "test-powerfail", "test-boot", "test-shell", "test-vfs", "test-net", "test-display", "run-compositor", "remote-desktop", "wallpapers", "test-compositor", "test-video", "test-input", "test-seat", "test-pty", "test-jobs", "test-restart", "test-threads", "test-rustc", "check", "host-clippy", "host-test", "host-doctest", "host-doc", "native-clippy", "model-doc", "busybox", "uutils", "ports", "omz", "zsh-functions", "flash", "watch-serial", "deploy");
+            attribute commands : String[68] = ("build", "run", "run-compositor", "run-badapple", "remote-desktop", "wallpapers", "everything-volume", "test-btrfs", "test-powerfail", "test-boot", "test-kaslr", "test-shell", "test-vfs", "test-net", "test-clipboard", "test-adb", "test-display", "test-compositor", "test-video", "test-input", "test-audio", "test-badapple", "test-seat", "test-pty", "test-foot", "test-vkgears", "test-jobs", "test-init", "bench-seam", "test-auth", "test-restart", "test-install", "test-sysfs", "test-threads", "test-sem", "test-procfs", "test-rustc", "test-chrome", "test-steamcmd", "test-steam-bootstrap", "test-steam-window", "run-steam", "test-yserver", "test-xwindow", "test-chrome-window", "test-chrome-audio", "bench-chrome", "bench-chrome-video", "test-selfhost", "builds-execute", "coverage", "check", "host-clippy", "host-test", "host-doctest", "host-doc", "check-ferrousli", "miri", "native-clippy", "model-doc", "busybox", "uutils", "ports", "flash", "watch-serial", "deploy", "omz", "zsh-functions");
         }
         #implemented part fuzz : Crate {
-            attribute :>> path = "fuzz";
+            attribute :>> path = "src/tests/fuzz";
             attribute :>> kind = CrateKind::FuzzTargets;
             attribute :>> hostTestable = true;
             attribute :>> forbidsUnsafe = false;

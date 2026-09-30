@@ -451,5 +451,19 @@ accepted and not honoured, a page held for a device keeps its frame and
 contents, and `MADV_WILLNEED` reads nothing ahead. Still to do for Chrome:
 the vDSO -- done on x86-64 on 2026-09-26 (`docs/CHROME.md` §3).
 
+**Done — an EDID override, and crosvm's GPU (2026-09-27).** The display
+core reads `drm.edid_firmware=` as Linux's DRM core does: once per card,
+when the driver's `HELLO` is accepted, it loads `/lib/firmware/<file>` for
+each connector the option names by Linux's name for it (`Virtual-1`,
+`HDMI-A-1`), and the connector gets Linux's `EDID` property. A name that is
+absolute, empty, holds a NUL or climbs through `..` is refused before
+anything is read, and the read follows no symbolic link, since the bytes go
+to every program that opens the card; stage 8's boot check holds that half.
+`run-compositor` uses it to give the desktop the host monitor's EDID, which
+is what the user's `monitor = desc:...` lines match. And the virtio-gpu
+driver sends `TRANSFER_TO_HOST_2D`'s offset as crosvm reads it on the Pixel
+7's VM, where every partial update had landed shifted by its own origin;
+QEMU keeps the specification's reading.
+
 ---
 

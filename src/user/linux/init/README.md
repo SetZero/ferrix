@@ -1,25 +1,42 @@
 # init
 
-`/sbin/init`, `/sbin/getty` and the getty generator: the service manager
-`docs/INIT.md` designs, as far as landing L4 takes it.
+`/sbin/init`, `/sbin/getty`, the getty generator and `/bin/svc`: the service
+manager `docs/INIT.md` designs, landings L1 to L12 (§16 records each).
+Every image that boots `/sbin/init` runs it, the desktop's included, where
+the compositor is `hyprix.service`.
 
 The manager itself is `src/lib/init/svc`, a pure `no_std` crate of the Ferrix
 workspace: unit files in systemd's syntax, the dependency graph, operations,
 the slice tree and every kind's state machine, as `Manager::step(event, now)
--> actions`. What is here is everything around it that makes system calls:
+-> actions`. Its restart policy is `src/lib/init/restart`, which allocates
+nothing, so that `devmgr` restarts drivers by the same rules. What is here is
+everything around it that makes system calls:
 
-* `src/user/linux/init/` -- pid 1. It mounts `/run` and cgroup2, moves itself into
+* `init/` -- pid 1. It mounts `/run` and cgroup2, moves itself into
   `init.scope`, runs the generators, reads the three unit directories, and
-  then waits in one `epoll_wait` on a signalfd, each child's exec report and
-  each cgroup's `cgroup.events`. What it finds becomes the manager's events;
-  the manager's actions become `mkdir`, `clone3(CLONE_INTO_CGROUP)`, `kill`,
-  `cgroup.kill` and, at the end, `reboot(2)`. `src/sys.rs` holds every
-  `unsafe` block.
+  then waits in one `epoll_wait` on a signalfd, each child's exec report,
+  each cgroup's `cgroup.events`, the control socket and the sockets it
+  listens on for `.socket` units. What it finds becomes the manager's
+  events; the manager's actions become `mkdir`, `clone3(CLONE_INTO_CGROUP)`,
+  `kill`, `cgroup.kill` and, at the end, `reboot(2)`. It carries out
+  `notify` readiness and `forking`, socket activation, the resource keys,
+  `Type=native` services in their cgroup's job with the directory of
+  `docs/INIT.md` §6, `User=` on a native service through a helper that has
+  become that user, and the audit record. On an image booted with
+  `ferrix.devmgr=init` it starts `devmgr` itself, through the starter the
+  kernel gives pid 1 (§7.3, `units/devmgr.service`). `init/src/sys.rs`
+  holds the system calls' `unsafe` blocks, and `sockets.rs` and
+  `directory.rs` the few that bind a listener or end a helper.
 * `getty/` -- `getty TTY` gives a terminal a session and a login shell;
   `getty-generator DIR` links a getty into `multi-user.target` for each
-  console.
-* `units/` -- the targets, `getty@.service` and `rescue.service`, installed
-  in `/lib/ferrix/units`.
+  console, a console named by its address included.
+* `svc/` -- `/bin/svc`, systemctl's verbs over `/run/ferrix/control`:
+  `svc status`, `svc list`, `svc log <unit>`, `set-property`, `top`,
+  `poweroff` (§10).
+* `dirclient/` -- a Linux program using init's directory, as `test-init`
+  runs it.
+* `units/` -- the targets, `getty@.service`, `rescue.service` and
+  `devmgr.service`, installed in `/lib/ferrix/units`.
 
 It is a workspace of its own, as zinc and the compositor are, because these
 are Linux programs built with std, and the Ferrix workspace's dependency

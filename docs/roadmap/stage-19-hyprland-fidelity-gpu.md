@@ -1394,9 +1394,7 @@ off`, a key bringing it back, and the lock chain
 **What this stage still owes** is the desktop's speed as a person watching
 it feels it (`docs/GPU.md` §3.9) -- a client's own pages as its texture's
 backing, so its pixels are not copied in the guest (8), the device queue
-being done (§3.11) -- then XWayland (40 as a first guess:
-`xwayland_shell_v1` on the compositor's side and an X server on Ferrix,
-which stage 22 is what finally needs), the second-pass effects
+being done (§3.11) -- then the second-pass effects
 (`no_screen_share`, which means drawing the frame again without one surface
 in it, and `blur_popups`, which reads what is behind the frame being drawn),
 `dwindle:precise_mouse_move`, which waits on dropping a dragged window
@@ -1404,7 +1402,10 @@ back into the tiling, and the window rule `xray`. Mesa on ferrousli and
 `zwp_linux_dmabuf`, for clients that draw on the GPU themselves, come after
 and are priced outside the stage (`docs/BACKLOG.md`, 8 points and 40 or
 more). `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 says why each is where it is,
-though its GPU item was written before Path A.
+though its GPU item was written before Path A. The X server this paragraph
+once listed, 40 as a first guess, is yserver, done on 2026-09-29 as a
+rootless Wayland client of hyprix rather than through
+`xwayland_shell_v1` (`docs/YSERVER.md`).
 
 **Exit:** the stage 18 test with animations on, requiring a sequence of
 screendumps to show a window moving along the configured curve with rounded

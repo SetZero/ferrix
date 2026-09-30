@@ -1,8 +1,9 @@
 # The compositor
 
 A Hyprland-shaped Wayland compositor, written in Rust, running on Ferrix: the
-goal after `rustc`, carried by `docs/ROADMAP.md` stages 17 (display and
-input), 18 (the compositor) and 19 (fidelity and the GPU).
+goal after `rustc`, carried by the roadmap's stages 17 (display and
+input), 18 (the compositor) and 19 (fidelity and the GPU), in
+`docs/roadmap/`.
 
 It lives in the Ferrix tree but stands alone, as zinc and ferrousli do: its
 own cargo workspace, a std Linux program reaching the kernel only through
@@ -18,9 +19,12 @@ names the part of Hyprland or hyprlang it follows.
   on 2026-09-17 with the reasoning in `docs/BACKLOG.md`.
 * **No C device stack, ever.** No udev, libinput, libseat, GBM, EGL or
   libwayland, not even on a Linux host: the backend is DRM dumb buffers and
-  raw evdev through the ioctl subset Ferrix implements, the protocol server
-  is pure Rust, and rendering is on the CPU. `xkbcommon` is the one C
-  library allowed, from stage 18. libwayland is linked by one thing and
+  raw evdev through the ioctl subset Ferrix implements, and the protocol
+  server is pure Rust. A frame is drawn on the CPU, or, where the card has
+  a GPU behind it, on the GPU as virgl command words written in Rust and
+  sent through the render node, with no Mesa, GBM or EGL between
+  (`docs/GPU.md` §3). `xkbcommon` is the one C library allowed, from
+  stage 18. libwayland is linked by one thing and
   never by the compositor: `wire/probe/wire.c`, a probe that runs on the
   development host to print the bytes a real implementation sends, the way
   `src/lib/proto/linux-abi/probe` prints the kernel's numbers.
@@ -105,9 +109,11 @@ names the part of Hyprland or hyprlang it follows.
   host-tested; a JSON parser in the tests is what says an answer is JSON
   without the compositor taking a dependency for it.
 * **`drm`** is the card: `/dev/dri/card0` through the legacy mode-setting
-  calls, and nothing else a compositor does not need -- no atomic commit, no
-  GEM import, no render node. It finds a connected connector and a mode,
-  finds a CRTC that can drive it, makes dumb buffers, maps them and shows
+  calls, and nothing else a compositor does not need -- no atomic commit and
+  no GEM import. It finds a connected connector and a mode, finds a CRTC
+  that can drive it, makes dumb buffers, maps them and shows one. Its
+  `render` module is the render node, `/dev/dri/renderD128`, where the GPU
+  is: the compositor opens the card to show a frame and the node to make
   one. It is the only crate here that builds on Linux alone, because
   `/dev/dri` is Linux's and Ferrix's through its Linux ABI; the parts that
   are arithmetic rather than ioctls are tested on any host. `blank` and
@@ -128,6 +134,10 @@ names the part of Hyprland or hyprlang it follows.
   byte (`tests/data/*.xrle`, written only with `COMPOSITOR_RENDER_BLESS=1`;
   `COMPOSITOR_RENDER_PPM=<dir>` dumps the frames to look at) with a
   one-pixel negative control.
+  `gpu` is the same frame as draw calls: a `Painter` that writes
+  `virgl`'s words, with Hyprland's own blur over a pyramid of textures, run
+  by the render node in a guest and by virglrenderer's test server on a
+  host, where every line of it is tested against the software frame.
   `cursor` is the arrow the compositor draws when no client has said
   otherwise: a shape in code rather than a theme file, since Ferrix has
   neither the files nor a library to read them with.
@@ -142,8 +152,9 @@ names the part of Hyprland or hyprlang it follows.
   and the fill are tested on any host.
 
 * **`hyprix`** is the compositor: it reads a `hyprland.conf`, listens on a
-  Wayland socket, tiles what connects to it, draws on the CPU and puts the
-  frame on a screen. Nothing in it parses a file, works out a layout, draws a
+  Wayland socket, tiles what connects to it, draws on the GPU where there
+  is one and on the CPU where there is not, and puts the frame on a
+  screen. Nothing in it parses a file, works out a layout, draws a
   pixel or decodes a message -- the crates above do those -- so it is the loop
   that joins them and the two places the compositor touches the world: a
   client's shared memory, and the screen. The screen is `src/user/linux/compositor/drm`'s
@@ -194,10 +205,10 @@ names the part of Hyprland or hyprlang it follows.
   the compositor handed a *program*, not what QEMU read off the scanout.
 * **`lock`** is `hyprlock` with the password taken out: it takes the screen
   through `ext-session-lock-v1`, draws a checkerboard over every screen,
-  holds it and gives it back. It asks for no password because Ferrix has no
-  notion of one; what it tests is the compositor's half -- that the windows
-  stop being drawn the moment the lock is taken, that a keybind that is not
-  `bindl` stops firing, and that the screen comes back.
+  holds it and gives it back. It asks for no password; what it tests is the
+  compositor's half -- that the windows stop being drawn the moment the lock
+  is taken, that a keybind that is not `bindl` stops firing, and that the
+  screen comes back. The real lock screen is `hyprlock`, below.
 * **`ctl`** is `hyprctl`, over `ipc`'s request shape; **`plug`** is the
   example plugin, a program the compositor starts and talks to rather than a
   shared object it loads; **`anim`** is Hyprland's bezier curves and its
@@ -207,6 +218,54 @@ names the part of Hyprland or hyprlang it follows.
   **`evecho`** is evdev with no libinput -- the input backend the seat reads
   its devices through, and the argument splitting an `exec` line needs where
   there is no shell to do it.
+* **`virgl`** writes virgl's command stream -- gallium's state and draw calls
+  as 32-bit words, `virgl_protocol.h`'s layouts and Mesa's
+  `virgl_encode.c`'s order -- and opens no device, so every command is
+  host-tested (`docs/GPU.md` §3.5). **`fan`** is worker threads started once
+  and kept: the software renderer draws a frame in bands, and starting a
+  thread a band was a thousand threads a second behind a moving wallpaper.
+  **`shm`** is a client's `memfd`, the three `unsafe` calls every `wl_shm`
+  client needs, audited once.
+* **`vdagent`** is the clipboard agent (`docs/CLIPBOARD.md` §6): it joins the
+  host's selection, arriving over the virtio-serial port `vport` binds at
+  the abstract name `\0ferrix.vport`, to the compositor's, as an
+  `ext-data-control` client with no window.
+* **`vkbd`** is `wtype` without the layouts: a
+  `zwp_virtual_keyboard_manager_v1` keyboard that types the keys it is
+  named, through the compositor's binds as a real keyboard's go. **`tone`**
+  plays a second of a counter through `/dev/snd` for `cargo xtask
+  test-audio` (`docs/AUDIO.md` §4). **`reboot`** is systemd's `reboot`,
+  whose word reaches the firmware through `LINUX_REBOOT_CMD_RESTART2`; on
+  the DK1 board that word picks U-Boot's prompt, `ums` or fastboot.
+
+## The desktop's own clients
+
+waybar, fuzzel, hyprlock and hypridle, ported to Rust and reading their
+users' files unchanged (`docs/DESKTOP-CLIENTS.md`, which says what of each
+file works on Ferrix and what cannot):
+
+* **`toolkit`** is the Wayland client runtime they share: the connection
+  and everything bound on it, surfaces on every screen as screens come and
+  go, the keyboard and the pointer, popups, cursors, children, timers and
+  signals, and a socket a program with its own loop can poll. `term`,
+  `lock` and `pattern` still speak Wayland by hand; four more copies of that
+  would be four places to fix each bug.
+* **`text`** finds a face the way fontconfig matches one and shapes and draws
+  text the way Pango and fcft do, in whole pixels as Pango does under GTK3.
+  **`image`** gives back PNG, JPEG and SVG (resvg's) as `tiny-skia` pixmaps.
+  **`hyprlang`** reads the language `hyprlock.conf` and `hypridle.conf` are
+  written in, as the hyprlang library does, against a schema each program
+  gives it.
+* **`waybar`** draws the bar from the user's `config` and `style.css`, and
+  `--render` draws the picture a boot of the same files must show.
+  **`fuzzel`** is the launcher: `fuzzel.ini`, the `.desktop` entries, fuzzel's
+  ranking and its window. **`hyprlock`** is the lock screen, its widgets drawn
+  from `hyprlock.conf`; its backend over `authd` is on branch `hyprlock`.
+  **`hypridle`** runs each `listener`'s commands through
+  `ext-idle-notify-v1`, with a socket of its own playing logind's part.
+  **`caption`** is the smallest program on the whole foundation, a line of
+  text in the user's font, which `test-compositor`'s `caption` boot compares
+  with the same code's drawing on the host.
 
 ## Testing
 

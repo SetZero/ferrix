@@ -43,9 +43,12 @@ USB with adb authorised, and nothing else: no Claude, no terminal.
 
   A VM run with "Stats" on starts it as pid 1 and the tab fills live. A
   native boot with "Stats" on runs it for that long ("until stopped" is a
-  minute there). The phone is off USB meanwhile, since Ferrix has no USB,
-  and its samples are in the `ramoops` record. The monitor loads that record
-  when Android is back and graphs the whole run. The console
+  minute there). The phone is off adb meanwhile, but once Ferrix's `usbdev`
+  presents its USB serial port ("Ferrix console", 1209:0001) the monitor
+  streams its lines, the samples among them, into the console, the boot card
+  and this tab, and keeps them as a `usb-<time>/run.log` record. The samples
+  are in the `ramoops` record too, which the monitor loads when Android is
+  back and graphs the whole run from. The console
   hides the `FERRIX-STAT` lines unless "stat lines" is ticked.
 * **Runs**: every `run.log` under `~/.local/share/ferrix/pixel7`, newest
   first, with its result. Clicking one loads it into the console.

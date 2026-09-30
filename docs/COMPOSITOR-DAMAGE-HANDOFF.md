@@ -485,9 +485,12 @@ Three traps, each of which cost time:
 
 Not part of this handoff, but the next person will ask.
 
-- **XWayland.** No X11 window can be shown. `xwayland_shell_v1` is not
-  offered and there is no `Xwayland` binary on Ferrix. The largest single
-  gap left.
+- **X11 windows.** Written as "no X11 window can be shown", the largest
+  single gap. Since 2026-09-28 and 29 they show through yserver, a Rust X
+  server that is a Wayland client of hyprix, each top-level X window an
+  `xdg_toplevel` with its input, sizes, dialogs, menus and clipboard
+  (`docs/YSERVER.md`). `xwayland_shell_v1` is still not offered, and there
+  is still no `Xwayland` binary; neither is needed for it.
 - **What the GPU path did not bring.** It landed on 2026-09-19
   (`docs/GPU.md` §3.7 and §3.8), a served desktop takes it by default and
   the pointer has a plane of its own since 2026-09-23 (§3.9, §3.10).
