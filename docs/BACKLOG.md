@@ -280,7 +280,8 @@ may one day need the relaxation.
 | `setns(CLONE_NEWNET)` is not wired: `net/netns_file.rs` is the seam, to become the network arm of the namespace files in `fs/nsfs.rs` | open | 13 |
 | Not boot-checked for network namespaces: a native child inheriting its creator's, the `/sys/class/net` listing per reader, IPv6 over a veth pair, ARP growth past the table limit, `unshare` from several threads | open | 13 |
 | Raw and packet sockets are reachable by a user who owns a network namespace (`CAP_NET_RAW` over an owned namespace is honoured): safe Rust with no ring-buffer interface, recorded as a residual in the vulnerability analysis | open, accepted | 13 |
-| Pid, time namespaces and the cgroup controllers (M2's reclaim, `cgroup.freeze`, `cpu.max`, `io`): their own differences are added here when those landings report | open | 13 |
+| **Pid namespaces** (branch `stage13-pidns`, not landed; `docs/PIDNS.md` §8 there): one machine-wide pool of 32768 kernel numbers with each namespace also numbering to 32768 locally, `pid_max` neither writable nor per namespace; an init's namespace is killed when its last thread ends, not after it reaped its children; only `SIGKILL` and `SIGSTOP` from an ancestor are forced through to a protected init, and faults bypass the protection; procfs file contents tell numbers for the reading process, not the instance's namespace; `setns` into a pid namespace and `clone3`'s `set_tid` are not built; `test-vfs` fails on x86_64 until the kernel stack overflow on the `ioctl` path is found | open | 13 |
+| Time namespaces and the cgroup controllers (M2's reclaim, `cgroup.freeze`, `cpu.max`, `io`): their own differences are added here when those landings report | open | 13 |
 
 ## Red on `main`
 

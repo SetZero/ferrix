@@ -179,15 +179,56 @@ namespace now stands on an empty bottom mount, as a booted Linux machine's
 `/` does, so `pivot_root` works from `/` in memory too: Steam's
 requirements check exits 0 as root in `test-steam-bootstrap`.
 
-**N4, user namespaces (2026-09-30, built on `stage13-n4-userns`, not
-landed):** `CLONE_NEWUSER` through `clone`, `clone3` and `unshare`, the
-map files, `setgroups`, `ns/user`, capability sets, `capget`/`capset`/
-`PR_CAPBSET_*`, `execve`'s recomputation, `privileged()` for the first
-namespace only, and ids told as the reader's namespace names them or 65534
-at every site that reports one, `si_uid` among them. The `userns` boot line
-(FX-0888) and five negative controls prove it on x86_64; the other gates
-and the consultant's review are owed (`docs/NAMESPACES.md` §12 has what is
-and is not built). Next is NP, then N5.
+**Done -- N4, user namespaces (2026-10-01):** `CLONE_NEWUSER` through
+`clone`, `clone3` and `unshare`; `/proc/<pid>/uid_map`, `gid_map`, `setgroups`
+and `ns/user`, each map written once and judged against its opener and its
+writer; capability sets, `capget`, `capset` and `PR_CAPBSET_*`;
+`privileged()` true in the first namespace only (U1); a child namespace
+honours five capabilities (U8); `execve` ignores set-id bits there (U7);
+`chroot` by `CAP_SYS_CHROOT`; nesting 32 deep, then `EUSERS`. Every site that
+reports an id tells it as the reader's namespace names it or 65534, and every
+one that takes an id refuses an unmapped one, `si_uid` among them (it was never
+filled before). The `userns` boot line (FX-0888) and `kmem`'s fill for user
+namespaces prove it on all three architectures, with ten negative controls
+that each stop the boot with their own message (`docs/NAMESPACES.md` §12 lists
+them). The consultant's review of the landed diff is still owed; his six
+conditions on the core are built.
+
+**Done -- S1, seccomp's verifier and interpreter (2026-10-01):**
+`src/lib/kernel/seccomp` is Linux's `bpf_check_classic` and
+`seccomp_check_filter` rule for rule, the classic machine, the action order and
+`run_all`, with `forbid(unsafe_code)`. Evidence: 23 host tests, one per rule
+and opcode; a second, independent checker held to `verify` over 300,000 seeded
+programs; three of Chrome 151's filters run against what a Linux 7.0 kernel did
+with calls 0 to 449; a fuzz target; Miri in CI. S2 to S6 (the core hook,
+filters, `TRAP`, `TSYNC`, the guest test) are designed in `docs/SECCOMP.md`
+and not landed.
+
+**Where stage 13 stands (2026-10-01).** The exit criterion -- an unprivileged
+user namespace runs a pid 1 under a memory limit with a scoped OOM kill and a
+seccomp filter that blocks a call -- is **not met**: pid namespaces and the
+filter itself are built on branches and not on `main`. Built, gated on their
+own boots, reviewed by nobody yet, and **not landed** (each on a local branch
+with a side ref on nazuna; `docs/BACKLOG.md` lists their differences from
+Linux):
+
+| Branch | What | State |
+|---|---|---|
+| `stage13-np`, `stage13-fdinfo` | `/proc`'s private links by `ptrace_may_access`, dumpable cleared by id changes, `/proc/<pid>/fdinfo` | boot check written; last run failed on a real bug now fixed, not re-run. Overlaps `main`'s own `credentials_changed` |
+| `stage13-n5` | unprivileged mounting: `may_mount` by owner, `tmpfs` alone, locked copies, detach-don't-pin, sysctls | `mountperm` line booted on x86_64, four controls fired; other gates not run |
+| `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
+| `stage13-smallns` | UTS, IPC, cgroup namespaces, nsfs, `setns`, pidfd `setns` | boots on three architectures, 55 controls; `check`, `test-init`, coverage not run |
+| `stage13-netns` | network namespaces, veth pairs, per-namespace stacks | boots on three architectures, `test-shell`, `test-vfs`, `test-net`, 30 controls; `check` not run |
+| `stage13-timens` | time namespace | agent had not reported |
+| `stage13-pidns` | pid namespaces | boots pass; **`test-vfs` fails on x86_64**: a kernel stack overflow on the `ioctl` path, cause not found (`Process` grew by about 48 bytes) |
+| `stage13-cgctl` | `cpu.max`, `io`, `cgroup.freeze`, M2's reclaim | agent had not reported |
+| `stage13-s2` | seccomp S2 to S5 | in progress |
+| `stage13-container` | `cargo xtask test-container`, the exit criterion as a program | written, never run |
+
+These branches were written against an earlier N4 and conflict with each other
+in the namespace, procfs, catalog and kmem files; they go in one at a time,
+each rebased with `git rebase --onto` the landed N4. Not started: seccomp S6,
+and N6 and N7 (Steam as uid 1000, pressure-vessel).
 
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,
