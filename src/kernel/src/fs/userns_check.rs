@@ -163,11 +163,12 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         Errno::EPERM,
         "an unprivileged writer mapped two ids",
     )?;
-    tally.refused(
-        write_to(page, uid_map.as_bytes(), b"garbage\n")?,
-        Errno::EINVAL,
-        "a malformed uid_map was not refused EINVAL",
-    )?;
+    match write_to(page, uid_map.as_bytes(), b"garbage\n")? {
+        Err(Errno::EINVAL) => {}
+        Ok(_) => return Err("a malformed uid_map was accepted"),
+        Err(Errno::EPERM) => return Err("a malformed uid_map was refused EPERM, not EINVAL"),
+        Err(_) => return Err("a malformed uid_map was refused with another errno"),
+    }
     tally.ok(
         write_to(page, uid_map.as_bytes(), b"0 1000 1\n")?,
         "the owner's own id could not be mapped",
