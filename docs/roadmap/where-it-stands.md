@@ -17,12 +17,22 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 * **Steam's sign-in window** draws on hyprix through yserver
   (2026-09-29, `docs/STEAM.md`, `cargo xtask test-steam-window`), and
   `run-compositor --everything` starts the client beside Chrome and a
-  terminal once its volume has been made. It still runs with launch-side
+  terminal, fetching its volume first when it is missing, and fuzzel lists
+  Steam to start it again (2026-10-01). It still runs with launch-side
   workarounds, each owned by a fix (`docs/STEAM.md` §3): namespaces for
   pressure-vessel and Chromium's sandbox, the `/proc` gaps behind the
   runtime's logger, and the `SIGBUS` that needs a 16 GiB guest. The kernel
   makes packet pipes for `pipe2(O_DIRECT)`, which retired the last
   preloaded shim.
+* **`--everything` is everything** (the customer's rule, 2026-10-01): the
+  desktop carries every feature, volume and app, and nothing is left out
+  with a line saying how it could have been added. The volume half is in:
+  a volume not fetched yet (rustc, Chrome, steamcmd, Claude Code, the
+  Steam window) is fetched before the merge, and a failed fetch stops the
+  run (`everything.rs`, f7777c17). Left: every app on that desktop, not
+  just the `default` ones, and btop built through WSL on a Windows host
+  (os-3c, `docs/APPS.md`). vkgears is listed wherever the host gives Venus,
+  which a Windows host cannot (`docs/GPU.md` §3).
 * **yserver is done**, all 36 of its points (`docs/YSERVER.md`, Y1 to Y7):
   X windows show on hyprix with their input, sizes, close, dialogs, menus
   and clipboard, and a window of a fixed size floats at that size. It is the
