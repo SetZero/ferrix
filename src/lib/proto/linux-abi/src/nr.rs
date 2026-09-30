@@ -495,6 +495,8 @@ pub mod x86_64 {
     pub const INOTIFY_INIT1: usize = 294;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 302;
+    /// Encode a file handle for a path; opening one back is `open_by_handle_at`.
+    pub const NAME_TO_HANDLE_AT: usize = 303;
     /// Read or tune a chosen clock's discipline.
     pub const CLOCK_ADJTIME: usize = 305;
     /// Move the calling thread into an existing namespace.
@@ -959,6 +961,8 @@ pub mod aarch64 {
     pub const WAIT4: usize = 260;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 261;
+    /// Encode a file handle for a path; opening one back is `open_by_handle_at`.
+    pub const NAME_TO_HANDLE_AT: usize = 264;
     /// Read or tune a chosen clock's discipline.
     pub const CLOCK_ADJTIME: usize = 266;
     /// Move the calling thread into an existing namespace.
@@ -1518,6 +1522,8 @@ pub mod arm {
     pub const ACCEPT4: usize = 366;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 369;
+    /// Encode a file handle for a path; opening one back is `open_by_handle_at`.
+    pub const NAME_TO_HANDLE_AT: usize = 370;
     /// Read or tune a chosen clock's discipline.
     pub const CLOCK_ADJTIME: usize = 372;
     /// Move the calling thread into an existing namespace.
@@ -1991,6 +1997,8 @@ pub mod i386 {
     pub const INOTIFY_INIT1: usize = 332;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 340;
+    /// Encode a file handle for a path; opening one back is `open_by_handle_at`.
+    pub const NAME_TO_HANDLE_AT: usize = 341;
     /// Flush the file system holding an open file.
     pub const SYNCFS: usize = 344;
     /// Move the calling thread into an existing namespace.
@@ -2613,6 +2621,8 @@ pub enum Syscall {
     Setrlimit,
     /// Read and set a resource limit of any process in one call.
     Prlimit64,
+    /// Encode a file handle for a path.
+    NameToHandleAt,
     /// Report accumulated resource usage.
     Getrusage,
     /// Report system-wide memory and load statistics.
@@ -3051,6 +3061,7 @@ fn x86_64_at_family(nr: usize) -> Option<Syscall> {
         x86_64::DUP3 => Syscall::Dup3,
         x86_64::PIPE2 => Syscall::Pipe2,
         x86_64::PRLIMIT64 => Syscall::Prlimit64,
+        x86_64::NAME_TO_HANDLE_AT => Syscall::NameToHandleAt,
         x86_64::RENAMEAT2 => Syscall::Renameat2,
         x86_64::GETRANDOM => Syscall::Getrandom,
         x86_64::MEMFD_CREATE => Syscall::MemfdCreate,
@@ -3370,6 +3381,7 @@ fn aarch64_memory_and_process(nr: usize) -> Option<Syscall> {
         aarch64::MADVISE => Syscall::Madvise,
         aarch64::WAIT4 => Syscall::Wait4,
         aarch64::PRLIMIT64 => Syscall::Prlimit64,
+        aarch64::NAME_TO_HANDLE_AT => Syscall::NameToHandleAt,
         aarch64::GETRANDOM => Syscall::Getrandom,
         aarch64::MEMFD_CREATE => Syscall::MemfdCreate,
         aarch64::EXECVEAT => Syscall::Execveat,
@@ -3723,6 +3735,7 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::DUP3 => Syscall::Dup3,
         arm::PIPE2 => Syscall::Pipe2,
         arm::PRLIMIT64 => Syscall::Prlimit64,
+        arm::NAME_TO_HANDLE_AT => Syscall::NameToHandleAt,
         arm::RENAMEAT2 => Syscall::Renameat2,
         arm::GETRANDOM => Syscall::Getrandom,
         arm::MEMFD_CREATE => Syscall::MemfdCreate,
@@ -4136,6 +4149,7 @@ fn i386_recent(nr: usize) -> Option<Syscall> {
         i386::PIPE2 => Syscall::Pipe2,
         i386::INOTIFY_INIT1 => Syscall::InotifyInit1,
         i386::PRLIMIT64 => Syscall::Prlimit64,
+        i386::NAME_TO_HANDLE_AT => Syscall::NameToHandleAt,
         i386::SYNCFS => Syscall::Syncfs,
         i386::SETNS => Syscall::Setns,
         i386::RENAMEAT2 => Syscall::Renameat2,

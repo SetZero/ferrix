@@ -17,23 +17,25 @@
 //! * a request nothing answers earns `NLMSG_ERROR` with `EOPNOTSUPP`, and a
 //!   message too short for its fixed header earns `EINVAL`;
 //! * every reply is addressed to the port `getsockname` reported, which is
-//!   what `libnetlink` checks before it believes a word of it.
+//!   what `libnetlink` checks before it believes a word of it;
+//! * a `NETLINK_KOBJECT_UEVENT` socket opens, joins the kernel's group, says
+//!   which protocol it is, and has nothing to read.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::netlink::{
-    IFA_LOCAL, IFF_LOOPBACK, IFF_UP, IFLA_IFNAME, IfAddrMsg, IfInfoMsg, NLM_F_ACK, NLM_F_CREATE,
-    NLM_F_DUMP, NLM_F_EXCL, NLM_F_REQUEST, NLMSG_DONE, NLMSG_ERROR, NetlinkAddress, NlMsgErr,
-    NlMsgHdr, RT_SCOPE_UNIVERSE, RT_TABLE_MAIN, RTA_DST, RTA_OIF, RTM_DELADDR, RTM_DELROUTE,
-    RTM_GETADDR, RTM_GETLINK, RTM_GETROUTE, RTM_NEWADDR, RTM_NEWROUTE, RTN_UNICAST, RTPROT_BOOT,
-    RtMsg,
+    IFA_LOCAL, IFF_LOOPBACK, IFF_UP, IFLA_IFNAME, IfAddrMsg, IfInfoMsg, NETLINK_KOBJECT_UEVENT,
+    NLM_F_ACK, NLM_F_CREATE, NLM_F_DUMP, NLM_F_EXCL, NLM_F_REQUEST, NLMSG_DONE, NLMSG_ERROR,
+    NetlinkAddress, NlMsgErr, NlMsgHdr, RT_SCOPE_UNIVERSE, RT_TABLE_MAIN, RTA_DST, RTA_OIF,
+    RTM_DELADDR, RTM_DELROUTE, RTM_GETADDR, RTM_GETLINK, RTM_GETROUTE, RTM_NEWADDR, RTM_NEWROUTE,
+    RTN_UNICAST, RTPROT_BOOT, RtMsg,
 };
-use ferrix_linux_abi::socket::{AF_INET, SOCK_DGRAM};
+use ferrix_linux_abi::socket::{AF_INET, SO_PROTOCOL, SOCK_DGRAM, SOCK_RAW, SOL_SOCKET, Width};
 use ferrix_netlink::{Address, Attr, Messages, Value, Writer};
 
-use super::{NetlinkSocket, of};
+use super::{NetlinkSocket, Protocol, of};
 
 /// What the check saw.
 #[derive(Debug, Default)]
@@ -79,7 +81,31 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     addresses(&mut netlink, &mut report, loopback)?;
     routes(&mut netlink, &mut report, loopback)?;
     refusals(&mut netlink, &mut report)?;
+    uevents()?;
     Ok(report)
+}
+
+/// A uevent socket, as libudev's monitor makes one: it binds to group 1,
+/// the kernel's, reports `NETLINK_KOBJECT_UEVENT`, and a receive that does
+/// not wait finds nothing, since no event is broadcast yet.
+fn uevents() -> Result<(), &'static str> {
+    let file = NetlinkSocket::open(SOCK_RAW, Protocol::Uevent, true, (0, 0))
+        .map_err(|_| "a uevent socket could not be opened")?;
+    let socket = of(&file).ok_or("a uevent socket's open file does not hold one")?;
+    let group = NetlinkAddress { pid: 0, groups: 1 };
+    socket
+        .bind(&group.to_bytes())
+        .map_err(|_| "a uevent socket could not join the kernel's group")?;
+    if socket.get_option(SOL_SOCKET, SO_PROTOCOL, Width::Bits64)
+        != Ok(NETLINK_KOBJECT_UEVENT.to_le_bytes().to_vec())
+    {
+        return Err("a uevent socket did not report NETLINK_KOBJECT_UEVENT");
+    }
+    let mut buffer = [0_u8; 64];
+    match socket.recv(&mut buffer, 0, true) {
+        Err(Errno::EAGAIN) => Ok(()),
+        _ => Err("a uevent socket had something to read"),
+    }
 }
 
 /// The links dump, which must hold the loopback with its name and flags.
@@ -323,7 +349,7 @@ struct Netlink {
 impl Netlink {
     /// Open a socket and bind it, as `rtnl_open` does.
     fn open() -> Result<Netlink, &'static str> {
-        let file = NetlinkSocket::open(SOCK_DGRAM, false, (0, 0))
+        let file = NetlinkSocket::open(SOCK_DGRAM, Protocol::Route, false, (0, 0))
             .map_err(|_| "a netlink socket could not be opened")?;
         let socket = of(&file).ok_or("a netlink socket's open file does not hold one")?;
         socket

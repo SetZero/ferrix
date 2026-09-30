@@ -49,8 +49,9 @@ and XTEST. Ferrix changed nothing for it.
 
 Ferrix gets three things wrong, and none of them matters to this design:
 
-* a `NETLINK_KOBJECT_UEVENT` socket is `EPROTONOSUPPORT`, so yserver's udev
-  monitor and libinput's seat fail. The Wayland backend uses neither;
+* a `NETLINK_KOBJECT_UEVENT` socket opens but never hears an event (it was
+  `EPROTONOSUPPORT` until 2026-09-30), so yserver's udev monitor and
+  libinput's seat see no devices come or go. The Wayland backend uses neither;
 * `KDGKBMODE` on the console is `ENOTTY`, so yserver does not take the
   console over, which a rootless server must not do anyway;
 * with no outputs, the root window is 0×0. The backend has to give it a

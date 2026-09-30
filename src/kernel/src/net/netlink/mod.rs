@@ -16,6 +16,17 @@
 //! program that sends and then reads with no timeout, and it is what Linux
 //! does for `NETLINK_ROUTE`, where every answer is synchronous.
 //!
+//! # `NETLINK_KOBJECT_UEVENT` hears nothing yet
+//!
+//! A uevent socket opens, binds to its groups and waits, and nothing is ever
+//! queued on it: this kernel makes its devices at boot and broadcasts no
+//! event for them, so a listener hears what it would hear on Linux between
+//! hotplugs. That is enough for libudev, whose monitor otherwise prints a
+//! line for every socket it fails to make, and Steam's client makes one
+//! over and over. A send is refused without `CAP_NET_ADMIN`, as Linux
+//! refuses a send to a group from an unprivileged socket, and is taken and
+//! dropped with it: no socket here hears another's broadcast.
+//!
 //! # One message per receive
 //!
 //! Each reply is queued as a datagram of its own rather than packed with its
@@ -45,8 +56,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use ferrix_kmem::{Charge, arc_footprint, buffer_footprint, reserve_deque};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::netlink::{
-    NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_ROUTE, NetlinkAddress, NlMsgHdr,
-    SOL_NETLINK,
+    NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_KOBJECT_UEVENT, NETLINK_ROUTE,
+    NetlinkAddress, NlMsgHdr, SOL_NETLINK,
 };
 use ferrix_linux_abi::socket::{
     AF_NETLINK, MSG_DONTWAIT, MSG_PEEK, SO_DOMAIN, SO_ERROR, SO_PROTOCOL, SO_RCVBUF,
@@ -84,6 +95,34 @@ const MAX_QUEUED: usize = 256 * 1024;
 /// and a process identifier that is reused the moment a process exits would be
 /// the one thing it must not be.
 static NEXT_PORT: AtomicU32 = AtomicU32::new(1);
+
+/// The netlink protocols a socket may be opened for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Protocol {
+    /// `NETLINK_ROUTE`: requests about links, addresses and routes.
+    Route,
+    /// `NETLINK_KOBJECT_UEVENT`: device events, of which there are none yet.
+    Uevent,
+}
+
+impl Protocol {
+    /// The protocol `socket`'s third argument names, if this kernel has it.
+    pub(crate) const fn from_linux(protocol: i32) -> Option<Protocol> {
+        match protocol {
+            NETLINK_ROUTE => Some(Protocol::Route),
+            NETLINK_KOBJECT_UEVENT => Some(Protocol::Uevent),
+            _ => None,
+        }
+    }
+
+    /// Its number, as `SO_PROTOCOL` reports it.
+    const fn to_linux(self) -> i32 {
+        match self {
+            Protocol::Route => NETLINK_ROUTE,
+            Protocol::Uevent => NETLINK_KOBJECT_UEVENT,
+        }
+    }
+}
 
 /// What a program has set that nothing else keeps.
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +163,8 @@ pub(crate) struct NetlinkSocket {
     /// `SOCK_DGRAM` or `SOCK_RAW`, as `SO_TYPE` reports it. Netlink treats
     /// them the same and so does this.
     kind: u32,
+    /// What it was opened for.
+    protocol: Protocol,
     /// What `stat` reports through it.
     metadata: Metadata,
     /// Everything that changes.
@@ -143,13 +184,14 @@ impl fmt::Debug for NetlinkSocket {
 }
 
 impl NetlinkSocket {
-    /// Open a `NETLINK_ROUTE` socket of `kind`.
+    /// Open a socket of `kind` for `protocol`.
     ///
     /// # Errors
     ///
     /// Whatever [`OpenFile::new`] refuses, which for a socket is nothing.
     pub(crate) fn open(
         kind: u32,
+        protocol: Protocol,
         nonblock: bool,
         owner: (u32, u32),
     ) -> Result<Arc<OpenFile>, Errno> {
@@ -163,6 +205,7 @@ impl NetlinkSocket {
         let ino = fs::socket::next_ino();
         let socket = Arc::new(NetlinkSocket {
             kind,
+            protocol,
             metadata: fs::socket::socket_metadata(ino, owner),
             state: SpinLock::new(State {
                 port: 0,
@@ -252,6 +295,14 @@ impl NetlinkSocket {
         // send with no process and may.
         let privileged = crate::syscall::process::current()
             .is_none_or(|process| process.with_credentials(|held| held.privileged()));
+        if self.protocol == Protocol::Uevent {
+            // Nothing hears it: see the module's documentation.
+            return if privileged {
+                Ok(data.len())
+            } else {
+                Err(Errno::EPERM)
+            };
+        }
         let mut buffer = Vec::new();
         buffer
             .try_reserve_exact(MAX_REPLY)
@@ -394,7 +445,7 @@ impl NetlinkSocket {
         match (level, name) {
             (SOL_SOCKET, SO_TYPE) => Ok(self.kind.cast_signed()),
             (SOL_SOCKET, SO_DOMAIN) => Ok(i32::from(AF_NETLINK)),
-            (SOL_SOCKET, SO_PROTOCOL) => Ok(NETLINK_ROUTE),
+            (SOL_SOCKET, SO_PROTOCOL) => Ok(self.protocol.to_linux()),
             (SOL_SOCKET, SO_ERROR) => Ok(0),
             (SOL_SOCKET, SO_SNDBUF) => Ok(i32::try_from(options.send_buffer).unwrap_or(i32::MAX)),
             (SOL_SOCKET, SO_RCVBUF) => {

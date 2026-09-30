@@ -38,9 +38,10 @@ use alloc::vec::Vec;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
-    AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_FOLLOW, AT_SYMLINK_NOFOLLOW, RENAME_EXCHANGE,
-    RENAME_NOREPLACE, RENAME_WHITEOUT, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFMT, S_IFREG,
-    S_IFSOCK, UTIME_NOW, UTIME_OMIT,
+    AT_EMPTY_PATH, AT_FDCWD, AT_HANDLE_CONNECTABLE, AT_HANDLE_FID, AT_HANDLE_MNT_ID_UNIQUE,
+    AT_REMOVEDIR, AT_SYMLINK_FOLLOW, AT_SYMLINK_NOFOLLOW, RENAME_EXCHANGE, RENAME_NOREPLACE,
+    RENAME_WHITEOUT, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFMT, S_IFREG, S_IFSOCK, UTIME_NOW,
+    UTIME_OMIT,
 };
 use ferrix_vfs::access::{Access, MAY_EXEC};
 use ferrix_vfs::initramfs::makedev;
@@ -101,6 +102,7 @@ fn describe(
         Syscall::Readlink => sys_readlinkat(process, AT_FDCWD, a[0], a[1], a[2]),
         Syscall::Readlinkat => sys_readlinkat(process, int(a[0]), a[1], a[2], a[3]),
         Syscall::InotifyAddWatch => sys_inotify_add_watch(process, int(a[0]), a[1], word(a[2])),
+        Syscall::NameToHandleAt => sys_name_to_handle_at(process, int(a[0]), a[1], word(a[4])),
         Syscall::Getcwd => sys_getcwd(process, a[0], a[1]),
         _ => return None,
     };
@@ -568,6 +570,46 @@ fn sys_inotify_add_watch(process: &Process, fd: i32, at: u64, mask: u32) -> Resu
         .require(&node.inode()?.metadata(), ferrix_vfs::access::MAY_READ)?;
     let wd = inotify::add_watch(&instance, &node, mask)?;
     usize::try_from(wd).map_err(|_| Errno::EINVAL)
+}
+
+/// `name_to_handle_at`: a file handle for what `at` names.
+///
+/// No filesystem here encodes one, so a name that resolves is
+/// `EOPNOTSUPP`, which is Linux's answer for a filesystem without export
+/// operations, and it comes, as there, after the flags are checked and the
+/// walk is made but before the caller's handle is read. The walk still
+/// matters: a name that does not exist is `ENOENT`, not `EOPNOTSUPP`.
+///
+/// `EOPNOTSUPP` is also the one failure libudev takes quietly. It asks this
+/// of `/dev` to learn whether devtmpfs is there, and any other errno is
+/// printed on every call; Steam's client asks over and over.
+fn sys_name_to_handle_at(
+    process: &Process,
+    dirfd: i32,
+    at: u64,
+    flags: u32,
+) -> Result<usize, Errno> {
+    let known = AT_SYMLINK_FOLLOW
+        | AT_EMPTY_PATH
+        | AT_HANDLE_FID
+        | AT_HANDLE_MNT_ID_UNIQUE
+        | AT_HANDLE_CONNECTABLE;
+    if flags & !known != 0 {
+        return Err(Errno::EINVAL);
+    }
+    // A connectable handle needs a parent to connect to, which neither a
+    // handle only for comparing nor a descriptor named by itself promises.
+    if flags & AT_HANDLE_CONNECTABLE != 0 && flags & (AT_HANDLE_FID | AT_EMPTY_PATH) != 0 {
+        return Err(Errno::EINVAL);
+    }
+    // A final link is followed only when asked, the other way round from
+    // `target`'s flag.
+    let mut walk = flags & AT_EMPTY_PATH;
+    if flags & AT_SYMLINK_FOLLOW == 0 {
+        walk |= AT_SYMLINK_NOFOLLOW;
+    }
+    let _named = target(process, dirfd, at, walk)?;
+    Err(Errno::EOPNOTSUPP)
 }
 
 /// `readlinkat` and `readlink`.

@@ -149,3 +149,12 @@ minutes where a desktop boot is ten. The workarounds of §3 are unchanged:
 the helper still runs without its sandbox and outside pressure-vessel, and
 its GPU process is disabled (`-cef-disable-gpu`), so the store draws in
 software.
+
+Most of what the client printed was its libudev failing, two lines at a
+time and over and over: `udev_monitor_new_from_netlink_fd: error getting
+socket: Protocol not supported` and `udev_has_devtmpfs: name_to_handle_at
+on /dev: Function not implemented`. Since 2026-09-30 a
+`NETLINK_KOBJECT_UEVENT` socket opens (and hears no event, since none is
+sent yet), and `name_to_handle_at` answers `EOPNOTSUPP`, the one failure
+that libudev takes quietly. A `test-steam-window` run went from 291 such
+lines to none.

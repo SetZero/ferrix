@@ -1782,13 +1782,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        252,
-        "the x86-64 table maps 252 calls"
+        253,
+        "the x86-64 table maps 253 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        220,
-        "the AArch64 table maps 220 calls"
+        221,
+        "the AArch64 table maps 221 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -2061,6 +2061,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (360, Syscall::InotifyInit1),             // inotify_init1
     (366, Syscall::Accept4),                  // accept4
     (369, Syscall::Prlimit64),                // prlimit64
+    (370, Syscall::NameToHandleAt),           // name_to_handle_at
     (372, Syscall::ClockAdjtime),             // clock_adjtime
     (375, Syscall::Setns),                    // setns
     (379, Syscall::FinitModule),              // finit_module
@@ -2295,7 +2296,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 270, "the ARMv7-A table maps 270 calls");
+    assert_eq!(mapped_arm().len(), 271, "the ARMv7-A table maps 271 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in
@@ -2321,6 +2322,7 @@ fn filesystem_control_calls_match_the_kernel_tables() {
         (285, 47, 352, Syscall::Fallocate),
         (161, 51, 61, Syscall::Chroot),
         (306, 267, 373, Syscall::Syncfs),
+        (303, 264, 370, Syscall::NameToHandleAt),
     ] {
         assert_eq!(from_x86_64(x86), Some(call), "x86-64 {x86}");
         assert_eq!(from_aarch64(generic), Some(call), "AArch64 {generic}");
@@ -3296,7 +3298,7 @@ mod virtgpu;
 /// Every i386 number [`from_i386`] translates beside the thread-area pair:
 /// the constant, the number `asm/unistd_32.h` gives it, and ARMv7-A's constant
 /// for the same call.
-const I386_NUMBERS: [(usize, usize, usize); 238] = [
+const I386_NUMBERS: [(usize, usize, usize); 239] = [
     (i386::FORK, 2, arm::FORK),
     (i386::KILL, 37, arm::KILL),
     (i386::WAIT4, 114, arm::WAIT4),
@@ -3464,6 +3466,7 @@ const I386_NUMBERS: [(usize, usize, usize); 238] = [
     (i386::PIPE2, 331, arm::PIPE2),
     (i386::INOTIFY_INIT1, 332, arm::INOTIFY_INIT1),
     (i386::PRLIMIT64, 340, arm::PRLIMIT64),
+    (i386::NAME_TO_HANDLE_AT, 341, arm::NAME_TO_HANDLE_AT),
     (i386::SYNCFS, 344, arm::SYNCFS),
     (i386::SETNS, 346, arm::SETNS),
     (i386::RENAMEAT2, 353, arm::RENAMEAT2),

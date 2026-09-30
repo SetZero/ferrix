@@ -50,7 +50,6 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::inet::{
     IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_MAX, IPPROTO_TCP, IPPROTO_UDP, SOCKADDR_STORAGE_SIZE,
 };
-use ferrix_linux_abi::netlink::NETLINK_ROUTE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::socket::{
     AF_INET, AF_INET6, AF_MAX, AF_NETLINK, AF_PACKET, AF_UNIX, CmsgHdr, ControlMessages,
@@ -64,7 +63,7 @@ use ferrix_vfs::OpenFile;
 
 use crate::fs;
 use crate::fs::socket::{Passed, Received, Socket, SocketType};
-use crate::net::netlink::{self as netlink, NetlinkSocket};
+use crate::net::netlink::{self as netlink, NetlinkSocket, Protocol as NetlinkProtocol};
 use crate::net::packet::PacketSocket;
 use crate::net::socket::{self as inet, InetKind, InetSocket};
 use crate::syscall::attributes::int;
@@ -385,8 +384,8 @@ enum Opened {
     Unix(SocketType),
     /// An `AF_INET` or `AF_INET6` socket of this kind.
     Inet(Family, InetKind),
-    /// An `AF_NETLINK` socket of this type.
-    Netlink(u32),
+    /// An `AF_NETLINK` socket of this type, for this protocol.
+    Netlink(u32, NetlinkProtocol),
     /// An `AF_PACKET` socket: the type `socket` was given, not yet checked,
     /// and the protocol as it was given, in network byte order.
     Packet(u32, u16),
@@ -500,17 +499,16 @@ fn packet_kind(kind: u32) -> Result<PacketKind, Errno> {
 ///
 /// `netlink_create` takes `SOCK_RAW` and `SOCK_DGRAM` and nothing else, and
 /// makes no distinction between them: a netlink socket carries records
-/// whichever was asked for. `NETLINK_ROUTE` is the one protocol this kernel
-/// has; the others are `EPROTONOSUPPORT`, which is what Linux answers for a
-/// family built without them.
+/// whichever was asked for. `NETLINK_ROUTE` and `NETLINK_KOBJECT_UEVENT` are
+/// the protocols this kernel has; the others are `EPROTONOSUPPORT`, which is
+/// what Linux answers for a family built without them.
 fn netlink_type(kind: u32, protocol: i32) -> Result<Opened, Errno> {
     if kind != SOCK_DGRAM && kind != SOCK_RAW {
         return Err(Errno::ESOCKTNOSUPPORT);
     }
-    if protocol != NETLINK_ROUTE {
-        return Err(Errno::EPROTONOSUPPORT);
-    }
-    Ok(Opened::Netlink(kind))
+    NetlinkProtocol::from_linux(protocol)
+        .map(|protocol| Opened::Netlink(kind, protocol))
+        .ok_or(Errno::EPROTONOSUPPORT)
 }
 
 /// `socket`.
@@ -527,7 +525,7 @@ pub(crate) fn sys_socket(
     let file = match opened {
         Opened::Unix(socket_type) => fs::socket::new_socket(socket_type, nonblock, process)?,
         Opened::Inet(family, kind) => InetSocket::open(family, kind, nonblock, owner)?,
-        Opened::Netlink(kind) => NetlinkSocket::open(kind, nonblock, owner)?,
+        Opened::Netlink(kind, protocol) => NetlinkSocket::open(kind, protocol, nonblock, owner)?,
         Opened::Packet(kind, protocol) => {
             PacketSocket::open(packet_kind(kind)?, protocol, nonblock, owner)?
         }
@@ -562,7 +560,7 @@ pub(crate) fn sys_socketpair(
         // `inet_socketpair` is `sock_no_socketpair`: the internet families
         // have no way to make two connected sockets without a listener, and
         // `netlink_ops` leaves the call at the same refusal.
-        Opened::Inet(_, _) | Opened::Netlink(_) => return Err(Errno::EOPNOTSUPP),
+        Opened::Inet(_, _) | Opened::Netlink(_, _) => return Err(Errno::EOPNOTSUPP),
         // `packet_ops` has `sock_no_socketpair`, once the type is one it has.
         Opened::Packet(kind, _) => {
             let _ = packet_kind(kind)?;

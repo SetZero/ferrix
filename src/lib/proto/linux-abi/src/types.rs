@@ -1187,6 +1187,13 @@ pub const AT_STATX_SYNC_TYPE: u32 = 0x6000;
 /// Check access with the effective rather than the real identity, for
 /// `faccessat2`. The same bit as [`AT_REMOVEDIR`], which only `unlinkat` reads.
 pub const AT_EACCESS: u32 = 0x200;
+/// `name_to_handle_at`: a handle to compare, never to open. The same bit as
+/// [`AT_REMOVEDIR`] again.
+pub const AT_HANDLE_FID: u32 = 0x200;
+/// `name_to_handle_at`: report the 64-bit unique mount identifier.
+pub const AT_HANDLE_MNT_ID_UNIQUE: u32 = 0x001;
+/// `name_to_handle_at`: a handle that opens back onto a connected path.
+pub const AT_HANDLE_CONNECTABLE: u32 = 0x002;
 
 /// `renameat2`: refuse with `EEXIST` rather than replace the target.
 pub const RENAME_NOREPLACE: u32 = 1 << 0;

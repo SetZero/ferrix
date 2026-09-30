@@ -161,10 +161,18 @@ the net, input and serial cores do not yet, so a bind there may answer `EIO`.
 
 ## 6. What is left out, and what each would take
 
-* **uevents.** The `uevent` files say what an event would carry; none is sent,
-  because there is no `NETLINK_KOBJECT_UEVENT`. A write to `uevent` is refused
+* **uevents.** The `uevent` files say what an event would carry; none is sent.
+  A `NETLINK_KOBJECT_UEVENT` socket opens and joins its group since
+  2026-09-30, so libudev's monitor is made, but nothing is ever queued on it
+  (`src/kernel/src/net/netlink/mod.rs`). A write to `uevent` is refused
   rather than accepted and dropped. Sending one on each BOUND, UNBOUND and
-  publication is a netlink family and a few lines per core, 3 points.
+  publication is a broadcast to those sockets and a few lines per core,
+  3 points. One rule for it (os-9f, 2026-09-30): a program's send must never
+  reach a listener looking like the kernel's -- sender port 0, root's
+  credentials -- because udev trusts exactly that, and forged uevents are a
+  known escalation (CVE-2009-1185). The `CAP_NET_ADMIN` refusal of a send
+  stays, judged in the first user namespace once N4 lands, never by a child
+  namespace's capability.
 * **A PCI function's `resource`, `config`, `irq`, `enable`.** Enumeration keeps
   apertures, not BARs by index, and nothing maps configuration space after
   boot. `resource` is keeping the sized BARs, 2 points; `config` is a read of

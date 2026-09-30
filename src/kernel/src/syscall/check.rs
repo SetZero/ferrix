@@ -10646,3 +10646,36 @@ fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'stati
     }
     Ok(Some(status))
 }
+
+/// `name_to_handle_at` walks the name and then answers `EOPNOTSUPP`, the one
+/// failure libudev does not print when it asks it of `/dev`; a name that is
+/// not there is still `ENOENT`, and flags it does not know, or a connectable
+/// handle only for comparing, are `EINVAL`.
+///
+/// At the end of the file, and not among the path checks, so that no checked
+/// function above it moves off the lines its coverage was measured on.
+pub(crate) fn run_handles() -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{AT_FDCWD, AT_HANDLE_CONNECTABLE, AT_HANDLE_FID};
+    const CWD: u64 = AT_FDCWD as i64 as u64;
+    let process = process::new_for_check().map_err(|_| "could not make a process")?;
+    let page = map_rw(&process, PAGE_SIZE)?;
+    let (root, missing) = (page, page + 64);
+    let (handle, mount) = (page + 128, page + 512);
+    uaccess::copy_to_user(process.space(), root, b"/\0")
+        .and_then(|()| uaccess::copy_to_user(process.space(), missing, b"/tmp/no-handle-here\0"))
+        .map_err(|_| "could not stage a path")?;
+    let call = |args| call_by_number(&process, Call::NameToHandleAt, args);
+    if call([CWD, root, handle, mount, 0, 0]) != Err(Errno::EOPNOTSUPP) {
+        return Err("name_to_handle_at on the root was not EOPNOTSUPP");
+    }
+    if call([CWD, missing, handle, mount, 0, 0]) != Err(Errno::ENOENT) {
+        return Err("name_to_handle_at on a missing name was not ENOENT");
+    }
+    for flags in [0x8000, AT_HANDLE_CONNECTABLE | AT_HANDLE_FID] {
+        if call([CWD, root, handle, mount, u64::from(flags), 0]) != Err(Errno::EINVAL) {
+            return Err("name_to_handle_at took flags it must refuse");
+        }
+    }
+    let _ = memory::sys_munmap(&process, page, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
