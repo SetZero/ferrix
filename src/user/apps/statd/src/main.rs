@@ -23,6 +23,10 @@
 //!   the machine is stopped. When it ends, pid 1 exits and the kernel powers
 //!   off, which on the phone is the watchdog's reset back to Android.
 //!
+//! Run from a shell, `--interval <ms>` and `--seconds <n>` say the same and
+//! win over the command line's: `ferrix-statd --seconds 1` is one sample
+//! and the end.
+//!
 //! One `FERRIX-STAT-START` line comes first, with what does not change, and
 //! one `FERRIX-STAT-END` line last. Everything is JSON the program writes
 //! itself: it has no dependencies.
@@ -78,6 +82,15 @@ fn option<'a>(cmdline: &'a str, name: &str) -> Option<&'a str> {
     cmdline
         .split_whitespace()
         .find_map(|word| word.strip_prefix(name)?.strip_prefix('='))
+}
+
+/// The value after `--name` among the program's own arguments.
+fn argument(arguments: &[String], name: &str) -> Option<u64> {
+    arguments
+        .iter()
+        .position(|word| word == name)
+        .and_then(|at| arguments.get(at + 1))
+        .and_then(|value| value.parse().ok())
 }
 
 fn times(fields: &[&str]) -> Times {
@@ -203,12 +216,13 @@ fn say(line: &str) {
 
 fn main() {
     let cmdline = read("/proc/cmdline");
-    let interval_ms: u64 = option(&cmdline, "ferrix.statd.interval")
-        .and_then(|x| x.parse().ok())
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let interval_ms: u64 = argument(&arguments, "--interval")
+        .or_else(|| option(&cmdline, "ferrix.statd.interval").and_then(|x| x.parse().ok()))
         .unwrap_or(500)
         .max(100);
-    let seconds: u64 = option(&cmdline, "ferrix.statd.seconds")
-        .and_then(|x| x.parse().ok())
+    let seconds: u64 = argument(&arguments, "--seconds")
+        .or_else(|| option(&cmdline, "ferrix.statd.seconds").and_then(|x| x.parse().ok()))
         .unwrap_or(0);
     let page_kib = 4;
 

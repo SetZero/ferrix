@@ -60,9 +60,6 @@ pub(crate) struct Args {
     pub(crate) ferrousli: bool,
     /// `--zinc`: `check` also runs zinc's gates, its own workspace.
     pub(crate) zinc: bool,
-    /// `--statd`: the image carries the stat service at
-    /// `/sbin/ferrix-statd`, for `ferrix.init=` to start.
-    pub(crate) statd: bool,
     /// `--installer`: the image carries `/sbin/ferrix-install` and the root
     /// volume it writes: the live image (`docs/INSTALLER.md` §11).
     pub(crate) installer: bool,
@@ -82,6 +79,8 @@ pub(crate) struct Args {
     pub(crate) apps: Vec<String>,
     /// `--no-apps`: no apps at all.
     pub(crate) no_apps: bool,
+    /// `--abi`: the ABI `new-app` writes an app for.
+    pub(crate) abi: Option<String>,
     /// `--miri`: add CI's Miri steps to `check`.
     pub(crate) miri: bool,
     /// `--jobs`, how many crates `miri` interprets at once; `None` for as
@@ -441,20 +440,22 @@ impl Args {
     }
 
     /// `--adbd`, `--app` and `--no-apps`: more programs the image carries,
-    /// or fewer.
+    /// or fewer; and `--abi`, the kind of app `new-app` writes.
     fn carry_more(&mut self, flag: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
         match flag {
             "--adbd" => self.adbd = true,
             "--app" => self.apps.push(value(items, flag)?),
+            "--abi" => self.abi = Some(value(items, flag)?),
             _ => self.no_apps = true,
         }
         Ok(())
     }
 
-    /// `--statd` and `--installer`: programs the image carries.
+    /// `--statd` and `--installer`: programs the image carries. `--statd`
+    /// is `--app statd`, kept for the phone's scripts, which say it.
     fn carry(&mut self, flag: &str) {
         match flag {
-            "--statd" => self.statd = true,
+            "--statd" => self.apps.push("statd".to_owned()),
             _ => self.installer = true,
         }
     }
@@ -510,7 +511,7 @@ impl Args {
                 "--zinc" => args.zinc = true,
                 "--statd" | "--installer" => args.carry(&item),
                 "--i686" => args.i686 = true,
-                "--adbd" | "--app" | "--no-apps" => args.carry_more(&item, &mut items)?,
+                "--adbd" | "--app" | "--no-apps" | "--abi" => args.carry_more(&item, &mut items)?,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--compositor" => args.compositor = true,
@@ -919,8 +920,8 @@ mod tests {
     fn zinc_is_off_unless_asked_for() {
         assert!(!parse(&["check"]).unwrap().zinc);
         assert!(parse(&["check", "--zinc"]).unwrap().zinc);
-        assert!(parse(&["build", "--statd"]).unwrap().statd);
-        assert!(!parse(&["build"]).unwrap().statd);
+        assert_eq!(parse(&["build", "--statd"]).unwrap().apps, ["statd"]);
+        assert!(parse(&["build"]).unwrap().apps.is_empty());
         assert!(parse(&["test-threads", "--i686"]).unwrap().i686);
         assert!(!parse(&["test-threads"]).unwrap().i686);
     }

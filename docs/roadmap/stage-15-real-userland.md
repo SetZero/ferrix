@@ -215,9 +215,11 @@ the package manager's engine from the start. The one change to the system an
 app needs is `ferrix_rt::linux::call` and `numbers`: any Linux call by
 number. The first app is `ferrofetch`, a native fastfetch; `test-apps`
 passes its three checks on x86-64, and fails, naming the check, with one
-`expect` changed to a line it never prints. Phases 2 to 4 -- the stat
-service, Bad Apple!!'s player and the ports moved in, `src/user/system/`,
-and the package manager -- are `docs/APPS.md` §8.
+`expect` changed to a line it never prints. The same day the stat service
+became the `statd` app, the first built for the Linux ABI, and btop the
+`btop` app, the first built by a script; `new-app` writes a folder that
+passes every app gate as it stands. Bad Apple!!'s player and the other
+ports, `src/user/system/`, and the package manager are `docs/APPS.md` §8.
 
 ---
 

@@ -6,8 +6,8 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
-# A workspace of its own, as zinc is: a static Linux program built with std
-# against the target's own musl, for the initramfs (tools/common/xtask/src/statd.rs).
+# An app (docs/APPS.md): a workspace of its own, a static Linux program
+# built with std against the target's own musl, as app.toml says.
 [workspace]
 
 [[bin]]

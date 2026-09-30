@@ -123,7 +123,6 @@ mod sha256;
 mod shell;
 mod ssh;
 mod start_page;
-mod statd;
 mod steam;
 mod steamcmd;
 mod symbolize;
@@ -270,8 +269,12 @@ COMMANDS:
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     uutils        Build uutils/coreutils against ferrousli (x86_64), the utilities replacing busybox's
-    ports         Build the programs ported onto ferrousli (x86_64: curl, btop, git, sshdt, foot; Arm: curl, git), which images carry
+    ports         Build the programs ported onto ferrousli (x86_64: curl, git, sshdt, foot and the libraries apps build on; Arm: curl, git), which images carry
     apps          List the apps in src/user/apps, each checked against its app.toml (docs/APPS.md)
+    check-apps    check's steps for the apps alone: each app's formatting, clippy, tests and folder
+    build-apps    Build every app's package, or --app's, for --arch: scripts too, which run and
+                  run-compositor never start, and take the last of
+    new-app       Write a new app's folder: --app NAME, --abi native (the default) or linux
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
@@ -411,12 +414,13 @@ OPTIONS:
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
-    --statd                              build, run, test-boot: carry the stat service at /sbin/ferrix-statd
+    --statd                              build, run, test-boot: --app statd, the stat service at /sbin/ferrix-statd
     --installer                          build, run: carry /sbin/ferrix-install and its root volume (the live image)
     --adbd                               build, run: carry adbd at /bin/adbd, started by nobody (docs/ADB.md)
     --app <NAME>                         run, run-compositor: also carry an app that is not in images by default;
                                          give it once for each app
     --no-apps                            run, run-compositor: carry no apps, not even the default ones
+    --abi <native|linux>                 new-app: the ABI the new app's program speaks [default: native]
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --jobs <N>                           miri: crates interpreted at once, by default one per core up to 8
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
@@ -546,7 +550,7 @@ fn run() -> Result<()> {
             builds::execute(std::path::Path::new(plan)).map(|_| ())
         }
         "check" | "miri" | "check-ferrousli" | "host-clippy" | "host-test" | "host-doctest"
-        | "host-doc" => check::command(command, &args),
+        | "host-doc" | "check-apps" => check::command(command, &args),
         "native-clippy" => args
             .arches()?
             .into_iter()
@@ -556,6 +560,8 @@ fn run() -> Result<()> {
         "uutils" => uutils::build(args.single_arch()?).map(|_| ()),
         "ports" => ports::build(args.single_arch()?),
         "apps" => apps::list(),
+        "build-apps" => apps::build_apps(&args),
+        "new-app" => apps::new_app(&args),
         "omz" => omz::install(args.from.as_deref()),
         "zsh-functions" => omz::install_functions(args.from.as_deref()),
         "flash" => {
@@ -811,10 +817,9 @@ fn image_cmdline(args: &Args) -> Option<String> {
 /// programs in `/sbin`, built and checked for `arch` first.
 fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let natives = native::build(arch, args.release)?;
-    let mut service: Vec<ports::File> = Vec::new();
-    if args.statd {
-        service.extend(statd::file(arch)?);
-    }
+    // Only the apps `--app` names: this is test-boot's image too, which
+    // carries no app it was not asked for (`docs/APPS.md` §5).
+    let mut service: Vec<ports::File> = apps::named(arch, args)?;
     if args.installer {
         service.extend(installer::files(arch)?.into_iter().flatten());
     }

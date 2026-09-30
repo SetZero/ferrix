@@ -192,7 +192,7 @@ model (phase 3) and the phone.
 `P=~/.local/share/ferrix/pixel7`. Two scripts there, outside the repo:
 
 * **`WT=<worktree> $P/build-run.sh <name>`** builds `<worktree>`'s aarch64
-  image with `--statd`, the loader with the payload, and
+  image with `--app statd`, the loader with the payload, and
   `$P/<name>/boot.img`. It keeps the tree's diff, the commit, and a debug
   kernel beside it. It refuses an existing `<name>`.
 * **`$P/boot-run.sh <name>`** runs `adb reboot bootloader`, `fastboot stage

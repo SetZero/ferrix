@@ -2,7 +2,7 @@
 //! `docs/ADB.md`): building it for the initramfs, and `test-adb`, which
 //! drives it with this machine's own `adb`.
 //!
-//! Built as `statd.rs` builds the stat service: a static Linux program with
+//! Built as `zinc.rs` builds the shell: a static Linux program with
 //! std against the target's musl, from a workspace of its own into a target
 //! directory of its own. `--adbd` puts it in an image at `/bin/adbd`, where
 //! nothing starts it: anyone who reaches its port gets a shell, so running

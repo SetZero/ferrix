@@ -9,8 +9,13 @@
 //! `build` and `run` do not start on their own. `cargo xtask ports` does.
 //!
 //! x86-64 builds every port. AArch64 and ARMv7-A build the C ones git needs,
-//! [`ARM_PORTS`], cross-compiled with the target's gcc: btop and its C++
-//! runtime need the target's g++, and sshdt's build names its Rust target.
+//! [`ARM_PORTS`], cross-compiled with the target's gcc: the C++ runtime
+//! needs the target's g++, and sshdt's build names its Rust target.
+//!
+//! A port that is a program of its own belongs among the apps
+//! (`docs/APPS.md`), which xtask finds without a list; btop was the first to
+//! move. The ones here are those other code still names, and the libraries
+//! apps build against.
 //!
 //! An entry is a file or a whole tree. A tree, such as git's
 //! `usr/libexec/git-core`, is walked in name order so the archive is the same
@@ -29,7 +34,7 @@ use crate::{Error, Result};
 
 /// The ports `cargo xtask ports` builds, in order, each a directory of
 /// `src/user/linux/ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
-/// btop links against, and installs nothing an image carries. `sshdt` is Rust
+/// the btop app links against, and installs nothing an image carries. `sshdt` is Rust
 /// rather than C, built the way uutils is, and needs cargo's crates.io.
 /// `foot` is the Wayland terminal `docs/CHROME.md` starts from, built with
 /// every library it links and the one font it draws with. `vkgears` is
@@ -40,7 +45,6 @@ use crate::{Error, Result};
 const PORTS: &[&str] = &[
     "curl",
     "libcxx",
-    "btop",
     "zlib",
     "git",
     "sshdt",
@@ -120,12 +124,6 @@ pub(crate) const FILES: &[Installed] = &[
         mode: 0o644,
         kind: Kind::File,
         port: "curl",
-    },
-    Installed {
-        path: "bin/btop",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "btop",
     },
     Installed {
         path: "bin/git",
@@ -462,7 +460,7 @@ mod tests {
             // git links zlib and libcurl, which must be built first.
             let at = |port| ports.iter().position(|p| *p == port).unwrap();
             assert!(at("zlib") < at("git") && at("curl") < at("git"), "{arch}");
-            for port in ["btop", "libcxx", "sshdt", "foot", "vkgears"] {
+            for port in ["libcxx", "sshdt", "foot", "vkgears"] {
                 assert!(!ports.contains(&port), "{arch} {port}");
             }
             assert!(ports.iter().all(|port| PORTS.contains(port)), "{arch}");

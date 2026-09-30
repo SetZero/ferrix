@@ -88,13 +88,22 @@ on Ferrix will read the same records.
   applies, as it does to the system's native programs, and the ELF is held
   to the same shape (`native.rs`'s check) before it goes anywhere.
 * `kind = "cargo"`, `abi = "linux"`: a static program against the target's
-  musl, as zinc and the stat service are built.
+  musl, as zinc is built. xtask gives the flags and names `rust-lld` as the
+  linker, so the app needs no `.cargo/config.toml`.
 * `kind = "script"`: `bash build.sh <arch> <out>`, which installs into
-  `<out>` the paths `from` names. For C ports; it needs a Linux host.
+  `<out>` the paths `from` names. For C ports, which source ferrousli's port
+  toolkit (`src/user/linux/ferrousli/tools/ports/common.sh`) as a native app
+  links the runtime; it needs a Linux host. `check` runs `bash -n` over it.
 
 Each app builds into `target/apps/<name>/`, never the system's target
 directory. An app whose toolchain is missing, or that does not list an
 architecture, is skipped with a line saying so, as a port is today.
+
+A script build is a download and minutes of C, which no image starts on its
+own, as no image starts a port: `run` and `run-compositor` take the package
+built last, and say how to build it when there is none. `cargo xtask
+build-apps` builds every app's package, or `--app`'s; `test-apps` builds
+what it boots. A cargo build is incremental, and every image makes it.
 
 ### 3.2 What an app may depend on
 
@@ -133,13 +142,17 @@ in xtask names an app.
 | Command | For each app |
 |---|---|
 | `cargo xtask apps` | lists it, and checks its manifest |
-| `cargo xtask check` | formatting; clippy on the host's lib target and the ELF's target; the host tests; rule 1 |
+| `cargo xtask check` | formatting (`bash -n` for a script); clippy on the host's lib target and the programs' targets; the host tests; rule 1 |
 | `cargo xtask run`, `run-compositor` | builds the `default` ones for the architecture and installs their packages into the image |
+| `cargo xtask build`, `test-boot` | installs only the ones `--app` names |
+| `cargo xtask build-apps` | builds its package, a script's too |
 | `cargo xtask test-apps` | one boot that runs every `[[smoke]]` line and wants each `expect` |
+| `cargo xtask new-app --app NAME [--abi linux]` | writes a new app's folder, which passes the rows above as it is |
 
 `--app NAME` adds an app that is not `default`; `--no-apps` leaves them all
 out. The images the test rows boot are unchanged: they are the system's
-tests, and an app's is `test-apps`.
+tests, and an app's is `test-apps`. `--statd` is `--app statd`, kept because
+the phone's scripts say it.
 
 ## 6. Packages
 
@@ -185,13 +198,16 @@ What this leaves room for, and deliberately does not build yet:
 
 ## 8. The phases
 
-1. **The mechanism** (this landing): `apps.rs`, `ferrix-pkg`, the SDK's
-   `linux::call`, the `check` steps, image installs, `test-apps`, rule 1,
-   and the fetch program `ferrofetch` as the first app.
-2. **The optional programs move in**: the stat service and Bad Apple!!'s
-   player, then the ports -- which deletes `statd.rs` and `ports.rs`'s
-   `PORTS` and `FILES`, and gives the ports' dependencies (btop on libcxx,
-   git on zlib and curl) the `depends` they have implicitly today.
+1. **The mechanism**: `apps.rs`, `ferrix-pkg`, the SDK's `linux::call`,
+   the `check` steps, image installs, `test-apps`, rule 1, and the fetch
+   program `ferrofetch` as the first app. Landed.
+2. **The optional programs move in**: the stat service and btop first, one
+   of each build that had no app, with `build-apps` and `new-app`; then Bad
+   Apple!!'s player and the other ports -- which empties `ports.rs`'s
+   `PORTS` and `FILES` of programs, and gives the ports' dependencies (git
+   on zlib and curl) the `depends` they have implicitly today. A library
+   only built against, as libcxx is for btop, stays a port: it installs
+   nothing an image carries.
 3. **`src/user/native` and `src/user/linux` move under `src/user/system/`**,
    a mechanical move of paths in xtask, the generators, CI and
    `LAYOUT.md`, done apart from the rest so it collides with as little
@@ -216,7 +232,9 @@ and passes the app's three smoke checks, the first a native program started
 from a shell by `execve` and reading `uname` and `/proc`; with one `expect`
 changed to a line the program never prints it fails and names the check.
 
-Not yet: phase 2's moves; the checks' `abi = "linux"` and `kind = "script"`
-paths have no app to exercise them, and are written against zinc's and the
-ports' builds, which they follow; `cargo xtask new-app` to write a new
-folder's skeleton.
+Phase 2's first half, the same day: the stat service is the `statd` app,
+`abi = "linux"`, and `statd.rs` is gone; btop is the `btop` app, `kind =
+"script"`, out of `ports.rs`; `build-apps` builds packages on demand, and
+`new-app` writes a folder for either ABI.
+
+Not yet: Bad Apple!!'s player and the other ports.

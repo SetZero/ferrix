@@ -302,7 +302,7 @@ struct Carried {
     busybox: Option<PathBuf>,
     /// zinc's bytes, which go to `/bin/zinc` with `/bin/zsh` beside them.
     zinc: Option<Vec<u8>>,
-    /// What `cargo xtask ports` built -- curl and btop -- when this machine
+    /// What `cargo xtask ports` built -- curl, git -- and the apps, when this machine
     /// has them. `build` and `run` put them on every image they make; a
     /// watched boot wants them for the same reason it wants the applets, and
     /// a gate boot's archive names none.

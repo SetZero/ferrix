@@ -8,9 +8,13 @@
 //! folder, and the check that nothing outside the folder names it is here
 //! too (`docs/APPS.md` §4, rule 1).
 
+mod new;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+pub(crate) use new::new_app;
 
 use ferrix_cpio::{Archive, FileType};
 use ferrix_pkg::manifest::{self, Abi, Build, FileSpec, Recipe};
@@ -148,38 +152,61 @@ pub(crate) fn list() -> Result<()> {
     Ok(())
 }
 
-/// The apps an image a person runs carries: the `default` ones and every
-/// `--app`, or none with `--no-apps`.
-fn selected(args: &Args) -> Result<Vec<App>> {
-    let apps = discover()?;
-    if let Some(unknown) = args
+/// Every `--app` names a folder in [`PLACE`].
+fn every_app_named_is_one(apps: &[App], args: &Args) -> Result<()> {
+    match args
         .apps
         .iter()
         .find(|name| !apps.iter().any(|app| app.name() == name.as_str()))
     {
-        return Err(Error::new(format!(
+        Some(unknown) => Err(Error::new(format!(
             "--app {unknown}: there is no {PLACE}/{unknown}"
-        )));
+        ))),
+        None => Ok(()),
     }
+}
+
+/// The apps an image a person runs carries: the `default` ones and every
+/// `--app`, or none with `--no-apps`; with `defaults` false, only the
+/// `--app` ones.
+fn selected(args: &Args, defaults: bool) -> Result<Vec<App>> {
+    let apps = discover()?;
+    every_app_named_is_one(&apps, args)?;
     if args.no_apps {
         return Ok(Vec::new());
     }
     Ok(apps
         .into_iter()
-        .filter(|app| app.recipe.default || args.apps.iter().any(|name| name == app.name()))
+        .filter(|app| {
+            (defaults && app.recipe.default) || args.apps.iter().any(|name| name == app.name())
+        })
         .collect())
 }
 
-/// The files of the apps `args` select, built for `arch`, as an image
-/// carries them: each app's package, installed.
+/// The files of the apps `args` select, built for `arch`, as an image a
+/// person runs carries them: each app's package, installed.
 ///
 /// # Errors
 ///
 /// A build that fails, or a set of packages that does not install.
 pub(crate) fn installed(arch: Arch, args: &Args) -> Result<Vec<ports::File>> {
+    install_selected(arch, args, true)
+}
+
+/// [`installed`], but only the apps `--app` names: for an image a test
+/// boots too, which carries no app it was not asked for.
+///
+/// # Errors
+///
+/// As [`installed`].
+pub(crate) fn named(arch: Arch, args: &Args) -> Result<Vec<ports::File>> {
+    install_selected(arch, args, false)
+}
+
+fn install_selected(arch: Arch, args: &Args, defaults: bool) -> Result<Vec<ports::File>> {
     let mut packages = Vec::new();
-    for app in selected(args)? {
-        if let Some(path) = package(&app, arch, args.release)? {
+    for app in selected(args, defaults)? {
+        if let Some(path) = package(&app, arch, args.release, Fresh::UnlessScript)? {
             packages.push(read(&path)?);
         }
     }
@@ -190,6 +217,31 @@ pub(crate) fn installed(arch: Arch, args: &Args) -> Result<Vec<ports::File>> {
     Ok(files)
 }
 
+/// Whether a package is built for the asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fresh {
+    /// Always: `build-apps` and `test-apps`.
+    Always,
+    /// Unless the app is built by a script, which is a download and minutes
+    /// of C that no image starts on its own, as no image starts a port: the
+    /// last package built is taken, and its absence said.
+    UnlessScript,
+}
+
+/// Where `app`'s package for `arch` is written.
+fn package_path(app: &App, arch: Arch) -> PathBuf {
+    let name = app.name();
+    paths::target_dir()
+        .join("apps")
+        .join(name)
+        .join(arch.name())
+        .join(format!(
+            "{name}-{}-{}.fxpkg",
+            app.recipe.package.version,
+            arch.name()
+        ))
+}
+
 /// Build `app` for `arch` and write its package, or `None` for an
 /// architecture it is not built for or a build this host cannot make.
 ///
@@ -197,10 +249,26 @@ pub(crate) fn installed(arch: Arch, args: &Args) -> Result<Vec<ports::File>> {
 ///
 /// A build that fails, a file its manifest names that the build did not
 /// make, or a native program the kernel could not start.
-pub(crate) fn package(app: &App, arch: Arch, release: bool) -> Result<Option<PathBuf>> {
+pub(crate) fn package(
+    app: &App,
+    arch: Arch,
+    release: bool,
+    fresh: Fresh,
+) -> Result<Option<PathBuf>> {
     let name = app.name();
     if !app.builds_for(arch) {
         println!("  {name} is not built for {arch}");
+        return Ok(None);
+    }
+    let out = package_path(app, arch);
+    if fresh == Fresh::UnlessScript && app.recipe.build == Build::Script {
+        if out.is_file() {
+            println!("  {name}: the package built last, {}", out.display());
+            return Ok(Some(out));
+        }
+        println!(
+            "  {name} is not built for {arch}: `cargo xtask build-apps --arch {arch} --app {name}`"
+        );
         return Ok(None);
     }
     let Some(built) = build(app, arch, release)? else {
@@ -234,17 +302,31 @@ pub(crate) fn package(app: &App, arch: Arch, release: bool) -> Result<Option<Pat
     directories.dedup();
     let directories: Vec<&str> = directories.iter().map(String::as_str).collect();
     let archive = initramfs::plain(&directories, &files)?;
-    let out = paths::target_dir()
-        .join("apps")
-        .join(name)
-        .join(arch.name())
-        .join(format!(
-            "{name}-{}-{}.fxpkg",
-            app.recipe.package.version,
-            arch.name()
-        ));
     write(&out, &archive)?;
     Ok(Some(out))
+}
+
+/// `cargo xtask build-apps`: every app's package, or `--app`'s, built for
+/// each `--arch`, scripts too.
+///
+/// # Errors
+///
+/// A build that fails, or an `--app` there is no folder for.
+pub(crate) fn build_apps(args: &Args) -> Result<()> {
+    let apps = discover()?;
+    every_app_named_is_one(&apps, args)?;
+    let wanted: Vec<&App> = apps
+        .iter()
+        .filter(|app| args.apps.is_empty() || args.apps.iter().any(|name| name == app.name()))
+        .collect();
+    for arch in args.arches()? {
+        for app in &wanted {
+            if let Some(path) = package(app, arch, args.release, Fresh::Always)? {
+                println!("{}", path.display());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The files a build made: each as its manifest names it, and its bytes.
@@ -289,7 +371,11 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
             .env("CARGO_TARGET_DIR", &target_dir)
             // For zinc's reason: RUSTFLAGS replaces the flags every config
             // file up the tree would otherwise merge in.
-            .env("RUSTFLAGS", zinc::RUSTFLAGS);
+            .env("RUSTFLAGS", zinc::RUSTFLAGS)
+            // And the linker, so an app needs no `.cargo/config.toml` of
+            // its own: the musl targets carry their C runtime, so rust-lld
+            // is the whole toolchain on any host.
+            .env(&linker_variable(target), "rust-lld");
             for spec in &app.recipe.files {
                 build = build.output(out.join(&spec.from));
             }
@@ -399,13 +485,26 @@ fn package_record(bytes: &[u8]) -> Result<Record> {
     Err(Error::new("a package without a record"))
 }
 
-/// `cargo` in `app`'s folder: on Windows, a Linux app's through WSL.
+/// Cargo's variable for `target`'s linker: `CARGO_TARGET_<TRIPLE>_LINKER`.
+fn linker_variable(target: &str) -> String {
+    format!(
+        "CARGO_TARGET_{}_LINKER",
+        target.to_ascii_uppercase().replace('-', "_")
+    )
+}
+
+/// `cargo` in `app`'s folder, into the app's own target directory under
+/// the tree's, where its builds go and CI's cache finds it: on Windows, a
+/// Linux app's through WSL, which keeps its own.
 fn cargo_in(app: &App, arguments: &[&str]) -> Command {
     if cfg!(windows) && app.recipe.package.abi == Abi::Linux {
         return crate::wsl::cargo(&app.dir, arguments);
     }
     let mut command = Command::new(cargo::cargo());
-    let _ = command.current_dir(&app.dir).args(arguments);
+    let _ = command.current_dir(&app.dir).args(arguments).env(
+        "CARGO_TARGET_DIR",
+        paths::target_dir().join("apps").join(app.name()),
+    );
     command
 }
 
@@ -432,8 +531,15 @@ pub(crate) fn stays_in_its_folder(app: &App) -> Result<()> {
     }
 }
 
-/// `cargo fmt --check` in `app`'s folder.
+/// `cargo fmt --check` in `app`'s folder; for an app built by a script,
+/// `bash -n` over the script, which is what can be said of it without
+/// running it.
 pub(crate) fn formatting(app: &App) -> Result<()> {
+    if app.recipe.build == Build::Script {
+        let mut command = Command::new("bash");
+        let _ = command.current_dir(&app.dir).args(["-n", "build.sh"]);
+        return cargo::run(command, &format!("{}: bash -n build.sh", app.name()));
+    }
     cargo::run(
         cargo_in(app, &["fmt", "--check"]),
         &format!("{}: cargo fmt", app.name()),
@@ -459,8 +565,16 @@ pub(crate) fn host(app: &App) -> Result<()> {
     )
 }
 
-/// Clippy over `app`'s programs for each target it is built for.
+/// Clippy over `app`'s programs for each target it is built for: none for
+/// an app built by a script, which has no cargo workspace.
 pub(crate) fn targets(app: &App) -> Result<()> {
+    if app.recipe.build == Build::Script {
+        println!(
+            "  {} is built by its build.sh: nothing for clippy",
+            app.name()
+        );
+        return Ok(());
+    }
     for arch in Arch::ALL {
         if !app.builds_for(arch) {
             continue;
@@ -474,11 +588,7 @@ pub(crate) fn targets(app: &App) -> Result<()> {
         };
         let mut clippy = vec!["clippy", "--bins", "--target", target, "--"];
         clippy.extend(LINTS);
-        let mut command = cargo_in(app, &clippy);
-        let _ = command.env(
-            "CARGO_TARGET_DIR",
-            paths::target_dir().join("apps").join(app.name()),
-        );
+        let command = cargo_in(app, &clippy);
         cargo::run(
             command,
             &format!("{}: cargo clippy --target {target}", app.name()),
@@ -532,7 +642,7 @@ pub(crate) fn test_apps(args: &Args) -> Result<()> {
         let mut packages = Vec::new();
         let mut tested = Vec::new();
         for app in apps {
-            if let Some(path) = package(&app, arch, args.release)? {
+            if let Some(path) = package(&app, arch, args.release, Fresh::Always)? {
                 packages.push(read(&path)?);
                 tested.push(app);
             }

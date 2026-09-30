@@ -21,6 +21,7 @@ pub(crate) fn command(name: &str, args: &Args) -> Result<()> {
         "host-test" => host_test(),
         "host-doctest" => host_doctest(),
         "host-doc" => host_doc(),
+        "check-apps" => apps(),
         _ => run(args),
     }
 }

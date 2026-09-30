@@ -27,7 +27,7 @@ draws only the kernel's own lines, so these do not fill it.
 
 ## Running it
 
-`cargo xtask build --statd` puts it in an image at `/sbin/ferrix-statd`, and
+`cargo xtask build --app statd` puts it in an image at `/sbin/ferrix-statd`, and
 the kernel starts it after the boot checks when the command line says
 
 ```
@@ -54,8 +54,8 @@ is the watchdog's reset back to Android.
   monitor streams its lines, these among them, into the Ferrix stats tab
   while Ferrix runs (`tools/vendor/google/pixel7/monitor`); the `ramoops`
   record once Android is back still has them too.
-* **QEMU**: `cargo xtask test-boot --arch aarch64 --statd --kernel-option
+* **QEMU**: `cargo xtask test-boot --arch aarch64 --app statd --kernel-option
   ferrix.init=/sbin/ferrix-statd --kernel-option ferrix.statd.seconds=3`.
 
 It is built like zinc, with std, statically against the target's own musl,
-from a workspace of its own (`tools/common/xtask/src/statd.rs`), and has no dependencies.
+from a workspace of its own, as an app (`docs/APPS.md`), and has no dependencies.

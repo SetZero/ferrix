@@ -438,7 +438,7 @@ come back both times.
 
 **Done — btop, and the C++ runtime under it.** `src/user/linux/ferrousli/tools/ports/libcxx`
 builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with
-the host's gcc. `src/user/linux/ferrousli/tools/ports/btop` builds btop 1.4.7, a C++23
+the host's gcc. The btop port (an app since 2026-09-30) builds btop 1.4.7, a C++23
 program, over them. What ferrousli lacked for that landed with them:
 `dl_iterate_phdr` and `dladdr`, the message catalogues, the `strtod_l` family,
 `pathconf`, `copy_file_range`, `getloadavg`, and thread cancellation, which

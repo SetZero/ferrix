@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Builds btop 1.4.7 as a static x86-64 program against ferrousli and the C++
-# runtime tools/ports/libcxx builds on it, which must be built first.
+# runtime ferrousli's libcxx port builds on it, which must be built first
+# (`cargo xtask ports`).
 #
-#     tools/ports/btop/build.sh            # from src/user/linux/ferrousli/
+#     build.sh <arch> <out>     # as an app's script is run (docs/APPS.md §3.1)
 #
-# Installs, under $FERRIX_PORTS (see ../common.sh):
-#   x86_64/bin/btop
+# Writes <out>/btop, which app.toml installs at /bin/btop. It downloads and
+# builds under $FERRIX_PORTS, as every port does, never in the repository.
 #
 # Pinned, and refused if its checksum differs: GitHub's archive of the v1.4.7
 # tag, by its sha256 as first downloaded on 2026-09-16; btop publishes no
@@ -16,9 +17,14 @@
 # libraries at run time, which a static program cannot do.
 set -euo pipefail
 
+[ $# -eq 2 ] || { echo "usage: build.sh <arch> <out>" >&2; exit 2; }
+out=$2
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../common.sh
-. "$here/../common.sh"
+# ferrousli's port toolkit: pinned downloads, the release library, and the
+# compilers that build against it. It reads `--arch <name>` first.
+set -- --arch "$1"
+# shellcheck source=../../linux/ferrousli/tools/ports/common.sh
+. "$here/../../linux/ferrousli/tools/ports/common.sh"
 # x86-64 only so far: another architecture needs libcxx built for it first.
 [ "$arch" = x86_64 ] || fail "btop is built for x86_64 only so far, not for $arch"
 
@@ -37,7 +43,7 @@ echo "btop $BTOP_VERSION, verified"
 
 build_ferrousli
 make_compilers
-[ -f "$prefix/lib/libc++.a" ] || fail "no C++ runtime in $prefix/lib; run tools/ports/libcxx/build.sh first"
+[ -f "$prefix/lib/libc++.a" ] || fail "no C++ runtime in $prefix/lib; run \`cargo xtask ports\` first"
 
 step "build"
 build=$work/build
@@ -57,8 +63,8 @@ if [ "$status" -ne 0 ]; then
 fi
 
 step "install"
-mkdir -p "$prefix/bin"
+mkdir -p "$out"
 # Stripped: the image carries it, and nothing on the guest reads its symbols.
-install -m 755 -s --strip-program="$STRIP" "$build/bin/btop" "$prefix/bin/btop"
-file "$prefix/bin/btop"
-"$prefix/bin/btop" --version
+install -m 755 -s --strip-program="$STRIP" "$build/bin/btop" "$out/btop"
+file "$out/btop"
+"$out/btop" --version
