@@ -228,6 +228,44 @@ pub fn for_each_thread(mut visit: impl FnMut(*mut Thread)) {
     }
 }
 
+/// The walk the loader's `dlopen` calls to give a new module's TLS image to
+/// every thread ([`crate::loader::ThreadWalk`]): `visit` with each thread's
+/// pointer, the thread list locked so that none ends under it.
+///
+/// # Safety
+///
+/// `visit` must be sound to call with any live thread's pointer while the
+/// thread runs, and must not take the thread list lock.
+pub unsafe extern "C" fn walk_threads(visit: unsafe extern "C" fn(tp: *mut u8)) {
+    let mask = block_app_signals();
+    list_lock();
+    for_each_thread(|t| {
+        // SAFETY: the thread is on the list, so its control block and TLS
+        // stay mapped while the lock is held; the loader writes only blocks
+        // of modules no thread has reached yet.
+        unsafe { visit(with_exposed_provenance_mut(thread::pointer_of(t))) };
+    });
+    list_unlock();
+    restore_signals(mask);
+}
+
+/// Catch the thread at `t`, which has not started, up on every module the
+/// loader's `dlopen` brought, with the thread list lock held: a `dlopen`
+/// that published a module before the lock was taken is copied here, and
+/// one after it finds the thread on the list.
+///
+/// # Safety
+///
+/// `t` must be a control block built by [`thread::new_control_block`] whose
+/// thread is not running, and the thread list lock held.
+unsafe fn catch_up_tls(t: *mut Thread) {
+    if let Some(loader) = crate::loader::threads() {
+        // SAFETY: the caller's promise: nothing else touches the thread's
+        // blocks, and the loader's static TLS is beside its pointer.
+        unsafe { (loader.catch_up_thread)(with_exposed_provenance_mut(thread::pointer_of(t))) };
+    }
+}
+
 /// What a new thread runs.
 #[derive(Debug, Clone, Copy)]
 pub enum Routine {
@@ -377,6 +415,9 @@ pub unsafe fn create(
     // SAFETY: the control block was just built.
     let parent_tid = unsafe { thread::tid(new) }.as_ptr();
     list_lock();
+    // SAFETY: the control block was just built, the thread has not started,
+    // and the lock is held.
+    unsafe { catch_up_tls(new) };
     let _ = THREADS_MINUS_1.fetch_add(1, Ordering::SeqCst);
     // SAFETY: the new thread's stack, control block and arguments are set up,
     // the kernel writes its id into its control block, and it clears the

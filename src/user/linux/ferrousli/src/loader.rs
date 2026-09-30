@@ -62,6 +62,25 @@ pub struct Interface {
         *const c_char,
         *const c_void,
     ) -> *mut c_void,
+    /// Revision 6: brings the TLS blocks of the thread at the pointer given
+    /// up to date with every module `dlopen` brought.
+    pub catch_up_thread: unsafe extern "C" fn(tp: *mut u8),
+    /// Revision 6: registers [`ThreadWalk`], through which `dlopen` gives a
+    /// new module's TLS image to every thread.
+    pub set_thread_walk: unsafe extern "C" fn(Option<ThreadWalk>),
+}
+
+/// A walk over every thread the library started: it calls the function it
+/// is given with each one's thread pointer, with the thread list locked.
+pub type ThreadWalk = unsafe extern "C" fn(visit: unsafe extern "C" fn(tp: *mut u8));
+
+/// The revision that added the thread walk.
+const THREAD_WALK: usize = 6;
+
+/// The loader's interface if it takes a thread walk.
+#[must_use]
+pub fn threads() -> Option<&'static Interface> {
+    interface().filter(|interface| interface.version >= THREAD_WALK)
 }
 
 /// The revision that added the `dlfcn.h` calls.

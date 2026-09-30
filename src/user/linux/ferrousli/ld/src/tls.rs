@@ -33,13 +33,17 @@
 //! A thread reaches such a module's variables only through that call, so
 //! nothing it has written is overwritten.
 //!
-//! Initial-exec and descriptor accesses bypass `__tls_get_addr`, so a
-//! module reached that way whose image is not all zeros -- zeros being what
-//! the surplus holds in every thread -- is still refused
-//! ([`needs_catch_up`]). Chrome's GPU libraries use only `__tls_get_addr`.
+//! Initial-exec and descriptor accesses bypass `__tls_get_addr`. So, as
+//! glibc does, `dlopen` also copies a new module's image into every thread
+//! at once ([`make_ready`]), through a walk over its threads the C library
+//! registers ([`set_thread_walk`]), and the C library catches up each thread
+//! it starts before it runs. libglvnd's `libGL.so.1` reads its dispatch
+//! table by initial-exec. Without a registered walk, a module reached that
+//! way whose image is not all zeros -- zeros being what the surplus holds in
+//! every thread -- is still refused ([`needs_catch_up`]).
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::object::MAX_OBJECTS;
 use crate::report::Error;
@@ -98,12 +102,45 @@ static DYNAMIC: DynamicModules = DynamicModules(UnsafeCell::new(
     }; MAX_DYNAMIC],
 ));
 
-/// How many entries of [`DYNAMIC`] are published: the newest generation.
+/// How many entries of [`DYNAMIC`] are published: the newest generation a
+/// thread may catch up on, whose object is relocated.
 static DYNAMIC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// How many entries of [`DYNAMIC`] are written: [`DYNAMIC_COUNT`], and the
+/// modules the `dlopen` under way placed, which [`make_ready`] publishes once
+/// they are relocated -- a module's image may itself be relocated, and a
+/// thread must not copy it before. Written only under `dlopen`'s lock.
+static PLACED: AtomicUsize = AtomicUsize::new(0);
+
+/// What the C library calls for each of its threads' thread pointers.
+pub(crate) type Visit = unsafe extern "C" fn(tp: *mut u8);
+
+/// The C library's walk over every thread it started, the calling one
+/// included, with its thread list locked.
+pub(crate) type Walk = unsafe extern "C" fn(visit: Visit);
+
+/// The C library's [`Walk`], once it has registered one; null before.
+static WALK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Record the C library's walk over its threads, so that `dlopen` can give
+/// every thread a new module's image, as glibc does, and initial-exec and
+/// descriptor accesses to it need no catching up. `None` forgets it.
+pub(crate) unsafe extern "C" fn set_thread_walk(walk: Option<Walk>) {
+    let walk = walk.map_or(core::ptr::null_mut(), |walk| walk as *mut ());
+    WALK.store(walk, Ordering::Release);
+}
+
+/// The registered walk, if there is one.
+fn walk() -> Option<Walk> {
+    let walk = WALK.load(Ordering::Acquire);
+    // SAFETY: a non-null value is a `Walk` that `set_thread_walk` stored, and
+    // a function pointer and a data pointer are one size here.
+    (!walk.is_null()).then(|| unsafe { core::mem::transmute::<*mut (), Walk>(walk) })
+}
 
 /// Publish object `index`, which `dlopen` just placed in the surplus, as the
 /// next generation: its offset and generation for `__tls_get_addr`, and its
-/// image for the threads that catch up.
+/// image for the threads that catch up once [`make_ready`] runs.
 ///
 /// # Errors
 ///
@@ -113,11 +150,22 @@ static DYNAMIC_COUNT: AtomicUsize = AtomicUsize::new(0);
 ///
 /// Called under `dlopen`'s lock, before anything can reach the module.
 pub(crate) unsafe fn publish_dynamic(scope: &Scope, index: usize) -> Result<(), Error> {
+    if index + 1 >= MODULES {
+        return Err(Error::TooManyObjects);
+    }
+    let generation = MODULE_GENERATIONS
+        .0
+        .get()
+        .cast::<isize>()
+        .wrapping_add(index + 1);
     let Some(tls) = scope.get(index).and_then(|object| object.tls) else {
+        // SAFETY: `index + 1` is inside the table, and the lock makes this the
+        // only writer. A failed `dlopen` may have left the index a module's.
+        unsafe { generation.write(0) };
         return Ok(());
     };
-    let count = DYNAMIC_COUNT.load(Ordering::Relaxed);
-    if count >= MAX_DYNAMIC || index + 1 >= MODULES {
+    let count = PLACED.load(Ordering::Relaxed);
+    if count >= MAX_DYNAMIC {
         return Err(Error::TooManyObjects);
     }
     let entry = DYNAMIC.0.get().cast::<Dynamic>().wrapping_add(count);
@@ -139,22 +187,42 @@ pub(crate) unsafe fn publish_dynamic(scope: &Scope, index: usize) -> Result<(), 
     // SAFETY: `index + 1` is inside the table, and the lock makes this the
     // only writer; nothing reads the module's entry before it is relocated.
     unsafe { offset.write(tls.offset) };
-    let generation = MODULE_GENERATIONS
-        .0
-        .get()
-        .cast::<isize>()
-        .wrapping_add(index + 1);
     // SAFETY: as above.
     unsafe { generation.write(count as isize + 1) };
-    DYNAMIC_COUNT.store(count + 1, Ordering::Release);
+    PLACED.store(count + 1, Ordering::Relaxed);
     Ok(())
 }
 
+/// Publish the generations this `dlopen` placed, its objects now relocated,
+/// and copy their images into every thread the C library has started.
+///
+/// # Safety
+///
+/// Called under `dlopen`'s lock, after the new objects are relocated and
+/// before their initialisers run.
+pub(crate) unsafe fn make_ready() {
+    DYNAMIC_COUNT.store(PLACED.load(Ordering::Relaxed), Ordering::Release);
+    if let Some(walk) = walk() {
+        // SAFETY: the C library visits each live thread's pointer, with its
+        // list locked, so none is freed under the copy.
+        unsafe { walk(catch_up_thread) };
+    }
+}
+
+/// Forget the generations a failed `dlopen` placed.
+///
+/// # Safety
+///
+/// Called under `dlopen`'s lock.
+pub(crate) unsafe fn abandon() {
+    PLACED.store(DYNAMIC_COUNT.load(Ordering::Relaxed), Ordering::Relaxed);
+}
+
 /// Whether module number `module` is one `dlopen` brought whose image is not
-/// all zeros: one a thread must catch up on before it reads it, which only
-/// `__tls_get_addr` does.
+/// all zeros, with no C library walk to give it to every thread: one a thread
+/// must catch up on before it reads it, which only `__tls_get_addr` does.
 pub(crate) fn needs_catch_up(module: usize) -> bool {
-    if module >= MODULES {
+    if module >= MODULES || walk().is_some() {
         return false;
     }
     // SAFETY: `module` is inside the table, which is written only under
@@ -186,25 +254,43 @@ pub(crate) fn needs_catch_up(module: usize) -> bool {
     })
 }
 
-/// The calling thread's count of initialised generations: its control
-/// block's `dtv` word, which no C library here uses otherwise.
-fn generation_word() -> *mut usize {
+/// The count of initialised generations of the thread whose pointer is `tp`:
+/// its control block's `dtv` word, which no C library here uses otherwise.
+fn generation_word(tp: *mut u8) -> *mut usize {
     #[cfg(target_arch = "x86_64")]
-    return (thread_pointer() + size_of::<usize>()) as *mut usize;
+    return tp.wrapping_add(size_of::<usize>()).cast();
     #[cfg(not(target_arch = "x86_64"))]
-    return thread_pointer() as *mut usize;
+    return tp.cast();
 }
 
 /// Bring the calling thread's blocks of every module `dlopen` brought since
-/// it last looked up to date: each image copied, and the rest of its block
-/// zeroed. Called by `__tls_get_addr` when a module is newer than the thread.
+/// it last looked up to date. Called by `__tls_get_addr` when a module is
+/// newer than the thread.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __ferrousli_tls_catch_up() {
-    let word = generation_word();
-    // SAFETY: the word is in this thread's control block.
+    // SAFETY: the calling thread's own pointer.
+    unsafe { catch_up_thread(thread_pointer() as *mut u8) };
+}
+
+/// Bring the blocks of the thread whose pointer is `tp` up to date with every
+/// module `dlopen` brought since it last did: each image copied, the rest of
+/// its block zeroed, and its count of generations advanced.
+///
+/// The C library calls it for a thread it is starting, with its thread list
+/// locked and before the thread runs, and [`make_ready`] for every thread; a
+/// thread calls it for itself from `__tls_get_addr`. None of them writes a
+/// block the thread has used: no thread reaches a module before `dlopen`
+/// returns it, and [`make_ready`] has copied it everywhere by then.
+///
+/// # Safety
+///
+/// `tp` must be a live thread's pointer, with the loader's static TLS beside
+/// it, whose control block's `dtv` word no one else is writing.
+pub(crate) unsafe extern "C" fn catch_up_thread(tp: *mut u8) {
+    let word = generation_word(tp);
+    // SAFETY: the word is in the thread's control block.
     let seen = unsafe { word.read() };
     let count = DYNAMIC_COUNT.load(Ordering::Acquire);
-    let tp = thread_pointer() as *mut u8;
     for generation in seen..count {
         // SAFETY: entries below the count were written before it.
         let entry = unsafe {
