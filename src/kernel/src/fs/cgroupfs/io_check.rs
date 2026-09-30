@@ -132,8 +132,14 @@ pub(super) fn run(harness: &mut Harness) -> Checked<u32> {
     drop(registration);
     let counted = outcome?;
     let _ = disabled.map_err(|_| "the root refused to disable io after the io check")?;
-    if crate::object::quota::live_slots() != slots {
-        return Err("the io check's cgroups are gone and their quota slots are not");
+    // A program an earlier check killed may be reaped meanwhile, and give a
+    // slot back: more than were there before is what a leak is.
+    let deadline = crate::timer::now_nanos().saturating_add(5_000_000_000);
+    while crate::object::quota::live_slots() > slots {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("the io check's cgroups are gone and their quota slots are not");
+        }
+        crate::sched::sleep_for(1_000_000);
     }
     Ok(counted)
 }
