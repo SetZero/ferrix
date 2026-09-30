@@ -74,6 +74,7 @@ int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int, int);
 #if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
 int posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t *__restrict, const char *__restrict);
 int posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *, int);
+int posix_spawn_file_actions_addclosefrom_np(posix_spawn_file_actions_t *, int);
 #endif
 
 #ifdef __cplusplus

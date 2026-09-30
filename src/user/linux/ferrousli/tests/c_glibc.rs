@@ -58,6 +58,11 @@ fn glibcs_internal_and_older_names_are_the_standard_functions() {
 }
 
 #[test]
+fn the_names_python_imports_read_write_exec_and_spawn() {
+    check(&Case::named("glibc/python"));
+}
+
+#[test]
 fn gnus_error_names_format_parser_generators_and_allocator_calls() {
     check(&Case::named("glibc/gnu"));
 }

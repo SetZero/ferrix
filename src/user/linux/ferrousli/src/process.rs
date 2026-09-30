@@ -115,6 +115,60 @@ pub unsafe extern "C" fn execve(
     -1
 }
 
+/// `AT_EMPTY_PATH`, from `linux/fcntl.h`.
+const AT_EMPTY_PATH: usize = 0x1000;
+
+/// Replaces the process with the program open at `fd`, as [`execve`] does
+/// the one at a path. Returns only on failure.
+///
+/// As musl 1.2.5's `process/fexecve.c`: `execveat` with an empty path, and
+/// on a kernel without it `execve` of `/proc/self/fd/<fd>`, whose absence
+/// means `fd` is not open.
+///
+/// # Safety
+///
+/// As [`execve`], for `argv` and `envp`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fexecve(
+    fd: c_int,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    // SAFETY: the empty path is a NUL-terminated literal, and the caller
+    // vouches for the arrays.
+    let ret = unsafe {
+        syscall::syscall6(
+            nr::EXECVEAT,
+            fd as usize,
+            c"".as_ptr().addr(),
+            argv.addr(),
+            envp.addr(),
+            AT_EMPTY_PATH,
+            0,
+        )
+    };
+    match errno::decode(ret) {
+        Err(error) if error == errno::ENOSYS => {}
+        Err(error) => {
+            errno::set(error);
+            return -1;
+        }
+        // `execveat` returns only on failure.
+        Ok(_) => return -1,
+    }
+    let mut path = [0u8; 32];
+    crate::termios::fd_link(&mut path, fd as c_uint);
+    // SAFETY: `fd_link` wrote a NUL-terminated path; the caller vouches for
+    // the arrays.
+    let error = unsafe { exec(path.as_ptr().cast(), argv, envp) };
+    errno::set(if error == errno::ENOENT {
+        errno::EBADF
+    } else {
+        error
+    });
+    -1
+}
+
 /// [`execve`] with the current environment.
 ///
 /// # Safety

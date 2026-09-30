@@ -10,7 +10,7 @@
 //! then checks that the name still leads to the same file, as musl does.
 
 use core::cell::UnsafeCell;
-use core::ffi::{c_char, c_int, c_uint, c_void};
+use core::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use core::mem::{offset_of, size_of};
 use core::ptr::null_mut;
 
@@ -296,7 +296,7 @@ pub unsafe extern "C" fn tcsetwinsize(fd: c_int, size: *const c_void) -> c_int {
 }
 
 /// Writes `/proc/self/fd/<fd>` and a NUL into `out`, which is zeroed.
-fn fd_link(out: &mut [u8; 32], fd: c_uint) {
+pub(crate) fn fd_link(out: &mut [u8; 32], fd: c_uint) {
     const PREFIX: &[u8] = b"/proc/self/fd/";
     let mut digits = [0u8; 10];
     let mut count = 0;
@@ -383,6 +383,26 @@ pub extern "C" fn ttyname(fd: c_int) -> *mut c_char {
         return null_mut();
     }
     buffer
+}
+
+/// The name of the calling process's controlling terminal, `/dev/tty`, as
+/// musl 1.2.5's `misc/ctermid.c` and glibc answer: copied into `s` when it
+/// is not null, and otherwise a string the caller must not change.
+///
+/// # Safety
+///
+/// `s` must be null or valid for writes of `L_ctermid` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn ctermid(s: *mut c_char) -> *mut c_char {
+    const TTY: &CStr = c"/dev/tty";
+    if s.is_null() {
+        return TTY.as_ptr().cast_mut();
+    }
+    let bytes = TTY.to_bytes_with_nul();
+    // SAFETY: the caller vouches for `L_ctermid`, 20, bytes at `s`, and the
+    // name with its NUL is nine.
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), s.cast(), bytes.len()) };
+    s
 }
 
 #[cfg(test)]

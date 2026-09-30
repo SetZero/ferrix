@@ -138,6 +138,7 @@ enum Kind {
     Dup2 = 3,
     Chdir = 4,
     Fchdir = 5,
+    Closefrom = 6,
 }
 
 /// One file action. Allocated by the `add` functions and freed by
@@ -659,6 +660,32 @@ pub unsafe extern "C" fn posix_spawn_file_actions_addfchdir_np(
     0
 }
 
+/// Adds "close every descriptor from `from` up" to `*acts`. glibc's
+/// extension; Python's `subprocess` asks for it.
+///
+/// # Safety
+///
+/// `acts` must be a list this module made.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn posix_spawn_file_actions_addclosefrom_np(
+    acts: *mut FileActions,
+    from: c_int,
+) -> c_int {
+    if from < 0 {
+        return errno::EBADF;
+    }
+    let at = node(Kind::Closefrom);
+    if at.is_null() {
+        return errno::ENOMEM;
+    }
+    // SAFETY: `at` is this call's own allocation, which nothing else refers
+    // to yet.
+    unsafe { (*at).fd = from };
+    // SAFETY: the caller vouches for the list, and `at` is a fresh node.
+    unsafe { append(acts, at) };
+    0
+}
+
 // ---------------------------------------------------------------------------
 // The spawn
 // ---------------------------------------------------------------------------
@@ -922,7 +949,7 @@ unsafe fn apply_actions(acts: *const FileActions, writer: c_int) -> Option<c_int
         // SAFETY: every link is a node the `add` functions allocated and
         // `destroy` has not freed.
         let action = unsafe { &*at };
-        if action.fd == writer && action.kind != Kind::Fchdir {
+        if action.fd == writer && !matches!(action.kind, Kind::Fchdir | Kind::Closefrom) {
             // SAFETY: `writer` is this process's pipe descriptor.
             let moved = unsafe { fcntl(writer, F_DUPFD_CLOEXEC, 0) };
             if moved < 0 {
@@ -939,6 +966,7 @@ unsafe fn apply_actions(acts: *const FileActions, writer: c_int) -> Option<c_int
             // SAFETY: as above.
             Kind::Chdir => unsafe { chdir(action.path) },
             Kind::Fchdir => fchdir(action.fd),
+            Kind::Closefrom => close_from(action.fd, writer),
         };
         if ret != 0 {
             return Some(errno::get());
@@ -946,6 +974,21 @@ unsafe fn apply_actions(acts: *const FileActions, writer: c_int) -> Option<c_int
         at = action.next;
     }
     None
+}
+
+/// Closes every descriptor from `from` up but `keep`, the pipe a failure is
+/// reported through, which is close-on-exec and goes at the `exec`. Always
+/// 0: a number that is not open is not an error here, as glibc's is not.
+fn close_from(from: c_int, keep: c_int) -> c_int {
+    if keep < from {
+        crate::linux_ext::closefrom(from);
+        return 0;
+    }
+    for fd in from..keep {
+        let _ = close(fd);
+    }
+    crate::linux_ext::closefrom(keep + 1);
+    0
 }
 
 /// Opens the action's path onto its descriptor number.

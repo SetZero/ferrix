@@ -263,6 +263,14 @@ pub const WAITID: usize = 95;
 pub const PREADV: usize = 69;
 /// `pwritev`.
 pub const PWRITEV: usize = 70;
+/// `preadv2`.
+pub const PREADV2: usize = 286;
+/// `pwritev2`.
+pub const PWRITEV2: usize = 287;
+/// `process_vm_readv`.
+pub const PROCESS_VM_READV: usize = 270;
+/// `process_vm_writev`.
+pub const PROCESS_VM_WRITEV: usize = 271;
 /// `mknodat`.
 pub const MKNODAT: usize = 33;
 /// `setresuid`.
