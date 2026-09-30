@@ -16,7 +16,7 @@
 //!
 //! What a rule matches on is a regular expression for the four names a
 //! window has and a yes-or-no for the states it can be in;
-//! `src/user/linux/compositor/regex` says which patterns are understood. What a rule does
+//! `src/user/system/linux/compositor/regex` says which patterns are understood. What a rule does
 //! is the list on [`Effect`] -- the parts of Hyprland's that the layout and
 //! the renderer here can carry out.
 

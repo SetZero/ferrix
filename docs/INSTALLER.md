@@ -78,7 +78,7 @@ Ferrix has half an installer already, and none of the other half.
 * ACPI, PCI with MSI, and an IOMMU are in the kernel; ring-3 drivers sit
   behind `blkring` (`docs/BLOCK-RING.md`), so a new disk driver is a new
   process speaking an existing protocol.
-* hyprix, and `src/user/linux/compositor/toolkit` with `render` and `text` for
+* hyprix, and `src/user/system/linux/compositor/toolkit` with `render` and `text` for
   drawing a client's window; `authd` for accounts and passwords
   (`docs/AUTH.md`).
 
@@ -148,7 +148,7 @@ section pointing at `docs/INSTALL.md`, the user-facing guide (§8).
 ### 4.1 Two programs, one engine
 
 ```
-src/user/linux/installer/
+src/user/system/linux/installer/
   engine/   ferrix-installer-engine: a library, no I/O of its own beyond a Disk trait
   cli/      /bin/ferrix-install: runs an answer file, prints progress; the gates use it
   gui/      /bin/ferrix-installer: the desktop app, on toolkit + render + text
@@ -253,7 +253,7 @@ A toplevel window on hyprix, 900 × 640, one page at a time with *Back* and
 
 The widgets are new: a button, a label, a list, a radio group, a text field
 (with a password mode and the toolkit's clipboard), a progress bar, the
-partition bar and a slider. They go in `src/user/linux/compositor/widgets` beside
+partition bar and a slider. They go in `src/user/system/linux/compositor/widgets` beside
 the toolkit, so later apps get them too. They draw with `render` and `text`
 as the other clients do, and follow the desktop's theme colours.
 
@@ -575,7 +575,7 @@ VM path does not wait on it. I1 is built (§5.1).
 **The MVP (2026-09-28, the customer: "land a MVP for now, we need to save
 tokens").** What installs Ferrix in a VM today, built from what exists:
 
-* `build --installer` carries `/sbin/ferrix-install` (`src/user/linux/installer`)
+* `build --installer` carries `/sbin/ferrix-install` (`src/user/system/linux/installer`)
   and the packed empty root volume. The live image is the usual FAT image,
   attached as a virtio disk.
 * `ferrix-install [--yes] [--from /dev/vdX] /dev/vdY` wipes the target and

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "a7b1ea9fbff6d51c7f7eb85e13a04150c7441eeebdb583f1d8aafb1a57362717",
+  "digest": "06b6db59034612da4800bcf15c44bd6f535a7d48f5da3c9f05fdd1177a7ce5ff",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -1897,7 +1897,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::devmgr",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/sbin/devmgr, a native program on src/user/native/rt.",
+              "doc": "/sbin/devmgr, a native program on src/user/system/native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 316
@@ -1921,7 +1921,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioBlk",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/blk, a native program on src/user/native/rt.",
+              "doc": "/lib/drivers/blk, a native program on src/user/system/native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 320
@@ -1945,7 +1945,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioGpu",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/gpu, a native program on src/user/native/rt.",
+              "doc": "/lib/drivers/gpu, a native program on src/user/system/native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 324
@@ -1969,7 +1969,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioNet",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/net, a native program on src/user/native/rt.",
+              "doc": "/lib/drivers/net, a native program on src/user/system/native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 328
@@ -1993,7 +1993,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioInput",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/input, a native program on src/user/native/rt.",
+              "doc": "/lib/drivers/input, a native program on src/user/system/native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 332
@@ -2017,7 +2017,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::vport",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/vport, the virtio-serial port driver, a native program on src/user/native/rt.",
+              "doc": "/lib/drivers/vport, the virtio-serial port driver, a native program on src/user/system/native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 336
@@ -2041,7 +2041,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioSndDriver",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/snd, the virtio-snd driver (docs/AUDIO.md), a native program on src/user/native/rt over src/lib/drivers/sound/virtio-snd.",
+              "doc": "/lib/drivers/snd, the virtio-snd driver (docs/AUDIO.md), a native program on src/user/system/native/rt over src/lib/drivers/sound/virtio-snd.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 341
@@ -2103,7 +2103,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 6,
-          "doc": "A running Linux binary -- static musl, a static PIE, or dynamically linked through the interpreter its PT_INTERP names -- as a Process (see FerrixObjects) speaking the Linux ABI, and optionally the native one. devmgr and the drivers are native programs on src/user/native/rt, which make the few Linux calls they need as well.",
+          "doc": "A running Linux binary -- static musl, a static PIE, or dynamically linked through the interpreter its PT_INTERP names -- as a Process (see FerrixObjects) speaking the Linux ABI, and optionally the native one. devmgr and the drivers are native programs on src/user/system/native/rt, which make the few Linux calls they need as well.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
             "line": 357
@@ -2161,7 +2161,7 @@
               "type": "UserProcess",
               "maturity": "implemented",
               "stage": 15,
-              "doc": "/sbin/init (src/user/linux/init/, docs/INIT.md), since 2026-09-26: pid 1 around src/lib/init/svc's manager. It mounts /run and cgroup2, runs each service in a cgroup of its own from clone3, reaps, restarts, gives the console a getty and a shell with a session of its own, and powers off. /bin/svc drives it over /run/ferrix/control; it waits for notify readiness, starts services on a socket's first connection, and applies MemoryMax=, TasksMax= and OOMPolicy= over the scoped OOM kill. It gives services bootstrap channels, starts native ones in their cgroup's job, and routes the directory's OPENs. It is pid 1 of cargo xtask run and of every desktop image, where the compositor is hyprix.service and each program it starts is in a scope of its own (L10). devmgr restarts drivers by its restart policy (L11), and on an image booted with ferrix.devmgr=init pid 1 starts devmgr itself, through the kernel's starter (L12, 2026-09-27). L13, the sandboxing keys, waits for the rest of stage 13.",
+              "doc": "/sbin/init (src/user/system/linux/init/, docs/INIT.md), since 2026-09-26: pid 1 around src/lib/init/svc's manager. It mounts /run and cgroup2, runs each service in a cgroup of its own from clone3, reaps, restarts, gives the console a getty and a shell with a session of its own, and powers off. /bin/svc drives it over /run/ferrix/control; it waits for notify readiness, starts services on a socket's first connection, and applies MemoryMax=, TasksMax= and OOMPolicy= over the scoped OOM kill. It gives services bootstrap channels, starts native ones in their cgroup's job, and routes the directory's OPENs. It is pid 1 of cargo xtask run and of every desktop image, where the compositor is hyprix.service and each program it starts is in a scope of its own (L10). devmgr restarts drivers by its restart policy (L11), and on an image booted with ferrix.devmgr=init pid 1 starts devmgr itself, through the kernel's starter (L12, 2026-09-27). L13, the sandboxing keys, waits for the rest of stage 13.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 377
@@ -3651,7 +3651,7 @@
           "name": "Workspace",
           "qualifiedName": "FerrixStructure::Workspace",
           "kind": "package",
-          "doc": "docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and is the only code cargo test, Miri and the fuzzers can reach; src/boot/common/uefi/ and src/kernel/ are reached by the QEMU boot test; tools/common/xtask/ by cargo test. src/user/native/ holds the native programs the initramfs carries -- devmgr, the drivers and the runtime they link -- built for the kernel's targets and kept out of the host gates. tools/common/check/check-crate-layering.sh keeps the arrows below pointing the right way.",
+          "doc": "docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and is the only code cargo test, Miri and the fuzzers can reach; src/boot/common/uefi/ and src/kernel/ are reached by the QEMU boot test; tools/common/xtask/ by cargo test. src/user/system/native/ holds the native programs the initramfs carries -- devmgr, the drivers and the runtime they link -- built for the kernel's targets and kept out of the host gates. tools/common/check/check-crate-layering.sh keeps the arrows below pointing the right way.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
             "line": 807
@@ -4886,7 +4886,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 10,
-              "doc": "The virtio-net driver logic, written ahead of the network device it drives from src/user/native/drivers/net/virtio-net: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every frame in silence, a transmit queue whose buffers stay the caller's until the device says it has read them, and a drain that acknowledges the interrupt before it starts. It negotiates no checksum, segmentation or merge-buffer feature, so a frame is one buffer and every header is the twelve bytes VERSION_1 makes it. It holds no handle: a transport, pinned pages and a header area go in, and frames go each way. The virtio_net fuzz target drives it from a device whose every register, used entry and header byte a stranger chose, and requires every accepted frame to be answered exactly once.",
+              "doc": "The virtio-net driver logic, written ahead of the network device it drives from src/user/system/native/drivers/net/virtio-net: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every frame in silence, a transmit queue whose buffers stay the caller's until the device says it has read them, and a drain that acknowledges the interrupt before it starts. It negotiates no checksum, segmentation or merge-buffer feature, so a frame is one buffer and every header is the twelve bytes VERSION_1 makes it. It holds no handle: a transport, pinned pages and a header area go in, and frames go each way. The virtio_net fuzz target drives it from a device whose every register, used entry and header byte a stranger chose, and requires every accepted frame to be answered exactly once.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1107
@@ -4923,7 +4923,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 17,
-              "doc": "The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from src/user/native/drivers/display/virtio-gpu since: bring-up with the control queue alone, one command at a time, every response checked, and the pipeline from the display core's requests to device commands. A failed step is undone as far as is safe, and pages the device may still hold are never unpinned. Its tests drive a frame to a fake device's screen; the virtio_gpu_pipeline fuzz target requires one reply per request and no unpin without a pin. Since stage 19 it takes the features 3D needs when asked.",
+              "doc": "The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from src/user/system/native/drivers/display/virtio-gpu since: bring-up with the control queue alone, one command at a time, every response checked, and the pipeline from the display core's requests to device commands. A failed step is undone as far as is safe, and pages the device may still hold are never unpinned. Its tests drive a frame to a fake device's screen; the virtio_gpu_pipeline fuzz target requires one reply per request and no unpin without a pin. Since stage 19 it takes the features 3D needs when asked.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1126
@@ -4996,7 +4996,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 17,
-              "doc": "The virtio-input driver logic, written ahead of the driver process for the input iteration (docs/INPUT.md) and driven from src/user/native/drivers/input/virtio-input since: bring-up that stops at FEATURES_OK so no event is discarded before the core has judged the device, the device's description read as a HELLO, the event queue kept full because QEMU drops a whole report for want of one buffer, and the events the device wrote batched into the EVENTS messages the core reads. It forwards only what the core would publish and drops the rest; it ends a report the core would refuse for length and counts the cut; and memory the device may still write into is never handed back. The virtio_input_driver fuzz target plays a device and the glue against a real session, and requires the core never to refuse a message the batch made and no event to be lost or reordered.",
+              "doc": "The virtio-input driver logic, written ahead of the driver process for the input iteration (docs/INPUT.md) and driven from src/user/system/native/drivers/input/virtio-input since: bring-up that stops at FEATURES_OK so no event is discarded before the core has judged the device, the device's description read as a HELLO, the event queue kept full because QEMU drops a whole report for want of one buffer, and the events the device wrote batched into the EVENTS messages the core reads. It forwards only what the core would publish and drops the rest; it ends a report the core would refuse for length and counts the cut; and memory the device may still write into is never handed back. The virtio_input_driver fuzz target plays a device and the glue against a real session, and requires the core never to refuse a message the batch made and no event to be lost or reordered.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1157
@@ -5654,7 +5654,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 10,
-              "doc": "A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; src/user/native/drivers/block/virtio-blk adds only the handles.",
+              "doc": "A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; src/user/system/native/drivers/block/virtio-blk adds only the handles.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1353
@@ -5702,7 +5702,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 10,
-              "doc": "The virtio-blk driver logic over a transport and DMA memory it is handed: bring-up to DRIVER_OK, read, write and flush, each completion counted once even from a hostile device, and memory handed back only after the device's reset. Driven from src/user/native/drivers/block/virtio-blk; fuzzed by virtio_blk.",
+              "doc": "The virtio-blk driver logic over a transport and DMA memory it is handed: bring-up to DRIVER_OK, read, write and flush, each completion counted once even from a hostile device, and memory handed back only after the device's reset. Driven from src/user/system/native/drivers/block/virtio-blk; fuzzed by virtio_blk.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1363
@@ -5786,7 +5786,7 @@
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "implemented",
-              "doc": "Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: src/user/native/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part.",
+              "doc": "Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: src/user/system/native/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1383
@@ -5882,7 +5882,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 19,
-              "doc": "The STM32MP157's Vivante GC400T as logic over registers and command memory (docs/GPU.md §6.3): the registers and the command stream from the etnaviv project's MIT-licensed register database, the identity, reset and initialisation in the order Linux's etnaviv driver uses them, and a WAIT/LINK ring. Linked by src/user/native/drivers/gpu/gc400, which devmgr starts on the board, where it ran on 2026-09-24; no QEMU machine has the core, so no gate drives it.",
+              "doc": "The STM32MP157's Vivante GC400T as logic over registers and command memory (docs/GPU.md §6.3): the registers and the command stream from the etnaviv project's MIT-licensed register database, the identity, reset and initialisation in the order Linux's etnaviv driver uses them, and a WAIT/LINK ring. Linked by src/user/system/native/drivers/gpu/gc400, which devmgr starts on the board, where it ran on 2026-09-24; no QEMU machine has the core, so no gate drives it.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1404
@@ -5929,7 +5929,7 @@
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "implemented",
-              "doc": "Text and filled rectangles on a linear framebuffer, with an embedded Spleen 8x16 font, clipped rather than refused and allocating nothing: what the panic screen (src/kernel/src/panic/screen.rs) draws with, and src/user/linux/compositor/term as well.",
+              "doc": "Text and filled rectangles on a linear framebuffer, with an embedded Spleen 8x16 font, clipped rather than refused and allocating nothing: what the panic screen (src/kernel/src/panic/screen.rs) draws with, and src/user/system/linux/compositor/term as well.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1418
@@ -6023,7 +6023,7 @@
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "implemented",
-              "doc": "SPICE's vdagent protocol as bytes, the chunk framing and the clipboard messages (docs/CLIPBOARD.md §4). Written ahead of the clipboard agent; since 2026-09-27 that agent, src/user/linux/compositor/vdagent, speaks it, and cargo xtask test-clipboard drives it both ways.",
+              "doc": "SPICE's vdagent protocol as bytes, the chunk framing and the clipboard messages (docs/CLIPBOARD.md §4). Written ahead of the clipboard agent; since 2026-09-27 that agent, src/user/system/linux/compositor/vdagent, speaks it, and cargo xtask test-clipboard drives it both ways.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1435
@@ -6070,7 +6070,7 @@
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "implemented",
-              "doc": "The virtio-console driver: bring-up, the control conversation until a named port is open, and that port's bytes (docs/CLIPBOARD.md §3). Linked by src/user/native/drivers/console/vport, which devmgr starts when --clipboard puts the device on the bus; cargo xtask test-clipboard drives it (2026-09-27).",
+              "doc": "The virtio-console driver: bring-up, the control conversation until a named port is open, and that port's bytes (docs/CLIPBOARD.md §3). Linked by src/user/system/native/drivers/console/vport, which devmgr starts when --clipboard puts the device on the bus; cargo xtask test-clipboard drives it (2026-09-27).",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1445
@@ -15367,7 +15367,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Eight exist, native programs on src/user/native/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid, gc400 and vport, each a thin layer of handles over its src/lib/ crates.",
+          "doc": "An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Eight exist, native programs on src/user/system/native/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid, gc400 and vport, each a thin layer of handles over its src/lib/ crates.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 136
@@ -15520,7 +15520,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "A native program on src/user/native/rt, not a musl binary: src/user/native/devmgr, /sbin/devmgr. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above. The kernel starts it from stage 10's boot check with DEVICES messages holding a job, every device node twice and every driver image /lib/drivers/MANIFEST lists (src/kernel/src/discovery/devmgr.rs, src/lib/proto/devmgr-proto); it matches virtio-blk, virtio-net, virtio-gpu, virtio-input and the virtio-serial port by a table of its own, starts each driver with START, waits for every one but the port driver to be PUBLISHED before the next, and REPORTs. docs/DEVMGR.md.",
+          "doc": "A native program on src/user/system/native/rt, not a musl binary: src/user/system/native/devmgr, /sbin/devmgr. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above. The kernel starts it from stage 10's boot check with DEVICES messages holding a job, every device node twice and every driver image /lib/drivers/MANIFEST lists (src/kernel/src/discovery/devmgr.rs, src/lib/proto/devmgr-proto); it matches virtio-blk, virtio-net, virtio-gpu, virtio-input and the virtio-serial port by a table of its own, starts each driver with START, waits for every one but the port driver to be PUBLISHED before the next, and REPORTs. docs/DEVMGR.md.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 179
@@ -15576,7 +15576,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 10,
-          "doc": "The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting. src/user/native/drivers/block/virtio-blk over src/lib/drivers/block/virtio-blk and src/lib/drivers/block/blkserve; the exit is met in the boot test, with VT-d translating on x86-64 and the SMMUv3 on AArch64, and ARMv7-A in degraded trusted mode.",
+          "doc": "The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting. src/user/system/native/drivers/block/virtio-blk over src/lib/drivers/block/virtio-blk and src/lib/drivers/block/blkserve; the exit is met in the boot test, with VT-d translating on x86-64 and the SMMUv3 on AArch64, and ARMv7-A in degraded trusted mode.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 207
@@ -15589,7 +15589,7 @@
           "definition": true,
           "specializes": "DriverProcess",
           "maturity": "implemented",
-          "doc": "src/user/native/drivers/net/virtio-net over src/lib/drivers/net/virtio-net and src/lib/drivers/net/netserve, speaking the net ring; cargo xtask test-net is its gate.",
+          "doc": "src/user/system/native/drivers/net/virtio-net over src/lib/drivers/net/virtio-net and src/lib/drivers/net/netserve, speaking the net ring; cargo xtask test-net is its gate.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 217
@@ -15603,7 +15603,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 17,
-          "doc": "src/user/native/drivers/display/virtio-gpu over src/lib/drivers/display/virtio-gpu: the display core's card0 over displayctl, and since stage 19 the render core's renderD128 over renderctl, turning its messages into virtio-gpu's 3D commands. cargo xtask test-display is its gate. The one driver devmgr starts again after it dies (restartDriver).",
+          "doc": "src/user/system/native/drivers/display/virtio-gpu over src/lib/drivers/display/virtio-gpu: the display core's card0 over displayctl, and since stage 19 the render core's renderD128 over renderctl, turning its messages into virtio-gpu's 3D commands. cargo xtask test-display is its gate. The one driver devmgr starts again after it dies (restartDriver).",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 222
@@ -15617,7 +15617,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 17,
-          "doc": "src/user/native/drivers/input/virtio-input over src/lib/drivers/input/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.",
+          "doc": "src/user/system/native/drivers/input/virtio-input over src/lib/drivers/input/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 231
@@ -15631,7 +15631,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 17,
-          "doc": "src/user/native/drivers/usb/usbhid over src/lib/drivers/usb/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are src/lib/drivers/usb/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).",
+          "doc": "src/user/system/native/drivers/usb/usbhid over src/lib/drivers/usb/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are src/lib/drivers/usb/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 238
@@ -15645,7 +15645,7 @@
           "specializes": "DriverProcess",
           "maturity": "inProgress",
           "stage": 19,
-          "doc": "src/user/native/drivers/gpu/gc400 over src/lib/drivers/gpu/gc400: the STM32MP157's Vivante GC400T, the G2 step of the board's gears (docs/GPU.md §6.3). It prints the core's identity, soft-resets and initialises it as etnaviv does, starts the front end on a WAIT/LINK loop in one page pinned PIN_COHERENT, splices in two blocks that each raise an event, and takes each as the interrupt. devmgr starts it as an engine, which serves no kernel subsystem yet, and does not wait for it. No QEMU machine has the core; its gates are src/lib/drivers/gpu/gc400's tests against models of the host interface and the front end, and on the board, on 2026-09-24, both events arrived by interrupt (G2 done). Drawing is G3 to G5.",
+          "doc": "src/user/system/native/drivers/gpu/gc400 over src/lib/drivers/gpu/gc400: the STM32MP157's Vivante GC400T, the G2 step of the board's gears (docs/GPU.md §6.3). It prints the core's identity, soft-resets and initialises it as etnaviv does, starts the front end on a WAIT/LINK loop in one page pinned PIN_COHERENT, splices in two blocks that each raise an event, and takes each as the interrupt. devmgr starts it as an engine, which serves no kernel subsystem yet, and does not wait for it. No QEMU machine has the core; its gates are src/lib/drivers/gpu/gc400's tests against models of the host interface and the front end, and on the board, on 2026-09-24, both events arrived by interrupt (G2 done). Drawing is G3 to G5.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 252
@@ -17674,7 +17674,7 @@
           "shortName": "S15",
           "type": "Stage",
           "maturity": "inProgress",
-          "doc": "Static musl busybox as /bin, a working init, job control, ttys, pipes. Exit: an interactive shell over serial a person can use.\n\nMost of it arrived under other stages' names: /bin is the uutils family and zinc rather than busybox, pipes are stage 8's, pseudo-terminals stage 18's, and the console's line discipline stage 8's over stage 7's receive interrupt.\n\nJob control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. src/user/linux/zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.\n\nA working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over src/lib/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8), and the images booting it with the compositor as its service (L10). Verified by initSession. devmgr on the restart policy (L11) the same day; the customer counts the init done there. L12, pid 1 starting devmgr through a kernel starter, on 2026-09-27; L13 parked until stage 13's namespaces.\n\nNext: authentication (docs/AUTH.md, approved by the customer on 2026-09-26): authd, passwords checked by Argon2id, passwd, authctl and a real hyprlock, phase 1, 27 points, not started; its P0, process_create giving a child root's credentials rather than its creator's, 2 points, fixed.\n\nDesigned on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in src/lib/init/svc behind backends a microkernel could serve. 67 points to L10, all spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.",
+          "doc": "Static musl busybox as /bin, a working init, job control, ttys, pipes. Exit: an interactive shell over serial a person can use.\n\nMost of it arrived under other stages' names: /bin is the uutils family and zinc rather than busybox, pipes are stage 8's, pseudo-terminals stage 18's, and the console's line discipline stage 8's over stage 7's receive interrupt.\n\nJob control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. src/user/system/linux/zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.\n\nA working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over src/lib/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8), and the images booting it with the compositor as its service (L10). Verified by initSession. devmgr on the restart policy (L11) the same day; the customer counts the init done there. L12, pid 1 starting devmgr through a kernel starter, on 2026-09-27; L13 parked until stage 13's namespaces.\n\nNext: authentication (docs/AUTH.md, approved by the customer on 2026-09-26): authd, passwords checked by Argon2id, passwd, authctl and a real hyprlock, phase 1, 27 points, not started; its P0, process_create giving a child root's credentials rather than its creator's, 2 points, fixed.\n\nDesigned on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in src/lib/init/svc behind backends a microkernel could serve. 67 points to L10, all spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 506
@@ -19131,7 +19131,7 @@
               "kind": "attribute",
               "type": "AssemblySite",
               "multiplicity": "24",
-              "value": "( AssemblySite(file = \"src/boot/common/uefi/src/arch/x86_64.rs\", maxLines = 30), AssemblySite(file = \"src/boot/common/uefi/src/arch/aarch64.rs\", maxLines = 60), AssemblySite(file = \"src/boot/common/uefi/src/arch/armv7a.rs\", maxLines = 63), AssemblySite(file = \"src/kernel/src/arch/x86_64/cpu.rs\", maxLines = 100), AssemblySite(file = \"src/kernel/src/arch/aarch64/cpu.rs\", maxLines = 100), AssemblySite(file = \"src/kernel/src/arch/armv7a/cpu.rs\", maxLines = 102), AssemblySite(file = \"src/kernel/src/arch/x86_64/trap.rs\", maxLines = 171), AssemblySite(file = \"src/kernel/src/arch/aarch64/trap.rs\", maxLines = 145), AssemblySite(file = \"src/kernel/src/arch/armv7a/trap.rs\", maxLines = 130), AssemblySite(file = \"src/kernel/src/arch/x86_64/smp.rs\", maxLines = 41), AssemblySite(file = \"src/kernel/src/arch/aarch64/smp.rs\", maxLines = 58), AssemblySite(file = \"src/kernel/src/arch/armv7a/smp.rs\", maxLines = 40), AssemblySite(file = \"src/kernel/src/arch/x86_64/switch.rs\", maxLines = 32), AssemblySite(file = \"src/kernel/src/arch/aarch64/switch.rs\", maxLines = 75), AssemblySite(file = \"src/kernel/src/arch/armv7a/switch.rs\", maxLines = 67), AssemblySite(file = \"src/kernel/src/arch/x86_64/syscall.rs\", maxLines = 118), AssemblySite(file = \"src/user/native/rt/src/arch/x86_64.rs\", maxLines = 20), AssemblySite(file = \"src/user/native/rt/src/arch/aarch64.rs\", maxLines = 20), AssemblySite(file = \"src/user/native/rt/src/arch/armv7a.rs\", maxLines = 20), AssemblySite(file = \"src/boot/vendor/google/pixel7/src/entry.rs\", maxLines = 130), AssemblySite(file = \"src/kernel/src/arch/x86_64/vdso.rs\", maxLines = 120), AssemblySite(file = \"src/kernel/src/arch/x86_64/speculation.rs\", maxLines = 16), AssemblySite(file = \"src/kernel/src/arch/aarch64/speculation.rs\", maxLines = 16), AssemblySite(file = \"src/kernel/src/arch/armv7a/speculation.rs\", maxLines = 16) )",
+              "value": "( AssemblySite(file = \"src/boot/common/uefi/src/arch/x86_64.rs\", maxLines = 30), AssemblySite(file = \"src/boot/common/uefi/src/arch/aarch64.rs\", maxLines = 60), AssemblySite(file = \"src/boot/common/uefi/src/arch/armv7a.rs\", maxLines = 63), AssemblySite(file = \"src/kernel/src/arch/x86_64/cpu.rs\", maxLines = 100), AssemblySite(file = \"src/kernel/src/arch/aarch64/cpu.rs\", maxLines = 100), AssemblySite(file = \"src/kernel/src/arch/armv7a/cpu.rs\", maxLines = 102), AssemblySite(file = \"src/kernel/src/arch/x86_64/trap.rs\", maxLines = 171), AssemblySite(file = \"src/kernel/src/arch/aarch64/trap.rs\", maxLines = 145), AssemblySite(file = \"src/kernel/src/arch/armv7a/trap.rs\", maxLines = 130), AssemblySite(file = \"src/kernel/src/arch/x86_64/smp.rs\", maxLines = 41), AssemblySite(file = \"src/kernel/src/arch/aarch64/smp.rs\", maxLines = 58), AssemblySite(file = \"src/kernel/src/arch/armv7a/smp.rs\", maxLines = 40), AssemblySite(file = \"src/kernel/src/arch/x86_64/switch.rs\", maxLines = 32), AssemblySite(file = \"src/kernel/src/arch/aarch64/switch.rs\", maxLines = 75), AssemblySite(file = \"src/kernel/src/arch/armv7a/switch.rs\", maxLines = 67), AssemblySite(file = \"src/kernel/src/arch/x86_64/syscall.rs\", maxLines = 118), AssemblySite(file = \"src/user/system/native/rt/src/arch/x86_64.rs\", maxLines = 20), AssemblySite(file = \"src/user/system/native/rt/src/arch/aarch64.rs\", maxLines = 20), AssemblySite(file = \"src/user/system/native/rt/src/arch/armv7a.rs\", maxLines = 20), AssemblySite(file = \"src/boot/vendor/google/pixel7/src/entry.rs\", maxLines = 130), AssemblySite(file = \"src/kernel/src/arch/x86_64/vdso.rs\", maxLines = 120), AssemblySite(file = \"src/kernel/src/arch/x86_64/speculation.rs\", maxLines = 16), AssemblySite(file = \"src/kernel/src/arch/aarch64/speculation.rs\", maxLines = 16), AssemblySite(file = \"src/kernel/src/arch/armv7a/speculation.rs\", maxLines = 16) )",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 230
@@ -19662,7 +19662,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 18,
-          "doc": "cargo xtask test-pty: src/user/linux/compositor/term --headless runs a program on a pseudoterminal pair, and what it wrote comes back through the master and the terminal's grid.",
+          "doc": "cargo xtask test-pty: src/user/system/linux/compositor/term --headless runs a program on a pseudoterminal pair, and what it wrote comes back through the master and the terminal's grid.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 376

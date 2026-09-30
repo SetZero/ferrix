@@ -8,7 +8,7 @@
 #      reason it exists -- it is the code `cargo test`, Miri and the fuzzers can
 #      reach -- so it must depend on neither the kernel nor the loader, and must
 #      contain no `#[cfg(target_arch)]`.
-#   2a. `src/user/native/*` is ring-3 programs: the native runtime, devmgr, drivers. A
+#   2a. `src/user/system/native/*` is ring-3 programs: the native runtime, devmgr, drivers. A
 #      program may use `src/lib/*` and never the kernel or the loader, and neither
 #      of those may link a program. Its `target_arch` conditionals live under
 #      its own `src/arch/`.
@@ -115,14 +115,14 @@ forbid ferrix-netlink  "netlink messages" "ferrix-kernel|ferrix-boot"
 # ---------------------------------------------------------------------------
 # 2a. Ring-3 programs sit beside the kernel, never in it.
 #
-# A crate under `src/user/native/` -- the native runtime, devmgr, a driver -- runs in user
+# A crate under `src/user/system/native/` -- the native runtime, devmgr, a driver -- runs in user
 # mode. It may use any `src/lib/` crate, `src/lib/proto/native-abi` above all, and nothing
 # of the kernel or the loader, whose code cannot run there. Neither of those may
-# link a `src/user/native/` crate either: that would be ring-3 code in ring 0. The names
+# link a `src/user/system/native/` crate either: that would be ring-3 code in ring 0. The names
 # come from each manifest's `[package]`, so a new program is covered without an
 # edit here.
 # ---------------------------------------------------------------------------
-user_crates=$(find src/user/native -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort \
+user_crates=$(find src/user/system/native -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort \
     | xargs -r sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"$/\1/p' \
     | paste -sd '|' - || true)
 if [[ -n "$user_crates" ]]; then
@@ -166,12 +166,12 @@ fi
 # they are properties both of our targets share, and asserting one is fine
 # anywhere. `target_os` likewise: xtask is a host program.
 #
-# A native program under `src/user/native/` follows the same rule: its crate's
+# A native program under `src/user/system/native/` follows the same rule: its crate's
 # `src/arch/` is the facade, as `src/kernel/src/arch/` is the kernel's.
 # ---------------------------------------------------------------------------
-offenders=$(grep -rnE 'cfg[^)]*target_arch' src/kernel/src src/boot/common/uefi/src src/lib src/user/native 2>/dev/null \
+offenders=$(grep -rnE 'cfg[^)]*target_arch' src/kernel/src src/boot/common/uefi/src src/lib src/user/system/native 2>/dev/null \
     --include='*.rs' \
-    | grep -vE '^(src/kernel/src/arch/|src/boot/common/uefi/src/arch/|src/user/native/(drivers/[^/]+/)?[^/]+/src/arch/)' || true)
+    | grep -vE '^(src/kernel/src/arch/|src/boot/common/uefi/src/arch/|src/user/system/native/(drivers/[^/]+/)?[^/]+/src/arch/)' || true)
 if [[ -n "$offenders" ]]; then
     echo "LAYERING VIOLATION: target_arch conditional outside an arch directory:" >&2
     echo "$offenders" | sed 's/^/    /' >&2
@@ -201,7 +201,7 @@ while IFS= read -r manifest; do
         echo >&2 "        workspace = true"
         status=1
     fi
-done < <(find src/boot src/kernel src/lib src/user/native tools/common/xtask -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort)
+done < <(find src/boot src/kernel src/lib src/user/system/native tools/common/xtask -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort)
 
 if [[ $status -ne 0 ]]; then
     echo >&2

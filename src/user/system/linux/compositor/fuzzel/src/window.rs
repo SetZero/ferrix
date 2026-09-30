@@ -1,4 +1,4 @@
-//! The program: fuzzel's `main` and `wayland.c`, on `src/user/linux/compositor/toolkit`.
+//! The program: fuzzel's `main` and `wayland.c`, on `src/user/system/linux/compositor/toolkit`.
 //!
 //! The command line, then the configuration, then the entries (from the
 //! `.desktop` files, or in dmenu mode from standard input), then a

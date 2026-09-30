@@ -8,7 +8,7 @@ static, fixed-address executable. Nearly every binary a distribution ships is a 
 that asks for glibc's `ld-linux`. `src/kernel/src/syscall/load.rs` used to refuse
 `PT_INTERP` by name; since 2026-09-20 it loads the linker the program asks for
 and enters it, which is the first bullet below. Since the same day there is a
-linker to name — `src/user/linux/ferrousli/ld`, the second bullet — and since 2026-09-21 it
+linker to name — `src/user/system/linux/ferrousli/ld`, the second bullet — and since 2026-09-21 it
 runs Debian's glibc busybox inside Ferrix on x86-64, which is the exit's
 second half there.
 The question of 2026-09-16 that put this here was
@@ -61,9 +61,9 @@ Three parts, in the order they can be tested:
   rather than three calls that only happen to exist separately.
 * **ferrousli's loader, 21 points — 18 done: a first version on 2026-09-20,
   the rest by 2026-09-22.** The
-  fifth item of `src/user/linux/ferrousli/README.md`: a dynamic loader in Rust, shipped as
+  fifth item of `src/user/system/linux/ferrousli/README.md`: a dynamic loader in Rust, shipped as
   ferrousli's `ld.so` with `libferrousli.so` beside `libferrousli.a`.
-  `src/user/linux/ferrousli/ld` reads `PT_DYNAMIC`, resolves `DT_NEEDED` libraries (through
+  `src/user/system/linux/ferrousli/ld` reads `PT_DYNAMIC`, resolves `DT_NEEDED` libraries (through
   `LD_LIBRARY_PATH` when a name carries no path of its own), looks symbols up
   through the GNU hash table, and applies `GLOB_DAT`, `JUMP_SLOT` and
   `IRELATIVE` relocations, then runs `DT_INIT_ARRAY` in dependency order and
@@ -170,7 +170,7 @@ Three parts, in the order they can be tested:
   several operations, and the one real one was a field written and never
   read.
 * **glibc's names, 13 points — 10 done on x86-64, 2026-09-21.**
-  `src/user/linux/ferrousli/tools/build-shared.sh` links `libferrousli.a` whole into a
+  `src/user/system/linux/ferrousli/tools/build-shared.sh` links `libferrousli.a` whole into a
   `libc.so.6` whose every symbol carries the version glibc gives it by
   default, from `tools/glibc-versions/x86_64.txt` (3,733 names, which
   `tools/gen-glibc-versions.py` reads out of glibc's own libraries: names and
@@ -291,7 +291,7 @@ the exit names, pinned by checksum.
 the library's port inside this stage on 2026-09-21, at ≈ 34 points of its
 own. ferrousli now builds for both, and its whole suite passes on each under
 QEMU 9.2.4's user mode — every unit test, and every C program at `-O0` and
-`-O2` — with x86-64's unchanged. `src/user/linux/ferrousli/README.md` says how to run it.
+`-O2` — with x86-64's unchanged. `src/user/system/linux/ferrousli/README.md` says how to run it.
 What it took: a system-call table per architecture, generated from the
 kernel's headers; the thread pointer, `clone` and TLS variant I, with the
 canary in `__stack_chk_guard`; `setjmp`, `va_list`, `fenv`, signal
@@ -317,7 +317,7 @@ customer means to run ferrousli on a rooted Pixel 7 that boots Ferrix
 itself, whose Tensor G2 is Cortex-X1, A78 and A55 cores. On AArch64
 `memcpy`, `memmove`, `memset`, `memcmp`, `memchr`, `strlen` and
 `strchrnul` work sixteen bytes at a time in Advanced SIMD registers
-(`src/user/linux/ferrousli/src/string/aarch64.rs`), which every AArch64 core has, so
+(`src/user/system/linux/ferrousli/src/string/aarch64.rs`), which every AArch64 core has, so
 nothing is chosen at run time; copies and fills of 64 bytes and more are
 one loop of `ldp`/`stp` register pairs. Counted with QEMU's instruction
 plugin on a Cortex-A55, at 4 KiB they take 1.8 to 5.3 times fewer
@@ -334,7 +334,7 @@ stage's points.
 
 **Done — `rustc`'s libraries on the loader, 2026-09-26.** Running the
 rustc volume on ferrousli (`docs/roadmap/stage-16-rustc.md`) took four
-changes to the loader, each with a test in `src/user/linux/ferrousli/ld/tests/link.rs`
+changes to the loader, each with a test in `src/user/system/linux/ferrousli/ld/tests/link.rs`
 that fails with it taken out: `$ORIGIN` and `${ORIGIN}` in a run path,
 from `/proc/self/exe` for the program and the path found for a library, and
 not for an `AT_SECURE` program; a program header table read from `e_phoff`

@@ -3,7 +3,7 @@
 //! terminal's text, the frame drawn on the GPU (`--gl`), and `test-video`'s
 //! wallpaper that moves.
 //!
-//! Each is held to a picture `src/user/linux/compositor/render` blesses, except the GPU's
+//! Each is held to a picture `src/user/system/linux/compositor/render` blesses, except the GPU's
 //! and the video's: QEMU cannot dump a GL console, so the GPU's is judged by
 //! the guest itself, and a video's frames are required to change rather than
 //! to be one picture.
@@ -28,14 +28,14 @@ use crate::{Error, Result};
 /// requires.
 const DECORATED_EXPECTED: (&str, &str) = (
     "corners cut, a shadow under each window, and the unfocused one dimmed",
-    "src/user/linux/compositor/render/tests/data/decorated-two-clients.xrle",
+    "src/user/system/linux/compositor/render/tests/data/decorated-two-clients.xrle",
 );
 
 /// The configuration the third boot is given: the same two windows, with
 /// `decoration:rounding` and `decoration:inactive_opacity` set.
 const DECORATED_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
-# The same settings `src/user/linux/compositor/render`'s `decorated_style` blesses the
+# The same settings `src/user/system/linux/compositor/render`'s `decorated_style` blesses the
 # picture with; a line changed here and not there is a picture that cannot
 # match.
 decoration:rounding = 12
@@ -52,20 +52,20 @@ exec-once = /bin/pattern gradient two --after one
 /// boot requires, since the slide is watched with them on.
 const ANIMATED_EXPECTED: [(&str, &str); 1] = [(
     "corners cut, a shadow under each window, and the unfocused one dimmed",
-    "src/user/linux/compositor/render/tests/data/decorated-two-clients.xrle",
+    "src/user/system/linux/compositor/render/tests/data/decorated-two-clients.xrle",
 )];
 
 /// Where the slide ends: the same two windows, exchanged.
 const ANIMATED_MOVING: Moving<'static> = Moving {
     what: "a window sliding to the other side with its decorations on",
-    path: "src/user/linux/compositor/render/tests/data/decorated-two-clients-swapped.xrle",
+    path: "src/user/system/linux/compositor/render/tests/data/decorated-two-clients-swapped.xrle",
     keys: &["meta_l", "a"],
 };
 
 /// How long a frame may take on the guest, in microseconds.
 ///
 /// Not the bound the renderer's software fallback has -- that one is stated
-/// and checked where it means something, by `src/user/linux/compositor/render`'s own
+/// and checked where it means something, by `src/user/system/linux/compositor/render`'s own
 /// release-build test, at 250 ms for a frame with every effect on. This is
 /// the same frame under QEMU's `tcg`, which emulates every instruction and
 /// is tens of times slower than the processor it is emulating: the numbers
@@ -123,7 +123,7 @@ dispatch movewindow r
 /// The picture a terminal makes, which the ninth boot requires.
 const TERMINAL_EXPECTED: [(&str, &str); 1] = [(
     "a terminal with a program's output in it",
-    "src/user/linux/compositor/render/tests/data/terminal-hyprctl-version.xrle",
+    "src/user/system/linux/compositor/render/tests/data/terminal-hyprctl-version.xrle",
 )];
 
 /// The configuration the ninth boot is given: a terminal, and nothing else.
@@ -264,7 +264,7 @@ const GPU_EXPECTED_PATH: &str = "etc/expected.xrle";
 /// the blur's -- and a key that holds a screenshot to the expected image.
 ///
 /// The settings are `DECORATED_CONFIG`'s, for its reason: the picture is
-/// `src/user/linux/compositor/render`'s `decorated_style`.
+/// `src/user/system/linux/compositor/render`'s `decorated_style`.
 const GPU_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor --gl`.
 decoration:rounding = 12
@@ -290,7 +290,7 @@ const GPU_PATIENCE: Duration = Duration::from_secs(90);
 
 /// `test-compositor --gl`: the compositor drawing on the GPU, in the guest.
 ///
-/// The frame is drawn by `src/user/linux/compositor/render`'s GPU painter through
+/// The frame is drawn by `src/user/system/linux/compositor/render`'s GPU painter through
 /// `/dev/dri/renderD128` -- the kernel's render node, the ring-3 driver,
 /// virtio-gpu's 3D commands and the host's virglrenderer -- and what is
 /// required is that it is the picture the software renderer blesses.
@@ -480,13 +480,13 @@ pub(super) fn one_picture(
 
 /// A ninth boot: a terminal, with a program running in it.
 ///
-/// The whole path at once: the compositor starts `src/user/linux/compositor/term`, which
+/// The whole path at once: the compositor starts `src/user/system/linux/compositor/term`, which
 /// opens `/dev/ptmx`, opens the slave, runs a program on it with the slave
 /// for its session and its three descriptors, reads what it wrote back
 /// through the master, draws it in a grid with its antialiased Hack, and
 /// puts that in a `wl_shm` buffer the compositor composes into the frame.
 /// Every pixel of that frame is compared against the one
-/// `src/user/linux/compositor/term`'s own test blesses.
+/// `src/user/system/linux/compositor/term`'s own test blesses.
 pub(super) fn test_terminal(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
@@ -612,7 +612,7 @@ fn frames_were_inside_the_bound(arch: Arch, said: &[String]) -> Result<()> {
     }
     println!(
         "  {arch}: the slowest frame the guest drew took {slowest} us, under emulation; the \
-         renderer's own bound is checked in release by `src/user/linux/compositor/render`"
+         renderer's own bound is checked in release by `src/user/system/linux/compositor/render`"
     );
     Ok(())
 }

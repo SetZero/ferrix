@@ -1,5 +1,5 @@
 //! A value moving on one of hyprlock's animation nodes: upstream's
-//! `PHLANIMVAR`, over `src/user/linux/compositor/anim`'s curves and clock-free values.
+//! `PHLANIMVAR`, over `src/user/system/linux/compositor/anim`'s curves and clock-free values.
 
 use compositor_anim::{Bezier, Moving};
 

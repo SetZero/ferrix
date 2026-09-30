@@ -414,7 +414,7 @@ guest lacks: KASLR, since the loader asks the TRNG only by `smc` and
 behind crosvm's `pci-host-cam-generic`, which Ferrix does not read; and
 console input.
 
-**Ferrix's own stats**: `src/user/linux/statd/` is Ferrix's stat service, `ferrix-statd`,
+**Ferrix's own stats**: `src/user/system/linux/statd/` is Ferrix's stat service, `ferrix-statd`,
 and `tools/vendor/google/pixel7/monitor` graphs it. `build-run.sh` images carry it. A VM
 run starts it with crosvm's `-p ferrix.init=/sbin/ferrix-statd`, which the
 monitor's "Stats" choice does, and a native boot needs it built in with

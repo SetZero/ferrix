@@ -98,7 +98,7 @@ Two ABIs coexist:
 
 A process may use both: a musl program can make native calls for the parts
 POSIX cannot express. `devmgr` and the ring-3 drivers are native programs,
-built on `src/user/native/rt`.
+built on `src/user/system/native/rt`.
 
 ---
 
@@ -411,8 +411,8 @@ test that a CoW filesystem actually has to pass.
 | Byte-level logic: ELF, cpio, btrfs item parsing, seccomp BPF, page-table arithmetic, allocators | `src/lib/` | `cargo test`, Miri, fuzzers |
 | Loader | `src/boot/common/uefi/` | QEMU boot test |
 | Kernel | `src/kernel/` | QEMU boot test, in-kernel test harness |
-| Ring-3 programs on Ferrix's own ABI: the native runtime, `devmgr`, drivers, test programs | `src/user/native/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test |
-| Ring-3 programs on the Linux ABI: init, `authd`, the compositor and its clients, ferrousli, zinc, the installer, the media player and sound server, `statd`, `adbd` | `src/user/linux/`, each its own cargo workspace | `cargo test` on the host, and the `test-*` boots on Ferrix |
+| Ring-3 programs on Ferrix's own ABI: the native runtime, `devmgr`, drivers, test programs | `src/user/system/native/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test |
+| Ring-3 programs on the Linux ABI: init, `authd`, the compositor and its clients, ferrousli, zinc, the installer, the media player and sound server, `statd`, `adbd` | `src/user/system/linux/`, each its own cargo workspace | `cargo test` on the host, and the `test-*` boots on Ferrix |
 | Test programs and fuzzing outside any one crate | `src/tests/` | the boots, and `cargo fuzz` |
 | Host tooling | `tools/common/`, and `tools/vendor/` for one vendor's hardware | `cargo test`, and the gates that run them |
 

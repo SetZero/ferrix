@@ -18,11 +18,11 @@ use crate::{Error, Result};
 const GROUPED_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "two windows in one slot, the one moved into the group drawn",
-        "src/user/linux/compositor/render/tests/data/grouped-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/grouped-two-clients.xrle",
     ),
 ];
 
@@ -51,11 +51,11 @@ bind = SUPER, W, exec, /bin/hyprctl activewindow
 const PLUGIN_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the windows swapped by the plugin's own dispatcher",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
 ];
 
@@ -78,7 +78,7 @@ bind = SUPER, W, exec, /bin/hyprctl activewindow
 /// The picture a window rule makes, which the tenth boot requires.
 const RULED_EXPECTED: [(&str, &str); 1] = [(
     "a window floating where a rule put it, each drawn as its own rules say",
-    "src/user/linux/compositor/render/tests/data/ruled-two-clients.xrle",
+    "src/user/system/linux/compositor/render/tests/data/ruled-two-clients.xrle",
 )];
 
 /// The configuration the tenth boot is given: the same two clients, with
@@ -109,14 +109,14 @@ exec-once = /bin/pattern gradient two --after one
 /// really there and really went.
 const TWIN_EXPECTED: [(&str, &str); 1] = [(
     "one window left, after the client that owned two destroyed one of them",
-    "src/user/linux/compositor/render/tests/data/one-client-alone.xrle",
+    "src/user/system/linux/compositor/render/tests/data/one-client-alone.xrle",
 )];
 
 /// The configuration the twentieth boot is given: one client with two
 /// windows.
 ///
 /// The kept window is the gradient because that is the window
-/// `src/user/linux/compositor/render` blesses alone; `--twin` draws the other pattern in
+/// `src/user/system/linux/compositor/render` blesses alone; `--twin` draws the other pattern in
 /// the second one, so the screen while both are up is plainly two windows.
 const TWIN_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
@@ -133,27 +133,27 @@ exec-once = /bin/pattern gradient two --twin
 const SUBMAP_EXPECTED: [(&str, &str); 6] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, now inside the submap",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, with the submap naming itself",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the windows swapped by a key bound only in the submap",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
     (
         "still swapped, with the submap left",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
     (
         "still swapped, with the global map naming itself",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
 ];
 
@@ -306,7 +306,7 @@ pub(super) fn test_dispatchers(arch: Arch, programs: &Programs, args: &Args) -> 
 /// other way: the client stays and destroys one of its two
 /// `xdg_toplevel`s, which until 2026-09-18 left the layout tiling a window
 /// that was not there. The host test in
-/// `src/user/linux/compositor/hyprix/tests/two_clients.rs` makes the same claim against
+/// `src/user/system/linux/compositor/hyprix/tests/two_clients.rs` makes the same claim against
 /// the compositor in a process; this makes it on Ferrix, on the card.
 pub(super) fn test_twin(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(

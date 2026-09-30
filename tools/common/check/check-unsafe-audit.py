@@ -88,7 +88,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
-ROOTS = ("src/kernel", "src/boot/common/uefi", "src/lib", "src/user/native", "tools/common/xtask")
+ROOTS = ("src/kernel", "src/boot/common/uefi", "src/lib", "src/user/system/native", "tools/common/xtask")
 REGISTER = ROOT / "tools" / "common" / "data" / "safety-requirements.json"
 BASELINE = ROOT / "tools" / "common" / "data" / "unsafe-trace-baseline.json"
 KERNEL_SRC = ROOT / "src" / "kernel" / "src"

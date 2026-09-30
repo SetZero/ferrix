@@ -204,7 +204,7 @@ struct Probed {
 /// [`ArgType::AnyNewId`] carrying all three, because a server that read them
 /// as three separate arguments could not tell this `new_id` from an ordinary
 /// one. So the `s` and `u` in front of an unnamed `n` are folded back into
-/// it here. The bytes are the same either way, and `src/user/linux/compositor/wire`'s own
+/// it here. The bytes are the same either way, and `src/user/system/linux/compositor/wire`'s own
 /// probe is what shows that.
 fn parse_signature(text: &str, anywhere: &[usize]) -> (u32, Vec<ArgType>) {
     let mut since = String::new();

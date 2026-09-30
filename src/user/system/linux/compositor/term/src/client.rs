@@ -1,8 +1,8 @@
 //! The terminal's window: connect, make a toplevel, draw the grid, and send
 //! what is typed to the program.
 //!
-//! The shape of a Wayland client is `src/user/linux/compositor/pattern`'s -- the same
-//! `src/user/linux/compositor/wire` under it, the same fixed object ids, the same
+//! The shape of a Wayland client is `src/user/system/linux/compositor/pattern`'s -- the same
+//! `src/user/system/linux/compositor/wire` under it, the same fixed object ids, the same
 //! connect-bind-configure-draw -- because that is the shape every client
 //! has. What is different is what it draws and what it does with a key: a
 //! grid of characters, and a byte written to the pseudoterminal.
@@ -178,7 +178,7 @@ struct Paste {
 
 /// Which bit `wl_keyboard.modifiers` uses for control.
 ///
-/// The compositor's keymap is `src/user/linux/compositor/xkb`'s, whose modifier order is
+/// The compositor's keymap is `src/user/system/linux/compositor/xkb`'s, whose modifier order is
 /// libxkbcommon's own: control is bit 2. Shift needs no constant here any
 /// more -- which level a key is read at is the keymap's business, and
 /// `Key::keysym` answers it from every mask the key declares rather than

@@ -7,8 +7,8 @@
 //! # What it is made of
 //!
 //! Nothing here parses a configuration file, works out a layout, draws a
-//! pixel or decodes a message: `src/user/linux/compositor/config`, `src/user/linux/compositor/layout`,
-//! `src/user/linux/compositor/render` and `src/user/linux/compositor/server` do those, and each of them is
+//! pixel or decodes a message: `src/user/system/linux/compositor/config`, `src/user/system/linux/compositor/layout`,
+//! `src/user/system/linux/compositor/render` and `src/user/system/linux/compositor/server` do those, and each of them is
 //! host-tested without a socket or a screen. This binary is the loop that
 //! joins them -- accept, read, lay out, draw, show -- and the two places it
 //! touches the world: a client's shared memory, and the screen.
@@ -18,7 +18,7 @@
 //! Two backends. `--headless` draws into memory and can write each frame out,
 //! which is how the compositor is tested on any machine and how its pixels
 //! are compared without a display. `/dev/dri/card0` is the real one on
-//! Ferrix, through the same legacy mode-setting `src/user/linux/compositor/blank` proved.
+//! Ferrix, through the same legacy mode-setting `src/user/system/linux/compositor/blank` proved.
 
 pub mod act;
 pub mod animate;

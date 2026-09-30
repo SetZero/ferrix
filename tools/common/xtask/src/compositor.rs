@@ -1,7 +1,7 @@
 //! `cargo xtask test-compositor`: the compositor itself, on Ferrix, on a
 //! screen.
 //!
-//! `cargo xtask test-display` boots `src/user/linux/compositor/blank`, which fills the card
+//! `cargo xtask test-display` boots `src/user/system/linux/compositor/blank`, which fills the card
 //! with one colour: the proof that the path from a program through
 //! `/dev/dri/card0`, the kernel's display core and the ring-3 virtio-gpu
 //! driver to QEMU's window works at all. This boots the compositor, which
@@ -9,12 +9,12 @@
 //! configuration, the layout, the renderer and its own DRM backend with two
 //! dumb buffers and a page flip.
 //!
-//! Two `src/user/linux/compositor/pattern` clients are carried in the initramfs at
+//! Two `src/user/system/linux/compositor/pattern` clients are carried in the initramfs at
 //! `/bin/pattern` and started by the compositor's own `exec-once`, so what
 //! reaches the screen is two real Wayland clients tiled by the dwindle
-//! layout -- the same picture `src/user/linux/compositor/hyprix/tests/two_clients.rs` makes
+//! layout -- the same picture `src/user/system/linux/compositor/hyprix/tests/two_clients.rs` makes
 //! on the host, and compared against the same expected image that
-//! `src/user/linux/compositor/render`'s own tests bless.
+//! `src/user/system/linux/compositor/render`'s own tests bless.
 //!
 //! # Three pictures, and two keybinds between them
 //!
@@ -27,8 +27,8 @@
 //! `virtio-keyboard-pci`, the kernel's evdev node and the compositor's seat.
 //!
 //! Each of the three states has an expected image of its own, blessed by
-//! `src/user/linux/compositor/render`'s own tests by calling the renderer with rectangles
-//! from `src/user/linux/compositor/layout`. The pictures compared here came from two
+//! `src/user/system/linux/compositor/render`'s own tests by calling the renderer with rectangles
+//! from `src/user/system/linux/compositor/layout`. The pictures compared here came from two
 //! programs talking Wayland to a server that worked the same rectangles out
 //! from their requests, so a difference between the two paths is a real one.
 //!
@@ -100,7 +100,7 @@ use protocols::{
 };
 use user_desktop::{test_everything_desktop, test_fuzzel, test_fuzzel_user};
 
-/// The compositor's own background: `src/user/linux/compositor/render`'s `Style::BACKGROUND`,
+/// The compositor's own background: `src/user/system/linux/compositor/render`'s `Style::BACKGROUND`,
 /// which is Hyprland's `misc:background_color` default.
 const BACKGROUND: [u8; 3] = [0x11, 0x11, 0x11];
 
@@ -126,19 +126,19 @@ const EITHER: &str = "hyprix: ";
 const SETTLE: Duration = Duration::from_secs(30);
 
 /// The three pictures, in the order the keybinds make them. Each is blessed
-/// by `src/user/linux/compositor/render`'s own tests.
+/// by `src/user/system/linux/compositor/render`'s own tests.
 const EXPECTED: [(&str, &str); 3] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the focus moved left",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients-focus-left.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-focus-left.xrle",
     ),
     (
         "the windows swapped",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
 ];
 
@@ -155,7 +155,7 @@ const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
 const VDAGENT_PATH: &str = "bin/vdagent";
-/// hypridle, and the `loginctl` that reaches it (`src/user/linux/compositor/hypridle`).
+/// hypridle, and the `loginctl` that reaches it (`src/user/system/linux/compositor/hypridle`).
 const HYPRIDLE_PATH: &str = "bin/hypridle";
 const LOGINCTL_PATH: &str = "bin/loginctl";
 /// `reboot`, with the word for the firmware busybox's cannot pass; it takes
@@ -245,11 +245,11 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
         ))
     })?;
     let target_dir = paths::target_dir().join("compositor").join("hyprix");
-    println!("  building src/user/linux/compositor/{binary} for {target}");
+    println!("  building src/user/system/linux/compositor/{binary} for {target}");
     let program = target_dir.join(target).join("release").join(binary);
     crate::builds::Build::cargo(
-        format!("cargo build (src/user/linux/compositor/{binary}) --target {target}"),
-        paths::workspace_root().join("src/user/linux/compositor"),
+        format!("cargo build (src/user/system/linux/compositor/{binary}) --target {target}"),
+        paths::workspace_root().join("src/user/system/linux/compositor"),
     )
     .args(["build", "--release", "-p", package, "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

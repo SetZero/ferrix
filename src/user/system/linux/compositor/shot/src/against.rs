@@ -6,7 +6,7 @@
 //! software renderer drew, which is the expected image byte for byte.
 //!
 //! A frame a GPU drew is the same picture and not the same bytes -- a step
-//! or two of a channel here and there, which `src/user/linux/compositor/render`'s `gpu`
+//! or two of a channel here and there, which `src/user/system/linux/compositor/render`'s `gpu`
 //! module explains -- and no digest says "nearly". So the comparison moves
 //! to where the pixels are: the expected image is put on the guest's own
 //! filesystem, `shot` reads it, and what crosses the serial port is the
@@ -14,7 +14,7 @@
 //! with a GPU behind its card is one QEMU's `screendump` cannot read
 //! (`docs/GPU.md` §3.1): this is the only judge such a frame has.
 //!
-//! The format is `src/user/linux/compositor/render`'s `golden`: read again here, without
+//! The format is `src/user/system/linux/compositor/render`'s `golden`: read again here, without
 //! its panics, because that reader is a test's and this is a program's.
 
 use crate::Shot;

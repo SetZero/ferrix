@@ -32,17 +32,17 @@ use crate::{Error, Result};
 pub(super) const POINTER_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled, with no pointer drawn because none has moved",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the pointer over the windows, its tip where the mouse was put",
-        "src/user/linux/compositor/render/tests/data/pointer-on-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/pointer-on-two-clients.xrle",
     ),
 ];
 
 /// Where the pointer is put, in QMP's 0..0x7FFF across the screen.
 ///
-/// `src/user/linux/compositor/render` blesses the picture with the arrow's tip at
+/// `src/user/system/linux/compositor/render` blesses the picture with the arrow's tip at
 /// (700, 300) on a 1024x768 screen, and these are those two as a fraction
 /// of the axis QEMU's virtio tablet reports.
 ///
@@ -107,7 +107,7 @@ exec-once = /bin/pattern gradient two --after one
 ///
 /// A compositor with a mouse and no arrow on the screen is one a person
 /// cannot use. This moves the pointer with QMP and requires the screen to
-/// become the picture `src/user/linux/compositor/render` blesses for the arrow at that
+/// become the picture `src/user/system/linux/compositor/render` blesses for the arrow at that
 /// point -- and to have been the ordinary tiled pair before it, because the
 /// pointer is not drawn until it has moved.
 pub(super) fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
@@ -183,11 +183,11 @@ pub(super) fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Resu
 const CURSOR_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled, with no pointer drawn because none has moved",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the pointer swept over the windows and put down, and still not in the frame",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
 ];
 

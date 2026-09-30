@@ -14,7 +14,7 @@ use crate::{
 };
 
 fn tree_fonts() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../../assets/fonts")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../../../assets/fonts")
 }
 
 fn fonts() -> Fonts {

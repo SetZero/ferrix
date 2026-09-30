@@ -9,7 +9,7 @@
 //! test job went red while `cargo xtask check` stayed green.
 //!
 //! Now there is no list. A freestanding member is one at `boot`, at
-//! `src/boot/vendor/google/pixel7`, at `kernel` or under `src/user/native/`, read from the workspace manifest; `cargo xtask check` and
+//! `src/boot/vendor/google/pixel7`, at `kernel` or under `src/user/system/native/`, read from the workspace manifest; `cargo xtask check` and
 //! CI both ask this module, through the same commands. And a member anywhere
 //! else whose `src/main.rs` says `#![no_main]` is refused, so a new program
 //! put in the wrong place fails the gate on the machine that added it.
@@ -27,7 +27,7 @@ const FREESTANDING_PLACES: &[&str] = &[
 ];
 
 /// The directory freestanding native programs live under.
-const NATIVE_PLACE: &str = "src/user/native/";
+const NATIVE_PLACE: &str = "src/user/system/native/";
 
 /// The workspace's members, sorted by what the host can do with them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub(crate) struct Members {
     pub(crate) host: Vec<String>,
     /// The loader and the kernel, by package name.
     pub(crate) kernel_and_loader: Vec<String>,
-    /// The native runtime and programs under `src/user/native/`, by package name.
+    /// The native runtime and programs under `src/user/system/native/`, by package name.
     pub(crate) native: Vec<String>,
 }
 
@@ -83,8 +83,8 @@ pub(crate) fn members(root: &Path) -> Result<Members> {
         } else if is_freestanding_program(&directory) {
             return Err(Error::new(format!(
                 "workspace member `{member}` is a freestanding program (its src/main.rs is \
-                 #![no_main]) outside boot, kernel and src/user/native/. The host gates build every other \
-                 member as a test harness, which fails for it; move it under src/user/native/"
+                 #![no_main]) outside boot, kernel and src/user/system/native/. The host gates build every other \
+                 member as a test harness, which fails for it; move it under src/user/system/native/"
             )));
         } else {
             sorted.host.push(name);

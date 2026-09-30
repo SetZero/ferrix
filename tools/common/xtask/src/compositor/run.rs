@@ -27,8 +27,8 @@ use crate::{Error, Result};
 /// `exec-once`: the boot ends at a shell prompt rather than at a picture,
 /// which is what somebody who asked to watch the compositor asked for.
 ///
-/// Every dispatcher named here is one `src/user/linux/compositor/layout` has. `SUPER+P`
-/// starts a `src/user/linux/compositor/pattern` client, which is how the tiling a gate boot
+/// Every dispatcher named here is one `src/user/system/linux/compositor/layout` has. `SUPER+P`
+/// starts a `src/user/system/linux/compositor/pattern` client, which is how the tiling a gate boot
 /// shows is reached from a configuration that starts none.
 const RUN_CONFIG: &str = "# Written into the initramfs by `cargo xtask run-compositor`.
 # `--config <PATH>` carries a real `hyprland.conf` instead of this one.

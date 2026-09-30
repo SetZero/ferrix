@@ -2,7 +2,7 @@
 //! memory: who the core says it is, how it is brought out of reset, and the
 //! command stream its front end fetches.
 //!
-//! `src/user/native/drivers/gpu/gc400` runs this in a ring-3 process under devmgr (`docs/GPU.md`
+//! `src/user/system/native/drivers/gpu/gc400` runs this in a ring-3 process under devmgr (`docs/GPU.md`
 //! §6.3). The process holds an `IoMapping` of the core's registers, its
 //! interrupt, and a page pinned with `PIN_COHERENT` for the command buffer.
 //! None of those exist in a unit test, so everything that decides a register

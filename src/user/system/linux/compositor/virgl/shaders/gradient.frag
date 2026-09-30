@@ -1,10 +1,10 @@
 #version 310 es
-// A border's gradient: `tex` is the ramp src/user/linux/compositor/render builds, one row
+// A border's gradient: `tex` is the ramp src/user/system/linux/compositor/render builds, one row
 // of premultiplied colours, and the place along it is `gradient.glsl`'s
 // folded progress across the box u[0]: u[1] is (sine, flip x, flip y, 0).
 // Drawn inside the rounded rectangle u[2] with (radius, power) in u[3].xy.
 //
-// The ramp is read at its nearest entry, as src/user/linux/compositor/render reads it:
+// The ramp is read at its nearest entry, as src/user/system/linux/compositor/render reads it:
 // entry round(progress * last) of `length`, whose centre is at
 // (progress * last + 0.5) / length. u[3].zw is (last / length, 0.5 / length).
 precision highp float;

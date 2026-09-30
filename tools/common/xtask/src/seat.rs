@@ -47,7 +47,7 @@ const FAILED: &str = "hyprix: failed";
 /// Either, so the boot stops at whichever comes.
 const EITHER: &str = "hyprix: ";
 
-/// The compositor's own background, `src/user/linux/compositor/render`'s `Style::BACKGROUND`.
+/// The compositor's own background, `src/user/system/linux/compositor/render`'s `Style::BACKGROUND`.
 const BACKGROUND: [u8; 3] = [0x11, 0x11, 0x11];
 
 /// Where the client and the configuration go in the initramfs.
@@ -56,7 +56,7 @@ const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// How wide and tall the cursor the compositor draws is.
 ///
-/// `src/user/linux/compositor/render`'s `cursor` module: a 24x24 arrow whose tip is the
+/// `src/user/system/linux/compositor/render`'s `cursor` module: a 24x24 arrow whose tip is the
 /// pointer, drawn down and to the right of it. A screen with the pointer on
 /// it is the background plus this, and a check that wants the background
 /// alone has to say where the cursor is allowed to be.
@@ -97,7 +97,7 @@ const SCREEN_PATIENCE: Duration = Duration::from_secs(90);
 /// How often to ask for the screen while waiting for it.
 const SCREEN_EVERY: Duration = Duration::from_millis(250);
 
-/// The checkerboard's two greys, `src/user/linux/compositor/render`'s `Pattern::LIGHT` and
+/// The checkerboard's two greys, `src/user/system/linux/compositor/render`'s `Pattern::LIGHT` and
 /// `Pattern::DARK`: what the client draws first.
 const CHECKERBOARD: [[u8; 3]; 2] = [[0xE0, 0xE0, 0xE0], [0x30, 0x30, 0x30]];
 
@@ -114,11 +114,11 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
         ))
     })?;
     let target_dir = paths::target_dir().join("compositor").join("seat");
-    println!("  building src/user/linux/compositor/{binary} for {target}");
+    println!("  building src/user/system/linux/compositor/{binary} for {target}");
     let program = target_dir.join(target).join("release").join(binary);
     crate::builds::Build::cargo(
-        format!("cargo build (src/user/linux/compositor/{binary}) --target {target}"),
-        paths::workspace_root().join("src/user/linux/compositor"),
+        format!("cargo build (src/user/system/linux/compositor/{binary}) --target {target}"),
+        paths::workspace_root().join("src/user/system/linux/compositor"),
     )
     .args(["build", "--release", "-p", package, "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
@@ -467,7 +467,7 @@ pub(crate) fn test_seat(args: &Args) -> Result<()> {
         // The keybind closed the window, so the screen is the compositor's
         // background -- everywhere but the cursor. The pointer was put in
         // the middle of the screen a few steps up, and the compositor draws
-        // a 24x24 arrow whose tip is the pointer (`src/user/linux/compositor/render`'s
+        // a 24x24 arrow whose tip is the pointer (`src/user/system/linux/compositor/render`'s
         // `cursor`), down and to the right of it. That is what is left, and
         // a check that asked for the background *everywhere* was written
         // before the cursor was drawn at all.

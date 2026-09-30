@@ -2,7 +2,7 @@
 # Builds alsa-lib 1.2.16.1 as a static library against ferrousli, for
 # alsa-utils' aplay and speaker-test (docs/AUDIO.md, U1).
 #
-#     tools/ports/alsa-lib/build.sh [--arch <arch>]    # from src/user/linux/ferrousli/
+#     tools/ports/alsa-lib/build.sh [--arch <arch>]    # from src/user/system/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   <arch>/include/alsa/*.h

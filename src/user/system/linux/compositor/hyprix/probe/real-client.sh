@@ -2,7 +2,7 @@
 # Run a real, unmodified Wayland application on the compositor and record
 # what it said.
 #
-# The compositor's own tests use `src/user/linux/compositor/pattern`, which is written
+# The compositor's own tests use `src/user/system/linux/compositor/pattern`, which is written
 # against the same crates the server is: it proves the two halves agree, not
 # that the protocol is right. A third-party toolkit does the other half. It
 # was written against libwayland and every other compositor, it knows nothing

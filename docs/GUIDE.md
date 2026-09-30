@@ -72,11 +72,11 @@ kept current with every landing. In short:
 * **Networking.** Sockets, a net core and a ring-3 virtio-net driver: `curl`
   fetches over HTTPS and `git` clones inside the guest, and `sshdt` serves
   SSH from it.
-* **A userland of its own.** [ferrousli](../src/user/linux/ferrousli/README.md), a C library
-  written in Rust; [zinc](../src/user/linux/zinc/README.md), a zsh-compatible shell that runs
+* **A userland of its own.** [ferrousli](../src/user/system/linux/ferrousli/README.md), a C library
+  written in Rust; [zinc](../src/user/system/linux/zinc/README.md), a zsh-compatible shell that runs
   oh-my-zsh and is `/bin/sh`; the uutils family for the utilities
   ([what is left of busybox](UUTILS.md) is fourteen names).
-* **A desktop.** [hyprix](../src/user/linux/compositor/README.md), a Hyprland-shaped Wayland
+* **A desktop.** [hyprix](../src/user/system/linux/compositor/README.md), a Hyprland-shaped Wayland
   compositor written from scratch, reads a real `hyprland.conf`, tiles
   windows, and composites on the host GPU through virgl
   ([docs/GPU.md](GPU.md)); a terminal running zinc opens at boot.
@@ -268,7 +268,7 @@ provides; busybox keeps the rest, which [docs/UUTILS.md](UUTILS.md) §8
 counts down.
 
 The busybox Ferrix is measured with is built against
-[ferrousli](../src/user/linux/ferrousli/README.md), this repository's C library, and
+[ferrousli](../src/user/system/linux/ferrousli/README.md), this repository's C library, and
 `--init ferrousli` names it. It is x86-64 only for now.
 
 On Windows, once, from PowerShell:
@@ -291,7 +291,7 @@ cargo xtask run --arch x86_64 --init ferrousli   # boot to a busybox shell
 
 Quit QEMU with `Ctrl-A x`.
 
-`cargo xtask busybox` runs `src/user/linux/ferrousli/tools/busybox/build.sh`, or on Windows
+`cargo xtask busybox` runs `src/user/system/linux/ferrousli/tools/busybox/build.sh`, or on Windows
 `build-windows.sh` in Git for Windows' bash. Either downloads busybox 1.37.0
 and Alpine's configuration for it, both checked against pinned sums, builds
 ferrousli and busybox against it under `~/.local/share/ferrix/busybox/ferrousli`
@@ -300,7 +300,7 @@ installs `x86_64/bin/busybox.static` there, where `--init ferrousli` looks. On
 Windows clang cross-compiles and links it, Strawberry Perl's gcc and gmake run
 busybox's own build, and the kernel headers busybox includes come from Alpine's
 `linux-headers` package, pinned the same way. It takes a few minutes the first
-time. Run it again after `src/user/linux/ferrousli/` changes; `--init ferrousli` uses whatever
+time. Run it again after `src/user/system/linux/ferrousli/` changes; `--init ferrousli` uses whatever
 it last installed.
 
 `cargo xtask test-shell --arch x86_64 --init ferrousli` runs a script in that
@@ -312,7 +312,7 @@ and glibc builds they check alongside.
 
 ### zinc, a zsh-compatible shell
 
-`build` and `run` with a program also put [zinc](../src/user/linux/zinc/README.md) in the
+`build` and `run` with a program also put [zinc](../src/user/system/linux/zinc/README.md) in the
 initramfs, at `/bin/zinc` with `/bin/zsh` beside it: a zsh-compatible shell
 written in Rust, whose goal is to run oh-my-zsh. It is `/bin/sh` as well, so
 the shell the kernel starts is zinc. It is built for x86-64 and AArch64 by `cargo` alone, against the
@@ -350,7 +350,7 @@ cargo xtask test-display --arch x86_64                  # the same, judged pixel
 window. The window starts on the firmware's console (VGA on x86-64, ramfb on
 AArch64), where the loader draws; the card is the other console in the
 window's View menu. `--init blank` builds the compositor's first program,
-[`src/user/linux/compositor/blank`](../src/user/linux/compositor/README.md), and boots it as init: it opens
+[`src/user/system/linux/compositor/blank`](../src/user/system/linux/compositor/README.md), and boots it as init: it opens
 `/dev/dri/card0` through Ferrix's Linux DRM subset, sets the preferred mode
 (1024×768) and fills the screen with one colour, `#1E1E2E`. Its serial
 line says `compositor: scanout ...`, or why it failed. There is no input and
@@ -373,16 +373,16 @@ cargo xtask run-compositor --arch x86_64 --no-gl     # the same, drawn in softwa
 ```
 
 `run-compositor` boots `/sbin/init`, which starts
-[`src/user/linux/compositor/hyprix`](../src/user/linux/compositor/README.md) as `hyprix.service` of
+[`src/user/system/linux/compositor/hyprix`](../src/user/system/linux/compositor/README.md) as `hyprix.service` of
 `graphical.target`, on a virtio-gpu card, and puts each program it starts
 in a scope of its own (`svc list` shows them as `app-*.scope`): the compositor reads a `hyprland.conf`, listens on a
 Wayland socket, tiles what connects to it and puts the frame on the screen.
 The configuration it writes into the initramfs starts a terminal first --
 `exec-once = /bin/term /bin/zinc` -- so the boot ends at a shell prompt rather
-than at a picture. [`src/user/linux/compositor/term`](../src/user/linux/compositor/README.md) is the terminal,
+than at a picture. [`src/user/system/linux/compositor/term`](../src/user/system/linux/compositor/README.md) is the terminal,
 a character grid with the escape sequences a shell actually sends, and it runs
 the program it is given on a pseudoterminal; that program is
-[zinc](../src/user/linux/zinc/README.md), with the busybox applets, the uutils and the ported
+[zinc](../src/user/system/linux/zinc/README.md), with the busybox applets, the uutils and the ported
 programs the image carries beside it.
 
 What the keyboard does, in the configuration it writes itself:
@@ -390,7 +390,7 @@ What the keyboard does, in the configuration it writes itself:
 | keys | |
 |---|---|
 | `SUPER`+`RETURN` | another terminal running zinc |
-| `SUPER`+`P` | a `src/user/linux/compositor/pattern` client, the picture the gates tile |
+| `SUPER`+`P` | a `src/user/system/linux/compositor/pattern` client, the picture the gates tile |
 | `SUPER`+`Q` | close the focused window |
 | `SUPER`+`F`, `SUPER`+`V` | fullscreen, floating |
 | `SUPER`+`H`, `SUPER`+`L` | move the focus; with `SHIFT`, move the window |
@@ -707,7 +707,7 @@ for, since every device a boot does not need is one fewer on the bus, and
 several of them exist to assert exactly what a machine enumerates.
 
 The same shape for `run`, which boots a program of your choosing rather than
-the compositor -- here `src/user/linux/compositor/blank`, and `--init ferrousli` or a path
+the compositor -- here `src/user/system/linux/compositor/blank`, and `--init ferrousli` or a path
 to a busybox for a shell instead:
 
 ```
@@ -720,8 +720,8 @@ anyway; `run` is the one command that wants it said.
 **What `--clipboard` does today.** It puts a `virtio-serial` device on the
 bus with the port SPICE's agent protocol uses, and QEMU's own half of that
 protocol behind it. In the guest, the ring-3 driver
-`src/user/native/drivers/console/vport` opens the port and offers it at
-`/tmp/vport`, and the agent, `src/user/linux/compositor/vdagent`, speaks the
+`src/user/system/native/drivers/console/vport` opens the port and offers it at
+`/tmp/vport`, and the agent, `src/user/system/linux/compositor/vdagent`, speaks the
 protocol over it, so the host's clipboard and the compositor's follow each
 other both ways: `clip copy` and `clip paste` in the guest, and the
 terminal's `CTRL`+`SHIFT`+`C` and `CTRL`+`SHIFT`+`V`. Over VNC the viewer
@@ -817,8 +817,8 @@ the repository.
 | `src/boot/` | The loaders: `src/boot/common/uefi/` for x86-64, AArch64 and ARMv7-A, `src/boot/vendor/google/pixel7/` for the phone. |
 | `src/kernel/` | The kernel. |
 | `src/lib/` | Architecture-neutral logic, nearly sixty crates in eight groups: `proto`, `kernel`, `platform`, `fs`, `network`, `drivers`, `init`, `crypto`. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. Drivers are grouped by function: `block`, `net`, `display`, `gpu`, `input`, `usb`, `sound`, `console`. |
-| `src/user/native/` | Ring-3 programs on the native ABI: the runtime, `devmgr`, and one process per driver under `src/user/native/drivers/<function>/`. |
-| `src/user/linux/` | Linux-ABI programs, each its own workspace: [the compositor](../src/user/linux/compositor/README.md), [the init](../src/user/linux/init/README.md), [zinc](../src/user/linux/zinc/README.md), statd and [ferrousli](../src/user/linux/ferrousli/README.md), the C library. |
+| `src/user/system/native/` | Ring-3 programs on the native ABI: the runtime, `devmgr`, and one process per driver under `src/user/system/native/drivers/<function>/`. |
+| `src/user/system/linux/` | Linux-ABI programs, each its own workspace: [the compositor](../src/user/system/linux/compositor/README.md), [the init](../src/user/system/linux/init/README.md), [zinc](../src/user/system/linux/zinc/README.md), statd and [ferrousli](../src/user/system/linux/ferrousli/README.md), the C library. |
 | `src/tests/` | The fuzz targets over `src/lib/`, and test programs that live outside any one crate. |
 | `tools/common/` | Everything that runs on the host: `xtask/` the build driver (cross-compiles every half, writes the images, drives QEMU and every `test-*` gate), `check/` the quality gates, `gen/` the generators, `fetch/` the pinned downloads, `test/` hand-run test drivers, `data/` the allow-lists and baselines. |
 | `tools/vendor/` | Host tools for one vendor's hardware: the Pixel 7 launcher and monitor. |

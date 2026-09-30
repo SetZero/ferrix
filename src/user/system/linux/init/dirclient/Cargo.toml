@@ -9,8 +9,8 @@ publish.workspace = true
 
 [dependencies]
 libc = "0.2.189"
-ferrix-native = { path = "../../../../lib/proto/native" }
-ferrix-native-abi = { path = "../../../../lib/proto/native-abi" }
+ferrix-native = { path = "../../../../../lib/proto/native" }
+ferrix-native-abi = { path = "../../../../../lib/proto/native-abi" }
 
 [lints]
 workspace = true

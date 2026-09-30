@@ -189,8 +189,8 @@ USAGE:
 COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
-    run-compositor  Boot src/user/linux/compositor/hyprix as init with a virtio-gpu, on a screen this host can show
-    run-badapple  Boot src/user/linux/media/badapple as init: all of Bad Apple!! in a window, heard on this host's sound server (tools/common/fetch/fetch-badapple.sh first)
+    run-compositor  Boot src/user/system/linux/compositor/hyprix as init with a virtio-gpu, on a screen this host can show
+    run-badapple  Boot src/user/system/linux/media/badapple as init: all of Bad Apple!! in a window, heard on this host's sound server (tools/common/fetch/fetch-badapple.sh first)
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     everything-volume  Make run-compositor --everything's volume from the fetched ones (on Windows, in WSL)
@@ -206,14 +206,14 @@ COMMANDS:
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-clipboard  Boot the desktop with its clipboard port on a socket xtask speaks vdagent over, and carry text both ways
     test-adb      Boot adbd with a network, and drive it with this machine's adb: shell, push, pull, forward, reboot
-    test-display  Boot src/user/linux/compositor/blank as init with a virtio-gpu, and require its colour on every pixel
-    test-compositor  Boot src/user/linux/compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
+    test-display  Boot src/user/system/linux/compositor/blank as init with a virtio-gpu, and require its colour on every pixel
+    test-compositor  Boot src/user/system/linux/compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
     test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
-    test-input    Boot src/user/linux/compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
-    test-audio    Boot src/user/linux/compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
-    test-badapple Boot src/user/linux/media/badapple as init, play 30 s of Bad Apple!!, and require the held frame on the screen, the song in QEMU's wav file, and the two in step
+    test-input    Boot src/user/system/linux/compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
+    test-audio    Boot src/user/system/linux/compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
+    test-badapple Boot src/user/system/linux/media/badapple as init, play 30 s of Bad Apple!!, and require the held frame on the screen, the song in QEMU's wav file, and the two in step
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
-    test-pty      Boot src/user/linux/compositor/term as init, run a program on a pseudoterminal, and require its output back
+    test-pty      Boot src/user/system/linux/compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
     test-vkgears  Boot the compositor with vkgears and the Venus card, and require it drew frames on the host's GPU (Linux hosts)
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers

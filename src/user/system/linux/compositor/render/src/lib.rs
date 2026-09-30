@@ -2,7 +2,7 @@
 //! tiny-skia, for the `XRGB8888` dumb buffers `/dev/dri/card0` scans out.
 //!
 //! Smithay's own CPU renderer is pixman, a C library, and the compositor
-//! takes no C device or rendering stack (`src/user/linux/compositor/README.md`), so this is
+//! takes no C device or rendering stack (`src/user/system/linux/compositor/README.md`), so this is
 //! the renderer whichever way the Smithay decision in `docs/BACKLOG.md` goes.
 //! It depends on neither: nothing here is a Wayland object, a device or a
 //! Smithay type. A frame is drawn from rectangles, colours and pixel buffers,
@@ -106,7 +106,7 @@ mod scratch;
 pub mod timing;
 pub mod transform;
 
-// Public, and not only for this crate's own tests: `src/user/linux/compositor/term` draws
+// Public, and not only for this crate's own tests: `src/user/system/linux/compositor/term` draws
 // its expected image with its own font and its own grid, and the images live
 // together whichever crate blesses one.
 pub mod golden;

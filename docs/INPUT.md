@@ -228,7 +228,7 @@ monotonic timestamps.
 
 **What the earlier claim got right and wrong.**
 
-* *Iteration 1 needs no epoll:* right. `src/user/linux/compositor/blank` calls the card's
+* *Iteration 1 needs no epoll:* right. `src/user/system/linux/compositor/blank` calls the card's
   ioctls directly and waits on nothing.
 * *Iteration 2 needs epoll and eventfd:* right, and incomplete. It also needs
   an epoll descriptor that is itself pollable, `ioctl(FIONBIO)`, and four DRM
@@ -324,7 +324,7 @@ axes is published without them, and the boot line says what was left out.
 and the core only delivers at `SYN_REPORT` (§3.1). `MAX_EVENTS` is 64, which
 holds any report QEMU's HID devices make.
 
-**The driver** (`src/user/native/drivers/input/virtio-input`, logic in `src/lib/drivers/input/virtio-input` over
+**The driver** (`src/user/system/native/drivers/input/virtio-input`, logic in `src/lib/drivers/input/virtio-input` over
 `src/lib/drivers/block/virtio-blk`'s traits as `src/lib/drivers/display/virtio-gpu` does) negotiates features,
 asks the configuration queries through `src/lib/drivers/virtio::input`, sends `HELLO`,
 and on `READY` sets `DRIVER_OK`. It then keeps every descriptor of the event
@@ -411,7 +411,7 @@ macro undefined, which is 24 bytes there. ferrousli's `bits/alltypes.h`
 defines `__USE_TIME_BITS64`, as musl's does, so its programs should see the
 kernel's 16 bytes; that is read from the header, not shown by a program
 built against ferrousli. ARMv7-A has taken part in the gates since
-2026-09-23: `src/user/linux/compositor/evecho`, a Rust program on the target's own musl
+2026-09-23: `src/user/system/linux/compositor/evecho`, a Rust program on the target's own musl
 built for `armv7-unknown-linux-musleabihf`, reads the kernel's 16-byte
 events, and `test-input` passes there with its negative control.
 
@@ -459,8 +459,8 @@ would learn of it without udev (an `inotify` watch on `/dev/input`), is §6.
   events (`virtio-input.c:28`–`30`). On q35 the PS/2 devices are behind it
   once the driver is up. So the test sends nothing until the program says
   it is ready, which is after both drivers are.
-* **The program.** `src/user/linux/compositor/evecho`, built as init like
-  `src/user/linux/compositor/blank`. It reads `/dev/input`, opens every `eventN` with
+* **The program.** `src/user/system/linux/compositor/evecho`, built as init like
+  `src/user/system/linux/compositor/blank`. It reads `/dev/input`, opens every `eventN` with
   `O_RDONLY | O_NONBLOCK | O_CLOEXEC`, identifies each with `EVIOCGVERSION`,
   `EVIOCGID`, `EVIOCGNAME`, `EVIOCGPROP`, `EVIOCGBIT` and `EVIOCGABS`, sets
   `EVIOCSCLOCKID(CLOCK_MONOTONIC)` and `EVIOCGRAB(1)`, and prints one
@@ -513,7 +513,7 @@ correspondence between the group index and the keymap clients hold.
 **So the compositor's job is a correct keymap and correct serialization**,
 and that is what this is.
 
-* **Every level is in the tables.** `src/user/linux/compositor/xkb/probe/keymap.c` prints,
+* **Every level is in the tables.** `src/user/system/linux/compositor/xkb/probe/keymap.c` prints,
   for each key, every group and every level: the keysyms, and the modifier
   masks that select each level (`xkb_keymap_key_get_mods_for_level`). So
   `Key::level` is a lookup rather than an implementation of XKB's key types.
@@ -522,7 +522,7 @@ and that is what this is.
   every modifier named at any of its levels -- and a combination that then
   matches nothing is **level zero**, never nothing at all. `de` has 64 keys
   deeper than two levels, `us` 17.
-* **A client reads the keymap it was handed.** `src/user/linux/compositor/term` is a client,
+* **A client reads the keymap it was handed.** `src/user/system/linux/compositor/term` is a client,
   and it read the first shipped table whatever the keymap said, so
   `kb_layout = de` gave it an American keyboard. There is no libxkbcommon
   here to compile with, so `compositor_xkb::groups_of` reads the group names
@@ -564,7 +564,7 @@ grp:alt_shift_toggle` works in Hyprland because the option is passed to
 libxkbcommon and the toggle ends up in the keymap's own compat section, which
 `xkb_state_update_key` then acts on. This compositor cannot compile a compat
 section at runtime, so a `grp:` toggle has to be implemented in
-`src/user/linux/compositor/xkb`'s own state rather than read out of the keymap. Same
+`src/user/system/linux/compositor/xkb`'s own state rather than read out of the keymap. Same
 behaviour, different mechanism, and it is the reason a shipped keymap carries
 no `grp:` option: the keymaps are generated without one, and the toggles are
 code. **Not yet implemented** -- `hyprctl switchxkblayout` is the way to
@@ -573,7 +573,7 @@ switch today, and a `grp:` line is read and carried without effect.
 **Also not implemented, and not planned:** compose and dead keys. Hyprland
 has no compose support at all and needs none, because it forwards keycodes
 and produces no text; a dead key is an ordinary keycode and the client's own
-`xkb_compose_state` handles it. `src/user/linux/compositor/xkb::character` therefore answers
+`xkb_compose_state` handles it. `src/user/system/linux/compositor/xkb::character` therefore answers
 `None` for `dead_circumflex` rather than the spacing character it resembles,
 so a client that cannot compose types nothing rather than the wrong thing.
 
@@ -589,9 +589,9 @@ it.
 | L2 | `src/lib/drivers/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4, fuzzed, its evdev numbers L1's. Landed (493fd843, 0bfb1de4, and the switch to L1's numbers) | no | 2 |
 | L3 | `src/lib/proto/inputctl`: §3.2's messages and validation, and `queue`: report assembly, per-open queues, `SYN_DROPPED`, grab, clock conversion, state for `EVIOCGKEY`/`EVIOCGABS`. Host-tested, fuzzed | no | 3 |
 | L4 | `src/lib/drivers/input/virtio-input`: driver logic over `src/lib/drivers/block/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does. Landed | no | 3 |
-| L5 | `src/user/native/drivers/input/virtio-input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types. Landed | yes | 5 |
+| L5 | `src/user/system/native/drivers/input/virtio-input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types. Landed | yes | 5 |
 | L6 | devfs `/dev/input/eventN`: subdirectory, character nodes, per-open objects, the ioctl branch and §3.3's subset, `read` and `poll`; Linux's queue size, drop rule, grab and revoke answers, string and bitmap lengths, and `read`'s errors checked against `drivers/input/evdev.c`. Landed | yes | 5 |
-| L7 | `src/user/linux/compositor/evecho`; `xtask test-input` with QMP `input-send-event` and its negative control; the devices under `run --display`. Landed | no | 3 |
+| L7 | `src/user/system/linux/compositor/evecho`; `xtask test-input` with QMP `input-send-event` and its negative control; the devices under `run --display`. Landed | no | 3 |
 |  | **The input iteration** |  | **23** |
 
 **The event-loop prerequisites (§2) are iteration 2's, not these 23**, and the
@@ -660,7 +660,7 @@ wrong answer rather than a failing test:
   `evdev_handle_get_bits` switches on the type, and `EV_REP`, `EV_PWR` and
   `EV_FF_STATUS` are not in the switch. A consumer that asked for every type
   a device reports lost every keyboard that reports `EV_REP`, which QEMU's
-  does -- found by running `src/user/linux/compositor/evecho` against the host's own kernel
+  does -- found by running `src/user/system/linux/compositor/evecho` against the host's own kernel
   before Ferrix ever ran it.
 * **A directory cursor counts from `FIRST_CURSOR`, not from zero.** The two
   entries before it are `.` and `..`. Counting from zero listed nothing at
@@ -670,9 +670,9 @@ wrong answer rather than a failing test:
   `EVIOCGNAME` held the session across the copy. The text is now copied out
   of the session first.
 
-The compositor reads those nodes as of the same day: `src/user/linux/compositor/xkb` carries
+The compositor reads those nodes as of the same day: `src/user/system/linux/compositor/xkb` carries
 libxkbcommon's own keymap for the `us` layout from a committed probe,
-`hyprix` opens every node through `src/user/linux/compositor/evecho` and turns its events
+`hyprix` opens every node through `src/user/system/linux/compositor/evecho` and turns its events
 into `wl_keyboard` and `wl_pointer` ones, and `cargo xtask test-seat` types
 into a window on Ferrix from QEMU's far end and fires a Hyprland keybind.
 `docs/ROADMAP.md` stage 18 records it.
@@ -687,7 +687,7 @@ Linux does.
 **Decided by os-f6, 2026-09-16:**
 
 1. **One driver process per input device**, as blk has one per disk, rather
-   than one `src/user/native/drivers/input/virtio-input` serving every virtio-input function.
+   than one `src/user/system/native/drivers/input/virtio-input` serving every virtio-input function.
 2. **No kernel key autorepeat** (§3.1), a written deviation from Linux: the
    core makes no value-2 events. Compositors repeat keys themselves
    (`wl_keyboard.repeat_info`), and libinput ignores `EV_REP` events.
@@ -751,7 +751,7 @@ Linux does.
 
 The STM32MP157 DK boards have no input device QEMU's virtio could stand in
 for: their four USB-A sockets hang off a Microchip USB2514B hub on port 1 of
-the chip's EHCI controller. `src/user/native/drivers/usb/usbhid`, over `src/lib/drivers/usb/usb-host`, drives that
+the chip's EHCI controller. `src/user/system/native/drivers/usb/usbhid`, over `src/lib/drivers/usb/usb-host`, drives that
 controller, the hub, and every keyboard and mouse behind it, and serves each
 to the input core as §3.2's protocol says. It ran on an STM32MP157D-DK1 on
 2026-09-23 with a Logitech G502 at full speed and a keyboard at low speed.

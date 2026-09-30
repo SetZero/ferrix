@@ -20,7 +20,7 @@ use crate::{Error, Result};
 /// size its `monitor =` line asked for.
 const MODE_EXPECTED: [(&str, &str); 1] = [(
     "tiled on a 1920x1080 screen, which is the mode the configuration asked for",
-    "src/user/linux/compositor/render/tests/data/dwindle-two-clients-1920x1080.xrle",
+    "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-1920x1080.xrle",
 )];
 
 /// The configuration the mode boot is given. The card prefers 1024x768, as
@@ -41,7 +41,7 @@ const TRANSFORM_EXPECTED: [(u32, (&str, &str)); 2] = [
         (
             "tiled on a monitor turned clockwise onto its edge, the picture turned \
              counter-clockwise into the buffer",
-            "src/user/linux/compositor/render/tests/data/dwindle-two-clients-transform-1.xrle",
+            "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-transform-1.xrle",
         ),
     ),
     (
@@ -49,7 +49,7 @@ const TRANSFORM_EXPECTED: [(u32, (&str, &str)); 2] = [
         (
             "tiled on a monitor turned counter-clockwise onto its edge, the picture turned \
              clockwise into the buffer",
-            "src/user/linux/compositor/render/tests/data/dwindle-two-clients-transform-3.xrle",
+            "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients-transform-3.xrle",
         ),
     ),
 ];
@@ -74,18 +74,18 @@ exec-once = /bin/pattern gradient two --after one
 const MONITOR_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the checkerboard alone on the first monitor",
-        "src/user/linux/compositor/render/tests/data/two-monitors-left.xrle",
+        "src/user/system/linux/compositor/render/tests/data/two-monitors-left.xrle",
     ),
 ];
 
 /// What the second screen must show once the keybind has been pressed.
 const MONITOR_OTHERS: [(&str, &str); 1] = [(
     "the gradient alone on the second monitor",
-    "src/user/linux/compositor/render/tests/data/two-monitors-right.xrle",
+    "src/user/system/linux/compositor/render/tests/data/two-monitors-right.xrle",
 )];
 
 /// The keybind the two-monitor boot presses between its two pictures.
@@ -109,7 +109,7 @@ bind = SUPER, W, exec, /bin/hyprctl activewindow
 /// The picture a scaled monitor makes, which the sixth boot requires.
 const SCALED_EXPECTED: (&str, &str) = (
     "every logical pixel drawn as two on a monitor at scale 2",
-    "src/user/linux/compositor/render/tests/data/scaled-two-clients.xrle",
+    "src/user/system/linux/compositor/render/tests/data/scaled-two-clients.xrle",
 );
 
 /// The configuration the sixth boot is given: one monitor at scale 2, where
@@ -129,7 +129,7 @@ exec-once = /bin/pattern gradient two --after one
 /// so two cards in the guest.
 ///
 /// The keybind sends the focused window to the second monitor, and each
-/// screen is then required to be the picture `src/user/linux/compositor/render`'s own tests
+/// screen is then required to be the picture `src/user/system/linux/compositor/render`'s own tests
 /// bless for it: one window each, neither monitor drawing the other's.
 pub(super) fn test_monitors(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -352,7 +352,7 @@ pub(super) fn test_mode(arch: Arch, programs: &Programs, args: &Args) -> Result<
 /// The card's mode stays 1024x768, and QEMU's screendump reads the card: so
 /// what is required is the buffer Hyprland would scan out for the same line,
 /// the windows tiled on a monitor 768 wide and 1024 tall and the picture
-/// turned into the buffer, pixel for pixel as `src/user/linux/compositor/render` blesses
+/// turned into the buffer, pixel for pixel as `src/user/system/linux/compositor/render` blesses
 /// it. Both quarter turns, because each is the other upside down and a
 /// compositor that turned the wrong way would pass one of them by drawing
 /// the other; and `hyprctl monitors` from inside the guest has to say

@@ -1,6 +1,6 @@
 //! The dispatchers that are the compositor's rather than the tiling's.
 //!
-//! `src/user/linux/compositor/layout` answers everything that moves a window: it holds the
+//! `src/user/system/linux/compositor/layout` answers everything that moves a window: it holds the
 //! monitors, the workspaces and the tree, and `movefocus` means nothing
 //! without them. The rest of Hyprland's one dispatcher table reaches past
 //! the layout -- it starts a program, signals one, turns a screen off, moves

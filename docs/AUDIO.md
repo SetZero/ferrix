@@ -245,7 +245,7 @@ leave `/dev/snd`, and the card's index is not given out again this boot.
 
 ### 3.3 The driver, and what QEMU's device does
 
-**The driver** (`src/user/native/drivers/sound/virtio-snd`, logic in `src/lib/drivers/sound/virtio-snd` over
+**The driver** (`src/user/system/native/drivers/sound/virtio-snd`, logic in `src/lib/drivers/sound/virtio-snd` over
 `src/lib/drivers/block/virtio-blk`'s traits, as `src/lib/drivers/input/virtio-input` does) negotiates
 `VIRTIO_F_VERSION_1`, reads the configuration (jacks, streams, channel maps),
 asks `PCM_INFO` for every stream, and sends `HELLO`. On `READY` it prepares,
@@ -412,7 +412,7 @@ replacement will look there. No client in this iteration needs them.
   QMP `quit` and, if the header still says zero, reads the data from byte 44
   to the end.
 * **The program.** `tone`, a Linux program built as init the way
-  `src/user/linux/compositor/evecho` is, over a new `ferrix-linux-abi::sound`. It opens
+  `src/user/system/linux/compositor/evecho` is, over a new `ferrix-linux-abi::sound`. It opens
   `controlC0`, prints `CARD_INFO`'s driver and name, opens `pcmC0D0p`, and
   refines to version 1's configuration exactly as alsa-lib would, including
   one `set_*_near` round of `EINVAL`s. It prints `tone: ready`, then writes
@@ -452,7 +452,7 @@ it.
 | L2 | `src/lib/drivers/virtio::snd`: configuration, control requests and responses, the transfer header and status, hostile-device tests, checked against QEMU 9.2.4, fuzzed | no | 2 |
 | L3 | `src/lib/proto/sndctl`: §3.2's messages and validation, and `pcm`: the state machine, the refine with open ends and the integer flag, pointers and `boundary` at both widths, submission, start, underrun and drain, `SYNC_PTR`'s flags, `poll`'s answer. Host-tested against a table of alsa-lib's `set_*_near` sequences, fuzzed | no | 5 |
 | L4 | `src/lib/drivers/sound/virtio-snd`: driver logic over `src/lib/drivers/block/virtio-blk`'s traits (bring-up, `PCM_INFO` into `HELLO`, prepare, one chain per `SUBMIT`, completions into `ELAPSED`, `HALT`), tested against a simulated device with QEMU's five behaviours (§3.3) | no | 3 |
-| L5 | `src/user/native/drivers/sound/virtio-snd`, devmgr's table entry and `start_sound`, `SOUND_CONTROL_CREATE`, the core's per-card task and buffer VMOs; exit: the boot line names the card, its published stream and what it left out | yes | 4 |
+| L5 | `src/user/system/native/drivers/sound/virtio-snd`, devmgr's table entry and `start_sound`, `SOUND_CONTROL_CREATE`, the core's per-card task and buffer VMOs; exit: the boot line names the card, its published stream and what it left out | yes | 4 |
 | L6 | devfs `/dev/snd/controlC0` and `pcmC0D0p`: per-open objects, the ioctl branch and §3.4's subset, `WRITEI_FRAMES`, `poll`, `EBUSY` for a second opener, `DISCONNECTED`; `/sys/class/sound` | yes | 5 |
 | L7 | `tone` and `ferrix-linux-abi::sound`'s use in it; `xtask test-audio` with the `wav` backend and its negative control; `run --audio` | no | 3 |
 |  | **The audio iteration** |  | **24** |
@@ -471,7 +471,7 @@ a daemon, a session manager and a protocol server. The customer
 re-baselines once U2's first attempt has sized it.
 
 **U2, sized 2026-09-27**, before any of its code, at the customer's order
-(U1, then U2). It lives in `src/user/linux/media/`, beside the `pcm` and
+(U1, then U2). It lives in `src/user/system/linux/media/`, beside the `pcm` and
 `resample` crates Bad Apple!! plays through, which it uses rather than
 repeats. Each slice lands on its own:
 
@@ -515,7 +515,7 @@ U3's SDL and games then find what is missing by running.
    Steam's runtime and every current distribution expect, and it is a large
    C port with a session manager (WirePlumber) and optional D-Bus. A Rust
    server needs to speak only the PulseAudio native protocol, which SDL,
-   Chromium and Steam all speak, and none of the rest. `src/user/linux/compositor/README.md`'s
+   Chromium and Steam all speak, and none of the rest. `src/user/system/linux/compositor/README.md`'s
    no-C rule is the compositor's, not the clients' (`docs/CHROME.md` §3), so
    either is allowed. Not needed until U2.
 
@@ -671,7 +671,7 @@ L5, L6 and L7 are done (2026-09-26), in one landing since none is
 testable without the others. They met the audio iteration's exit on x86-64
 and AArch64:
 
-* **L5.** `src/user/native/drivers/sound/virtio-snd` is the driver process. devmgr starts it for PCI
+* **L5.** `src/user/system/native/drivers/sound/virtio-snd` is the driver process. devmgr starts it for PCI
   0x1059 (`Kind::Sound`), and `sound_control_create` (native call 0x1050)
   gives it its channel. `src/kernel/src/interfaces/audio` is the core: a task per card
   that judges HELLO, allocates the stream's buffer as a VMO (four pages
@@ -688,7 +688,7 @@ and AArch64:
   in sequence order whether a program's write or a completion made them.
   `/sys/class/sound` is not published: no client of this iteration reads
   it.
-* **L7.** `src/user/linux/compositor/tone` and `cargo xtask test-audio`. A second of the
+* **L7.** `src/user/system/linux/compositor/tone` and `cargo xtask test-audio`. A second of the
   counter, written through the ALSA ioctls in 700-frame blocks, was found
   in QEMU's WAV file frame for frame, on x86-64 and on AArch64. It took
   1.1 s of guest time, the device's own pace. The negative control failed
@@ -742,7 +742,7 @@ Three things are still open:
   is unchanged; the customer chose U1 first, then U2 (2026-09-27).
 
 U1 is done (2026-09-27): alsa-lib 1.2.16.1 and alsa-utils 1.2.16's `aplay`
-and `speaker-test` are ferrousli ports (`src/user/linux/ferrousli/tools/ports/
+and `speaker-test` are ferrousli ports (`src/user/system/linux/ferrousli/tools/ports/
 alsa-lib`, `alsa-utils`), static, built by `cargo xtask ports` on x86-64.
 Both linked against ferrousli with nothing undefined on the first try.
 alsa-lib is static, so every PCM and control plugin is built in and nothing
@@ -755,7 +755,7 @@ counter, which goes through alsa-lib's configuration and `plug` to
 on its first run. With one frame of the WAV file changed, the check failed
 at exactly that frame. Shared libraries wait for a client that wants them.
 
-U2a is done (2026-09-27): `src/user/linux/media/pulse-server` is the protocol's
+U2a is done (2026-09-27): `src/user/system/linux/media/pulse-server` is the protocol's
 server side as a state machine with no I/O, on `pulseaudio` at 3c0325f.
 Its 12 host tests drive it as libpulse does, with the crate's own encoders,
 through sequences `patrace` recorded between mpv or ffmpeg and PipeWire's
@@ -768,7 +768,7 @@ are what it keeps time by. The buffer attributes a client leaves to the
 server are PulseAudio's rules with a `tlength` of 250 ms rather than 2 s,
 since the card has 320 ms of its own.
 
-U2b is done (2026-09-27): `src/user/linux/media/pulsed` is the daemon, and
+U2b is done (2026-09-27): `src/user/system/linux/media/pulsed` is the daemon, and
 `pa-tone` a client that sends tone's counter over the protocol as
 libpulse's simple API would. `pulsed` waits for its sockets at most a
 quarter of a period, then writes the card a period at a time for as long
@@ -844,7 +844,7 @@ ALSA at start, found the card held by `pulsed`, and played nothing.
 `libpulsecommon` imports it for the stack its log may print, and ferrousli
 had `backtrace` and `backtrace_symbols_fd` and not it. It was the only
 symbol the whole of libpulse's closure needed that ferrousli lacked.
-ferrousli has it now (`src/user/linux/ferrousli/src/execinfo.rs`). With it
+ferrousli has it now (`src/user/system/linux/ferrousli/src/execinfo.rs`). With it
 libpulse loaded, authenticated, asked for the server's information, and
 waited for ever: its threaded main loop's lock is a recursive mutex that
 inherits priority, and Ferrix's futex has no `FUTEX_LOCK_PI`, so the first
@@ -852,7 +852,7 @@ contended lock waited as a deadlock would. glibc refuses such a mutex in
 `pthread_mutex_init` with `ENOTSUP` where the kernel has no PI futexes,
 and libpulse then asks for a plain one; ferrousli had accepted it. It
 refuses it as glibc does now, having asked the kernel once
-(`src/user/linux/ferrousli/src/mutex.rs`). A client of libpulse's, a probe
+(`src/user/system/linux/ferrousli/src/mutex.rs`). A client of libpulse's, a probe
 doing Chrome's sequence step by step, found where it stopped. And
 `test-chrome-audio` runs Chrome on ferrousli unless `--interpreter glibc`
 asks for the volume's own: 1.52 s of 439.9 Hz on its first pass there.

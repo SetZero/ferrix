@@ -7,7 +7,7 @@
 //! the shape `crate::Canvas` cuts, and blending the way it blends; the blur
 //! is Hyprland's own four passes over a pyramid of textures rather than this
 //! crate's port of them to floats. Nothing here draws a pixel. It writes
-//! words, `src/user/linux/compositor/virgl`'s, and a [`Device`] runs them: the render node
+//! words, `src/user/system/linux/compositor/virgl`'s, and a [`Device`] runs them: the render node
 //! in a guest, virglrenderer's test server on a host, which is where every
 //! line of this is tested against the software frame.
 //!

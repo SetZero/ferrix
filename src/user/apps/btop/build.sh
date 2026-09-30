@@ -23,8 +23,8 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # ferrousli's port toolkit: pinned downloads, the release library, and the
 # compilers that build against it. It reads `--arch <name>` first.
 set -- --arch "$1"
-# shellcheck source=../../linux/ferrousli/tools/ports/common.sh
-. "$here/../../linux/ferrousli/tools/ports/common.sh"
+# shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
+. "$here/../../system/linux/ferrousli/tools/ports/common.sh"
 # x86-64 only so far: another architecture needs libcxx built for it first.
 [ "$arch" = x86_64 ] || fail "btop is built for x86_64 only so far, not for $arch"
 

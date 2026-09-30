@@ -20,7 +20,7 @@ the owner's own word, which the survey shows is not needed.
 When the Pixel 7 boots Ferrix natively (`fastboot boot` from example), nothing
 reaches the PC until the run is over. Android is gone, Ferrix has no USB, and
 so the phone is off USB for the whole run. Ferrix's console and the stat
-service's samples (`src/user/linux/statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
+service's samples (`src/user/system/linux/statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
 which Android reads back after the watchdog reset. `tools/vendor/google/pixel7/monitor` then
 loads the record and fills its graphs after the fact. The owner wants them
 live.
@@ -104,7 +104,7 @@ What the tree cannot tell, and phase 1 has to find:
 
 * **The device model.** The kernel publishes a device tree node for a binding
   it knows (`src/kernel/src/device.rs`: `BoardBinding`, `BoardDevice`,
-  `DmaShape`). `src/user/native/devmgr`'s `TREE_DRIVERS` table maps the binding to a
+  `DmaShape`). `src/user/system/native/devmgr`'s `TREE_DRIVERS` table maps the binding to a
   driver, which `devmgr` starts in a job of its own with the node's
   apertures and interrupt (`docs/DEVMGR.md` §3). Bindings are numbered in
   `src/lib/proto/native-abi/src/types.rs`: `TREE_STM32_HDMI = 1`, `_USBH = 2`,
@@ -112,7 +112,7 @@ What the tree cannot tell, and phase 1 has to find:
 * **The precedent to copy.** The DK1's USB host:
   * `src/kernel/src/platform/st/stm32mp1/usb.rs` turns on clocks, resets, regulators and the
     PHY's PLL, with values read back from U-Boot, and publishes the node.
-  * `src/user/native/drivers/usb/usbhid` drives the EHCI controller.
+  * `src/user/system/native/drivers/usb/usbhid` drives the EHCI controller.
   * `src/lib/drivers/usb/usb-host` is the host-testable logic, with a register model under
     `src/tests/model.rs`.
   * `docs/INPUT.md` §7 is its design.
@@ -128,7 +128,7 @@ What the tree cannot tell, and phase 1 has to find:
 * **The console.** `src/kernel/src/arch/aarch64/console.rs` has three backends:
   PL011, 16550 over MMIO, and the phone's `ramoops` zone. `ferrix-statd`
   writes its `FERRIX-STAT` lines to its standard output, which as pid 1 is
-  the console. `src/user/linux/statd/README.md` has the format. How a ring-3 USB driver
+  the console. `src/user/system/linux/statd/README.md` has the format. How a ring-3 USB driver
   gets the console's bytes is a design decision still to make (§5, phase 4).
 * **The loader.** `src/boot/vendor/google/pixel7`, which runs with the MMU off, so all
   memory is Device memory: aligned, word-sized, volatile accesses only. It
@@ -161,7 +161,7 @@ Each phase ends with something run on the phone and written down here.
    TRB rings, event decoding, and endpoint 0's control state machine, tested
    against a register model as `src/lib/drivers/usb/usb-host` is. Device descriptors and the
    CDC-ACM class go in `src/lib/drivers/usb/usb-device`. The ring-3 program, say
-   `src/user/native/drivers/usb/usbdev`, goes in `devmgr`'s table. Run at high speed (USB 2.0) first:
+   `src/user/system/native/drivers/usb/usbdev`, goes in `devmgr`'s table. Run at high speed (USB 2.0) first:
    `DCFG` can hold the core there, which keeps the combo SuperSpeed PHY out of
    the first bring-up. The endpoints are endpoint 0, one bulk IN and one bulk
    OUT for ACM data, and an interrupt IN for ACM notifications.
@@ -292,7 +292,7 @@ What each part is, now on `main`:
   with a write-back cache in front of its memory, which caught one real
   missing invalidate. It refuses to write unless the controller is as
   ABL leaves it, and replaces ABL's event buffer before it runs.
-* `src/user/native/drivers/usb/usbdev`: the ring-3 driver, devmgr's `Gadget` kind.
+* `src/user/system/native/drivers/usb/usbdev`: the ring-3 driver, devmgr's `Gadget` kind.
   It asks for the log only while a host holds the port open (DTR), and
   asks again only once the last piece has gone, so a slow or absent host
   leaves the log in the kernel's ring. What the host sends is dropped.
@@ -370,7 +370,7 @@ and every worktree, branch and target directory of its own removed.
 * **Where the parts are:** `src/boot/vendor/google/pixel7/src/usb.rs` (survey),
   `src/kernel/src/platform/google/gs201/usb.rs` (binding), `src/lib/drivers/usb/dwc3` and
   `src/lib/drivers/usb/usb-device` (host-tested, `cargo test -p ferrix-dwc3
-  -p ferrix-usb-device`), `src/user/native/drivers/usb/usbdev` (driver),
+  -p ferrix-usb-device`), `src/user/system/native/drivers/usb/usbdev` (driver),
   `src/kernel/src/console/log.rs` and `src/kernel/src/interfaces/logctl` (the log and its
   reader, in the certified item: ask the certification session before
   changing either), `tools/vendor/google/pixel7/monitor/src/usb.rs` (watcher).

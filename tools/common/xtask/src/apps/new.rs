@@ -166,7 +166,7 @@ bench = false
 
 # The runtime, on the kernel's targets only: the host builds the lib alone.
 [target.'cfg(target_os = "none")'.dependencies]
-ferrix-rt = { path = "../../native/rt" }
+ferrix-rt = { path = "../../system/native/rt" }
 
 [profile.dev]
 panic = "abort"

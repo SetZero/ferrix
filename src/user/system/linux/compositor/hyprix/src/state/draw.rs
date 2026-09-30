@@ -171,7 +171,7 @@ impl Compositor<'_> {
         if self.tally.drawn == 1 {
             // The screens are up and the first frame is on them. This is
             // what a watcher waits for, in the shape
-            // `src/user/linux/compositor/blank`'s marker has.
+            // `src/user/system/linux/compositor/blank`'s marker has.
             (self.report)(&format!(
                 "hyprix: {} {display}",
                 described(&self.screens),

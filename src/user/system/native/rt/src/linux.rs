@@ -5,7 +5,7 @@
 //! and a namespace (`Process::with_pid` in `src/kernel/src/syscall/process.rs`),
 //! and `dispatch` picks the ABI by the number's range and by nothing else --
 //! so a native program that wants a socket may simply ask for one. This
-//! module is that: the handful of calls `src/user/native/drivers/console/vport` needs to put a virtio
+//! module is that: the handful of calls `src/user/system/native/drivers/console/vport` needs to put a virtio
 //! port on a Unix socket, and no more.
 //!
 //! `docs/CLIPBOARD.md` §5 is why this exists. It is deliberately not a libc:

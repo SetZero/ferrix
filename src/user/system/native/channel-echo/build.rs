@@ -1,4 +1,4 @@
-//! Link with the runtime's layout. See `src/user/native/rt/build.rs` for why the path
+//! Link with the runtime's layout. See `src/user/system/native/rt/build.rs` for why the path
 //! arrives this way.
 
 // A build script talks to cargo over stdout; that is the whole interface.

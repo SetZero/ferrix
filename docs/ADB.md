@@ -82,12 +82,12 @@ check each value against those files before relying on it. The host's
   pseudo-terminals and job control (`test-pty`, `test-jobs`),
   `fork`/`execve`, and zinc as the shell. `/proc` is what `ps` and the
   monitor's script read.
-* **A place for the program:** `src/user/linux/`, beside `src/user/linux/statd`, built
+* **A place for the program:** `src/user/system/linux/`, beside `src/user/system/linux/statd`, built
   for the Linux personality and put in the initramfs the same way.
 * **The USB device stack:** `src/lib/drivers/usb/dwc3`, `src/lib/drivers/usb/usb-device`
-  and `src/user/native/drivers/usb/usbdev` present a CDC-ACM port today (§8 of the USB
+  and `src/user/system/native/drivers/usb/usbdev` present a CDC-ACM port today (§8 of the USB
   handover).
-* **The pattern for the USB half:** `src/user/native/drivers/console/vport` moves a device's
+* **The pattern for the USB half:** `src/user/system/native/drivers/console/vport` moves a device's
   bytes to and from a Unix socket, and a Linux program on the other side
   speaks the protocol (`docs/CLIPBOARD.md` §6). adb's USB transport is the
   same shape: `usbdev` moves the adb interface's bulk transfers to a socket,
@@ -97,7 +97,7 @@ check each value against those files before relying on it. The host's
 
 Each step lands on its own, gated, and says where it stands here.
 
-1. **adbd over TCP** (`src/user/linux/adbd`, a Linux program). The message layer
+1. **adbd over TCP** (`src/user/system/linux/adbd`, a Linux program). The message layer
    and the stream table go in a host-tested library, as the USB pieces are,
    tested against captured `adb` exchanges. Then `CNXN` without auth,
    `shell:` on a pty, `reboot:`, `sync:` push and pull, and `tcp:`. Started
@@ -160,7 +160,7 @@ secure-firmware call plus a persistent write Ferrix must never make:
 * `src/lib/proto/adb` (`ferrix-adb`): the 24-byte messages, the banner, and the
   first sync protocol's requests and replies, with tests on the host. The
   constants match `protocol.txt`, and the host's `adb` 37 is the proof.
-* `src/user/linux/adbd`: a static musl program, built as `statd` is. `shell:` runs
+* `src/user/system/linux/adbd`: a static musl program, built as `statd` is. `shell:` runs
   a command under `/bin/sh -c`, or an interactive shell on a pty. `sync:`
   does `STAT`, `LIST`, `SEND` and `RECV`. `reboot:` restarts the machine,
   or ends adbd under `--test`. `tcp:PORT` is a stream to a port inside. No
@@ -187,7 +187,7 @@ secure-firmware call plus a persistent write Ferrix must never make:
   adbd behind it the host lists it offline. `src/lib/drivers/usb/dwc3` has room
   for six endpoints and a nine-page DMA area.
 * `usbdev` bridges the two endpoints to `/tmp/adbd-usb`
-  (`src/user/native/drivers/usb/usbdev/src/adb.rs`), `vport`'s shape. It sends each
+  (`src/user/system/native/drivers/usb/usbdev/src/adb.rs`), `vport`'s shape. It sends each
   message's header and payload as transfers of their own, and adbd over
   USB offers payloads of at most 4096 bytes, one endpoint ring.
 * `adbd --usb` serves that socket; run as pid 1

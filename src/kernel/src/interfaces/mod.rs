@@ -1,7 +1,7 @@
 //! The kernel's interfaces to ring-3 drivers: one core per kind of device.
 //!
 //! Nothing here drives hardware. A driver is a process under
-//! `src/user/native/drivers/`; what lives here is the kernel's end of the
+//! `src/user/system/native/drivers/`; what lives here is the kernel's end of the
 //! control channel or ring that driver speaks, checked word for word against
 //! its protocol crate in `src/lib/proto/`, and what the kernel publishes from
 //! it to programs: a disk, a network interface, a card under `/dev/dri`, an

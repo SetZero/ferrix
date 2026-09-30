@@ -57,7 +57,7 @@ In dependency order, with sizes in story points:
 | 1 | **virtio-gpu 3D in the ring-3 driver.** `VIRTIO_GPU_F_VIRGL` and `CONTEXT_INIT` negotiated, `GET_CAPSET_INFO`/`GET_CAPSET`, `CTX_CREATE`/`CTX_DESTROY`/`CTX_ATTACH_RESOURCE`, `RESOURCE_CREATE_3D`, `SUBMIT_3D`, `TRANSFER_TO_HOST_3D`/`FROM_HOST_3D`, and fences. `src/lib/drivers/virtio::gpu` already has the 2D commands and their fuzz target, and this extends both. **Mostly done -- §3.2.** | 13 |
 | 2 | **A render node and the `virtgpu` ioctls.** *Begun: `src/lib/proto/renderctl`, `kernel::render`, the ABI table and the node itself are written, a program opens it, and `RESOURCE_CREATE`/`RESOURCE_INFO` make a real resource through the open's handle table -- §3.4. `MAP`, the calls that need a context, and scanout are what is left.* `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `src/lib/proto/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
 | 5 | **The host half, in xtask.** `-device virtio-gpu-gl` and a GL display where QEMU has them, asked for as `window.rs` asks for a display today, with the 2D device otherwise. The gate host's QEMU rebuilt with OpenGL and virglrenderer, and `egl-headless` for judged boots. GPU output is not byte-exact across drivers, so a judged GPU boot compares within a stated tolerance, or against a software GL pinned on the gate host; the software renderer's images stay byte-exact. **Judging one needs a way to read its pixels that is not `screendump` -- see §3.1.** | 5 |
-| 3b | **A GPU renderer for the compositor, in Rust.** A `src/user/linux/compositor/virgl` crate that encodes virgl's command stream -- object creation, state, `draw_vbo`, resource transfers -- with shaders as the TGSI text virgl takes. Hyprland's effects are about eight shaders: the two blur kernels, `blurprepare`, `blurFinish`, the rounded texture, the border gradient, the shadow. `src/user/linux/compositor/render` gains a renderer trait with the software renderer as the fallback the roadmap already requires -- the compositor is never GPU-only. Clients stay `wl_shm`; their damaged rectangles are uploaded as textures. | 21 |
+| 3b | **A GPU renderer for the compositor, in Rust.** A `src/user/system/linux/compositor/virgl` crate that encodes virgl's command stream -- object creation, state, `draw_vbo`, resource transfers -- with shaders as the TGSI text virgl takes. Hyprland's effects are about eight shaders: the two blur kernels, `blurprepare`, `blurFinish`, the rounded texture, the border gradient, the shadow. `src/user/system/linux/compositor/render` gains a renderer trait with the software renderer as the fallback the roadmap already requires -- the compositor is never GPU-only. Clients stay `wl_shm`; their damaged rectangles are uploaded as textures. | 21 |
 | 4 | **`zwp_linux_dmabuf` and a GBM-shaped allocator.** Only once clients render on the GPU themselves. Not needed for 3b, and deferred with 3a. | 8 |
 
 **52 points to a GPU-composited desktop** (1, 2, 5, 3b), in that order: the
@@ -105,7 +105,7 @@ real constraint on the plan.
 
   So step 5 owes a second way to read a frame, and the cheapest one is
   probably from *inside* the guest -- the compositor already knows how to
-  write its own frame out (`src/user/linux/compositor/shot`), and a picture judged there
+  write its own frame out (`src/user/system/linux/compositor/shot`), and a picture judged there
   needs no host console at all. That also sidesteps the tolerance question
   for the 2D path, where the guest's bytes are still the renderer's own.
   Whether a newer QEMU grew a GL screendump is worth checking before
@@ -152,7 +152,7 @@ describes:
 `kernel::render` names no virtio type. What turns `MAKE_CTX` into
 `CTX_CREATE`, `MAKE_OBJ` into `RESOURCE_CREATE_3D` with
 `CTX_ATTACH_RESOURCE` behind it, and `DROP_OBJ` into `RESOURCE_UNREF`, is a
-hundred lines in `src/user/native/drivers/display/virtio-gpu`: the adapter a second GPU replaces.
+hundred lines in `src/user/system/native/drivers/display/virtio-gpu`: the adapter a second GPU replaces.
 
 **READY carries the work VMO**, as `Ready::HANDLE_RIGHTS` always said it
 would: a megabyte the core owns, handed over `READ | TRANSFER` with the
@@ -225,7 +225,7 @@ the fence and wait model, devmgr bring-up and the `START` message, the
 ring-3 placement, and the gates. What it adds is one more implementation of
 `src/lib/proto/renderctl` and one more driver-specific ioctl range.
 
-**What it does not inherit** is the command encoder: `src/user/linux/compositor/virgl`
+**What it does not inherit** is the command encoder: `src/user/system/linux/compositor/virgl`
 (step 3b) speaks virgl, and an NVIDIA path needs its own, or Mesa (§3a).
 That is the same boundary Linux draws and it is drawn here on purpose.
 
@@ -326,7 +326,7 @@ without risk.
 The pieces, each landable on its own:
 
 1. **`CONTEXT_INIT` and `GET_CAPS` through the node** (step 2 tail, ~3 pts).
-   `context_init` in `src/user/native/drivers/display/virtio-gpu` maps onto `MAKE_CTX` with a capset; the node
+   `context_init` in `src/user/system/native/drivers/display/virtio-gpu` maps onto `MAKE_CTX` with a capset; the node
    answers `VIRTGPU_GETPARAM` from the HELLO already. `GET_CAPS` needs the
    core to carry the capset *bytes*: add a `Capset` message to
    `src/lib/proto/renderctl` (core asks, driver runs `GetCapset`, bytes ride a work
@@ -345,7 +345,7 @@ The pieces, each landable on its own:
    inode needs its own `mapping()` returning the object's VMO). Testable:
    a program creates a resource, maps it, writes a byte, reads it back.
 
-3. **`src/user/linux/compositor/virgl`, the command encoder** (step 3b core, ~8 pts). A new
+3. **`src/user/system/linux/compositor/virgl`, the command encoder** (step 3b core, ~8 pts). A new
    crate, pure Rust, encoding virgl's command stream into a byte buffer the
    compositor hands to `EXECBUFFER`. The header is
    `VIRGL_CMD0(cmd,obj,len) = cmd | obj<<8 | len<<16`, len in dwords
@@ -379,7 +379,7 @@ The pieces, each landable on its own:
    not offer the `FENCES` feature yet; offer it and wire `on_interrupt`'s
    fence to `WAITED`.
 
-5. **A renderer trait in `src/user/linux/compositor/render`** (step 3b integration, ~5 pts).
+5. **A renderer trait in `src/user/system/linux/compositor/render`** (step 3b integration, ~5 pts).
    `render_onto` and the `Canvas` operations become a trait with two impls:
    the software one that exists, and a `virgl` one that emits commands. The
    fallback is mandatory (roadmap) — the compositor is never GPU-only, and
@@ -396,7 +396,7 @@ The pieces, each landable on its own:
 
 7. **The host half** (step 5, ~5 pts, mostly done). `--gl` boots; what is
    left is judging a GPU frame — `screendump` cannot read a GL console
-   (§3.1), so judge from inside the guest with `src/user/linux/compositor/shot`, or check
+   (§3.1), so judge from inside the guest with `src/user/system/linux/compositor/shot`, or check
    whether a newer QEMU grew a GL screendump.
 
 Order 1→2→3→4→6→5, with 5's renderer trait landing beside 3. Each of 1, 2,
@@ -416,7 +416,7 @@ gigabytes. This is now **AV1 in IVF, decoded by rav1d in the guest**:
   `ffmpeg` for 8-bit 4:2:0 AV1 in an IVF container (`libaom-av1`, a bounded
   CRF and fast encoding). The image carries the resulting `.ivf`, which is
   megabytes rather than hundreds of megabytes of raw frames.
-* **Guest side** (`src/user/linux/compositor/pattern`): a small IVF demuxer feeds temporal
+* **Guest side** (`src/user/system/linux/compositor/pattern`): a small IVF demuxer feeds temporal
   units to rav1d, converts the decoder's 8-bit I420 pictures to XRGB8888,
   and retains compressed packets plus one decoded frame. It validates the
   stream before startup, reopens the decoder at a loop boundary, and damages
@@ -476,7 +476,7 @@ this path needs to know, so `WAIT` answers at once and says why. QEMU 9.2
 polls fences on a 10 ms timer, so a frame that waited on one would lose more
 than it gained; a frame is paced by the display's flip, not by a fence.
 
-**`src/user/linux/compositor/virgl` writes the streams**, host-tested word for word against
+**`src/user/system/linux/compositor/virgl` writes the streams**, host-tested word for word against
 `virgl_protocol.h`, and its shaders are TGSI text. The text is what no
 word-for-word test can judge, and a guest boot is a minute and a black
 screen per mistake, so the crate also speaks to `virgl_test_server` --
@@ -490,7 +490,7 @@ a GL console (§3.1).
 
 **The shaders are GLSL, and Mesa compiles them -- on the gate host**
 (pieces 3 and 5, 2026-09-19). virgl carries a shader as TGSI assembly, and
-there is no Mesa on Ferrix to make it. So `src/user/linux/compositor/virgl/shaders/` is
+there is no Mesa on Ferrix to make it. So `src/user/system/linux/compositor/virgl/shaders/` is
 GLSL, `tools/regenerate.sh` compiles each with Mesa's own virgl driver run
 against the test server (`GALLIUM_DRIVER=virpipe`, `VIRGL_DEBUG=tgsi`), and
 the TGSI text that driver sends is what is committed under `src/tgsi/`: the
@@ -500,7 +500,7 @@ not guess: a linker packs two varyings to suit whichever of them a fragment
 shader reads, so the texture coordinate and the pixel's place travel in one
 `vec4`, packed by hand. Eight fragment shaders: a solid colour and a surface,
 each inside a rounded rectangle cut by the superellipse the software
-renderer cuts; a gradient read from the ramp `src/user/linux/compositor/render` builds; the
+renderer cuts; a gradient read from the ramp `src/user/system/linux/compositor/render` builds; the
 shadow's falloff; and Hyprland's four blur passes.
 
 **The frame is drawn through a trait, `compositor_render::Painter`**, which
@@ -598,7 +598,7 @@ scanout honour it, while what the renderer draws is unaffected by it -- so
 setting it turned the screen and the readback upside down together. The
 guest's own screenshot caught the readback; nothing in the gate could have
 caught the screen, because a GL console cannot be dumped. What caught it was
-looking: `src/user/linux/compositor/hyprix/probe/vncshot.py` grabs a frame from the VNC
+looking: `src/user/system/linux/compositor/hyprix/probe/vncshot.py` grabs a frame from the VNC
 server beside `egl-headless`, which is the screen as a person sees it.
 
 **What it is worth**, 1920x1080 under KVM on the gate host, behind a blurred
@@ -674,7 +674,7 @@ The customer called the desktop's performance abysmal. The desktop they
 watch is `cargo xtask remote-desktop` with `run-compositor --clipboard`: a
 served screen, and no `--gl` -- so every frame above was the software
 renderer's, on a GPU that was there all along. Measured as they see it,
-with `src/user/linux/compositor/hyprix/probe/vncbench.py`: a viewer that keeps one update
+with `src/user/system/linux/compositor/hyprix/probe/vncbench.py`: a viewer that keeps one update
 request outstanding, as TigerVNC does, while it moves the pointer in a
 circle sixty times a second, and reports what arrived. KVM, four
 processors, 1920x1080, the configuration `run-compositor` writes (a
@@ -724,7 +724,7 @@ What is left, in the order a person feels it:
 
 The first item §3.9 left. A screen whose card has a cursor plane shows the
 pointer on it, and its frames neither draw the pointer nor count its moves as
-damage (`src/user/linux/compositor/hyprix/src/plane.rs`). Top to bottom:
+damage (`src/user/system/linux/compositor/hyprix/src/plane.rs`). Top to bottom:
 
 * **`DRM_IOCTL_MODE_CURSOR` and `CURSOR2`** on `card<N>`, as Linux's
   `drm_mode_cursor_universal` answers them, and `DRM_CAP_CURSOR_WIDTH` and
@@ -802,7 +802,7 @@ fire: with the first page's address shifted by four bytes, virglrenderer
 reports an illegal command buffer and the render node's probe draws black
 where it draws red.
 
-**A request's order is kept across the two conversations.** `src/user/native/drivers/display/virtio-gpu`
+**A request's order is kept across the two conversations.** `src/user/system/native/drivers/display/virtio-gpu`
 reads the render core's channel into a backlog and puts it on the device in
 order, uploads and streams at once -- one slot is always left for the
 display -- and anything else (a context, an object, a capability set) only
@@ -819,7 +819,7 @@ send their request and return; the reply is taken by the renderer's task,
 which gives the stream's slot back, and `VIRTGPU_WAIT` -- which answered at
 once, since nothing was ever outstanding -- now waits until everything its
 open sent before it has been answered. A program writes a backing again only
-after a wait, which is Linux's contract; `src/user/linux/compositor/drm`'s render device
+after a wait, which is Linux's contract; `src/user/system/linux/compositor/drm`'s render device
 keeps it, and waits only when an upload from that texture may still be on
 its way. A transfer *from* the device still waits for its bytes, since its
 caller asked in order to read them, and is ordered behind the object's
@@ -874,7 +874,7 @@ Mesa's virgl driver built on ferrousli would give *every client* OpenGL ES
 as well as the compositor. It is a large C and C++ port -- libdrm, a C++
 standard library, EGL and GBM -- it loads its drivers with `dlopen`, which
 waits on the dynamic linking stage, and it is the C device stack
-`src/user/linux/compositor/README.md` says the compositor never takes. 40 points or more,
+`src/user/system/linux/compositor/README.md` says the compositor never takes. 40 points or more,
 most of it unknown. It stays the way clients get GL, later, beside step 4;
 the compositor does not wait for it.
 
@@ -1016,7 +1016,7 @@ mesa-demos' meson, which requires desktop GL. It needs `libwayland-client`,
 | # | what | points |
 |---|---|---|
 | V1 | **Blob resources and Venus in `src/lib/drivers/virtio::gpu`**: `RESOURCE_CREATE_BLOB`, `RESOURCE_MAP_BLOB`/`UNMAP_BLOB`, a context's capset in `CTX_CREATE`, a fence's ring index, the PCI shared-memory capability. Host-tested and fuzzed as the rest | 5 |
-| V2 | **`src/user/native/drivers/display/virtio-gpu`**: negotiate `RESOURCE_BLOB` and `CONTEXT_INIT`, map the `hostmem` BAR, carry the Venus capset, and complete fences per ring. `src/lib/proto/renderctl` gains blob objects and ring fences | 8 |
+| V2 | **`src/user/system/native/drivers/display/virtio-gpu`**: negotiate `RESOURCE_BLOB` and `CONTEXT_INIT`, map the `hostmem` BAR, carry the Venus capset, and complete fences per ring. `src/lib/proto/renderctl` gains blob objects and ring fences | 8 |
 | V3 | **The render node**: the ioctls and parameters above, a blob's host pages mapped into the program, fence descriptors that `poll`, and the `/sys` entries libdrm reads | 8 |
 | V4 | **The ports**: libdrm, Mesa's Venus driver as a static archive, the static loader, libdecor and vkgears, against ferrousli, with vkgears' shaders compiled to SPIR-V on the host | 13 |
 | V5 | **`cargo xtask test-vkgears`**: a `venus=on,blob=on,hostmem=` boot on the Linux host, judged from inside the guest: the device vkgears names is the host's GPU through Venus, frames are counted, and `/bin/shot` finds gears in the frame | 5 |
@@ -1062,7 +1062,7 @@ over 3,000 a second. Each step, and what differed from the plan:
   `drm_virtgpu_resource_create_blob` eight bytes longer than linux-libc-dev
   7.0's, so its ioctl number differs. Linux's `drm_ioctl` matches a driver's
   call by number and takes any size; the node does the same for this one.
-* **V4**, the port: see `src/user/linux/ferrousli/tools/ports/vkgears/build.sh` and its
+* **V4**, the port: see `src/user/system/linux/ferrousli/tools/ports/vkgears/build.sh` and its
   four patches. The driver is linked into the program rather than loaded,
   as one relocatable object with Mesa's hidden symbols made local -- Mesa
   builds its own C11 threads, which would collide with ferrousli's -- and
@@ -1102,13 +1102,13 @@ project's reverse-engineered register database, which Mesa carries under the
 MIT licence in `src/etnaviv/hw/`. Linux's etnaviv driver is GPL and is read,
 never copied, the way glibc is for ferrousli. A shader is Vivante machine
 code, and the gears need only a fixed few, so they are compiled on the host
-by Mesa's etnaviv compiler and checked in, as `src/user/linux/compositor/virgl/shaders/`
+by Mesa's etnaviv compiler and checked in, as `src/user/system/linux/compositor/virgl/shaders/`
 compiles its GLSL with Mesa's virgl driver (§3.8).
 
 | # | what | points |
 |---|---|---|
 | G1 | **The kernel's part**: the GPU's clocks and reset in `src/kernel/src/platform/st/stm32mp1.rs`, and a device node with its registers and interrupt, as the LTDC has | 3 |
-| G2 | **`src/user/native/drivers/gpu/gc400`, a ring-3 driver**: identify the core (model, revision, features), power it, run a command buffer through the front end, take its completion by interrupt. Proved on the board by a `WAIT`/`LINK` loop and an event | 8 |
+| G2 | **`src/user/system/native/drivers/gpu/gc400`, a ring-3 driver**: identify the core (model, revision, features), power it, run a command buffer through the front end, take its completion by interrupt. Proved on the board by a `WAIT`/`LINK` loop and an event | 8 |
 | G3 | **Pixels**: a render target cleared and resolved by the GPU into a buffer the LTDC shows | 8 |
 | G4 | **Drawing**: vertex streams, a depth buffer, the host-compiled shaders, and draws | 8 |
 | G5 | **`gears` on the board**: the three gears lit and turning, drawn by the GC400, with frames per second on the serial console | 5 |
@@ -1120,7 +1120,7 @@ host-tested (the command stream's words, the register layout) is.
 ### 6.3 Where the GC400 stands (2026-09-24)
 
 G1 and G2 are done: on the board on 2026-09-24 the kernel clocked the core
-and took it out of reset, and `src/user/native/drivers/gpu/gc400` identified it, started its front
+and took it out of reset, and `src/user/system/native/drivers/gpu/gc400` identified it, started its front
 end and ran two blocks through it, each ending in an event taken by
 interrupt. Nothing of either can run in QEMU: the three QEMU machines boot
 exactly as before (no `vivante,gc` node, so no line and no device), and
@@ -1156,7 +1156,7 @@ devmgr now counts 8 drivers.
   board could: a block queued before the front end started was never run,
   because the start address followed the loop instead of staying at the
   ring's first slot.
-* `src/user/native/drivers/gpu/gc400`, the driver, started by devmgr as a new kind, an *engine*:
+* `src/user/system/native/drivers/gpu/gc400`, the driver, started by devmgr as a new kind, an *engine*:
   handed its device and START as a port's driver is, publishing to no
   subsystem, and taken at its word. It stays alive afterwards, answering any
   interrupt by saying what it was: a driver that exited would have devmgr

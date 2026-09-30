@@ -3,7 +3,7 @@
 //! `docs/CLIPBOARD.md` §6 is the specification. This program sits between two
 //! sockets and belongs to neither protocol:
 //!
-//! * **`\0ferrix.vport`**, the abstract name `src/user/native/drivers/console/vport` binds --
+//! * **`\0ferrix.vport`**, the abstract name `src/user/system/native/drivers/console/vport` binds --
 //!   not a path, because `devmgr` starts the driver before `/` moves onto the
 //!   root volume and a path it bound would stay behind in the initramfs's
 //!   `/tmp` (`docs/INIT.md` §7.3). Everything written there goes
@@ -15,7 +15,7 @@
 //!   ordinary clipboard client sets the selection with a serial from an input
 //!   event it was the focus for, and an agent is never the focus.
 //!   `ext-data-control` exists for exactly this and the compositor already
-//!   serves it (`src/user/linux/compositor/hyprix/src/clipboard.rs`).
+//!   serves it (`src/user/system/linux/compositor/hyprix/src/clipboard.rs`).
 //!
 //! # The two directions
 //!
@@ -34,7 +34,7 @@
 //! # Waiting
 //!
 //! Both sockets are non-blocking and the loop services each in turn with a
-//! short sleep, for the reason `src/user/native/drivers/console/vport` polls: there is no wait that takes
+//! short sleep, for the reason `src/user/system/native/drivers/console/vport` polls: there is no wait that takes
 //! both, and a clipboard is a human-speed thing.
 
 use std::collections::BTreeMap;
@@ -54,14 +54,14 @@ use compositor_wire::{Arg, ArgType, Fd, Interface, ObjectId, Reader, Writer};
 use ferrix_vdagent::chunk::{self, Reassembler};
 use ferrix_vdagent::message::{AGENT_CAPS, ClipboardType, Message, Selection, Shape, Types};
 
-/// The MIME type version 1 carries, which is what `src/user/linux/compositor/clip` offers
+/// The MIME type version 1 carries, which is what `src/user/system/linux/compositor/clip` offers
 /// and what `ClipboardType::Utf8Text` maps to.
 const TEXT: &str = "text/plain;charset=utf-8";
 
 /// The manager this agent binds, by the name the registry advertises.
 const MANAGER_NAME: &str = ext_data_control::EXT_DATA_CONTROL_MANAGER_V1.name;
 
-/// Where `src/user/native/drivers/console/vport` listens (`docs/CLIPBOARD.md` §6).
+/// Where `src/user/system/native/drivers/console/vport` listens (`docs/CLIPBOARD.md` §6).
 const PORT_NAME: &[u8] = b"ferrix.vport";
 
 /// How long a turn of the loop rests before looking at both sockets again.
@@ -69,7 +69,7 @@ const TICK: Duration = Duration::from_millis(10);
 
 /// How long to keep trying the port before deciding this boot has none.
 ///
-/// `devmgr` starts `src/user/native/drivers/console/vport` long before the compositor starts its
+/// `devmgr` starts `src/user/system/native/drivers/console/vport` long before the compositor starts its
 /// `exec-once` programs, so the socket is normally there already -- but a
 /// race that loses the clipboard for the whole boot is not worth leaving,
 /// and a boot genuinely without `--clipboard` only waits this once.
@@ -88,7 +88,7 @@ const PIPE_PATIENCE: Duration = Duration::from_millis(500);
 /// The largest selection carried in either direction, §7(a)'s draft answer.
 const MAX_SELECTION: usize = 1024 * 1024;
 
-/// The fixed object ids, as `src/user/linux/compositor/clip` numbers its own.
+/// The fixed object ids, as `src/user/system/linux/compositor/clip` numbers its own.
 mod id {
     use compositor_wire::ObjectId;
 

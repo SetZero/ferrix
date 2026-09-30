@@ -2,7 +2,7 @@
 
 The customer's order of 2026-09-26: Ferrix plays **Bad Apple!! with its
 sound**, and runs **Doom, written in Rust**. Both are Linux programs on
-Ferrix's Linux ABI, in `src/user/linux/media/` (and `userland/doom/` for Doom),
+Ferrix's Linux ABI, in `src/user/system/linux/media/` (and `userland/doom/` for Doom),
 and both stand on what stages 17 and 22 built: `/dev/dri/card0`'s dumb
 buffers (`docs/DISPLAY.md`), `/dev/snd` (`docs/AUDIO.md`) and
 `/dev/input/eventN` (`docs/INPUT.md`). Neither needs anything new from the
@@ -26,7 +26,7 @@ kernel.
 
 ## 2. Bad Apple!!
 
-`src/user/linux/media/` is a cargo workspace of its own:
+`src/user/system/linux/media/` is a cargo workspace of its own:
 
 | Crate | What |
 |---|---|
@@ -67,7 +67,7 @@ scanned out, so a half-drawn frame is never shown.
 
 **On the desktop** the player is a window. When `WAYLAND_DISPLAY` is set it
 opens a toplevel through the compositor toolkit (`Client::toplevel`, added
-to `src/user/linux/compositor/toolkit` for it) instead of the card. The
+to `src/user/system/linux/compositor/toolkit` for it) instead of the card. The
 compositor tiles and sizes the window, and the picture is fitted into it.
 The sound card is still the clock. Frame callbacks only say when the
 compositor is ready for the next picture, so a frame is never drawn over

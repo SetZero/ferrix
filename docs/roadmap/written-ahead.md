@@ -195,7 +195,7 @@ allocator's long random workload was 97% of the first, and runs 2,000 of its
 20,000 steps under Miri. `cargo xtask check --miri` runs the same list, and a
 test fails when it and the workflow disagree.
 
-**`src/user/linux/ferrousli/` is on the goal's path.** It is a C library for Linux written in
+**`src/user/system/linux/ferrousli/` is on the goal's path.** It is a C library for Linux written in
 Rust, modelled on musl and aimed in time at glibc's binary interface. It is its
 own cargo workspace, depends on no Ferrix crate, and reaches the kernel only
 through Linux system calls. Until 2026-09-13 it sat beside this roadmap; by the
@@ -207,8 +207,8 @@ and `test-vfs` on x86_64 without reaching a stub. It is the primary busybox,
 the userland Ferrix is measured with: the gates run it first, with `--init
 ferrousli`, and keep Alpine's musl build and the glibc one as compatibility
 checks. Its test programs already boot as Ferrix's first process with `cargo
-xtask test-shell --init`, `src/user/linux/ferrousli/tests/c/thread/on_ferrix.c` among them for
-`CLONE_THREAD`. Its own status is in [src/user/linux/ferrousli/README.md](../../src/user/linux/ferrousli/README.md),
+xtask test-shell --init`, `src/user/system/linux/ferrousli/tests/c/thread/on_ferrix.c` among them for
+`CLONE_THREAD`. Its own status is in [src/user/system/linux/ferrousli/README.md](../../src/user/system/linux/ferrousli/README.md),
 and its distance from POSIX.1-2024, interface by interface, in
 [POSIX-2024.md](../POSIX-2024.md).
 

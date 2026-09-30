@@ -31,8 +31,8 @@ are grouped by what they drive, as in Linux's `drivers/`, whoever made the
 chip.
 
 The root `Cargo.toml` is one workspace: `src/boot/`, `src/kernel/`,
-`src/lib/`, `src/user/native/` and `tools/common/xtask/`. Everything under
-`src/user/linux/`, `src/tests/` and `tools/vendor/` is a workspace of its own,
+`src/lib/`, `src/user/system/native/` and `tools/common/xtask/`. Everything under
+`src/user/system/linux/`, `src/tests/` and `tools/vendor/` is a workspace of its own,
 built by xtask from inside its directory.
 
 ## `src/boot/`
@@ -59,7 +59,7 @@ ring in `tools/common/data/certification-item.json`.
 | `src/kernel/src/arch/arm_common/` | Drivers for Arm peripherals both Arm architectures can have: the GICv2, the PL011 and the STM32MP1's USART |
 | `src/kernel/src/platform/<vendor>/<soc>/` | The kernel's part in one system on chip's devices, found in the device tree at boot: `google/gs201` (the Pixel 7) and `st/stm32mp1` (the DK1), the vendor being the prefix of the chip's device-tree `compatible`. Declared inline in `main.rs`, and each file has its own ring |
 | `src/kernel/src/discovery/` | Finding what the machine has and handing it to ring 3: `acpi` and `fdt` reach the firmware's description of the machine, `pci` walks the buses it describes, and `devmgr` starts `devmgr` with what was found. The parsers are the host-testable crates in `src/lib/platform/`; what the kernel does for a running driver (device nodes, IOMMU domains, interrupts) stays outside |
-| `src/kernel/src/interfaces/` | The kernel's end of each ring-3 driver's protocol, not a driver: `block_ring`, `net_ring`, `display`, `render`, `input`, `audio`, `logctl`. Each checks its channel against the protocol crate in `src/lib/proto/` and publishes what the driver serves (a disk, a card, an event node). The drivers themselves are processes under `src/user/native/drivers/` |
+| `src/kernel/src/interfaces/` | The kernel's end of each ring-3 driver's protocol, not a driver: `block_ring`, `net_ring`, `display`, `render`, `input`, `audio`, `logctl`. Each checks its channel against the protocol crate in `src/lib/proto/` and publishes what the driver serves (a disk, a card, an event node). The drivers themselves are processes under `src/user/system/native/drivers/` |
 | `src/kernel/src/` otherwise | Everything the architecture does not change: memory, scheduling, objects, system calls, filesystems |
 
 `#[cfg(target_arch)]` appears only under `src/kernel/src/arch/`
@@ -88,11 +88,11 @@ kernel or a loader. Each crate sits in exactly one group:
 
 **Drivers by function.** A driver is two crates: its logic in
 `src/lib/drivers/<function>/<name>/` and its process in
-`src/user/native/drivers/<function>/<name>/`, under the same function and,
+`src/user/system/native/drivers/<function>/<name>/`, under the same function and,
 where there is one of each, the same name. `virtio/` is the virtqueue core
 every virtio driver shares.
 
-| Function | Logic (`src/lib/drivers/…`) | Process (`src/user/native/drivers/…`) |
+| Function | Logic (`src/lib/drivers/…`) | Process (`src/user/system/native/drivers/…`) |
 |---|---|---|
 | `block/` | `virtio-blk`, `blkserve` | `virtio-blk` |
 | `net/` | `virtio-net`, `netserve` | `virtio-net` |
@@ -113,22 +113,22 @@ kernel alone needs and that is not storage, network or a device is `kernel`.
 Add the crate to the root `Cargo.toml`'s `members` and
 `[workspace.dependencies]`, and to the table above.
 
-## `src/user/native/`
+## `src/user/system/native/`
 
 Programs that run in ring 3 on Ferrix's native ABI, built into the
 initramfs by xtask:
 
 | Path | What |
 |---|---|
-| `src/user/native/rt/` | The runtime every native program links: entry, the system-call instruction, exit, panic. |
-| `src/user/native/driver/` | `ferrix-driver`, what every driver process shares: START, register blocks, DMA memory freed only after a reset, a bus's transport (`virtio`), and the protocol a subsystem speaks to its kernel interface (`input`). A driver implements its subsystem's trait and nothing else. virtio-input is on it; the other drivers move as they are touched. |
-| `src/user/native/devmgr/` | Matches devices to drivers and starts each in a job of its own. |
-| `src/user/native/drivers/<function>/<name>/` | One process per driver, grouped by function as in the table above. The logic lives in `src/lib/drivers/`; the program is the thin shell around it. |
-| `src/user/native/pong/`, `src/user/native/channel-echo/` | Small native test programs the boot gates start. |
+| `src/user/system/native/rt/` | The runtime every native program links: entry, the system-call instruction, exit, panic. |
+| `src/user/system/native/driver/` | `ferrix-driver`, what every driver process shares: START, register blocks, DMA memory freed only after a reset, a bus's transport (`virtio`), and the protocol a subsystem speaks to its kernel interface (`input`). A driver implements its subsystem's trait and nothing else. virtio-input is on it; the other drivers move as they are touched. |
+| `src/user/system/native/devmgr/` | Matches devices to drivers and starts each in a job of its own. |
+| `src/user/system/native/drivers/<function>/<name>/` | One process per driver, grouped by function as in the table above. The logic lives in `src/lib/drivers/`; the program is the thin shell around it. |
+| `src/user/system/native/pong/`, `src/user/system/native/channel-echo/` | Small native test programs the boot gates start. |
 
 `tools/common/xtask/src/native.rs` lists which of these go into the image.
 
-## `src/user/linux/`
+## `src/user/system/linux/`
 
 Programs that run on Ferrix's Linux ABI. Each is a separate cargo workspace
 with its own `Cargo.lock` and lints, built by xtask from inside its
@@ -136,11 +136,11 @@ directory:
 
 | Path | What |
 |---|---|
-| `src/user/linux/compositor/` | hyprix, the terminal and every Wayland piece. |
-| `src/user/linux/init/` | `/sbin/init`, getty and the unit files. |
-| `src/user/linux/zinc/` | The zsh-compatible shell. |
-| `src/user/linux/media/` | Bad Apple!!'s player, its video format and the host's converter (`docs/MEDIA.md`); the resampler and the playback through `/dev/snd` it and the sound server share; and the PulseAudio-protocol server and its client (`docs/AUDIO.md`, U2). ferrix-90's since 2026-09-27, when Bad Apple's author stopped. |
-| `src/user/linux/ferrousli/` | The C library written in Rust, its dynamic linker, and the ports built against it (`tools/ports/`). |
+| `src/user/system/linux/compositor/` | hyprix, the terminal and every Wayland piece. |
+| `src/user/system/linux/init/` | `/sbin/init`, getty and the unit files. |
+| `src/user/system/linux/zinc/` | The zsh-compatible shell. |
+| `src/user/system/linux/media/` | Bad Apple!!'s player, its video format and the host's converter (`docs/MEDIA.md`); the resampler and the playback through `/dev/snd` it and the sound server share; and the PulseAudio-protocol server and its client (`docs/AUDIO.md`, U2). ferrix-90's since 2026-09-27, when Bad Apple's author stopped. |
+| `src/user/system/linux/ferrousli/` | The C library written in Rust, its dynamic linker, and the ports built against it (`tools/ports/`). |
 
 ## `src/user/apps/`
 
@@ -160,7 +160,7 @@ app: `cargo xtask apps` lists them. `docs/APPS.md` is the design.
 | `src/tests/sem/`, `src/tests/procfs/` | Static programs `test-sem` and `test-procfs` run inside Ferrix. |
 
 A crate's own tests and test data stay beside it (`src/lib/fs/btrfs/testdata/`,
-`src/user/linux/compositor/render/tests/data/`). `src/tests/` is for programs
+`src/user/system/linux/compositor/render/tests/data/`). `src/tests/` is for programs
 that exercise the system from outside any one crate.
 
 ## `assets/`

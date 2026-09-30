@@ -9,8 +9,8 @@
 //! line is wrong. This is the same file for the same job, because the job is
 //! the same one.
 //!
-//! It belongs here rather than in `src/user/linux/compositor/config` for a reason that is
-//! not taste. `src/user/linux/compositor/config`'s option table holds *exactly* the options
+//! It belongs here rather than in `src/user/system/linux/compositor/config` for a reason that is
+//! not taste. `src/user/system/linux/compositor/config`'s option table holds *exactly* the options
 //! Hyprland 0.56 has, and a differential harness checks its defaults against
 //! a real `hyprctl getoption`; an invented `wallpaper:fps` in there would
 //! make that comparison a lie. And it would be the wrong place anyway: every

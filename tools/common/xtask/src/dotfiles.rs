@@ -23,7 +23,7 @@
 //! files (with `$variables` expanded), `font=` in `fuzzel.ini`,
 //! `font-family` in waybar's CSS -- is resolved on this machine with
 //! `fc-match`, and every file of that family (`fc-list`) goes to
-//! `/usr/share/fonts/host/`, where `src/user/linux/compositor/text` looks. They are read
+//! `/usr/share/fonts/host/`, where `src/user/system/linux/compositor/text` looks. They are read
 //! from the host when the image is built and never committed: they are the
 //! user's own and their licences are theirs. A family the host cannot
 //! resolve is said and skipped; a host with no fontconfig carries none.

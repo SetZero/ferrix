@@ -1,7 +1,7 @@
 //! hyprlang: the language `hyprlock.conf` and `hypridle.conf` are written
 //! in, read the way the hyprlang library (0.6, `src/config.cpp`) reads it.
 //!
-//! `src/user/linux/compositor/config` reads `hyprland.conf`, and knows every one of
+//! `src/user/system/linux/compositor/config` reads `hyprland.conf`, and knows every one of
 //! Hyprland's options; this crate knows none. A program says what its file
 //! may hold -- a [`Schema`] of option names, *special categories* and
 //! keywords, as hyprlock's and hypridle's `ConfigManager.cpp` call

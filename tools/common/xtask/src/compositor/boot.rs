@@ -38,7 +38,7 @@ const ASKED: [(&str, &[&str]); 2] = [("SUPER C", &["meta_l", "c"]), ("SUPER W", 
 /// otherwise be a new argument in every signature between here and
 /// A gate's compositor image for a client built elsewhere: the compositor
 /// and its own programs, `config` as `/etc/hyprland.conf`, and `files`
-/// carried beside them. `src/user/linux/media`'s Bad Apple!! window
+/// carried beside them. `src/user/system/linux/media`'s Bad Apple!! window
 /// (`crate::badapple`) is such a client.
 pub(crate) fn client_image(
     arch: Arch,
@@ -115,9 +115,9 @@ impl Wanted<'_> {
 ///
 /// `decoration:blur:noise` is 0.0117 in Hyprland and here, and the dither is
 /// drawn. But the pictures a boot is judged against are
-/// `src/user/linux/compositor/render`'s expected images, and those are blessed without it
+/// `src/user/system/linux/compositor/render`'s expected images, and those are blessed without it
 /// (`Style::undithered` says why: a dither is the one thing a run-length
-/// encoded image cannot hold). `src/user/linux/compositor/hyprix/tests/two_clients.rs`
+/// encoded image cannot hold). `src/user/system/linux/compositor/hyprix/tests/two_clients.rs`
 /// tells the compositor under test the same thing for the same reason.
 ///
 /// Without this a boot fails on a dither and nothing else: every pixel that

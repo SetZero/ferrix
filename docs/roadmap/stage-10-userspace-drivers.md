@@ -584,7 +584,7 @@ ARMv7-A at four processors and at two.
 
 **Done — the exit: a sector read through a driver in ring 3, with the IOMMU
 on.** `/sbin/blk` (at `/lib/drivers/blk` since `devmgr` landed), stage 11's virtio-blk driver on the native runtime
-(`src/user/native/drivers/block/virtio-blk`, over `src/lib/drivers/block/virtio-blk` and `src/lib/drivers/block/blkserve`), is started from the
+(`src/user/system/native/drivers/block/virtio-blk`, over `src/lib/drivers/block/virtio-blk` and `src/lib/drivers/block/blkserve`), is started from the
 boot check by a kernel-driven parent with the START `devmgr` will send
 (`docs/BLOCK-RING.md` §6.4, from `block_ring::start_for`): the device with
 `MANAGE`, and the driver's end of the ring's control channel. It maps the

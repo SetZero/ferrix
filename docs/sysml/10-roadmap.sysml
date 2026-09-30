@@ -519,7 +519,7 @@ package FerrixRoadmap {
              * kernel: every call it is made of -- setpgid, TIOCSPGRP,
              * TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED --
              * had been answered since stage 7 with nothing using them.
-             * src/user/linux/zinc/src/jobs.rs puts a pipeline in one process group, hands
+             * src/user/system/linux/zinc/src/jobs.rs puts a pipeline in one process group, hands
              * the terminal to the foreground job and takes it back, and
              * keeps the table jobs, fg, bg, wait, disown and kill %1 name.
              * Verified by jobsSession and by zinc's pty gate.

@@ -1,6 +1,6 @@
 //! The windows on their way from where they were to where they are.
 //!
-//! `src/user/linux/compositor/anim` holds the curves and the tree and knows nothing about a
+//! `src/user/system/linux/compositor/anim` holds the curves and the tree and knows nothing about a
 //! window; this joins the two. Each pass round the compositor's loop the
 //! layout says where every window belongs, and this says where each one *is*:
 //! on its way there along `windowsMove`'s curve, or already arrived.

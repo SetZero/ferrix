@@ -54,7 +54,7 @@ const DEFAULT_PORT: u16 = 5555;
 const USB_SOCKET: &str = "/tmp/adbd-usb";
 
 /// The largest payload over USB: `usbdev`'s ring for one transfer
-/// (`src/user/native/drivers/usb/usbdev/src/adb.rs`).
+/// (`src/user/system/native/drivers/usb/usbdev/src/adb.rs`).
 const USB_MAX_PAYLOAD: u32 = 4096;
 
 /// How the program was asked to run.

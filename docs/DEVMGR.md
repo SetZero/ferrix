@@ -6,7 +6,7 @@ stage 11. `docs/ARCHITECTURE.md` §7 is the architecture; this is the protocol
 between the kernel and `devmgr`, and between `devmgr` and the drivers it
 starts. The kernel's half of it — `device_info`, `device_quiesce`, bus
 mastering at the first pin, START — is on develop; `devmgr` the program, on
-`ferrix-rt`, is `src/user/native/devmgr`, started by `src/kernel/src/discovery/devmgr.rs`; the
+`ferrix-rt`, is `src/user/system/native/devmgr`, started by `src/kernel/src/discovery/devmgr.rs`; the
 messages are `src/lib/proto/devmgr-proto`.
 
 ## 1. What devmgr is, and what it is not

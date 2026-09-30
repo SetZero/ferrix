@@ -2,7 +2,7 @@
 //!
 //! # Building it
 //!
-//! `src/user/linux/auth/` is a workspace of its own, built as init is: a static
+//! `src/user/system/linux/auth/` is a workspace of its own, built as init is: a static
 //! program against the target's own musl, linked by rust-lld. [`carried`]
 //! returns what an image carries for it: `/sbin/authd`, `/bin/passwd`,
 //! `/bin/authctl`, the shipped service policies in
@@ -53,7 +53,7 @@ use crate::ports::{Content, File};
 use crate::qemu::{self, SUCCESS_MARKER, Watching};
 use crate::{Error, Result, cargo, fat, init, initramfs, native, zinc};
 
-/// What only a sabotaged `authd` carries (`src/user/linux/auth/authd/src/sabotage.rs`).
+/// What only a sabotaged `authd` carries (`src/user/system/linux/auth/authd/src/sabotage.rs`).
 const MARKER: &[u8] = b"FERRIX-AUTH-SABOTAGED-BUILD";
 
 /// Set by `test-auth --sabotage` alone: the one run whose image may carry a
@@ -94,8 +94,8 @@ pub(crate) const PASSWD_LINE: &str = "auth:x:90:90:authd:/var/lib/ferrix/auth:/s
 pub(crate) const GROUP_LINE: &str = "auth:x:90:\n";
 
 /// The shipped policies and units, beside this module in the tree.
-const SERVICES: &str = "src/user/linux/auth/services";
-const UNITS: &str = "src/user/linux/auth/units";
+const SERVICES: &str = "src/user/system/linux/auth/services";
+const UNITS: &str = "src/user/system/linux/auth/units";
 
 /// The password the gate seeds `ferrix` with.
 const GATE_PASSWORD: &str = "the gate own horse battery";
@@ -116,7 +116,7 @@ const POWER_DOWN: &str = "reboot: Power down";
 /// seconds, as the shipped ones do.
 const GATE_POLICY: &str = "[Service]\nDescription=test-auth's own service\nAccount=any\nMethods=password\nFailDelaySec=2\n";
 
-/// The programs of `src/user/linux/auth/` for one architecture.
+/// The programs of `src/user/system/linux/auth/` for one architecture.
 #[derive(Debug)]
 pub(crate) struct Built {
     authd: PathBuf,
@@ -124,7 +124,7 @@ pub(crate) struct Built {
     authctl: PathBuf,
 }
 
-/// Build `src/user/linux/auth/` for `arch`, sabotaged as `sabotage` when one is
+/// Build `src/user/system/linux/auth/` for `arch`, sabotaged as `sabotage` when one is
 /// named, or `None` on an architecture it is not built for.
 pub(crate) fn built(arch: Arch, sabotage: Option<&str>) -> Result<Option<Built>> {
     let Some(target) = zinc::target(arch) else {
@@ -156,7 +156,7 @@ pub(crate) fn built(arch: Arch, sabotage: Option<&str>) -> Result<Option<Built>>
     };
     let mut build = crate::builds::Build::cargo(
         format!("cargo build (auth) --target {target}"),
-        paths::workspace_root().join("src/user/linux/auth"),
+        paths::workspace_root().join("src/user/system/linux/auth"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

@@ -809,7 +809,7 @@ impl State {
     ///
     /// The strips a layer surface's exclusive zone takes off the monitor:
     /// a bar across the top means the windows start below it. Nothing else
-    /// sets them, and `src/user/linux/compositor/layout` works none of them out -- where a
+    /// sets them, and `src/user/system/linux/compositor/layout` works none of them out -- where a
     /// layer surface goes is [`crate::layers`]' and what it reserves is that
     /// module's answer, because it is the protocol's rule and not the
     /// tiling's.

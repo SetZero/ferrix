@@ -17,7 +17,7 @@ use crate::{Error, Result};
 /// The picture a bar and two windows make, which the second boot requires.
 const BAR_EXPECTED: (&str, &str) = (
     "a bar across the top with the windows under it",
-    "src/user/linux/compositor/render/tests/data/layer-bar-two-clients.xrle",
+    "src/user/system/linux/compositor/render/tests/data/layer-bar-two-clients.xrle",
 );
 
 /// The picture a window with a menu on it makes, which the sixteenth boot
@@ -28,13 +28,13 @@ const BAR_EXPECTED: (&str, &str) = (
 /// picture it makes.
 const MENU_EXPECTED: [(&str, &str); 1] = [(
     "a menu over the window it hangs off, where the positioner puts it",
-    "src/user/linux/compositor/render/tests/data/menu-on-a-window.xrle",
+    "src/user/system/linux/compositor/render/tests/data/menu-on-a-window.xrle",
 )];
 
 /// The configuration the sixteenth boot is given: a window with a menu and
 /// a window without one.
 ///
-/// `--menu 200` is what `src/user/linux/compositor/render` blesses the picture with, and a
+/// `--menu 200` is what `src/user/system/linux/compositor/render` blesses the picture with, and a
 /// number changed here and not there is a picture that cannot match.
 const MENU_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
@@ -51,15 +51,15 @@ exec-once = /bin/pattern gradient two --after one
 const LOCK_EXPECTED: [(&str, &str); 3] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the lock's own surface over the whole screen, and no window on it",
-        "src/user/linux/compositor/render/tests/data/locked-screen.xrle",
+        "src/user/system/linux/compositor/render/tests/data/locked-screen.xrle",
     ),
     (
         "the windows again, once the lock let go",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
 ];
 
@@ -90,17 +90,17 @@ bind = , K, exec, /bin/lswt close one
 ///
 /// A screenshot changes nothing on the screen, so both are the tiled pair:
 /// what the boot is *for* is the digest the guest prints, which must be the
-/// digest of the picture `src/user/linux/compositor/render` blesses. The second picture is
+/// digest of the picture `src/user/system/linux/compositor/render` blesses. The second picture is
 /// there so that a compositor which had stopped drawing would still be
 /// caught.
 const SHOT_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, with a screenshot taken of it",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
 ];
 
@@ -131,15 +131,15 @@ bind = , S, exec, /bin/shot
 const TASKBAR_EXPECTED: [(&str, &str); 3] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, with a taskbar having listed both windows",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "one window left, closed from outside it by the taskbar",
-        "src/user/linux/compositor/render/tests/data/one-client-alone.xrle",
+        "src/user/system/linux/compositor/render/tests/data/one-client-alone.xrle",
     ),
 ];
 
@@ -147,7 +147,7 @@ const TASKBAR_EXPECTED: [(&str, &str); 3] = [
 ///
 /// No modifier, which matters here and nowhere else. A bind consumes its
 /// own key but never the modifier held with it, so `SUPER B` reaches the
-/// focused client as a `meta` press -- and `src/user/linux/compositor/pattern` draws the
+/// focused client as a `meta` press -- and `src/user/system/linux/compositor/pattern` draws the
 /// *other* pattern for every key it is sent, on purpose, so that a key
 /// shows on the screen. It redraws only when it is configured, so in every
 /// other boot the change never reaches a frame; this is the one boot that
@@ -176,7 +176,7 @@ bind = , K, exec, /bin/lswt close one
 const CLIPBOARD_TEXT: &str = "the clipboard went through the compositor";
 const CLIPBOARD_EXPECTED: [(&str, &str); 1] = [(
     "the windows tiled while one program copied and another pasted",
-    "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+    "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
 )];
 
 /// The configuration the eleventh boot is given: two windows, a program
@@ -311,7 +311,7 @@ pub(super) fn test_bar(arch: Arch, programs: &Programs, args: &Args) -> Result<(
 /// for ever -- the menu simply does not appear. This boot is a window that
 /// asks for one the moment it has drawn, and what is required is the
 /// picture: the popup over the window, at the rectangle
-/// `xdg_positioner`'s rules put it, which `src/user/linux/compositor/render` blesses by
+/// `xdg_positioner`'s rules put it, which `src/user/system/linux/compositor/render` blesses by
 /// calling those same rules.
 pub(super) fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -354,7 +354,7 @@ pub(super) fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<
 /// Three pictures: the windows, the lock over them, and the windows again.
 /// The middle one is the point -- while the lock is held the compositor
 /// draws its surface and *nothing else*, so the screen must be the picture
-/// `src/user/linux/compositor/render` blesses for a locked screen and not one pixel of
+/// `src/user/system/linux/compositor/render` blesses for a locked screen and not one pixel of
 /// either window.
 ///
 /// The second key is the other half. `K` closes a window, and it is pressed
@@ -433,7 +433,7 @@ pub(super) fn test_lock(arch: Arch, programs: &Programs, args: &Args) -> Result<
 /// every pixel. What is required is that the digest is the one the expected
 /// image has: the screenshot the compositor wrote into a client's shared
 /// memory inside the guest is, pixel for pixel, the frame
-/// `src/user/linux/compositor/render` builds on the host by calling the renderer with
+/// `src/user/system/linux/compositor/render` builds on the host by calling the renderer with
 /// rectangles.
 ///
 /// That is a stronger statement than the screendump the other boots make.
@@ -508,11 +508,11 @@ pub(super) fn test_screenshot(arch: Arch, programs: &Programs, args: &Args) -> R
 const TYPING_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "src/user/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
+        "src/user/system/linux/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "one window left, closed by a key another program typed",
-        "src/user/linux/compositor/render/tests/data/one-client-alone.xrle",
+        "src/user/system/linux/compositor/render/tests/data/one-client-alone.xrle",
     ),
 ];
 
@@ -589,7 +589,7 @@ pub(super) fn test_typing(arch: Arch, programs: &Programs, args: &Args) -> Resul
 
 /// FNV-1a, which is how a whole screen is compared through a serial port.
 ///
-/// The same function `src/user/linux/compositor/shot`'s `digest` is, and it has to stay the
+/// The same function `src/user/system/linux/compositor/shot`'s `digest` is, and it has to stay the
 /// same: the guest prints the digest of what it was handed and this is what
 /// that is compared against. Short enough to print on one line, and simple
 /// enough that two copies cannot drift without a test saying so.

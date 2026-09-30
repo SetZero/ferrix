@@ -3,7 +3,7 @@
 //!
 //! The phone's USB-C port is a Synopsys DWC3 (`usb@11210000`, and the
 //! `synopsys,dwc3` child that shares its window), which the phone's tree
-//! puts in device mode. `src/user/native/drivers/usb/usbdev` drives it, presenting a USB serial
+//! puts in device mode. `src/user/system/native/drivers/usb/usbdev` drives it, presenting a USB serial
 //! port to whatever the phone is plugged into
 //! (`docs/vendor/google/pixel7/USB-HANDOVER.md`).
 //!

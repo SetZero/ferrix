@@ -21,7 +21,7 @@
 //!
 //! # Which shell runs it
 //!
-//! zinc, the shell in `src/user/linux/zinc/`, unless `--init` names another. Both are worth
+//! zinc, the shell in `src/user/system/linux/zinc/`, unless `--init` names another. Both are worth
 //! running and the gate runs both: zinc is the image's shell, and a static
 //! busybox is *somebody else's* binary, which is what stage 7's exit was
 //! about — a shell written against this kernel works by construction and
@@ -181,7 +181,7 @@ pub(crate) fn carried_for(
 pub(crate) const FERROUSLI: &str = "ferrousli";
 
 /// Build ferrousli's loader and `libc.so.6` for `arch` with
-/// `src/user/linux/ferrousli/tools/build-shared.sh`, and answer the directory holding them
+/// `src/user/system/linux/ferrousli/tools/build-shared.sh`, and answer the directory holding them
 /// as `ld.so` and `libc.so.6`.
 ///
 /// Built every time rather than when stale: cargo is incremental, and the
@@ -194,7 +194,7 @@ pub(crate) const FERROUSLI: &str = "ferrousli";
 /// links x86-64's with the host's Linux `cc`), and a failed build.
 pub(crate) fn ferrousli_shared(arch: Arch) -> Result<PathBuf> {
     let out = paths::build_dir(arch).join("ferrousli-shared");
-    let ferrousli = paths::workspace_root().join("src/user/linux/ferrousli");
+    let ferrousli = paths::workspace_root().join("src/user/system/linux/ferrousli");
     if cfg!(windows) {
         // The script in WSL, as `check --ferrousli` runs its cargo steps,
         // writing into this checkout's build directory through `/mnt`.
@@ -217,11 +217,13 @@ pub(crate) fn ferrousli_shared(arch: Arch) -> Result<PathBuf> {
         return Ok(out);
     }
     // A build `FERRIX_BUILDS` may record or replay, as busybox's is.
-    let mut build =
-        crate::builds::Build::bash("src/user/linux/ferrousli/tools/build-shared.sh", &ferrousli)
-            .args(["tools/build-shared.sh", "--arch", arch.name()])
-            .args([out.as_os_str()])
-            .output(&out);
+    let mut build = crate::builds::Build::bash(
+        "src/user/system/linux/ferrousli/tools/build-shared.sh",
+        &ferrousli,
+    )
+    .args(["tools/build-shared.sh", "--arch", arch.name()])
+    .args([out.as_os_str()])
+    .output(&out);
     if let Some(dir) = crate::ferrousli::target_dir(std::env::var_os("CARGO_TARGET_DIR")) {
         build = build.env("CARGO_TARGET_DIR", dir);
     }

@@ -3,7 +3,7 @@
 //!
 //! Two of them now — busybox in [`crate::busybox`] and uutils/coreutils in
 //! [`crate::uutils`] — and they are built the same way: a script under
-//! `src/user/linux/ferrousli/tools/` downloads pinned sources, builds `libferrousli.a` and
+//! `src/user/system/linux/ferrousli/tools/` downloads pinned sources, builds `libferrousli.a` and
 //! `crt1.o`, links a static x86-64 program against those and nothing from the
 //! host's C library, and installs it under a directory outside the repository.
 //! A link that fails writes the symbols ferrousli has not got yet beside the
@@ -133,7 +133,7 @@ pub(crate) fn target_dir(caller: Option<std::ffi::OsString>) -> Option<String> {
     Some(dir.to_string_lossy().replace('\\', "/"))
 }
 
-/// Point a build script's command at `src/user/linux/ferrousli/`, with the target directory
+/// Point a build script's command at `src/user/system/linux/ferrousli/`, with the target directory
 /// [`target_dir`] gives.
 pub(crate) fn in_ferrousli(command: &mut std::process::Command, ferrousli: &Path) {
     let _ = command.current_dir(ferrousli);

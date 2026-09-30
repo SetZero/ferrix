@@ -4,7 +4,7 @@
 //! `/dev/dri/card0` and plays the song through `/dev/snd`, for `SECONDS` or
 //! to the end. The song is the original's AAC track, decoded here; the
 //! video is the original converted by the host into `.bav`
-//! (`src/user/linux/media/bav`), since there is no H.264 decoder in Rust to run.
+//! (`src/user/system/linux/media/bav`), since there is no H.264 decoder in Rust to run.
 //!
 //! **The sound card is the clock.** A thread decodes the song, converts it to
 //! the card's 48 kHz and writes it; the writes block while the card's buffer

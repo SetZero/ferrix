@@ -34,7 +34,7 @@ const PRODUCT_NAME: &str = "Ferrix console";
 /// silently. The same value on every Linux architecture this runs on.
 const O_NOCTTY: i32 = 0o400;
 
-/// The line `usbdev` restarts Ferrix on (`src/user/native/drivers/usb/usbdev`), after a
+/// The line `usbdev` restarts Ferrix on (`src/user/system/native/drivers/usb/usbdev`), after a
 /// newline of its own. The port's line discipline echoes what Ferrix sends
 /// back to it until `stty -echo` takes, so usbdev may be holding a piece of
 /// its own log as the start of a line. The command must be a whole line,

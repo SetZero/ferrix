@@ -361,7 +361,7 @@ pub struct Mods {
 }
 
 impl Mods {
-    /// The modifiers as `src/user/linux/compositor/xkb`'s mask bits.
+    /// The modifiers as `src/user/system/linux/compositor/xkb`'s mask bits.
     #[must_use]
     pub fn mask(self) -> u32 {
         use compositor_xkb::generated::{CONTROL, MOD1, MOD4, SHIFT};

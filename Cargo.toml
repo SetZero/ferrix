@@ -87,21 +87,21 @@ members = [
     # in the initramfs. Like the kernel they cannot be built or tested for the
     # host, so the host gates exclude them; everything about them that can be
     # a pure function lives in `src/lib/proto/native`.
-    "src/user/native/rt",
-    "src/user/native/driver",
-    "src/user/native/channel-echo",
-    "src/user/native/pong",
-    "src/user/native/drivers/block/virtio-blk",
-    "src/user/native/drivers/net/virtio-net",
-    "src/user/native/drivers/display/virtio-gpu",
-    "src/user/native/drivers/display/stm32-ltdc",
-    "src/user/native/drivers/input/virtio-input",
-    "src/user/native/drivers/sound/virtio-snd",
-    "src/user/native/drivers/usb/usbhid",
-    "src/user/native/drivers/usb/usbdev",
-    "src/user/native/drivers/gpu/gc400",
-    "src/user/native/drivers/console/vport",
-    "src/user/native/devmgr",
+    "src/user/system/native/rt",
+    "src/user/system/native/driver",
+    "src/user/system/native/channel-echo",
+    "src/user/system/native/pong",
+    "src/user/system/native/drivers/block/virtio-blk",
+    "src/user/system/native/drivers/net/virtio-net",
+    "src/user/system/native/drivers/display/virtio-gpu",
+    "src/user/system/native/drivers/display/stm32-ltdc",
+    "src/user/system/native/drivers/input/virtio-input",
+    "src/user/system/native/drivers/sound/virtio-snd",
+    "src/user/system/native/drivers/usb/usbhid",
+    "src/user/system/native/drivers/usb/usbdev",
+    "src/user/system/native/drivers/gpu/gc400",
+    "src/user/system/native/drivers/console/vport",
+    "src/user/system/native/devmgr",
 
     # Host-side build and test driver (`cargo xtask ...`).
     "tools/common/xtask",
@@ -164,9 +164,9 @@ ferrix-net = { path = "src/lib/network/net" }
 ferrix-netring = { path = "src/lib/proto/netring" }
 ferrix-netserve = { path = "src/lib/drivers/net/netserve" }
 ferrix-netlink = { path = "src/lib/network/netlink" }
-ferrix-rt = { path = "src/user/native/rt" }
-ferrix-driver = { path = "src/user/native/driver" }
-ferrix-net-driver = { path = "src/user/native/drivers/net/virtio-net" }
+ferrix-rt = { path = "src/user/system/native/rt" }
+ferrix-driver = { path = "src/user/system/native/driver" }
+ferrix-net-driver = { path = "src/user/system/native/drivers/net/virtio-net" }
 ferrix-objects = { path = "src/lib/kernel/objects" }
 ferrix-sync = { path = "src/lib/kernel/sync" }
 ferrix-ustack = { path = "src/lib/kernel/ustack" }
@@ -175,7 +175,7 @@ ferrix-virtio = { path = "src/lib/drivers/virtio" }
 ferrix-virtio-blk = { path = "src/lib/drivers/block/virtio-blk" }
 ferrix-virtio-gpu = { path = "src/lib/drivers/display/virtio-gpu" }
 ferrix-virtio-console = { path = "src/lib/drivers/console/virtio-console" }
-ferrix-vport = { path = "src/user/native/drivers/console/vport" }
+ferrix-vport = { path = "src/user/system/native/drivers/console/vport" }
 ferrix-virtio-input = { path = "src/lib/drivers/input/virtio-input" }
 ferrix-virtio-snd = { path = "src/lib/drivers/sound/virtio-snd" }
 ferrix-virtio-net = { path = "src/lib/drivers/net/virtio-net" }

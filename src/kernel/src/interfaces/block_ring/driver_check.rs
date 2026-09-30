@@ -398,7 +398,7 @@ fn published_by_devmgr(
 const DRIVER_DIED: &str = "a blk driver devmgr started died before publishing its disk";
 
 /// The step `/sbin/blk`'s exit status names: its `Step` enum, in
-/// `src/user/native/drivers/block/virtio-blk/src/main.rs`, whose numbers are its exit statuses, and
+/// `src/user/system/native/drivers/block/virtio-blk/src/main.rs`, whose numbers are its exit statuses, and
 /// from 20 up its `fault_status`, the fault that stopped it serving.
 fn blk_step(status: i32) -> &'static str {
     match status {

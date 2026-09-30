@@ -299,7 +299,7 @@ fn a_texture_is_drawn_the_way_up_it_was_written() {
     }
 }
 
-/// A rounded rectangle is cut where `src/user/linux/compositor/render` cuts one: a circle
+/// A rounded rectangle is cut where `src/user/system/linux/compositor/render` cuts one: a circle
 /// of radius 16 leaves the corner's own pixel out and the pixel on the
 /// diagonal at the curve in.
 #[test]

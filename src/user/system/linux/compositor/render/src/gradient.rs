@@ -100,7 +100,7 @@ impl Gradient {
     ///
     /// No colours at all is one transparent colour, which draws nothing, as
     /// `gradient.glsl` answers `vec4(0.0)` for an empty gradient.
-    /// `src/user/linux/compositor/config` refuses to parse one, so this is the shape of a
+    /// `src/user/system/linux/compositor/config` refuses to parse one, so this is the shape of a
     /// gradient that cannot be drawn rather than a case anybody meets.
     #[must_use]
     pub fn new(colors: &[Color], degrees: i32) -> Self {

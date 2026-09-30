@@ -3,7 +3,7 @@
 ## 1. The aim
 
 The customer runs Hyprland on example, and Ferrix's compositor
-(`src/user/linux/compositor/hyprix`) already reads their `~/.config/hypr/hyprland.conf`.
+(`src/user/system/linux/compositor/hyprix`) already reads their `~/.config/hypr/hyprland.conf`.
 That file starts `waybar` and `hypridle`, binds fuzzel to `SUPER+R` and
 hyprlock to `SUPER+L`. None of the four is on Ferrix, and all four are C or
 C++ on GTK, Pango, cairo, fontconfig and libwayland, none of which is either.
@@ -25,20 +25,20 @@ silence, and never a reason to refuse the file. What cannot work on Ferrix
 is said (§7), not faked.
 
 Each program is a binary named after its upstream, in a crate of the
-`src/user/linux/compositor/` workspace, installed as `/bin/<name>` in the desktop image,
+`src/user/system/linux/compositor/` workspace, installed as `/bin/<name>` in the desktop image,
 so `exec-once = waybar` and `bind = …, exec, hyprlock` find it.
 
 ## 2. The foundation
 
 Four crates, on branch `clients-base` until each lands on `main`. They
 exist so that the four programs do not each write a fifth copy of the
-hand-rolled Wayland client that `src/user/linux/compositor/term`, `src/user/linux/compositor/lock` and
-`src/user/linux/compositor/pattern` each carry.
+hand-rolled Wayland client that `src/user/system/linux/compositor/term`, `src/user/system/linux/compositor/lock` and
+`src/user/system/linux/compositor/pattern` each carry.
 
-### 2.1 `src/user/linux/compositor/toolkit` -- the Wayland client runtime
+### 2.1 `src/user/system/linux/compositor/toolkit` -- the Wayland client runtime
 
 `compositor_toolkit::Client` is one connection and everything bound on it,
-over `src/user/linux/compositor/wire`, `socket`, `shm`, `protocol` and `xkb` -- no
+over `src/user/system/linux/compositor/wire`, `socket`, `shm`, `protocol` and `xkb` -- no
 libwayland. Pull, not callbacks: a program makes its surfaces and turns
 `Client::dispatch(timeout)`, which blocks in `poll` on the Wayland socket,
 the timers, the children's pipes, a `signalfd` and any descriptor the
@@ -68,7 +68,7 @@ program hands it, and returns a `Vec<Event>`.
   compositor holds both), attaches, damages and commits. A program draws
   with tiny-skia directly -- there is no widget layer; waybar's box model
   is waybar's.
-* **The seat**: the keyboard through `src/user/linux/compositor/xkb` (the keymap's groups
+* **The seat**: the keyboard through `src/user/system/linux/compositor/xkb` (the keymap's groups
   matched as `term` does, keysym names, the text a key types, modifiers,
   and repeat from `repeat_info`, done by the runtime and marked
   `repeat: true`); the pointer's enter, leave, motion, button (with its
@@ -92,7 +92,7 @@ program hands it, and returns a `Vec<Event>`.
   the interface's own generated table; `new_buffer` gives it a `wl_shm`
   buffer to hand to one.
 
-### 2.2 `src/user/linux/compositor/text` -- fonts, shaping, glyphs, layout, markup
+### 2.2 `src/user/system/linux/compositor/text` -- fonts, shaping, glyphs, layout, markup
 
 * **Finding a face**: `Fonts::system()` scans `$FERRIX_FONT_DIRS`,
   `~/.local/share/fonts`, `~/.fonts`, `/usr/share/fonts`,
@@ -127,7 +127,7 @@ program hands it, and returns a `Vec<Event>`.
 
 Points are pixels × 72 / 96, as hyprgraphics and fcft both have it.
 
-### 2.3 `src/user/linux/compositor/hyprlang` -- the configuration language
+### 2.3 `src/user/system/linux/compositor/hyprlang` -- the configuration language
 
 hyprlock.conf and hypridle.conf are hyprlang, the language of
 hyprland.conf without Hyprland's options. The crate is hyprlang 0.6's
@@ -149,13 +149,13 @@ refused, in its words (`Config error in file … at line 12: config option
 them as hyprlang's `INT` (colours `rgb()`/`rgba()`/`0xAARRGGBB`, booleans),
 `FLOAT` and `VEC2` do.
 
-`src/user/linux/compositor/config` keeps its own grammar: it is Hyprland's, with
+`src/user/system/linux/compositor/config` keeps its own grammar: it is Hyprland's, with
 Hyprland's options wired to the compositor, and it was just fixed to match
 hyprlang on the two points above (`cc2eb016`). Moving it onto this crate
 would be a change to the compositor's startup path for no behaviour; it can
-be done later, gated by `src/user/linux/compositor/config`'s own tests.
+be done later, gated by `src/user/system/linux/compositor/config`'s own tests.
 
-### 2.4 `src/user/linux/compositor/image` -- PNG, JPEG, SVG
+### 2.4 `src/user/system/linux/compositor/image` -- PNG, JPEG, SVG
 
 `compositor_image::load(path, Fit)` sniffs the bytes and returns a
 `tiny_skia::Pixmap`: PNG through tiny-skia's own decoder, JPEG through
@@ -190,7 +190,7 @@ DejaVu Sans, and the host's `sans-serif` and `monospace`.
 
 ### 2.6 The foundation's boot: `caption`
 
-`src/user/linux/compositor/caption` is the smallest program on the whole
+`src/user/system/linux/compositor/caption` is the smallest program on the whole
 foundation: a line of text in a named font on an overlay layer surface,
 held 40 pixels from the top-left corner. `cargo xtask test-compositor
 --boot caption` draws `Ferrix 12:34 — AVATAR To…` at 32 points in the font
@@ -204,7 +204,7 @@ match it pixel for pixel on `x86_64` (within 2 a channel elsewhere).
 
 ## 3. waybar
 
-`src/user/linux/compositor/waybar` is `/bin/waybar`: it reads `config.jsonc` and
+`src/user/system/linux/compositor/waybar` is `/bin/waybar`: it reads `config.jsonc` and
 `style.css` the way waybar 0.15 (Alexays/Waybar at 1684389) and GTK 3.24
 read them, and draws the bar GTK would draw from them. Upstream's source is
 the reference, read file by file; `waybar-probe` is the host-side check
@@ -239,7 +239,7 @@ that lists what of the user's real files is not carried out.
   to the last layer's box, layers last listed first, inset shadows, border.
   An `url()` image is rasterised at its own size and scaled, as GTK3's
   pixbuf loader does. Text and images are behind traits, for
-  `src/user/linux/compositor/text` and `src/user/linux/compositor/image`.
+  `src/user/system/linux/compositor/text` and `src/user/system/linux/compositor/image`.
 * **Modules** (`modules/`): each a state machine over a `Host` (children,
   timers, files, Hyprland requests, interface ioctls), tested with a fake
   one against upstream's rules: `custom/*` (its three workers, `exec-if`,
@@ -248,9 +248,9 @@ that lists what of the user's real files is not carried out.
   the bar's `empty`/`solo` classes), `cpu`, `memory`, `network`, `clock`,
   `pulseaudio`, `tray`.
 * **The bar on the screen** (`app.rs`, `bar.rs`, `engine.rs`): the loop on
-  `src/user/linux/compositor/toolkit` -- a layer surface per output the config
-  matches, text through `src/user/linux/compositor/text` and `url()` images
-  through `src/user/linux/compositor/image`; hover restyles with `:hover` and sets
+  `src/user/system/linux/compositor/toolkit` -- a layer surface per output the config
+  matches, text through `src/user/system/linux/compositor/text` and `url()` images
+  through `src/user/system/linux/compositor/image`; hover restyles with `:hover` and sets
   the hand cursor, tooltips open after 500 ms as `xdg_popup`s through
   `zwlr_layer_surface_v1.get_popup` with their Pango markup, clicks count
   doubles and triples, scrolls step; `SIGUSR1` toggles the bar and
@@ -318,7 +318,7 @@ starts it.
 
 The gate is `cargo xtask test-compositor --boot waybar`: the user's
 `style.css` and `icons/` (read from this machine, never committed) over a
-test config of the tree's (`src/user/linux/compositor/waybar/data/boot/`: the
+test config of the tree's (`src/user/system/linux/compositor/waybar/data/boot/`: the
 user's bar with each Python script an `echo` of a fixed answer, and
 `"output": "Virtual-1"`). The host's build draws the same files with
 `--render`, and the guest's screen must show those pixels: all 1024x40
@@ -340,7 +340,7 @@ each module is, the boot points QEMU's tablet at the chip and turns the
 wheel, and waybar says at debug level each answer, why it asked, and what
 the label became.
 
-A text measurement to settle when `src/user/linux/compositor/text` lands: the user's
+A text measurement to settle when `src/user/system/linux/compositor/text` lands: the user's
 comment measures `line_height='2.0'` as 10.5 px over and 11.5 under at
 their `font-size: 15px`; clients-base measured 8.41 each way at 15 px and
 11.21 at 15 pt. GTK3 gives Pango a CSS `px` size as `px × PANGO_SCALE × 72
@@ -350,7 +350,7 @@ on the host with GTK before blessing a golden image.
 
 ## 4. fuzzel
 
-`src/user/linux/compositor/fuzzel`, `/bin/fuzzel`: a port of fuzzel 1.12
+`src/user/system/linux/compositor/fuzzel`, `/bin/fuzzel`: a port of fuzzel 1.12
 (codeberg.org/dnkl/fuzzel, read from a shallow clone in
 `~/.local/share/ferrix/clients-ref/fuzzel`). Each module names the part of
 fuzzel's source it follows: `config` is `config.c`, with every option and its
@@ -450,7 +450,7 @@ clicked (hyprix); the startup time above; aarch64 boot.
 
 ## 5. hyprlock
 
-`src/user/linux/compositor/hyprlock` is hyprlock 0.9.6 (`/var/cache/hyprland-build/src/
+`src/user/system/linux/compositor/hyprlock` is hyprlock 0.9.6 (`/var/cache/hyprland-build/src/
 hyprlock`) for Ferrix, installed as `/bin/hyprlock`. It reads
 `~/.config/hypr/hyprlock.conf` unchanged, or the file `-c` names, found
 as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
@@ -477,7 +477,7 @@ as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
   `cmd[update:N(:force)]`, which runs through `/bin/sh -c` and shows the
   output, trimmed as `general:text_trim` says. A text is Pango markup in a
   Pango font description at a point size (96 dpi), drawn by
-  `src/user/linux/compositor/text` to its logical rectangle, which is what upstream's
+  `src/user/system/linux/compositor/text` to its logical rectangle, which is what upstream's
   label texture is. The clock is UTC: Ferrix's image has no `TZ` and no
   `/etc/localtime`, which is when upstream falls back to UTC too.
 * **The input field**: dots of `dots_size`, `dots_spacing`, `dots_center`,
@@ -486,7 +486,7 @@ as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
   placeholder; `fade_on_empty` and `fade_timeout`; `outer_color`,
   `inner_color`, `font_color`, `check_color`, `fail_color`, the Caps Lock
   and Num Lock colours with their fallbacks; `swap_font_color`.
-* **Keys** through `src/user/linux/compositor/xkb` as the compositor's keymap has them, so
+* **Keys** through `src/user/system/linux/compositor/xkb` as the compositor's keymap has them, so
   `input:kb_layout = de` with `nodeadkeys` types German: text is appended,
   `BackSpace`/`Delete` remove a character and are the only keys that
   repeat, `Escape`, `Ctrl+U`, `Ctrl+A` and `Ctrl+BackSpace` clear, `Return`
@@ -496,9 +496,9 @@ as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
   hyprlock's own tree (`global`, `fade`, `fadeIn`, `fadeOut`, `inputField`,
   `inputFieldColors`, `inputFieldFade`, `inputFieldWidth`,
   `inputFieldDots`), a speed of N being N tenths of a second, over
-  `src/user/linux/compositor/anim`'s curves.
+  `src/user/system/linux/compositor/anim`'s curves.
 * **Backgrounds**: `color`, `path` (PNG, JPEG, SVG through
-  `src/user/linux/compositor/image`; upstream also reads WebP, JPEG XL and BMP),
+  `src/user/system/linux/compositor/image`; upstream also reads WebP, JPEG XL and BMP),
   `path = screenshot` through `zwlr_screencopy_v1`, `blur_size`,
   `blur_passes`, `noise`, `contrast`, `brightness`, `vibrancy`,
   `vibrancy_darkness` (the dual-Kawase blur of `blurFB`, `blur.rs`), and
@@ -564,7 +564,7 @@ zeroed when dropped.
 
 ### Where it stands
 
-2026-09-26. **On main:** `src/user/linux/compositor/hyprlock`'s library -- the
+2026-09-26. **On main:** `src/user/system/linux/compositor/hyprlock`'s library -- the
 configuration model on `compositor/hyprlang` (every option and default of
 `ConfigManager.cpp`), layout, formatting, the field's session, the
 authentication interface with `Missing`, the blur, and every widget drawn
@@ -587,7 +587,7 @@ left is a rebase onto the relaid tree and its boots.
 
 ## 6. hypridle
 
-`src/user/linux/compositor/hypridle` is upstream hypridle 0.1.8
+`src/user/system/linux/compositor/hypridle` is upstream hypridle 0.1.8
 (`/var/cache/hyprland-build/src/hypridle`) in Rust: `/bin/hypridle`, with
 `-c`/`--config`, `-q`, `-v`, `-V` and `-h` as upstream's `main.cpp` has
 them, and the file looked for where `Hyprutils::Path::findConfig` looks
@@ -618,7 +618,7 @@ as upstream's `run()` does. hyprix offers `ext_idle_notifier_v1` version 2
 and answers both requests (`server/src/client/desktop.rs`); against a
 version-1 notifier hypridle falls back to the inhibitable request and says
 so. `hyprland_lock_notifier_v1` drives `on_lock_cmd` and `on_unlock_cmd`.
-All of it goes through `src/user/linux/compositor/toolkit`: `idle_notification`, `bind`
+All of it goes through `src/user/system/linux/compositor/toolkit`: `idle_notification`, `bind`
 and `request` for the lock notifier, and `watch_fd` for the `loginctl`
 socket. hypridle has no surface and no wire code of its own.
 
@@ -695,9 +695,9 @@ it.
 
 Built and passing: the host tests, `idle` and `idle-user` on x86_64 and
 aarch64, and every other `test-compositor` boot on x86_64. The file is read
-through `src/user/linux/compositor/hyprlang` (`hypridle/src/conf.rs` is the
+through `src/user/system/linux/compositor/hyprlang` (`hypridle/src/conf.rs` is the
 schema and the adapter into the model), and Wayland is spoken through
-`src/user/linux/compositor/toolkit`, so hypridle carries no copy of either. Left
+`src/user/system/linux/compositor/toolkit`, so hypridle carries no copy of either. Left
 for Ferrix to grow: a suspend (`before_sleep_cmd`, `after_sleep_cmd`,
 `inhibit_sleep`) and a D-Bus `ScreenSaver.Inhibit`. The user's `lock_cmd`
 locks as soon as `/bin/hyprlock` is in the image. Until then it says
@@ -716,13 +716,13 @@ shell says it does, and the program reports it.
 
 ### Where it stands
 
-* **`src/user/linux/compositor/toolkit` is on `main`** (2026-09-26). Its tests run hyprix
+* **`src/user/system/linux/compositor/toolkit` is on `main`** (2026-09-26). Its tests run hyprix
   in the test process, headless, and judge the frame it composed: a bar
   anchored across the top is drawn there, a lock surface covers the screen
   and comes off at unlock, and timers, children, signals and the waker come
   back as events. Two things are not tried end to end: the keyboard, since
   a headless seat has no keyboard (the key translation is tested as a
-  function against `src/user/linux/compositor/xkb`'s `us` and `de` tables).
+  function against `src/user/system/linux/compositor/xkb`'s `us` and `de` tables).
   Popups are tried since 2026-09-27: hyprix takes an `xdg_popup` whose
   parent comes from `zwlr_layer_surface_v1.get_popup` (`7506dc0a`, for
   waybar's tooltips), and `tests/against_hyprix.rs`'s popup test runs.
@@ -730,14 +730,14 @@ shell says it does, and the program reports it.
   gives windows and dialogs their menus and floats dialogs, and lets a
   program with its own loop poll its socket, for yserver
   (`docs/YSERVER.md`).
-* **`src/user/linux/compositor/hyprlang` and `src/user/linux/compositor/image` are on
+* **`src/user/system/linux/compositor/hyprlang` and `src/user/system/linux/compositor/image` are on
   `main`** (2026-09-26). hyprlang's tests pin each place config.cpp behaves
   unexpectedly (a top-level name no keyword takes is accepted silently; a
   scoped keyword written out in full keeps its full name; a shorthand line
   and a following block are one instance). image renders all fifteen of the
   user's waybar icons on example (an ignored probe test); JPEG decodes with
   zune-jpeg's SIMD off, so it forbids unsafe and is slower than it could be.
-* **`src/user/linux/compositor/text` is on `main`** (2026-09-26). 29 host tests on
+* **`src/user/system/linux/compositor/text` is on `main`** (2026-09-26). 29 host tests on
   the tree's own Liberation and Inter; an ignored probe of the host's fonts
   (`cargo test -p compositor-text -- --ignored`) found 419 faces in about
   200 ms, instanced the variable Ubuntu file at wght 300 for "Ubuntu Light",

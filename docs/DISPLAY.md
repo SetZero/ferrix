@@ -345,7 +345,7 @@ time the kernel said `card0 scanout 0 is now ...`, hyprix `Virtual-1 is
 ... now, as its monitor prefers`, and the screen was the new size with the
 windows tiled on it and the GPU still drawing.
 
-**How it is checked.** `src/user/linux/compositor/blank` asks for universal planes after its
+**How it is checked.** `src/user/system/linux/compositor/blank` asks for universal planes after its
 modeset, reads the planes as Smithay does, and ends its marker line with
 `plane 4 Primary`: the plane whose `type` value is named `Primary` in the
 property's own enum list, and which must show the framebuffer and CRTC the
@@ -422,7 +422,7 @@ from `BootInfo`. What changes is what a person sees:
   `VIRTIO_F_ACCESS_PLATFORM`, so the driver runs in degraded trusted mode
   there, as the disk drivers do. The compositor's programs are built for
   `armv7-unknown-linux-musleabihf`, hard float.
-* **`test-display`.** Builds `src/user/linux/compositor/blank` as init and boots it with the
+* **`test-display`.** Builds `src/user/system/linux/compositor/blank` as init and boots it with the
   device, waits for a line starting `compositor: `, then asks QEMU over QMP
   (TCP on localhost on every host) for `screendump device=gpu0 head=0` in
   QEMU's default PPM, and compares every pixel. A negative control, the
@@ -491,7 +491,7 @@ from `BootInfo`. What changes is what a person sees:
   file for the same job at `~/.config/ferrix/wallpaper.toml`. It could not be
   a compositor option anyway: every setting in it is spent by `ffmpeg` on the
   host when the image is built, and the guest has no encoder to change its
-  mind with. `src/user/linux/compositor/config`'s table stays exactly Hyprland 0.56's, which
+  mind with. `src/user/system/linux/compositor/config`'s table stays exactly Hyprland 0.56's, which
   is what lets the differential harness compare it. The client keeps **two** buffers
   where a still wallpaper keeps one, because a compositor releases a buffer
   when a later commit replaces it: a client that drew once and waited for the
@@ -605,9 +605,9 @@ kernel code.
 | L2 | `src/lib/drivers/virtio::gpu`: 2D control commands and responses encoded and decoded, config, features, hostile-device tests, fuzz target; checked against QEMU 9.2.4's `virtio_gpu.h` | no | 5 |
 | L3 | `src/lib/proto/displayctl`: §2.2's messages and validation, host-tested, fuzzed | no | 3 |
 | L4 | `src/lib/drivers/display/virtio-gpu`: driver logic over `src/lib/drivers/block/virtio-blk`'s traits (bring-up, the command queue, resource lifecycle), tested against a simulated device | no | 5 |
-| L5 | `src/user/native/drivers/display/virtio-gpu` driver, devmgr's table entry, `DISPLAY_CONTROL_CREATE`, the core's control task and the §2.4 check; exit: the boot line names the mode the driver reported | yes | 8 |
+| L5 | `src/user/system/native/drivers/display/virtio-gpu` driver, devmgr's table entry, `DISPLAY_CONTROL_CREATE`, the core's control task and the §2.4 check; exit: the boot line names the mode the driver reported | yes | 8 |
 | L6 | devfs `/dev/dri/card0`: subdirectory, exclusive open, the ioctl branch and §2.3's subset, `mapping()` to the card VMO, event `read` | yes | 8 |
-| L7 | `src/user/linux/compositor/` first binary (open, mode, dumb buffer, fill, `SETCRTC`), built into the initramfs; `xtask test-display` with QMP screendump and its negative control; `xtask run --display` | no | 5 |
+| L7 | `src/user/system/linux/compositor/` first binary (open, mode, dumb buffer, fill, `SETCRTC`), built into the initramfs; `xtask test-display` with QMP screendump and its negative control; `xtask run --display` | no | 5 |
 |  | **Iteration 1** |  | **37** |
 
 That is 3 more than the 34 first given. The difference is devfs
@@ -681,7 +681,7 @@ divider and nothing else of PLL4.
   kind and the binding number `TREE_STM32_HDMI`, and starts `/lib/drivers/ltdc`
   with blk's START shape, the two register windows where virtio's blocks
   would be.
-* **The driver** (`src/user/native/drivers/display/stm32-ltdc`, logic in `src/lib/drivers/display/stm32-display`, host-tested
+* **The driver** (`src/user/system/native/drivers/display/stm32-ltdc`, logic in `src/lib/drivers/display/stm32-display`, host-tested
   against models of the LTDC, the I2C controller, the bridge and an EDID
   EEPROM, and with real monitors' EDIDs): finds the bridge in TPI mode and
   checks its chip id, reads the monitor's EDID (base block and first
@@ -828,7 +828,7 @@ reload at the next vertical blanking, and no frame is drawn.
   controller starts again.
 * The monitor is turned (`transform, 3`), and the card knows nothing of
   it. `hyprix` turns the plane's image, its hotspot and its place as it
-  turns the frame (`src/user/linux/compositor/hyprix/src/plane.rs`, `turned`): the
+  turns the frame (`src/user/system/linux/compositor/hyprix/src/plane.rs`, `turned`): the
   pointer lands on the buffer pixel the frame would have drawn it on, for
   all eight transforms, which virtio-gpu's plane gets as well -- before
   this a turned monitor drew its pointer into the frame on every card.
@@ -840,7 +840,7 @@ step off.
 
 **What ran on the board (2026-09-23).** At `FERRIX-BOOT-OK stages 1-12` the
 node was published, `devmgr   1 devices, 6 drivers, 1 started, 0 failed`,
-`display  card0 scanout 0: 1280x720`. `src/user/linux/compositor/blank` as init printed
+`display  card0 scanout 0: 1280x720`. `src/user/system/linux/compositor/blank` as init printed
 `compositor: scanout 1280x720 1280x720 colour 0x1e1e2e plane 4 Primary` and
 the customer saw that colour on the monitor. `hyprix` as init reported `1
 monitor [card0 HDMI-A-1 1280x720 1280x720]`, started a terminal running
@@ -882,7 +882,7 @@ the question, and the core reads the file itself:
   ring-3 drivers are native programs with handles and no filesystem: the
   driver-side design would have been a new displayctl message (protocol
   version 7), a way for a native driver to be handed `/proc/cmdline` and a
-  firmware file, and the same parse in `src/user/native/drivers/display/virtio-gpu` and `src/user/native/drivers/display/stm32-ltdc` both.
+  firmware file, and the same parse in `src/user/system/native/drivers/display/virtio-gpu` and `src/user/system/native/drivers/display/stm32-ltdc` both.
 * One place means every client sees the same bytes: hyprix through the
   property, anything else through the same ioctls, and
   `/sys/class/drm/card0-Virtual-1/edid`, which the core now has too.
@@ -954,7 +954,7 @@ bar. Never by connector: `card2-DP-1` today is another connector after the
 host's next boot. The EDID goes to `/lib/firmware/edid/LEN-R27qe-Gen2.bin`
 in the initramfs, `drm.edid_firmware=edid/LEN-R27qe-Gen2.bin` into the
 image's `DEFAULTS.TXT`, and the host's `/usr/share/hwdata/pnp.ids` to the
-same path in the guest, where `src/user/linux/compositor/drm`'s `registered` turns `LEN`
+same path in the guest, where `src/user/system/linux/compositor/drm`'s `registered` turns `LEN`
 into `Lenovo Group Limited`. Neither file is ever committed: both are read
 from the machine the image is built on. On a host without `pnp.ids` the
 make is the code and the description `LEN R27qe Gen2 UTP03KBB`, which the
@@ -997,7 +997,7 @@ R27qe, alone at `2560x0`, at the window's size. What that did, looked for:
 **Tests.** `src/lib/proto/displayctl` (13: the grammar, the name rule, the checks, the identity,
 the property and blob answers); `xtask` (3: finding a monitor among
 connector directories, describing one, what an image carries);
-`src/user/linux/compositor/config` (rule precedence) and `hyprix` (the pointer over a
+`src/user/system/linux/compositor/config` (rule precedence) and `hyprix` (the pointer over a
 screen at `2560x0`). `test-compositor --boot edid` boots with the host's
 monitor, or on a host without it a stand-in EDID xtask makes (`FRX Ferrix
 Test EDID0001`), and requires the kernel's line, `hyprctl monitors` saying

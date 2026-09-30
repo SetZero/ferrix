@@ -17,7 +17,7 @@ seen without it.
                    vendor_boot.img, fastboot boot the image, wait for Android,
                    and save the ramoops record the run left
     POST /boot?stats=N
-                   the same, with Ferrix's stat service (`src/user/linux/statd/`) as pid 1
+                   the same, with Ferrix's stat service (`src/user/system/linux/statd/`) as pid 1
                    for N seconds: a copy of the image whose boot image header
                    carries `ferrix.init=/sbin/ferrix-statd
                    ferrix.statd.seconds=N`, which ABL puts in the device

@@ -315,33 +315,33 @@ package FerrixStructure {
              * from the same archive (src/kernel/src/fs/root_disk.rs). */
         part devmgr : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /sbin/devmgr, a native program on src/user/native/rt. */
+            doc /* /sbin/devmgr, a native program on src/user/system/native/rt. */
         }
         part virtioBlk : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/blk, a native program on src/user/native/rt. */
+            doc /* /lib/drivers/blk, a native program on src/user/system/native/rt. */
         }
         part virtioGpu : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/gpu, a native program on src/user/native/rt. */
+            doc /* /lib/drivers/gpu, a native program on src/user/system/native/rt. */
         }
         part virtioNet : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/net, a native program on src/user/native/rt. */
+            doc /* /lib/drivers/net, a native program on src/user/system/native/rt. */
         }
         part virtioInput : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/input, a native program on src/user/native/rt. */
+            doc /* /lib/drivers/input, a native program on src/user/system/native/rt. */
         }
         part vport : UserBinary {
             attribute :>> staticMusl = false;
             doc /* /lib/drivers/vport, the virtio-serial port driver, a native
-                 * program on src/user/native/rt. */
+                 * program on src/user/system/native/rt. */
         }
         part virtioSndDriver : UserBinary {
             attribute :>> staticMusl = false;
             doc /* /lib/drivers/snd, the virtio-snd driver (docs/AUDIO.md), a
-                 * native program on src/user/native/rt over src/lib/drivers/sound/virtio-snd. */
+                 * native program on src/user/system/native/rt over src/lib/drivers/sound/virtio-snd. */
         }
         part init : UserBinary {
             doc /* The program the kernel starts first (src/kernel/src/init.rs):
@@ -360,7 +360,7 @@ package FerrixStructure {
              * dynamically linked through the interpreter its PT_INTERP names
              * -- as a Process (see FerrixObjects) speaking the Linux ABI, and
              * optionally the native one. devmgr and the drivers are native
-             * programs on src/user/native/rt, which make the few Linux calls they need
+             * programs on src/user/system/native/rt, which make the few Linux calls they need
              * as well. */
         attribute usesNativeAbi : Boolean = false;
     }
@@ -376,7 +376,7 @@ package FerrixStructure {
 
         #implemented part init : UserProcess {
             @stage { number = 15; }
-            doc /* /sbin/init (src/user/linux/init/, docs/INIT.md), since 2026-09-26: pid 1
+            doc /* /sbin/init (src/user/system/linux/init/, docs/INIT.md), since 2026-09-26: pid 1
                  * around src/lib/init/svc's manager. It mounts /run and cgroup2, runs
                  * each service in a cgroup of its own from clone3, reaps,
                  * restarts, gives the console a getty and a shell with a
@@ -808,7 +808,7 @@ package FerrixStructure {
         doc /* docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and
              * is the only code cargo test, Miri and the fuzzers can reach;
              * src/boot/common/uefi/ and src/kernel/ are reached by the QEMU boot test; tools/common/xtask/ by
-             * cargo test. src/user/native/ holds the native programs the initramfs
+             * cargo test. src/user/system/native/ holds the native programs the initramfs
              * carries -- devmgr, the drivers and the runtime they link --
              * built for the kernel's targets and kept out of the host gates.
              * tools/common/check/check-crate-layering.sh keeps the arrows below pointing
@@ -1109,7 +1109,7 @@ package FerrixStructure {
             attribute :>> hostTests = 22;
             @stage { number = 10; }
             doc /* The virtio-net driver logic, written ahead of the network
-                 * device it drives from src/user/native/drivers/net/virtio-net: bring-up in the order the
+                 * device it drives from src/user/system/native/drivers/net/virtio-net: bring-up in the order the
                  * status protocol fixes, a receive queue the driver fills and
                  * refills because an empty one drops every frame in silence, a
                  * transmit queue whose buffers stay the caller's until the
@@ -1129,7 +1129,7 @@ package FerrixStructure {
             @stage { number = 17; }
             doc /* The virtio-gpu 2D driver logic, written ahead of the driver
                  * process for the compositor's first iteration and driven
-                 * from src/user/native/drivers/display/virtio-gpu since: bring-up with
+                 * from src/user/system/native/drivers/display/virtio-gpu since: bring-up with
                  * the control queue alone, one command at a time, every
                  * response checked, and the pipeline from the display core's
                  * requests to device commands. A failed step is undone as far
@@ -1160,7 +1160,7 @@ package FerrixStructure {
             @stage { number = 17; }
             doc /* The virtio-input driver logic, written ahead of the driver
                  * process for the input iteration (docs/INPUT.md) and driven
-                 * from src/user/native/drivers/input/virtio-input since: bring-up
+                 * from src/user/system/native/drivers/input/virtio-input since: bring-up
                  * that stops at FEATURES_OK so no event is discarded before
                  * the core has judged the device, the device's description
                  * read as a HELLO, the event queue kept full because QEMU
@@ -1357,7 +1357,7 @@ package FerrixStructure {
             @stage { number = 10; }
             doc /* A ring-3 block driver's serve loop between the block ring and
                  * a virtio-blk device, written against a trait so it runs on
-                 * the host with a fake device; src/user/native/drivers/block/virtio-blk adds only the
+                 * the host with a fake device; src/user/system/native/drivers/block/virtio-blk adds only the
                  * handles. */
         }
         #implemented part virtioBlk : LibraryCrate {
@@ -1368,7 +1368,7 @@ package FerrixStructure {
                  * it is handed: bring-up to DRIVER_OK, read, write and flush,
                  * each completion counted once even from a hostile device, and
                  * memory handed back only after the device's reset. Driven
-                 * from src/user/native/drivers/block/virtio-blk; fuzzed by virtio_blk. */
+                 * from src/user/system/native/drivers/block/virtio-blk; fuzzed by virtio_blk. */
         }
         #implemented part devmgrProto : LibraryCrate {
             attribute :>> path = "src/lib/proto/devmgr-proto";
@@ -1385,7 +1385,7 @@ package FerrixStructure {
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 30;
             doc /* Typed, safe wrappers over every native system call, with
-                 * owned handles, written against a raw call trait: src/user/native/rt
+                 * owned handles, written against a raw call trait: src/user/system/native/rt
                  * implements it with the trap instruction, and the tests with
                  * a recorder that plays the kernel's part. */
         }
@@ -1411,7 +1411,7 @@ package FerrixStructure {
                  * command stream from the etnaviv project's MIT-licensed
                  * register database, the identity, reset and initialisation
                  * in the order Linux's etnaviv driver uses them, and a
-                 * WAIT/LINK ring. Linked by src/user/native/drivers/gpu/gc400, which devmgr starts
+                 * WAIT/LINK ring. Linked by src/user/system/native/drivers/gpu/gc400, which devmgr starts
                  * on the board, where it ran on 2026-09-24; no QEMU machine
                  * has the core, so no gate drives it. */
         }
@@ -1423,7 +1423,7 @@ package FerrixStructure {
                  * embedded Spleen 8x16 font, clipped rather than refused and
                  * allocating nothing: what the panic screen
                  * (src/kernel/src/panic/screen.rs) draws with, and
-                 * src/user/linux/compositor/term as well. */
+                 * src/user/system/linux/compositor/term as well. */
         }
         #implemented part qr : LibraryCrate {
             attribute :>> path = "src/lib/kernel/qr";
@@ -1439,7 +1439,7 @@ package FerrixStructure {
             doc /* SPICE's vdagent protocol as bytes, the chunk framing and the
                  * clipboard messages (docs/CLIPBOARD.md §4). Written ahead of
                  * the clipboard agent; since 2026-09-27 that agent,
-                 * src/user/linux/compositor/vdagent, speaks it, and cargo
+                 * src/user/system/linux/compositor/vdagent, speaks it, and cargo
                  * xtask test-clipboard drives it both ways. */
         }
         #implemented part virtioConsole : LibraryCrate {
@@ -1448,7 +1448,7 @@ package FerrixStructure {
             attribute :>> hostTests = 15;
             doc /* The virtio-console driver: bring-up, the control
                  * conversation until a named port is open, and that port's
-                 * bytes (docs/CLIPBOARD.md §3). Linked by src/user/native/drivers/console/vport, which
+                 * bytes (docs/CLIPBOARD.md §3). Linked by src/user/system/native/drivers/console/vport, which
                  * devmgr starts when --clipboard puts the device on the bus;
                  * cargo xtask test-clipboard drives it (2026-09-27). */
         }

@@ -26,7 +26,7 @@
 //!
 //! # What is drawn and what is only recorded
 //!
-//! `blur` is drawn: `src/user/linux/compositor/render` blurs what is behind a translucent
+//! `blur` is drawn: `src/user/system/linux/compositor/render` blurs what is behind a translucent
 //! layer surface, which is what makes a bar look like Hyprland's.
 //! `above_lock` is drawn: the surface goes over the session lock, which is
 //! the whole reason an on-screen keyboard can be used on a lock screen.

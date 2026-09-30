@@ -2,7 +2,7 @@
 //! speaker, and both found again -- the picture in a screendump, the song in
 //! the file QEMU wrote of what the sound card played.
 //!
-//! `src/user/linux/media/badapple` runs as init with a virtio-gpu and a
+//! `src/user/system/linux/media/badapple` runs as init with a virtio-gpu and a
 //! virtio-snd whose far end is QEMU's `wav` backend. It decodes the song's
 //! AAC track itself, converts it to 48 kHz and plays it; it shows the video,
 //! converted by the host into `.bav`, frame by frame by the sound card's
@@ -126,8 +126,8 @@ fn pack_tool() -> Result<PathBuf> {
     let target_dir = paths::target_dir().join("media").join("host");
     let program = target_dir.join("release").join("bav-pack");
     crate::builds::Build::cargo(
-        "cargo build (src/user/linux/media, bav-pack) for the host",
-        paths::workspace_root().join("src/user/linux/media"),
+        "cargo build (src/user/system/linux/media, bav-pack) for the host",
+        paths::workspace_root().join("src/user/system/linux/media"),
     )
     .args(["build", "--release", "-p", "media-bav", "--bin", "bav-pack"])
     .env("CARGO_TARGET_DIR", &target_dir)
@@ -196,7 +196,7 @@ fn prepared(dir: &Path, source: &Path, tool: &Path) -> Result<(PathBuf, PathBuf)
     Ok((video, song))
 }
 
-/// Build `src/user/linux/media/badapple` for `arch`, with the negative control or
+/// Build `src/user/system/linux/media/badapple` for `arch`, with the negative control or
 /// without.
 fn build_player(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target = crate::display::target(arch)
@@ -205,11 +205,11 @@ fn build_player(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target_dir = paths::target_dir()
         .join("media")
         .join(format!("badapple-{flavour}"));
-    println!("  building src/user/linux/media/badapple ({flavour}) for {target}");
+    println!("  building src/user/system/linux/media/badapple ({flavour}) for {target}");
     let program = target_dir.join(target).join("release").join("badapple");
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (src/user/linux/media/badapple, {flavour}) --target {target}"),
-        paths::workspace_root().join("src/user/linux/media"),
+        format!("cargo build (src/user/system/linux/media/badapple, {flavour}) --target {target}"),
+        paths::workspace_root().join("src/user/system/linux/media"),
     )
     .args([
         "build",

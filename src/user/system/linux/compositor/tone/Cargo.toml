@@ -22,7 +22,7 @@ restart = []
 [dependencies]
 libc = "0.2.189"
 # The ALSA numbers and layouts, checked against the UAPI header.
-ferrix-linux-abi = { path = "../../../../lib/proto/linux-abi" }
+ferrix-linux-abi = { path = "../../../../../lib/proto/linux-abi" }
 compositor-evecho = { path = "../evecho" }
 
 [lints]

@@ -19,7 +19,7 @@
 //!
 //! Nothing here traps. Every wrapper builds a [`Raw`] — number, six argument
 //! registers, and the memory its pointer arguments name — and passes it to a
-//! [`Syscall`]. `src/user/native/rt`, the runtime a native program links, implements that
+//! [`Syscall`]. `src/user/system/native/rt`, the runtime a native program links, implements that
 //! trait with the architecture's trap instruction. The tests implement it with
 //! a recorder that plays the kernel's part, so every wrapper's number, argument
 //! order, pointer layout and error decoding is checked on the host and under

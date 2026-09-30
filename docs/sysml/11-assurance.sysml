@@ -219,9 +219,9 @@ package FerrixAssurance {
             AssemblySite(file = "src/kernel/src/arch/aarch64/switch.rs", maxLines = 75),
             AssemblySite(file = "src/kernel/src/arch/armv7a/switch.rs", maxLines = 67),
             AssemblySite(file = "src/kernel/src/arch/x86_64/syscall.rs", maxLines = 118),
-            AssemblySite(file = "src/user/native/rt/src/arch/x86_64.rs", maxLines = 20),
-            AssemblySite(file = "src/user/native/rt/src/arch/aarch64.rs", maxLines = 20),
-            AssemblySite(file = "src/user/native/rt/src/arch/armv7a.rs", maxLines = 20),
+            AssemblySite(file = "src/user/system/native/rt/src/arch/x86_64.rs", maxLines = 20),
+            AssemblySite(file = "src/user/system/native/rt/src/arch/aarch64.rs", maxLines = 20),
+            AssemblySite(file = "src/user/system/native/rt/src/arch/armv7a.rs", maxLines = 20),
             AssemblySite(file = "src/boot/vendor/google/pixel7/src/entry.rs", maxLines = 130),
             AssemblySite(file = "src/kernel/src/arch/x86_64/vdso.rs", maxLines = 120),
             AssemblySite(file = "src/kernel/src/arch/x86_64/speculation.rs", maxLines = 16),
@@ -375,7 +375,7 @@ package FerrixAssurance {
     }
     #implemented verification def PtyTest {
         @stage { number = 18; }
-        doc /* cargo xtask test-pty: src/user/linux/compositor/term --headless runs a program
+        doc /* cargo xtask test-pty: src/user/system/linux/compositor/term --headless runs a program
              * on a pseudoterminal pair, and what it wrote comes back through
              * the master and the terminal's grid. */
         subject os : Ferrix;

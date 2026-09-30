@@ -8,7 +8,7 @@
 //! path at once, and nothing in it is simulated: QEMU's `input-send-event`
 //! puts an event into a real `virtio-keyboard-pci`, the ring-3 driver reads
 //! it off the device's event queue, the kernel's input core assembles the
-//! report, `/dev/input/event0` hands it to `src/user/linux/compositor/evecho`, and evecho
+//! report, `/dev/input/event0` hands it to `src/user/system/linux/compositor/evecho`, and evecho
 //! prints it on the serial port this reads.
 //!
 //! **The negative control.** The same boot is run again with evecho built
@@ -46,7 +46,7 @@ const POINTER: (i32, i32) = (0x4000, 0x2000);
 /// virtqueue, a channel and a device node, and the guest is emulated.
 const PATIENCE: Duration = Duration::from_secs(20);
 
-/// Build `src/user/linux/compositor/evecho` for `arch`, with the negative control or
+/// Build `src/user/system/linux/compositor/evecho` for `arch`, with the negative control or
 /// without, and say where the program is.
 pub(crate) fn build_evecho(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target = crate::display::target(arch).ok_or_else(|| {
@@ -57,11 +57,13 @@ pub(crate) fn build_evecho(arch: Arch, negative: bool) -> Result<PathBuf> {
     })?;
     let flavour = if negative { "negative" } else { "plain" };
     let target_dir = paths::target_dir().join("compositor").join("evecho");
-    println!("  building src/user/linux/compositor/evecho ({flavour}) for {target}");
+    println!("  building src/user/system/linux/compositor/evecho ({flavour}) for {target}");
     let program = target_dir.join(target).join("release").join("evecho");
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (src/user/linux/compositor/evecho, {flavour}) --target {target}"),
-        paths::workspace_root().join("src/user/linux/compositor"),
+        format!(
+            "cargo build (src/user/system/linux/compositor/evecho, {flavour}) --target {target}"
+        ),
+        paths::workspace_root().join("src/user/system/linux/compositor"),
     )
     .args([
         "build",

@@ -138,7 +138,7 @@ package FerrixDrivers {
         doc /* An ordinary user process in its own Job, holding exactly the
              * capabilities devmgr gave it. A driver fault is a process fault;
              * a wedged driver is a Job kill. Eight exist, native programs on
-             * src/user/native/rt under /lib/drivers: blk, net, gpu, ltdc, input,
+             * src/user/system/native/rt under /lib/drivers: blk, net, gpu, ltdc, input,
              * usbhid, gc400 and vport, each a thin layer of handles over its
              * src/lib/ crates. */
         ref part job : Job;
@@ -178,7 +178,7 @@ package FerrixDrivers {
 
     #implemented part def DevMgr {
         @stage { number = 10; }
-        doc /* A native program on src/user/native/rt, not a musl binary: src/user/native/devmgr,
+        doc /* A native program on src/user/system/native/rt, not a musl binary: src/user/system/native/devmgr,
              * /sbin/devmgr. Receives a handle per device node, matches a
              * driver, spawns it in its own Job with the four resources
              * above. The kernel starts it from stage 10's boot check with
@@ -208,20 +208,20 @@ package FerrixDrivers {
         @stage { number = 10; }
         doc /* The first driver: virtio-blk as a user process. Exit test: a
              * sector read through ring 3 with the IOMMU on, and a deliberate
-             * out-of-domain DMA attempt faulting. src/user/native/drivers/block/virtio-blk over
+             * out-of-domain DMA attempt faulting. src/user/system/native/drivers/block/virtio-blk over
              * src/lib/drivers/block/virtio-blk and src/lib/drivers/block/blkserve; the exit is met in the boot
              * test, with VT-d translating on x86-64 and the SMMUv3 on
              * AArch64, and ARMv7-A in degraded trusted mode. */
     }
 
     #implemented part def VirtioNetDriver :> DriverProcess {
-        doc /* src/user/native/drivers/net/virtio-net over src/lib/drivers/net/virtio-net and src/lib/drivers/net/netserve, speaking the
+        doc /* src/user/system/native/drivers/net/virtio-net over src/lib/drivers/net/virtio-net and src/lib/drivers/net/netserve, speaking the
              * net ring; cargo xtask test-net is its gate. */
     }
 
     #implemented part def VirtioGpuDriver :> DriverProcess {
         @stage { number = 17; }
-        doc /* src/user/native/drivers/display/virtio-gpu over src/lib/drivers/display/virtio-gpu: the display core's card0 over
+        doc /* src/user/system/native/drivers/display/virtio-gpu over src/lib/drivers/display/virtio-gpu: the display core's card0 over
              * displayctl, and since stage 19 the render core's renderD128
              * over renderctl, turning its messages into virtio-gpu's 3D
              * commands. cargo xtask test-display is its gate. The one driver
@@ -230,14 +230,14 @@ package FerrixDrivers {
 
     #implemented part def VirtioInputDriver :> DriverProcess {
         @stage { number = 17; }
-        doc /* src/user/native/drivers/input/virtio-input over src/lib/drivers/input/virtio-input, feeding the input core's
+        doc /* src/user/system/native/drivers/input/virtio-input over src/lib/drivers/input/virtio-input, feeding the input core's
              * /dev/input/eventN over inputctl; cargo xtask test-input is its
              * gate. */
     }
 
     #implemented part def UsbHidDriver :> DriverProcess {
         @stage { number = 17; }
-        doc /* src/user/native/drivers/usb/usbhid over src/lib/drivers/usb/usb-host: the STM32MP157's EHCI
+        doc /* src/user/system/native/drivers/usb/usbhid over src/lib/drivers/usb/usb-host: the STM32MP157's EHCI
              * controller, its hubs, and HID keyboards, mice and media keys
              * read by their report descriptors, each served to the input
              * core over a control channel of its own, keyboards' LEDs lit
@@ -251,7 +251,7 @@ package FerrixDrivers {
 
     #inProgress part def Gc400Driver :> DriverProcess {
         @stage { number = 19; }
-        doc /* src/user/native/drivers/gpu/gc400 over src/lib/drivers/gpu/gc400: the STM32MP157's Vivante GC400T,
+        doc /* src/user/system/native/drivers/gpu/gc400 over src/lib/drivers/gpu/gc400: the STM32MP157's Vivante GC400T,
              * the G2 step of the board's gears (docs/GPU.md §6.3). It
              * prints the core's identity, soft-resets and initialises it as
              * etnaviv does, starts the front end on a WAIT/LINK loop in one

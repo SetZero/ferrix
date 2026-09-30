@@ -132,7 +132,7 @@ rule below comes from something seen there.
 [LAYOUT.md](LAYOUT.md) says which directory each kind of thing belongs in:
 a new lib in the `src/lib/` group it is, a driver's logic and process
 under the same function in `src/lib/drivers/` and
-`src/user/native/drivers/`, a Linux program under `src/user/linux/`, a
+`src/user/system/native/drivers/`, a Linux program under `src/user/system/linux/`, a
 script or host program under the `tools/common/` role it has, and anything
 for one vendor's hardware under `vendor/<vendor>/<device>/`. Nothing new
 goes at the top level without adding it there, and scratch files never go

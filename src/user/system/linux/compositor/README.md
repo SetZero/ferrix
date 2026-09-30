@@ -157,7 +157,7 @@ names the part of Hyprland or hyprlang it follows.
   screen. Nothing in it parses a file, works out a layout, draws a
   pixel or decodes a message -- the crates above do those -- so it is the loop
   that joins them and the two places the compositor touches the world: a
-  client's shared memory, and the screen. The screen is `src/user/linux/compositor/drm`'s
+  client's shared memory, and the screen. The screen is `src/user/system/linux/compositor/drm`'s
   card, with two dumb buffers drawn into in turn and shown with a page flip;
   `--headless WxH` draws into memory instead, and `--dump <dir>` writes each
   frame as a PPM. `debug:overlay = 1`, in the configuration or by `hyprctl

@@ -16,7 +16,7 @@ name = "ferrix-install"
 path = "src/main.rs"
 
 [dependencies]
-ferrix-partition = { path = "../../../lib/fs/partition" }
+ferrix-partition = { path = "../../../../lib/fs/partition" }
 
 [profile.release]
 opt-level = "s"

@@ -3,7 +3,7 @@
 //! fuzzel hands a binding's key to `xkb_keysym_from_name(key, 0)`: the name
 //! must be one XKB knows, spelled with XKB's own case, and two spellings of
 //! one keysym are the same key. There is no libxkbcommon here, so "a name
-//! XKB knows" is every keysym the keymaps in `src/user/linux/compositor/xkb` make -- which
+//! XKB knows" is every keysym the keymaps in `src/user/system/linux/compositor/xkb` make -- which
 //! is every key a keyboard on this compositor can press -- and the aliases
 //! `keysymdef.h` gives those keys a second name under.
 

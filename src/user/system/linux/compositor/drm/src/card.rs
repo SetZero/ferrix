@@ -403,7 +403,7 @@ pub fn rename(plans: &mut [Plan]) {
     }
 }
 
-/// Fill the screen with one colour and show it: `src/user/linux/compositor/blank`'s whole
+/// Fill the screen with one colour and show it: `src/user/system/linux/compositor/blank`'s whole
 /// job, and the proof that the path from a program to QEMU's window works.
 ///
 /// # Errors

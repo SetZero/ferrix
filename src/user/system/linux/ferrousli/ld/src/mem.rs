@@ -7,7 +7,7 @@
 //! before the C library is mapped, and linking a second copy of it into every
 //! process is the thing a dynamic loader exists to avoid.
 //!
-//! They are written as `src/user/linux/ferrousli/CONVENTIONS.md` requires of this kind of
+//! They are written as `src/user/system/linux/ferrousli/CONVENTIONS.md` requires of this kind of
 //! code: plain `while` loops over raw pointers, with no slice operation, no
 //! iterator and no move of anything larger than a machine word, because every
 //! one of those is a call back into the function being defined.

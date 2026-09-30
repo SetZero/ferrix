@@ -116,7 +116,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of src/kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (src/kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of src/kernel/src/console.rs and src/kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (src/kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-23 files, 103 packages, 5281 elements, 212 relations. Model digest `a7b1ea9fbff6d51c`.
+23 files, 103 packages, 5281 elements, 212 relations. Model digest `06b6db59034612da`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2392,7 +2392,7 @@ Where the hardware is: src/lib/platform/acpi's dmar module (VT-d units and their
 
 `#implemented`  ·  stage 10
 
-An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Eight exist, native programs on src/user/native/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid, gc400 and vport, each a thin layer of handles over its src/lib/ crates.
+An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Eight exist, native programs on src/user/system/native/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid, gc400 and vport, each a thin layer of handles over its src/lib/ crates.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2421,7 +2421,7 @@ The data path is not per-request IPC: driver and kernel share a descriptor ring 
 
 `#implemented`  ·  stage 10
 
-A native program on src/user/native/rt, not a musl binary: src/user/native/devmgr, /sbin/devmgr. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above. The kernel starts it from stage 10's boot check with DEVICES messages holding a job, every device node twice and every driver image /lib/drivers/MANIFEST lists (src/kernel/src/discovery/devmgr.rs, src/lib/proto/devmgr-proto); it matches virtio-blk, virtio-net, virtio-gpu, virtio-input and the virtio-serial port by a table of its own, starts each driver with START, waits for every one but the port driver to be PUBLISHED before the next, and REPORTs. docs/DEVMGR.md.
+A native program on src/user/system/native/rt, not a musl binary: src/user/system/native/devmgr, /sbin/devmgr. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above. The kernel starts it from stage 10's boot check with DEVICES messages holding a job, every device node twice and every driver image /lib/drivers/MANIFEST lists (src/kernel/src/discovery/devmgr.rs, src/lib/proto/devmgr-proto); it matches virtio-blk, virtio-net, virtio-gpu, virtio-input and the virtio-serial port by a table of its own, starts each driver with START, waits for every one but the port driver to be PUBLISHED before the next, and REPORTs. docs/DEVMGR.md.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2434,37 +2434,37 @@ A native program on src/user/native/rt, not a musl binary: src/user/native/devmg
 
 `#implemented`  ·  stage 10  ·  specialises `DriverProcess`
 
-The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting. src/user/native/drivers/block/virtio-blk over src/lib/drivers/block/virtio-blk and src/lib/drivers/block/blkserve; the exit is met in the boot test, with VT-d translating on x86-64 and the SMMUv3 on AArch64, and ARMv7-A in degraded trusted mode.
+The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting. src/user/system/native/drivers/block/virtio-blk over src/lib/drivers/block/virtio-blk and src/lib/drivers/block/blkserve; the exit is met in the boot test, with VT-d translating on x86-64 and the SMMUv3 on AArch64, and ARMv7-A in degraded trusted mode.
 
 #### VirtioNetDriver
 
 `#implemented`  ·  specialises `DriverProcess`
 
-src/user/native/drivers/net/virtio-net over src/lib/drivers/net/virtio-net and src/lib/drivers/net/netserve, speaking the net ring; cargo xtask test-net is its gate.
+src/user/system/native/drivers/net/virtio-net over src/lib/drivers/net/virtio-net and src/lib/drivers/net/netserve, speaking the net ring; cargo xtask test-net is its gate.
 
 #### VirtioGpuDriver
 
 `#implemented`  ·  stage 17  ·  specialises `DriverProcess`
 
-src/user/native/drivers/display/virtio-gpu over src/lib/drivers/display/virtio-gpu: the display core's card0 over displayctl, and since stage 19 the render core's renderD128 over renderctl, turning its messages into virtio-gpu's 3D commands. cargo xtask test-display is its gate. The one driver devmgr starts again after it dies (restartDriver).
+src/user/system/native/drivers/display/virtio-gpu over src/lib/drivers/display/virtio-gpu: the display core's card0 over displayctl, and since stage 19 the render core's renderD128 over renderctl, turning its messages into virtio-gpu's 3D commands. cargo xtask test-display is its gate. The one driver devmgr starts again after it dies (restartDriver).
 
 #### VirtioInputDriver
 
 `#implemented`  ·  stage 17  ·  specialises `DriverProcess`
 
-src/user/native/drivers/input/virtio-input over src/lib/drivers/input/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.
+src/user/system/native/drivers/input/virtio-input over src/lib/drivers/input/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.
 
 #### UsbHidDriver
 
 `#implemented`  ·  stage 17  ·  specialises `DriverProcess`
 
-src/user/native/drivers/usb/usbhid over src/lib/drivers/usb/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are src/lib/drivers/usb/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).
+src/user/system/native/drivers/usb/usbhid over src/lib/drivers/usb/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are src/lib/drivers/usb/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).
 
 #### Gc400Driver
 
 `#inProgress`  ·  stage 19  ·  specialises `DriverProcess`
 
-src/user/native/drivers/gpu/gc400 over src/lib/drivers/gpu/gc400: the STM32MP157's Vivante GC400T, the G2 step of the board's gears (docs/GPU.md §6.3). It prints the core's identity, soft-resets and initialises it as etnaviv does, starts the front end on a WAIT/LINK loop in one page pinned PIN_COHERENT, splices in two blocks that each raise an event, and takes each as the interrupt. devmgr starts it as an engine, which serves no kernel subsystem yet, and does not wait for it. No QEMU machine has the core; its gates are src/lib/drivers/gpu/gc400's tests against models of the host interface and the front end, and on the board, on 2026-09-24, both events arrived by interrupt (G2 done). Drawing is G3 to G5.
+src/user/system/native/drivers/gpu/gc400 over src/lib/drivers/gpu/gc400: the STM32MP157's Vivante GC400T, the G2 step of the board's gears (docs/GPU.md §6.3). It prints the core's identity, soft-resets and initialises it as etnaviv does, starts the front end on a WAIT/LINK loop in one page pinned PIN_COHERENT, splices in two blocks that each raise an event, and takes each as the interrupt. devmgr starts it as an engine, which serves no kernel subsystem yet, and does not wait for it. No QEMU machine has the core; its gates are src/lib/drivers/gpu/gc400's tests against models of the host interface and the front end, and on the board, on 2026-09-24, both events arrived by interrupt (G2 done). Drawing is G3 to G5.
 
 #### DriverBootstrap
 
@@ -2710,7 +2710,7 @@ Stage C: subvolumes and snapshots, then the rest. The reader mounts the default 
 
 ## The workspace
 
-docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and is the only code cargo test, Miri and the fuzzers can reach; src/boot/common/uefi/ and src/kernel/ are reached by the QEMU boot test; tools/common/xtask/ by cargo test. src/user/native/ holds the native programs the initramfs carries -- devmgr, the drivers and the runtime they link -- built for the kernel's targets and kept out of the host gates. tools/common/check/check-crate-layering.sh keeps the arrows below pointing the right way.
+docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and is the only code cargo test, Miri and the fuzzers can reach; src/boot/common/uefi/ and src/kernel/ are reached by the QEMU boot test; tools/common/xtask/ by cargo test. src/user/system/native/ holds the native programs the initramfs carries -- devmgr, the drivers and the runtime they link -- built for the kernel's targets and kept out of the host gates. tools/common/check/check-crate-layering.sh keeps the arrows below pointing the right way.
 
 | Crate | Maturity | Stage | Unsafe | Host tests | Note |
 | --- | --- | ---: | --- | ---: | --- |
@@ -2738,10 +2738,10 @@ docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and is the only co
 | `src/lib/drivers/net/netserve` | `#implemented` | — | `forbid` | 12 | A ring-3 network driver's serve loop: the net ring on one side, a virtio-net device on the other, and the rules where they meet. |
 | `src/lib/proto/netring` | `#implemented` | — | `forbid` | 32 | The net ring: the memory the kernel shares with a ring-3 network driver, specified in docs/NET-RING.md. |
 | `src/lib/network/netlink` | `#implemented` | — |  | 48 | The byte-level half of netlink, over linux-abi's headers: walking a buffer of messages and the attributes after each fixed header, and building replies into a caller's buffer with every length and pad computed rather than taken. |
-| `src/lib/drivers/net/virtio-net` | `#implemented` | 10 |  | 22 | The virtio-net driver logic, written ahead of the network device it drives from src/user/native/drivers/net/virtio-net: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every frame in… |
-| `src/lib/drivers/display/virtio-gpu` | `#implemented` | 17 |  | 31 | The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from src/user/native/drivers/display/virtio-gpu since: bring-up with the control queue alone, one command at a time, every response checked,… |
+| `src/lib/drivers/net/virtio-net` | `#implemented` | 10 |  | 22 | The virtio-net driver logic, written ahead of the network device it drives from src/user/system/native/drivers/net/virtio-net: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every… |
+| `src/lib/drivers/display/virtio-gpu` | `#implemented` | 17 |  | 31 | The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from src/user/system/native/drivers/display/virtio-gpu since: bring-up with the control queue alone, one command at a time, every response… |
 | `src/lib/drivers/sound/virtio-snd` | `#implemented` | — |  | 14 | The virtio-snd driver logic, written ahead of the driver process for the audio iteration (docs/AUDIO.md L4): bring-up with DRIVER_OK before HELLO, since a sound device describes its streams only through its control queue; READY into SET_PARAMS and PREPARE;… |
-| `src/lib/drivers/input/virtio-input` | `#implemented` | 17 |  | 28 | The virtio-input driver logic, written ahead of the driver process for the input iteration (docs/INPUT.md) and driven from src/user/native/drivers/input/virtio-input since: bring-up that stops at FEATURES_OK so no event is discarded before the core has… |
+| `src/lib/drivers/input/virtio-input` | `#implemented` | 17 |  | 28 | The virtio-input driver logic, written ahead of the driver process for the input iteration (docs/INPUT.md) and driven from src/user/system/native/drivers/input/virtio-input since: bring-up that stops at FEATURES_OK so no event is discarded before the core… |
 | `src/lib/proto/displayctl` | `#implemented` | 17 | `forbid` | 33 | The control protocol between the kernel's display core and a ring-3 display driver, written ahead of both for the compositor's first iteration (docs/DISPLAY.md). |
 | `src/lib/proto/inputctl` | `#implemented` | 17 | `forbid` | 26 | The control protocol between the kernel's input core and a ring-3 input driver, and evdev's per-open queues, written ahead of both for the input iteration (docs/INPUT.md). |
 | `src/lib/proto/sndctl` | `#implemented` | — | `forbid` | 30 | The control protocol between the kernel's audio core and a ring-3 sound driver, and a PCM stream's state as ALSA keeps it, written ahead of both for the audio iteration (docs/AUDIO.md L3). |
@@ -2755,13 +2755,13 @@ docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and is the only co
 | `src/lib/fs/btrfs-vfs` | `#implemented` | 11 | `forbid` | 35 | btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only and holding no lock across I/O, and a writable mount over src/lib/fs/btrfs-write behind one sleeping lock, whose writes become extents at the commit. |
 | `src/lib/fs/block` | `#implemented` | 11 | `forbid` | 37 | The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. |
 | `src/lib/proto/blkring` | `#implemented` | 10 | `forbid` | 66 | The block ring, docs/BLOCK-RING.md in code: the memory the kernel shares with a ring-3 block driver, every index and entry the other side writes checked before it is used, doorbells over ports, and the HELLO, READY and START messages, linked by both the… |
-| `src/lib/drivers/block/blkserve` | `#implemented` | 10 | `forbid` | 8 | A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; src/user/native/drivers/block/virtio-blk adds only the handles. |
+| `src/lib/drivers/block/blkserve` | `#implemented` | 10 | `forbid` | 8 | A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; src/user/system/native/drivers/block/virtio-blk adds only the handles. |
 | `src/lib/drivers/block/virtio-blk` | `#implemented` | 10 |  | 39 | The virtio-blk driver logic over a transport and DMA memory it is handed: bring-up to DRIVER_OK, read, write and flush, each completion counted once even from a hostile device, and memory handed back only after the device's reset. |
 | `src/lib/proto/devmgr-proto` | `#implemented` | 10 | `forbid` | 7 | The messages between the kernel and devmgr on its bootstrap channel as docs/DEVMGR.md fixes them -- DEVICES, REPORT, PUBLISHED, DIED and RESTARTED -- so the kernel and the program share one definition. |
-| `src/lib/proto/native` | `#implemented` | — | `forbid` | 30 | Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: src/user/native/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part. |
+| `src/lib/proto/native` | `#implemented` | — | `forbid` | 30 | Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: src/user/system/native/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part. |
 | `src/lib/proto/renderctl` | `#implemented` | 19 | `forbid` | 22 | The render control protocol between the kernel's render core and a ring-3 GPU driver (docs/GPU.md §3.3), in displayctl's shape: fixed messages decoded strictly, command buffers passed through as bytes the driver understands and the core does not, and the… |
 | `src/lib/drivers/gpu/gc400` | `#implemented` | 19 | `forbid` | 28 | The STM32MP157's Vivante GC400T as logic over registers and command memory (docs/GPU.md §6.3): the registers and the command stream from the etnaviv project's MIT-licensed register database, the identity, reset and initialisation in the order Linux's etnaviv… |
-| `src/lib/kernel/fbtext` | `#implemented` | — | `forbid` | 30 | Text and filled rectangles on a linear framebuffer, with an embedded Spleen 8x16 font, clipped rather than refused and allocating nothing: what the panic screen (src/kernel/src/panic/screen.rs) draws with, and src/user/linux/compositor/term as well. |
+| `src/lib/kernel/fbtext` | `#implemented` | — | `forbid` | 30 | Text and filled rectangles on a linear framebuffer, with an embedded Spleen 8x16 font, clipped rather than refused and allocating nothing: what the panic screen (src/kernel/src/panic/screen.rs) draws with, and src/user/system/linux/compositor/term as well. |
 | `src/lib/kernel/qr` | `#implemented` | — | `forbid` | 20 | A QR code encoder with no heap, ported from Linux's drm_panic_qr.rs, for the panic screen's report. |
 | `src/lib/drivers/console/vdagent` | `#implemented` | — | `forbid` | 17 | SPICE's vdagent protocol as bytes, the chunk framing and the clipboard messages (docs/CLIPBOARD.md §4). |
 | `src/lib/drivers/console/virtio-console` | `#implemented` | — | allowed | 15 | The virtio-console driver: bring-up, the control conversation until a named port is open, and that port's bytes (docs/CLIPBOARD.md §3). |
@@ -3313,7 +3313,7 @@ Static musl busybox as /bin, a working init, job control, ttys, pipes. Exit: an 
 
 Most of it arrived under other stages' names: /bin is the uutils family and zinc rather than busybox, pipes are stage 8's, pseudo-terminals stage 18's, and the console's line discipline stage 8's over stage 7's receive interrupt.
 
-Job control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. src/user/linux/zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.
+Job control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. src/user/system/linux/zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.
 
 A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over src/lib/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8), and the images booting it with the compositor as its service (L10). Verified by initSession. devmgr on the restart policy (L11) the same day; the customer counts the init done there. L12, pid 1 starting devmgr through a kernel starter, on 2026-09-27; L13 parked until stage 13's namespaces.
 
@@ -3513,9 +3513,9 @@ An absolute cap, because assembly here is a fixed cost that a scheduler, a files
 | `src/kernel/src/arch/aarch64/switch.rs` | 75 |
 | `src/kernel/src/arch/armv7a/switch.rs` | 67 |
 | `src/kernel/src/arch/x86_64/syscall.rs` | 118 |
-| `src/user/native/rt/src/arch/x86_64.rs` | 20 |
-| `src/user/native/rt/src/arch/aarch64.rs` | 20 |
-| `src/user/native/rt/src/arch/armv7a.rs` | 20 |
+| `src/user/system/native/rt/src/arch/x86_64.rs` | 20 |
+| `src/user/system/native/rt/src/arch/aarch64.rs` | 20 |
+| `src/user/system/native/rt/src/arch/armv7a.rs` | 20 |
 | `src/boot/vendor/google/pixel7/src/entry.rs` | 130 |
 | `src/kernel/src/arch/x86_64/vdso.rs` | 120 |
 | `src/kernel/src/arch/x86_64/speculation.rs` | 16 |

@@ -15,7 +15,7 @@ name = "adbd"
 path = "src/main.rs"
 
 [dependencies]
-ferrix-adb = { path = "../../../lib/proto/adb" }
+ferrix-adb = { path = "../../../../lib/proto/adb" }
 # posix_openpt and the pty ioctls, setsid, and reboot, none of which std
 # offers; the version zinc already builds with.
 libc = "0.2.189"

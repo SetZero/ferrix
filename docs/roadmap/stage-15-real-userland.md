@@ -14,7 +14,7 @@ gained one. What was left when this stage was looked at properly on
 2026-09-19 was not the kernel's at all: every system call job control is made
 of had been answered since stage 7 and nothing in user space used them.
 
-**Done -- job control, and a gate that types (2026-09-19).** `src/user/linux/zinc/src/jobs.rs`
+**Done -- job control, and a gate that types (2026-09-19).** `src/user/system/linux/zinc/src/jobs.rs`
 is the shell's half of what the kernel already offered. A pipeline is one
 process group, so `kill %1` and the terminal's Ctrl-C reach all of it; a
 foreground job is handed the terminal with `tcsetpgrp` and the shell takes it
@@ -30,7 +30,7 @@ Before this the shipped shell answered `fg` with *no job control in this
 shell*.
 
 Two gates, because a process group is invisible in a transcript.
-`src/user/linux/zinc/tests/pty_jobs.py`, in `cargo xtask check --zinc`, drives the shell on
+`src/user/system/linux/zinc/tests/pty_jobs.py`, in `cargo xtask check --zinc`, drives the shell on
 a host pseudo-terminal and reads the process groups themselves out of
 `/proc/<pid>/stat`: that the job's group is not the shell's, that a job's own
 children share it, and that the terminal's foreground group is the job's
@@ -84,7 +84,7 @@ drives the manager with events in any order. The core never holds a
 handle: every action names a `UnitId`, a `GroupPath`, a `Token` or a
 `ClientId`, for the init program's backends to map (`docs/INIT.md` §16).
 
-**Done -- L4, the init program (2026-09-26, 10 points).** `src/user/linux/init/` is a
+**Done -- L4, the init program (2026-09-26, 10 points).** `src/user/system/linux/init/` is a
 workspace beside zinc's, built the same way for all three architectures.
 `/sbin/init` is pid 1 around `src/lib/init/svc`'s manager: it mounts `/run` and
 cgroup2, moves itself into `init.scope`, runs the generators, and waits in

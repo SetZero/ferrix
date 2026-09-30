@@ -94,12 +94,12 @@ Each fact below was read from the tree at `1a8bea54`.
 | DMA | Contained by an IOMMU on x86-64 and AArch64. On ARMv7-A `virt` and the DK1, any ring-3 driver can read all memory, and the boot says so. | `docs/ARCHITECTURE.md:326-357` |
 | Accounts | Busybox images carry `root:x:0:0` and `ferrix:x:1000:1000` with a home. `test-init` carries the same two. The foot compositor image carries only root. No image has `/etc/shadow`. | `tools/common/xtask/src/initramfs.rs:536-546`; `tools/common/xtask/src/init.rs:311-314`; `tools/common/xtask/src/compositor.rs:4360` |
 | The btrfs root | The first boot unpacks the initramfs onto the volume. Later boots re-unpack only a changed archive. **A file the archive carries is replaced; a file it does not carry is kept.** | `src/kernel/src/fs/root_disk.rs:25-31` |
-| getty | `setsid`, takes the terminal, then execs `$SHELL` as a login shell. "There is no `login` yet." | `src/user/linux/init/getty/src/main.rs:7-11`, `:78-84`; `src/user/linux/init/units/getty@.service` |
-| init | Reads `User=` from `/etc/passwd`. Its control socket is `0666`, and `SO_PEERCRED` decides who may change state. A user may make a scope only under their own `user-<uid>.slice`. | `src/user/linux/init/init/src/spawn.rs:446-487`; `src/user/linux/init/init/src/control.rs:5-6`, `:67`; `docs/INIT.md` §10 |
+| getty | `setsid`, takes the terminal, then execs `$SHELL` as a login shell. "There is no `login` yet." | `src/user/system/linux/init/getty/src/main.rs:7-11`, `:78-84`; `src/user/system/linux/init/units/getty@.service` |
+| init | Reads `User=` from `/etc/passwd`. Its control socket is `0666`, and `SO_PEERCRED` decides who may change state. A user may make a scope only under their own `user-<uid>.slice`. | `src/user/system/linux/init/init/src/spawn.rs:446-487`; `src/user/system/linux/init/init/src/control.rs:5-6`, `:67`; `docs/INIT.md` §10 |
 | The desktop | hyprix is linked into the kernel as its init, so it and every client run as uid 0. Moving it under init is `docs/INIT.md` L10, not started. | `tools/common/xtask/src/compositor.rs:1237-1239`; `docs/INIT.md:810`, `:887` |
-| The lock | `ext-session-lock-v1`. Any client may take the lock. Only the client that holds it may unlock. A lock whose client died stays locked, and **a second client is refused even then**, so a crashed locker needs a reboot. | `src/user/linux/compositor/server/src/client.rs:3670-3686`, `:3745-3749`; `src/user/linux/compositor/hyprix/src/state.rs:1048-1058`, `:5351-5361`, `:5406-5417` |
-| hyprlock (unlanded) | Authentication through one trait, `auth::Backend::check(secret) -> Verdict`. On Ferrix today its backend is `Missing`, and only `SIGUSR1` unlocks. | branch `hyprlock`, `src/user/linux/compositor/hyprlock/src/auth.rs:1-23`, `:56-61`; its `docs/DESKTOP-CLIENTS.md` §5.2 |
-| ferrousli | `getspnam_r` reads `/etc/tcb/<name>/shadow` or `/etc/shadow`, as musl does. `crypt` does DES, MD5, `$5$` and `$6$`. Blowfish gives `"*"`. There is no yescrypt and no Argon2. | `src/user/linux/ferrousli/src/shadow.rs:1-12`; `src/user/linux/ferrousli/src/crypt.rs:1-27` |
+| The lock | `ext-session-lock-v1`. Any client may take the lock. Only the client that holds it may unlock. A lock whose client died stays locked, and **a second client is refused even then**, so a crashed locker needs a reboot. | `src/user/system/linux/compositor/server/src/client.rs:3670-3686`, `:3745-3749`; `src/user/system/linux/compositor/hyprix/src/state.rs:1048-1058`, `:5351-5361`, `:5406-5417` |
+| hyprlock (unlanded) | Authentication through one trait, `auth::Backend::check(secret) -> Verdict`. On Ferrix today its backend is `Missing`, and only `SIGUSR1` unlocks. | branch `hyprlock`, `src/user/system/linux/compositor/hyprlock/src/auth.rs:1-23`, `:56-61`; its `docs/DESKTOP-CLIENTS.md` §5.2 |
+| ferrousli | `getspnam_r` reads `/etc/tcb/<name>/shadow` or `/etc/shadow`, as musl does. `crypt` does DES, MD5, `$5$` and `$6$`. Blowfish gives `"*"`. There is no yescrypt and no Argon2. | `src/user/system/linux/ferrousli/src/shadow.rs:1-12`; `src/user/system/linux/ferrousli/src/crypt.rs:1-27` |
 | Busybox | Built without PAM, with shadow passwords and libc's `crypt`, sha512 by default. `login`, `su`, `passwd`, `chpasswd`, `vlock` and `adduser` are built, and all are linked in `/bin`. | `~/.local/share/ferrix/busybox/ferrousli/src/busyboxconfig`; `tools/common/xtask/src/initramfs.rs:237`, `:243`, `:253`, `:260` |
 | ssh | `sshdt`, key-only. "`sshdt` given no key and no password accepts anyone", which is why every boot authorizes a key. | `tools/common/xtask/src/ssh.rs:10-31`; `docs/ROADMAP.md:3491-3526` |
 
@@ -214,7 +214,7 @@ needs no ring 0. **Recommended.**
 | | |
 |---|---|
 | Program | `/sbin/authd`, std Rust on `*-linux-musl`, like init (`docs/INIT.md` §2) |
-| Crate | `src/user/linux/auth/authd`, in a workspace `src/user/linux/auth/` beside `src/user/linux/init/` |
+| Crate | `src/user/system/linux/auth/authd`, in a workspace `src/user/system/linux/auth/` beside `src/user/system/linux/init/` |
 | Runs as | its own user, `auth`, with a fixed system uid (§9, decision 10). It needs no root: it reads its own store, and the programs that change uid (`login`, `su`) are the ones that are root. |
 | Unit | `auth.service` (`Type=simple`, started by its socket; no `User=`, since `authd` drops to `auth` itself after preparing the store; `MemoryMax=320M`, enough for one hash at the ceiling and a little more; `NoNewPrivileges=yes` once L13 lands) and `auth.socket` (`ListenSequentialPacket=/run/ferrix/auth`, `SocketMode=0666`), which init already supports (`src/lib/init/svc/src/kind/socket.rs:19-24`, `:83`) |
 | Without init | Under the phase 1 desktop, where hyprix is pid 1, `exec-once = /sbin/authd` starts it as root. It binds the socket and then drops to `auth` with `setresuid`. It is the same binary and the same socket, so no client can tell the difference. |
@@ -346,8 +346,8 @@ as the Security Target's §9.1 expects.
 ### 3.7 Who may unlock: the compositor decides, on `authd`'s word
 
 Today the client that holds the lock decides alone: `unlock_and_destroy`
-from it gives the screen back (`src/user/linux/compositor/server/src/client.rs:3745-3749`,
-`src/user/linux/compositor/hyprix/src/state.rs:5406-5417`). While every client is root,
+from it gives the screen back (`src/user/system/linux/compositor/server/src/client.rs:3745-3749`,
+`src/user/system/linux/compositor/hyprix/src/state.rs:5406-5417`). While every client is root,
 that costs nothing, because any client could do worse anyway. Once the
 desktop is a user's, it matters: the lock holder would be the one process
 between a same-uid attacker and the session.
@@ -432,9 +432,9 @@ and the service policy says which are needed.
 | Method | Stored | Phase | Needs |
 |---|---|---|---|
 | `password` | Argon2id PHC string | 1 | nothing |
-| `password` legacy import | `$6$` / `$5$` string | 1 | the SHA-2 crypt code hyprlock already tested against Drepper's vectors (branch `hyprlock`, `src/user/linux/compositor/hyprlock/src/crypt.rs`), moved into `authd`. It verifies an imported hash, then rewrites it as Argon2id on the first success. |
+| `password` legacy import | `$6$` / `$5$` string | 1 | the SHA-2 crypt code hyprlock already tested against Drepper's vectors (branch `hyprlock`, `src/user/system/linux/compositor/hyprlock/src/crypt.rs`), moved into `authd`. It verifies an imported hash, then rewrites it as Argon2id on the first success. |
 | `totp` | RFC 6238 seed, digits, period | 3 | HMAC-SHA-1 and a clock that is right, which on a board without a battery means NTP first (`ntpd` is in busybox) |
-| `fido2` | credential id and COSE public key, per key | 3 | CTAP2 over USB HID. `src/user/native/drivers/usb/usbhid` exists, and the DK1 has USB host (`src/kernel/src/platform/st/stm32mp1/usb.rs`). A hidraw-style path from that driver to `authd` is the unsized part. |
+| `fido2` | credential id and COSE public key, per key | 3 | CTAP2 over USB HID. `src/user/system/native/drivers/usb/usbhid` exists, and the DK1 has USB host (`src/kernel/src/platform/st/stm32mp1/usb.rs`). A hidraw-style path from that driver to `authd` is the unsized part. |
 | `fingerprint` | a reader's template handle | later | a reader driver. There is none. |
 | `sshkey` | nothing: ssh keys stay in `~/.ssh/authorized_keys` | 3 | `authd` only records and throttles an ssh login's verdict, which `sshdt` makes itself. |
 
@@ -708,7 +708,7 @@ old account's password.
 **Written atomically**: a new file beside the old one, `fsync`, `rename`,
 `fsync` of the directory. Failure counts go in `state/`, not `users/`, so a
 wrong guess never rewrites the credential file. One file per account, as
-tcb's `/etc/tcb/<name>/shadow` (`src/user/linux/ferrousli/src/shadow.rs:4-5`), so one
+tcb's `/etc/tcb/<name>/shadow` (`src/user/system/linux/ferrousli/src/shadow.rs:4-5`), so one
 account's change cannot damage another's.
 
 ### 5.3 Provisioning
@@ -764,7 +764,7 @@ as root unless something gives it the devices.
 ### 6.2 What it takes
 
 1. **`login` on the console** (P2.3). getty execs `/bin/login` instead of
-   the shell (`src/user/linux/init/getty/src/main.rs:78-84`). `login` runs the `login`
+   the shell (`src/user/system/linux/init/getty/src/main.rs:78-84`). `login` runs the `login`
    conversation. On ACCEPTED it does `initgroups`, `setresgid` and
    `setresuid`, asks init for `session-N.scope` under `user-<uid>.slice`
    (`svc scope`, `docs/INIT.md` §5.6), and execs the account's shell. The
@@ -903,7 +903,7 @@ phase 1. hyprlock does not change when phase 2 moves the session to
 | P3.6 | A graphical greeter on hyprlock's widgets | desktop clients | 8 |
 | P3.7 | K-E: `SO_PEERCRED` taken at `connect` and `listen`, as Linux does. **Moved into phase 1 and done** (§8.3) | auth | 3 |
 | P3.8 | K-D: `mlock` accepted as a no-op within `RLIMIT_MEMLOCK` (`docs/BACKLOG.md`) | kernel | 1 |
-| — | FIDO2 over USB HID (needs a hidraw path from `src/user/native/drivers/usb/usbhid`), fingerprint (needs a reader), a trusted path, several seats | | unsized |
+| — | FIDO2 over USB HID (needs a hidraw path from `src/user/system/native/drivers/usb/usbhid`), fingerprint (needs a reader), a trusted path, several seats | | unsized |
 
 ### Order
 
@@ -1055,9 +1055,9 @@ it was put to the customer.
 | P0a, P0b, P0c | done 2026-09-26 (ferrix-15): P0a refused `User=` on a native unit until P0b made it run as that user; P0c is `54cba422`, the `SET_LIMIT` right |
 | P1.1 `src/lib/crypto/argon2` | on `main` with this section: RFC 9106's vector and five RustCrypto ones, Miri in CI, the `argon2_phc` fuzz target, the timings of §5.1 |
 | P1.2 `src/lib/proto/auth-proto` | on `main` with this section: the records of §3.3, `Secret`, the `auth_proto` fuzz target |
-| P1.3 `authd`, P1.4 `passwd` and `authctl` | on `main` with this row (`src/user/linux/auth/`): 28 host tests, one of them over a real socket, and `test-auth` on all three architectures |
+| P1.3 `authd`, P1.4 `passwd` and `authctl` | on `main` with this row (`src/user/system/linux/auth/`): 28 host tests, one of them over a real socket, and `test-auth` on all three architectures |
 | P1.6 `cargo xtask test-auth` | on `main` with this row (`tools/common/xtask/src/auth.rs`): passes on x86-64, AArch64 and ARMv7-A, and each of `--sabotage accept-any`, `tell-unknown`, `let-anyone-name` and `no-throttle` fails on its own line |
-| P1.5 hyprlock's backend | the hyprlock stream's, now that `authd` and `src/user/linux/auth/client` are on `main`; it also puts `authd` into the desktop's image |
+| P1.5 hyprlock's backend | the hyprlock stream's, now that `authd` and `src/user/system/linux/auth/client` are on `main`; it also puts `authd` into the desktop's image |
 | K-E `SO_PEERCRED` at `connect` and `listen` | on `main` with its boot check (E-01, closed) |
 | P1.7 the Security Target's OE.AUTH | on `main` with this row: OE.AUTH, A.AUTH and §9.1's note |
 

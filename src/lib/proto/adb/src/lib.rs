@@ -1,5 +1,5 @@
 //! The Android Debug Bridge's wire protocol, the device's half: what
-//! `src/user/linux/adbd` reads from and writes to the host's `adb`.
+//! `src/user/system/linux/adbd` reads from and writes to the host's `adb`.
 //!
 //! `docs/ADB.md` is why Ferrix speaks adb and how much of it. The authority
 //! is AOSP's `packages/modules/adb`: `protocol.txt` for [`message`] and

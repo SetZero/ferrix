@@ -9,7 +9,7 @@
 //! offers Venus -- each with an icon of the tree's own in a
 //! `hicolor` theme, so the icon lookup and the large picture of the selected
 //! entry have something to find. The files are in
-//! `src/user/linux/compositor/fuzzel/data/`, where fuzzel's host test reads the same ones.
+//! `src/user/system/linux/compositor/fuzzel/data/`, where fuzzel's host test reads the same ones.
 //!
 //! `top` is `Terminal=true` on purpose. fuzzel starts such an entry through
 //! `terminal=`, and the user's `fuzzel.ini` says `terminal=foot`, which is not
@@ -41,7 +41,7 @@ const ICONS: [&str; 5] = [
 const VKGEARS: &str = "vkgears";
 
 /// Where the tree keeps them.
-const DATA: &str = "src/user/linux/compositor/fuzzel/data";
+const DATA: &str = "src/user/system/linux/compositor/fuzzel/data";
 
 /// Where the entries and the icons go in the image.
 const INSTALLED_APPLICATIONS: &str = "usr/share/applications";
@@ -120,15 +120,15 @@ bind = , F2, exec, /bin/vkbd Return
 pub(crate) const EXPECTED: [(&str, &str); 3] = [
     (
         "fuzzel over the empty screen, every entry listed and the first selected",
-        "src/user/linux/compositor/render/tests/data/fuzzel-listed.xrle",
+        "src/user/system/linux/compositor/render/tests/data/fuzzel-listed.xrle",
     ),
     (
         "fuzzel with `pat` typed and the test pattern ranked first",
-        "src/user/linux/compositor/render/tests/data/fuzzel-typed-pat.xrle",
+        "src/user/system/linux/compositor/render/tests/data/fuzzel-typed-pat.xrle",
     ),
     (
         "the test pattern fuzzel started, alone on the screen",
-        "src/user/linux/compositor/render/tests/data/one-client-alone.xrle",
+        "src/user/system/linux/compositor/render/tests/data/one-client-alone.xrle",
     ),
 ];
 
@@ -143,12 +143,12 @@ pub(crate) const BINDS: [(&str, &[&str]); 2] = [
 pub(crate) const AWAITING: [&str; 2] = ["vkbd: typed Return", "executing pattern.desktop"];
 
 /// Where the boot's `fuzzel.ini` is kept, and the font it names.
-const BOOT_INI: &str = "src/user/linux/compositor/fuzzel/data/boot/fuzzel.ini";
+const BOOT_INI: &str = "src/user/system/linux/compositor/fuzzel/data/boot/fuzzel.ini";
 const BOOT_FONT: &str = "assets/fonts/liberation/LiberationSerif-Regular.ttf";
 
 /// Everything the fuzzel boot carries: the program, the entries and icons,
 /// the `fuzzel.ini` in the home directory the compositor's children have
-/// (`/`), and the font it names where `src/user/linux/compositor/text` looks.
+/// (`/`), and the font it names where `src/user/system/linux/compositor/text` looks.
 pub(crate) fn boot_files(program: &std::path::Path) -> Result<Vec<File>> {
     let read = |path: &std::path::Path| {
         std::fs::read(path)

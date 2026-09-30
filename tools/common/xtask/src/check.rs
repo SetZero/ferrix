@@ -277,7 +277,7 @@ fn cross_target_clippy() -> Result<()> {
 /// gives: the tests start Linux executables. The generated-ABI check reads
 /// headers in the tree and runs natively.
 fn ferrousli(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("src/user/linux/ferrousli");
+    let dir = root.join("src/user/system/linux/ferrousli");
     let in_ferrousli = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);
@@ -293,7 +293,10 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
     }
 
     step("ferrousli: generated ABI", || {
-        python_with("src/user/linux/ferrousli/tools/gen-abi.py", &["--check"])
+        python_with(
+            "src/user/system/linux/ferrousli/tools/gen-abi.py",
+            &["--check"],
+        )
     })?;
     step("ferrousli: formatting", || {
         cargo::run(in_ferrousli(&["fmt", "--check"]), "cargo fmt (ferrousli)")
@@ -316,7 +319,7 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
     })?;
     // The library on AArch64 and ARMv7-A, whose code the host's build never
     // compiles. Clippy needs only their rustup targets; the tests there need
-    // a cross compiler and QEMU's user mode, which `src/user/linux/ferrousli/README.md` says
+    // a cross compiler and QEMU's user mode, which `src/user/system/linux/ferrousli/README.md` says
     // how to run.
     for target in ["aarch64-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf"] {
         step(&format!("ferrousli: clippy ({target})"), || {
@@ -387,7 +390,7 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
 /// The tests start Linux executables and the pty needs a Linux kernel, so on
 /// Windows those steps run in WSL, as ferrousli's do.
 fn zinc(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("src/user/linux/zinc");
+    let dir = root.join("src/user/system/linux/zinc");
     const TARGET: &str = "x86_64-unknown-linux-musl";
     let native = |arguments: &[&str]| {
         let mut command = Command::new(cargo_binary());
@@ -441,7 +444,10 @@ fn zinc(root: &std::path::Path) -> Result<()> {
                 .args(["-c", script, "bash", TARGET]);
             command
         };
-        cargo::run(command, "src/user/linux/zinc/tests/pty_completion.py")
+        cargo::run(
+            command,
+            "src/user/system/linux/zinc/tests/pty_completion.py",
+        )
     })?;
     step("zinc: oh-my-zsh's git prompt on a pty", || {
         let script = "cargo build --release --target \"$1\" && \
@@ -456,7 +462,10 @@ fn zinc(root: &std::path::Path) -> Result<()> {
                 .args(["-c", script, "bash", TARGET]);
             command
         };
-        cargo::run(command, "src/user/linux/zinc/tests/pty_prompt_git.py")
+        cargo::run(
+            command,
+            "src/user/system/linux/zinc/tests/pty_prompt_git.py",
+        )
     })?;
     step("zinc: job control on a pty", || {
         let script = "cargo build --release --target \"$1\" && \
@@ -471,18 +480,18 @@ fn zinc(root: &std::path::Path) -> Result<()> {
                 .args(["-c", script, "bash", TARGET]);
             command
         };
-        cargo::run(command, "src/user/linux/zinc/tests/pty_jobs.py")
+        cargo::run(command, "src/user/system/linux/zinc/tests/pty_jobs.py")
     })
 }
 
 /// The compositor's gates.
 ///
-/// `src/user/linux/compositor/` is a workspace of its own, like ferrousli, so the steps
+/// `src/user/system/linux/compositor/` is a workspace of its own, like ferrousli, so the steps
 /// above never reach it. They are on by default, because they are seconds
 /// rather than minutes.
 ///
 /// They also go through WSL on Windows now, which the comment here used to
-/// say would happen "when a crate needs a Linux host". `src/user/linux/compositor/virgl` is
+/// say would happen "when a crate needs a Linux host". `src/user/system/linux/compositor/virgl` is
 /// that crate: `device.rs` holds an `OwnedFd` for a render node and
 /// `vtest.rs` speaks virglrenderer's protocol over a `UnixStream`, neither of
 /// which `std` has on Windows, and `drm`, `render` and `hyprix` all build on
@@ -496,7 +505,7 @@ fn zinc(root: &std::path::Path) -> Result<()> {
 /// worth linting and the half a Windows developer is most likely to be
 /// changing.
 fn compositor(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("src/user/linux/compositor");
+    let dir = root.join("src/user/system/linux/compositor");
     let in_compositor = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);
@@ -524,11 +533,11 @@ fn compositor(root: &std::path::Path) -> Result<()> {
     })
 }
 
-/// The Linux-ABI workspaces under `src/user/linux/` that the host steps do not
+/// The Linux-ABI workspaces under `src/user/system/linux/` that the host steps do not
 /// reach: init's, authentication's and media's.
 fn userland(root: &std::path::Path) -> Result<()> {
-    linux_workspace(root, "init", "src/user/linux/init")?;
-    linux_workspace(root, "auth", "src/user/linux/auth")?;
+    linux_workspace(root, "init", "src/user/system/linux/init")?;
+    linux_workspace(root, "auth", "src/user/system/linux/auth")?;
     step("auth: no sabotage in the environment", no_sabotage)?;
     media(root)
 }
@@ -564,7 +573,7 @@ fn apps() -> Result<()> {
 
 /// Every image build inherits this environment, and a set
 /// `FERRIX_AUTH_SABOTAGE` would build its authd with a refusal turned off
-/// (`src/user/linux/auth/authd/src/sabotage.rs`).
+/// (`src/user/system/linux/auth/authd/src/sabotage.rs`).
 fn no_sabotage() -> Result<()> {
     match std::env::var_os("FERRIX_AUTH_SABOTAGE") {
         Some(_) => Err(Error::new(
@@ -574,8 +583,8 @@ fn no_sabotage() -> Result<()> {
     }
 }
 
-/// The gates of a Linux-ABI workspace under `src/user/linux/`: init's
-/// (`src/user/linux/init/`) and authentication's (`src/user/linux/auth/`). Each is a
+/// The gates of a Linux-ABI workspace under `src/user/system/linux/`: init's
+/// (`src/user/system/linux/init/`) and authentication's (`src/user/system/linux/auth/`). Each is a
 /// workspace of its own, as the compositor is, so the host steps above
 /// never reach it. On by default, since they are seconds. What they are
 /// built on -- `src/lib/init/svc`, `src/lib/proto/auth-proto`,
@@ -612,12 +621,12 @@ fn linux_workspace(root: &std::path::Path, name: &str, relative: &str) -> Result
     })
 }
 
-/// adbd's gates: `src/user/linux/adbd/` is a workspace of its own, as the media
+/// adbd's gates: `src/user/system/linux/adbd/` is a workspace of its own, as the media
 /// programs are. Its protocol is `src/lib/proto/adb`, which the main workspace's
 /// tests cover; what is left to check here is its formatting and clippy,
 /// seconds. `test-adb` is the gate that runs it (`docs/ADB.md`).
 fn adbd(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("src/user/linux/adbd");
+    let dir = root.join("src/user/system/linux/adbd");
     let in_adbd = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);
@@ -642,11 +651,11 @@ fn adbd(root: &std::path::Path) -> Result<()> {
     })
 }
 
-/// The media workspace's gates: `src/user/linux/media/` is a workspace of its own,
+/// The media workspace's gates: `src/user/system/linux/media/` is a workspace of its own,
 /// as the init is. On by default, since they are seconds: the video format,
 /// the resampler and the player's arithmetic are tested on the host.
 fn media(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("src/user/linux/media");
+    let dir = root.join("src/user/system/linux/media");
     let in_media = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);

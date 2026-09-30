@@ -88,7 +88,7 @@ pub(crate) mod node;
 /// many in flight without being memory a guest notices.
 pub(crate) const WORK_BYTES: u64 = 1024 * 1024;
 
-/// How many words an object's description is: the ten `src/user/native/drivers/display/virtio-gpu` reads back
+/// How many words an object's description is: the ten `src/user/system/native/drivers/display/virtio-gpu` reads back
 /// -- target, format, bind, width, height, depth, array size, last level,
 /// samples and flags, which is a virtio-gpu resource's whole shape.
 ///

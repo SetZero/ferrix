@@ -25,7 +25,7 @@
 //! of its own stack. A caller in `crate::linux` therefore names an operation
 //! and never an architecture.
 //!
-//! This is the facade: the one place under `src/user/native/` that selects on
+//! This is the facade: the one place under `src/user/system/native/` that selects on
 //! `target_arch`, for the reason `src/kernel/src/arch/mod.rs` is the kernel's.
 
 #[cfg(target_arch = "aarch64")]

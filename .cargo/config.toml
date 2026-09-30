@@ -29,7 +29,7 @@ rustflags = [
     # is every native program.
     #
     # Those programs must stay fixed-address executables, which is what the
-    # kernel's ELF loader takes (src/user/native/rt/linker/native.ld), so the link is
+    # kernel's ELF loader takes (src/user/system/native/rt/linker/native.ld), so the link is
     # told `-no-pie` here, and `src/kernel/build.rs` alone says `-pie` after it:
     # a build script's link arguments come after these, and the last wins.
     # `--mitigations off` builds the kernel with the static model again.

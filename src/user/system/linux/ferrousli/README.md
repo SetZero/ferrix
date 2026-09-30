@@ -116,7 +116,7 @@ it weak in assembly, and which stable Rust cannot express for a
 
 These are the utilities that replace busybox's, and since 2026-09-18 they are
 what `/bin` holds: every name uutils provides is uutils', `/bin/sh` is zinc,
-and busybox keeps the rest. [docs/UUTILS.md](../../../../docs/UUTILS.md) is the plan, including §6a on
+and busybox keeps the rest. [docs/UUTILS.md](../../../../../docs/UUTILS.md) is the plan, including §6a on
 the two projects of the family that do not build for this target.
 
 ## busybox

@@ -11,7 +11,7 @@
 //!
 //! **It understands nothing of vdagent.** Everything that arrives on the port
 //! is written to whoever is connected and everything written there goes out
-//! on the port. The protocol is `src/user/linux/compositor/vdagent`'s, one process further
+//! on the port. The protocol is `src/user/system/linux/compositor/vdagent`'s, one process further
 //! out, so this driver has no opinion about the clipboard at all.
 //!
 //! **It publishes to no kernel subsystem**, because there is none to publish

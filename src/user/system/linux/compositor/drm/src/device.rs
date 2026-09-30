@@ -1,4 +1,4 @@
-//! The render node as somewhere `src/user/linux/compositor/virgl`'s streams run.
+//! The render node as somewhere `src/user/system/linux/compositor/virgl`'s streams run.
 //!
 //! [`compositor_virgl::Device`] is what a GPU renderer asks of whatever runs
 //! its streams, and on a host that is virglrenderer's test server. In a
@@ -56,7 +56,7 @@ impl RenderDevice {
     }
 
     /// Who is driving the node: `virtio_gpu` is the one whose streams
-    /// `src/user/linux/compositor/virgl` writes.
+    /// `src/user/system/linux/compositor/virgl` writes.
     ///
     /// # Errors
     ///

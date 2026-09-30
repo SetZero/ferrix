@@ -274,7 +274,7 @@ fixed width, 127 for `route` and `udp` and 149 for `tcp`, by Linux's
 `seq_pad`, which pads a short line and leaves a long one alone -- which is why
 an IPv6 row overflows.
 
-**Done — the driver, in ring 3.** `src/user/native/drivers/net/virtio-net` is the process that makes a
+**Done — the driver, in ring 3.** `src/user/system/native/drivers/net/virtio-net` is the process that makes a
 virtio-net function an interface. It holds handles and nothing else:
 `src/lib/drivers/net/virtio-net` drives the device, `src/lib/proto/netring` speaks the ring,
 `src/lib/drivers/net/netserve` joins the two, and all three are tested on the host, so the
@@ -291,8 +291,8 @@ rang it. Frames the *device* delivered still woke it through the interrupt, so
 the interface looked alive and transmitted nothing at all.
 
 That was possible because `src/lib/drivers/net/netserve` left the handshake to its caller
-while `src/lib/drivers/block/blkserve` owns it, which is why `src/user/native/drivers/block/virtio-blk` never had the bug and
-`src/user/native/drivers/net/virtio-net` did. The handshake is now `netserve`'s too, and with it the rule
+while `src/lib/drivers/block/blkserve` owns it, which is why `src/user/system/native/drivers/block/virtio-blk` never had the bug and
+`src/user/system/native/drivers/net/virtio-net` did. The handshake is now `netserve`'s too, and with it the rule
 `blkserve` already had: while a frame waits for room in the device's transmit
 queue the answer is always to sleep, whatever the ring holds. Without that
 rule a full transmit queue is a spin rather than a wait — the loop takes no
@@ -348,7 +348,7 @@ landed. musl's `initgroups` tries an `AF_UNIX` connection to nscd before it
 reads `/etc/group`; `EOPNOTSUPP` is an error it gives up on, and `ENOENT` is
 one it falls back from.
 
-**Done — curl, built against ferrousli.** `src/user/linux/ferrousli/tools/ports/curl` builds
+**Done — curl, built against ferrousli.** `src/user/system/linux/ferrousli/tools/ports/curl` builds
 curl 8.22.0 over Mbed TLS 3.6.7 as a static x86-64 program against ferrousli,
 from sources pinned by checksum, with curl.se's extract of Mozilla's CA
 certificates. It linked with nothing missing from the library. `cargo xtask
@@ -418,8 +418,8 @@ Its negative control, not committed, on x86-64: with the loader's time flag
 cleared, the guest printed `verified 0` and `untrusted 60`, and `test-net`
 failed on that program.
 
-**Done — git, built against ferrousli.** `src/user/linux/ferrousli/tools/ports/zlib` builds
-zlib 1.3.2 and `src/user/linux/ferrousli/tools/ports/git` builds git 2.55.0 over it and over
+**Done — git, built against ferrousli.** `src/user/system/linux/ferrousli/tools/ports/zlib` builds
+zlib 1.3.2 and `src/user/system/linux/ferrousli/tools/ports/git` builds git 2.55.0 over it and over
 the curl port's libcurl and Mbed TLS. It is built without Perl, Python, Tcl,
 gettext and iconv, which the image does not have. Its Rust half is off too: cargo
 builds that for the host, against glibc. It uses git's own regex, because
@@ -436,7 +436,7 @@ protocol at `10.0.2.2`, through `git-remote-http` and libcurl: neither
 busybox on the image has `httpd`. The file and the commit's subject must
 come back both times.
 
-**Done — btop, and the C++ runtime under it.** `src/user/linux/ferrousli/tools/ports/libcxx`
+**Done — btop, and the C++ runtime under it.** `src/user/system/linux/ferrousli/tools/ports/libcxx`
 builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with
 the host's gcc. The btop port (an app since 2026-09-30) builds btop 1.4.7, a C++23
 program, over them. What ferrousli lacked for that landed with them:
@@ -472,7 +472,7 @@ both when started that small and after a resize, and still redraws after a
 key at full size.
 
 **Done — an SSH server, and a way in from the host.**
-`src/user/linux/ferrousli/tools/ports/sshdt` builds sshdt 0.4.2, an SSH server written in Rust
+`src/user/system/linux/ferrousli/tools/ports/sshdt` builds sshdt 0.4.2, an SSH server written in Rust
 (russh, tokio, and aws-lc underneath). It is built the way uutils is: the musl
 target, ferrousli in the C library's place, and aws-lc compiled with
 `ferrousli-cc`. It linked on the first try, with nothing undefined. sshdt was

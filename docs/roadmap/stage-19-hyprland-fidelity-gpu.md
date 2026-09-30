@@ -13,7 +13,7 @@ beside it. Sixteen more are carried out now, and the ones that are not
 each have a reason written down.
 
 The ones that change how a window is *drawn* go through
-`src/user/linux/compositor/render`: `rounding_power` (a superellipse rather than a
+`src/user/system/linux/compositor/render`: `rounding_power` (a superellipse rather than a
 circle, which is the "squircle" a person sets the option for),
 `border_color`, `decorate false` for a window that draws its own frame,
 `opaque` for a client that leaves rubbish in its alpha channel,
@@ -26,7 +26,7 @@ drawn" and one fill of the canvas just before that thing is the whole
 effect. Both halves work -- `windowrule` for a dialog and `layerrule` for
 a launcher.
 
-The ones that change where a window *is* go through `src/user/linux/compositor/layout`:
+The ones that change where a window *is* go through `src/user/system/linux/compositor/layout`:
 `monitor`, `min_size`, `max_size`, `no_max_size`, `keep_aspect_ratio`,
 `fullscreen_state` and `scrolling_width`. The size limits belong with the
 window rather than with the rule that set them -- Hyprland clamps at
@@ -240,7 +240,7 @@ were wrong, and only the first is about drawing at all.
   them. A blurred frame is six blur passes and the conversions either side of
   them, so a 30 fps wallpaper that moves was on the order of a thousand
   threads started and ended a second. The bands are the same bands now, given
-  to workers that are already there: `src/user/linux/compositor/fan`, started once, waiting
+  to workers that are already there: `src/user/system/linux/compositor/fan`, started once, waiting
   on a condition variable between frames. The thread that asks for the work
   is one of them, which is why the pool starts one fewer than there are
   cores and a single-processor guest starts none.
@@ -268,7 +268,7 @@ were wrong, and only the first is about drawing at all.
 
 **Done — the rest of Hyprland's dispatcher table (2026-09-17).**
 Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
-of them does now. The split is by what they touch. `src/user/linux/compositor/layout`
+of them does now. The split is by what they touch. `src/user/system/linux/compositor/layout`
 answers the ones that move windows -- `layoutmsg` (both layouts' own
 messages: `togglesplit`, `swapsplit`, `movetoroot`, `preselect` for dwindle,
 and `swapwithmaster`, `focusmaster`, `mfact`, `orientation*`, `swapnext`,
@@ -385,7 +385,7 @@ keyboard, which is right for an application and wrong for `cliphist` or
 to them whether or not anything is focused, and a manager can set either as
 well as read it. They are the same protocol twice -- wlroots wrote the first
 and the `ext` namespace standardised it -- so they are one module with a
-table of interfaces, the way `src/user/linux/compositor/clip` is one program with a flag.
+table of interfaces, the way `src/user/system/linux/compositor/clip` is one program with a flag.
 
 `wlr-gamma-control` is `gammastep` and `hyprsunset`. The client hands over
 three ramps on a descriptor and every pixel is looked up in its channel's
@@ -411,7 +411,7 @@ monitor, which until now every Hyprland bar read out of `hyprctl`.
 client's keys reach the seat, and that is the whole point of the protocol.
 So: one key starts `/bin/vkbd`, `vkbd` types `SUPER Q` on the Wayland
 socket, the bind fires, and `closewindow, title:^(one)$` closes the window
-that expression names. The screen must be the picture `src/user/linux/compositor/render`
+that expression names. The screen must be the picture `src/user/system/linux/compositor/render`
 blesses for the window that is left. Two new things in one picture -- a
 client acting as a device, and a dispatcher picking a window out by title.
 
@@ -555,7 +555,7 @@ has gone". The slave answers every terminal request, including the
 session and process-group ones, with a pair's own session and foreground
 group; the master answers those that act on the pair, as Linux's does.
 
-`src/user/linux/compositor/term` is the terminal: a character grid with the escape
+`src/user/system/linux/compositor/term` is the terminal: a character grid with the escape
 sequences a shell and its programs actually send (the cursor, the erases,
 the colours, the cursor's visibility), drawn with Hack, antialiased --
 `tools/common/gen/gen-term-font.py` rasterises the TrueType faces vendored beside
@@ -599,7 +599,7 @@ now has no warning in it at all.
   shape and no theme to pick another from.
 * **`zwp_primary_selection_device_manager_v1`** -- the middle-click paste,
   which is the clipboard's older and simpler sibling and the same protocol
-  under another name. `src/user/linux/compositor/clip` grew `--primary` rather than a twin,
+  under another name. `src/user/system/linux/compositor/clip` grew `--primary` rather than a twin,
   and the compositor's clipboard carries both selections apart.
 * **`xdg_activation_v1`** -- one program asking for another's window to be
   raised: a link opened from a chat window raising the browser. The token is
@@ -634,7 +634,7 @@ and fail with two.
 on the screen is one a person cannot use, and there was none: `wl_pointer`
 carried motion and buttons to the clients and nothing was ever drawn.
 
-The arrow is in `src/user/linux/compositor/render`, in code, as a shape rather than as a
+The arrow is in `src/user/system/linux/compositor/render`, in code, as a shape rather than as a
 file: Hyprland loads an XCursor or a `hyprcursor` theme and Ferrix has
 neither the files nor a library to read them with, so the one this draws is
 written out -- a 24x24 left-pointing arrow with a black outline and a white
@@ -656,7 +656,7 @@ with no mouse.
 `cargo xtask test-compositor` boots a seventeenth time and takes two
 pictures: the tiled pair with nothing on it, and then -- after QMP moves the
 mouse -- the same pair with the arrow's tip where it was put, which must be
-the picture `src/user/linux/compositor/render` blesses for exactly that.
+the picture `src/user/system/linux/compositor/render` blesses for exactly that.
 
 **Done — menus (2026-09-17).** `xdg_popup`, which is what every right-click
 menu, dropdown, tooltip and combo box in every toolkit is. The objects were
@@ -668,7 +668,7 @@ clicks and nothing happens.
 Where a popup goes is `xdg_positioner`'s arithmetic and nothing else -- a
 rectangle on the parent to hang off, a point of it to anchor to, a direction
 to grow in, an offset, and what to do when the result falls off the screen
--- so it is written in `src/user/linux/compositor/layout` with the rest of the geometry,
+-- so it is written in `src/user/system/linux/compositor/layout` with the rest of the geometry,
 where it is tested against the rules rather than against a screenshot. The
 order is the protocol's: anchor, offset, gravity, then `flip`, `slide` and
 `resize`, each on the axis that is off the screen and only if the client
@@ -689,7 +689,7 @@ a popup against the parent's geometry as it is.
 `cargo xtask test-compositor` boots a sixteenth time with `exec-once =
 /bin/pattern checkerboard one --menu 200`: the window asks for a menu the
 moment it has drawn, as a toolkit would, and the screen must be the picture
-`src/user/linux/compositor/render` blesses -- which it builds by calling the same placement
+`src/user/system/linux/compositor/render` blesses -- which it builds by calling the same placement
 rules -- with the client having been told where it was put. A host test
 compares a screenshot of the same thing.
 
@@ -717,14 +717,14 @@ compositor gets wrong by doing nothing: an unlocked session is not what a
 crash is allowed to produce. A second program asking to lock while one is
 held is sent `finished` and refused.
 
-`src/user/linux/compositor/lock` is `hyprlock` with the password taken out: it locks, draws
+`src/user/system/linux/compositor/lock` is `hyprlock` with the password taken out: it locks, draws
 a checkerboard over every screen, holds it, and unlocks. It asks for no
 password because Ferrix has no notion of one yet; the part that can be
 tested is the part that matters to the compositor.
 
 `cargo xtask test-compositor` boots a fifteenth time and takes three
 pictures: the windows, the lock over them, and the windows again. The middle
-one must be the picture `src/user/linux/compositor/render` blesses for a locked screen and
+one must be the picture `src/user/system/linux/compositor/render` blesses for a locked screen and
 not one pixel of either window, and a keybind pressed while the screen was
 locked must have done nothing -- the window it would have closed is still
 there in the third. On x86-64 and on AArch64. A host test compares a
@@ -830,12 +830,12 @@ copied into once: a second `copy` is `already_used`, which is a protocol
 error, because a client that sent one has lost track of an object it owns.
 
 This is the one place the compositor *writes* into a client's memory, and it
-is a mapping of its own: `src/user/linux/compositor/hyprix`'s pool mapping is read-only and
+is a mapping of its own: `src/user/system/linux/compositor/hyprix`'s pool mapping is read-only and
 says why, so a screenshot maps the same pool a second time, writable, for
 exactly as long as the copy takes. The rule that the compositor never writes
 into a window's buffer still holds everywhere else.
 
-`src/user/linux/compositor/shot` is `grim` without the file format: it binds the manager
+`src/user/system/linux/compositor/shot` is `grim` without the file format: it binds the manager
 and a `wl_output`, makes the buffer it is told to make, and reads back what
 was written into it. It prints the size and an FNV digest of every pixel,
 which is how a whole screen is compared through a serial port.
@@ -843,13 +843,13 @@ which is how a whole screen is compared through a serial port.
 And that is the strongest picture proof in this tree. Every other boot
 compares QEMU's *screendump*, which reads the virtio-gpu's scanout; this
 compares what the compositor handed a program **through the Wayland
-protocol**, against the image `src/user/linux/compositor/render` builds on the host by
+protocol**, against the image `src/user/system/linux/compositor/render` builds on the host by
 calling the renderer with rectangles. A compositor that drew the right thing
 and answered screencopy with rubbish is caught here and nowhere else.
 
 `cargo xtask test-compositor` boots a fourteenth time: a keybind runs
 `/bin/shot`, and the digest it prints must be the digest of the expected
-image, on x86-64 and on AArch64. A host test in `src/user/linux/compositor/hyprix` compares
+image, on x86-64 and on AArch64. A host test in `src/user/system/linux/compositor/hyprix` compares
 the screenshot against the same image pixel by pixel.
 
 **And a second real bug came out of it.** The seat turned a whole batch of
@@ -888,7 +888,7 @@ reported false and refused rather than faked, because this layout has one
 fullscreen state and no minimised one, and a wrong tick in a taskbar's menu
 is worse than none.
 
-`src/user/linux/compositor/lswt` is `lswt`, Leon Henrik Plickat's "list wayland toplevels",
+`src/user/system/linux/compositor/lswt` is `lswt`, Leon Henrik Plickat's "list wayland toplevels",
 which is a taskbar with the drawing taken out: `lswt` prints a line a window,
 `lswt activate <title>` focuses one and `lswt close <title>` asks one to
 close. It is how the protocol is tested with no screen and no panel.
@@ -916,8 +916,8 @@ before the reconfigure now, with everything else that changes the layout.
 `cargo xtask test-compositor` boots a thirteenth time: a keybind runs
 `/bin/lswt`, which must name both windows with the focused one marked, and a
 second keybind runs `/bin/lswt close one`, after which the screen must be the
-picture `src/user/linux/compositor/render` blesses for one window left alone -- on x86-64
-and on AArch64. A host test in `src/user/linux/compositor/hyprix` runs the same program
+picture `src/user/system/linux/compositor/render` blesses for one window left alone -- on x86-64
+and on AArch64. A host test in `src/user/system/linux/compositor/hyprix` runs the same program
 against the compositor in one process and requires the window that went to be
 the one it named.
 
@@ -974,20 +974,20 @@ that copies while another holds the selection is given it and the previous
 owner is sent `cancelled`; a client that goes away while holding it clears
 it. Drag-and-drop is the other half of the same four interfaces; it was not
 done when this landed, and a drag between two clients was carried later the
-same day (`src/user/linux/compositor/hyprix/src/dragging.rs`).
+same day (`src/user/system/linux/compositor/hyprix/src/dragging.rs`).
 
-`src/user/linux/compositor/clip` is `wl-copy` and `wl-paste`, neither of which is on Ferrix:
+`src/user/system/linux/compositor/clip` is `wl-copy` and `wl-paste`, neither of which is on Ferrix:
 `clip copy <text>` offers the text as `text/plain;charset=utf-8` and stays
 alive to answer, because it must; `clip paste` waits to be told what the
 selection holds, asks for it on a pipe it makes, and prints what comes back.
 
 Getting it right was a question of who owns a descriptor. One that arrives
-over a socket is owned by `src/user/linux/compositor/socket`'s `Connection` until a message
+over a socket is owned by `src/user/system/linux/compositor/socket`'s `Connection` until a message
 claims it, and a claim is what `Connection::consume`'s second argument says:
 a program that reads an event carrying a descriptor and then forgets to say
 so has the same descriptor owned twice, closed twice, and -- since Rust 1.86
 checks -- aborts the process. Two places had it wrong and both are fixed:
-`src/user/linux/compositor/clip` now claims what `Reader::descriptors_taken` counted, and
+`src/user/system/linux/compositor/clip` now claims what `Reader::descriptors_taken` counted, and
 the compositor no longer claims for the two clipboard events that carry no
 descriptor at all.
 
@@ -997,7 +997,7 @@ and requires that the compositor say it took the selection and passed the
 pipe on, that the copying program say it was asked for its data exactly once,
 that the pasting program print the text the other one copied, and that the
 windows still be drawn pixel for pixel while all of that happens -- on x86-64
-and on AArch64. A host test in `src/user/linux/compositor/hyprix` runs the same two programs
+and on AArch64. A host test in `src/user/system/linux/compositor/hyprix` runs the same two programs
 against the compositor in one process.
 
 **Begun — plugins (2026-09-17).** A plugin is a program the compositor
@@ -1027,7 +1027,7 @@ sockets are bound and before `exec-once`. The plugin connects to the same
 `Dispatchers:` line Hyprland has no need for. A plugin that goes takes its
 dispatchers with it and the compositor carries on.
 
-`src/user/linux/compositor/plug` is the example: it adds `swapthem`, and answers it with the
+`src/user/system/linux/compositor/plug` is the example: it adds `swapthem`, and answers it with the
 two dispatchers that exchange the focused window with its neighbour.
 `cargo xtask test-compositor` boots a seventh time with `plugin = /bin/plug`
 and `bind = SUPER, P, swapthem` -- a dispatcher nothing in the compositor
@@ -1051,12 +1051,12 @@ dispatchers, `hyprctl`, the layer surfaces -- works in logical pixels and
 never learns the difference.
 
 The clients are told: each `wl_output` carries its own scale, and
-`src/user/linux/compositor/pattern` now reads it, sends a buffer that many times the size
+`src/user/system/linux/compositor/pattern` now reads it, sends a buffer that many times the size
 and says so with `wl_surface.set_buffer_scale`, which is what a client on a
 scaled monitor does. `hyprctl monitors` prints the scale it is at.
 
 `cargo xtask test-compositor` boots a sixth time with `monitor = ,
-preferred, auto, 2` and requires the picture `src/user/linux/compositor/render`'s own tests
+preferred, auto, 2` and requires the picture `src/user/system/linux/compositor/render`'s own tests
 bless for a scaled monitor, pixel for pixel, on x86-64 and on AArch64.
 
 **Begun — turned monitors (2026-09-23).** `monitor = name, res, pos, scale,
@@ -1095,7 +1095,7 @@ turned monitor.
 
 `cargo xtask test-compositor --boot transform` boots twice, with `transform,
 1` and `transform, 3`, and requires QEMU's screendump -- the connector's
-buffer -- to be the turned picture `src/user/linux/compositor/render` blesses, pixel for
+buffer -- to be the turned picture `src/user/system/linux/compositor/render` blesses, pixel for
 pixel, and `hyprctl monitors` in the guest to say `transform: N` beside the
 1024x768 mode.
 
@@ -1131,7 +1131,7 @@ direction, `+N`/`-N` along the list, an id counting from zero, or a name:
 The proof is a fifth boot of `cargo xtask test-compositor`: two virtio-gpu
 devices, so two cards and two monitors in the guest, two windows tiled on the
 first, and then a keybind moving one to the second -- with each screen
-required, pixel for pixel, to be the picture `src/user/linux/compositor/render`'s own tests
+required, pixel for pixel, to be the picture `src/user/system/linux/compositor/render`'s own tests
 bless for it, on x86-64 and on AArch64. QEMU enables a second *output* of one
 virtio-gpu only when a host window manager resizes its window, which a
 headless test cannot do; two devices are two consoles, and a screendump names
@@ -1145,7 +1145,7 @@ because 0.56 merged the two syntaxes and took the old one away.
 
 Matching is by regular expression for the four names a window has -- `class`,
 `title`, `initial_class`, `initial_title` -- and a yes-or-no for `float`,
-`fullscreen` and `focus`. The expressions are `src/user/linux/compositor/regex`'s, which is
+`fullscreen` and `focus`. The expressions are `src/user/system/linux/compositor/regex`'s, which is
 RE2's syntax as far as a window rule uses it: literals and escapes, `.`,
 classes with ranges and negation, `*`, `+`, `?`, groups with alternatives,
 and the anchors every rule carries and a full match makes redundant. What is
@@ -1167,7 +1167,7 @@ style.
 `cargo xtask test-compositor` boots a tenth time with six rules -- one
 window floated at a size and a place and drawn at `opacity 0.6`, the other
 with its corners cut and no shadow -- and requires the picture they make.
-`src/user/linux/compositor/render` blesses it by calling `State::float_window` and handing
+`src/user/system/linux/compositor/render` blesses it by calling `State::float_window` and handing
 the renderer the same per-window styles, which is what the rules do, so the
 two pictures are made by one piece of code.
 
@@ -1198,7 +1198,7 @@ socket is how the Ferrix proof presses them.
 
 `cargo xtask test-compositor` boots a fourth time: two windows tiled, one
 keybind, and then both of them in one slot with the one that was moved in
-drawn -- pixel for pixel the image `src/user/linux/compositor/render`'s own tests bless, on
+drawn -- pixel for pixel the image `src/user/system/linux/compositor/render`'s own tests bless, on
 x86-64 and on AArch64, with `hyprctl clients` naming the group from inside
 the guest and the event socket carrying both events.
 
@@ -1229,7 +1229,7 @@ a bright block into a dark hole with a bright halo, which is what this looked
 like before the shaders were read again. The colour grading (`noise`,
 `contrast`, `brightness`, `vibrancy`) was not done at first, since it changes
 the blur's colour and not its shape; it followed later the same day, with
-Hyprland's defaults and `vibrancy_darkness` (`src/user/linux/compositor/render/src/blur.rs`).
+Hyprland's defaults and `vibrancy_darkness` (`src/user/system/linux/compositor/render/src/blur.rs`).
 
 The compositor now reports its slowest frame in microseconds, which is the
 stated bound this stage asks each software effect to have: a number measured
@@ -1251,7 +1251,7 @@ showing one has two workspaces the focus can be on, and an empty one is not
 pruned while it is being shown -- an empty scratchpad is a scratchpad you can
 put something in.
 
-**Begun — animations with Hyprland's curves (2026-09-17).** `src/user/linux/compositor/anim`
+**Begun — animations with Hyprland's curves (2026-09-17).** `src/user/system/linux/compositor/anim`
 is the curves, the tree and the values they move, and it holds no window and
 no clock: a value is asked what it is at a time the caller gives it, so every
 curve and every inheritance rule is host-tested.
@@ -1295,7 +1295,7 @@ it is drawn. Anti-aliasing stays off, as everywhere in this renderer: a row's
 inset is the circle's at that row's centre rounded to the nearest pixel, so
 coverage is all or nothing and every frame is exact. `cargo xtask
 test-compositor` boots a third time with both set and requires the picture
-`src/user/linux/compositor/render`'s own tests bless, and a test pins what a rounded corner
+`src/user/system/linux/compositor/render`'s own tests bless, and a test pins what a rounded corner
 must show: the compositor's background where the corner was cut, and the
 border along the same edge away from it.
 
@@ -1372,16 +1372,16 @@ The protocols and keywords this paragraph used to list as left --
 `relative-pointer` (a game that grabs the pointer), `presentation-time`,
 drag-and-drop and `hyprctl getoption` -- have all landed, each written the
 way the four before them were: the XML vendored, the tables checked against
-libwayland's own, a program in `src/user/linux/compositor/` that speaks it with no screen,
+libwayland's own, a program in `src/user/system/linux/compositor/` that speaks it with no screen,
 a host test against the image the renderer blesses, and a boot of `cargo
 xtask test-compositor` that does it on Ferrix.
 
 **Begun -- the desktop's own clients, in Rust (2026-09-26).** The
 customer asked for waybar, fuzzel, hyprlock and hypridle, written for
 Ferrix and reading their own files unchanged: five streams, one a program
-and one for the foundation they share -- `src/user/linux/compositor/toolkit` (a Wayland
-client runtime), `src/user/linux/compositor/text` (fonts, shaping, layout, Pango markup),
-`src/user/linux/compositor/hyprlang` and `src/user/linux/compositor/image`. `docs/DESKTOP-CLIENTS.md`.
+and one for the foundation they share -- `src/user/system/linux/compositor/toolkit` (a Wayland
+client runtime), `src/user/system/linux/compositor/text` (fonts, shaping, layout, Pango markup),
+`src/user/system/linux/compositor/hyprlang` and `src/user/system/linux/compositor/image`. `docs/DESKTOP-CLIENTS.md`.
 
 **hypridle (2026-09-26).** `/bin/hypridle` reads the user's
 `hypridle.conf` unchanged over `ext-idle-notify-v1` and
@@ -1415,7 +1415,7 @@ QEMU with independent workspaces; a plugin-shaped extension loaded from the
 configuration.
 
 **waybar in Rust draws the user's bar (2026-09-27).**
-`src/user/linux/compositor/waybar` reads the user's own `~/.config/waybar/config.jsonc`
+`src/user/system/linux/compositor/waybar` reads the user's own `~/.config/waybar/config.jsonc`
 and `style.css` as waybar does: jsoncpp's JSONC, `src/config.cpp`'s search
 path, `include` merging and `output` matching, libfmt's format strings, a
 GTK3 stylesheet with `@define-color`, `alpha()`, `calc()`, layered `url()`
@@ -1460,7 +1460,7 @@ evidence is:
 
 * the sliding window with its decorations on, as a sequence of screendumps,
   with the guest's own frame times reported and the renderer's software
-  bound stated and checked in release by `src/user/linux/compositor/render`;
+  bound stated and checked in release by `src/user/system/linux/compositor/render`;
 * two monitors, each with a workspace of its own and each required to be the
   picture blessed for it;
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
@@ -1498,7 +1498,7 @@ followed once that close path existed, and the close path was a bug of its
 own: only a whole connection going took a window out of the layout, so a
 client that closed one of two left the layout tiling a window that was not
 there. That close path has its own test since 2026-09-19:
-`src/user/linux/compositor/pattern`'s `Shape::Twin` is a client that opens a second
+`src/user/system/linux/compositor/pattern`'s `Shape::Twin` is a client that opens a second
 `xdg_toplevel` once the first has drawn and destroys it with the connection
 still open, and the compositor must show the window that was kept, alone and
 filling the workspace. Nothing else in the tree opens two windows from one

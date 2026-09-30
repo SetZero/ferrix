@@ -1,7 +1,7 @@
 //! A USB host as logic over registers and DMA memory: an EHCI controller,
 //! the hubs behind it, and the keyboards and mice behind those.
 //!
-//! `src/user/native/drivers/usb/usbhid` runs this in a ring-3 process under devmgr, for the
+//! `src/user/system/native/drivers/usb/usbhid` runs this in a ring-3 process under devmgr, for the
 //! STM32MP15 DK boards' USB host (`docs/INPUT.md` §7). The process holds an
 //! `IoMapping` of the controller's registers, its interrupt, a VMO pinned
 //! with `PIN_COHERENT` for the memory the controller walks, and one control

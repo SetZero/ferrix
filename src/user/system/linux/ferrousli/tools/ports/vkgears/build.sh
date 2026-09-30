@@ -3,7 +3,7 @@
 # ferrousli with Mesa's Venus driver linked into it: Vulkan in the guest,
 # executed by the host's GPU through virtio-gpu (docs/GPU.md §6.1).
 #
-#     tools/ports/vkgears/build.sh [--arch x86_64]    # from src/user/linux/ferrousli/
+#     tools/ports/vkgears/build.sh [--arch x86_64]    # from src/user/system/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   <arch>/bin/vkgears

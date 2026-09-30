@@ -1,5 +1,5 @@
 //! Drawing one frame: fuzzel's `render.c`, with tiny-skia for pixman and
-//! `src/user/linux/compositor/text` for fcft.
+//! `src/user/system/linux/compositor/text` for fcft.
 //!
 //! The order and the operators are fuzzel's: the rounded background and
 //! border replace what is under them (`PIXMAN_OP_SRC`), each row erases its
@@ -31,7 +31,7 @@ use crate::icon::{Found, Kind};
 use crate::launcher::Launcher;
 use crate::matching::Match;
 
-/// A colour as `src/user/linux/compositor/text` takes it.
+/// A colour as `src/user/system/linux/compositor/text` takes it.
 fn text_rgba(color: Rgba) -> compositor_text::Rgba {
     let [r, g, b, a] = color.0.to_be_bytes();
     compositor_text::Rgba { r, g, b, a }

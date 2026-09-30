@@ -2,7 +2,7 @@
 //! controller, the I2C controller, and the Silicon Image `SiI9022` HDMI bridge
 //! an STM32MP157 DK board wires between them and its HDMI socket.
 //!
-//! `src/user/native/drivers/display/stm32-ltdc` runs this in a ring-3 process under devmgr, as `src/user/native/drivers/display/virtio-gpu` runs
+//! `src/user/system/native/drivers/display/stm32-ltdc` runs this in a ring-3 process under devmgr, as `src/user/system/native/drivers/display/virtio-gpu` runs
 //! `ferrix-virtio-gpu` (`docs/DISPLAY.md` §6). The process holds an
 //! `IoMapping` of each controller's registers, the LTDC's interrupt, the card
 //! VMO it pins buffers from, and the control channel to the kernel's display

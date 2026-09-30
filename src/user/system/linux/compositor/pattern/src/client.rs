@@ -2120,7 +2120,7 @@ impl Client {
             .unwrap_or(0);
         let buffer = *BUFFERS.get(slot).unwrap_or(&id::BUFFER);
 
-        // The pattern itself, drawn by `src/user/linux/compositor/render` so the client and
+        // The pattern itself, drawn by `src/user/system/linux/compositor/render` so the client and
         // the expected image are made from one piece of code.
         let size = (
             u32::try_from(width).unwrap_or(0),

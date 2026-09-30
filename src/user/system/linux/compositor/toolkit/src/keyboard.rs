@@ -1,5 +1,5 @@
 //! The keyboard as a program reads it: keysyms and text, through
-//! `src/user/linux/compositor/xkb`, with the repeat the client is owed.
+//! `src/user/system/linux/compositor/xkb`, with the repeat the client is owed.
 
 /// Which modifiers are in force, from `wl_keyboard.modifiers` read against
 /// the keymap's real modifier masks.
@@ -24,7 +24,7 @@ pub struct Modifiers {
 
 impl Modifiers {
     /// From the combined mask, with the core X11 bit meanings every keymap
-    /// `src/user/linux/compositor/xkb` ships uses.
+    /// `src/user/system/linux/compositor/xkb` ships uses.
     #[must_use]
     pub const fn from_mask(mask: u32) -> Self {
         use compositor_xkb::generated::{CONTROL, LOCK, MOD1, MOD2, MOD4, SHIFT};

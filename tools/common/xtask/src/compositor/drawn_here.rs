@@ -27,8 +27,8 @@ const CAPTION_TEXT: &str = "Ferrix 12:34 — AVATAR To…";
 const CAPTION_POINTS: &str = "32";
 
 /// `cargo xtask test-compositor`'s `caption` boot: a client built on the
-/// desktop clients' foundation (`src/user/linux/compositor/caption`, on `src/user/linux/compositor/toolkit`
-/// and `src/user/linux/compositor/text`) draws a line in the user's own font on a layer
+/// desktop clients' foundation (`src/user/system/linux/compositor/caption`, on `src/user/system/linux/compositor/toolkit`
+/// and `src/user/system/linux/compositor/text`) draws a line in the user's own font on a layer
 /// surface, and the screen must show exactly the pixels the same program
 /// draws on this machine with the same font files.
 ///
@@ -590,6 +590,6 @@ fn picture_differences(
     (count, first)
 }
 
-/// Where `src/user/linux/compositor/caption` holds its surface from the top-left corner:
+/// Where `src/user/system/linux/compositor/caption` holds its surface from the top-left corner:
 /// its `MARGIN`.
 const CAPTION_MARGIN: i32 = 40;

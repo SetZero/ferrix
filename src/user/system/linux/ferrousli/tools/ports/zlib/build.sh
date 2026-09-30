@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds zlib 1.3.2 as a static library against ferrousli, for git.
 #
-#     tools/ports/zlib/build.sh [--arch <arch>]    # from src/user/linux/ferrousli/
+#     tools/ports/zlib/build.sh [--arch <arch>]    # from src/user/system/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   <arch>/include/zlib.h, zconf.h

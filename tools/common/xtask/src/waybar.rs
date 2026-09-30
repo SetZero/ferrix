@@ -19,10 +19,10 @@ use crate::ports::{Content, File};
 use crate::{Error, Result, paths};
 
 /// The boot's config, in the tree.
-const BOOT_CONFIG: &str = "src/user/linux/compositor/waybar/data/boot/config.jsonc";
+const BOOT_CONFIG: &str = "src/user/system/linux/compositor/waybar/data/boot/config.jsonc";
 
 /// The stylesheet a machine without the user's takes, in the tree.
-const FALLBACK_STYLE: &str = "src/user/linux/compositor/waybar/data/boot/style.css";
+const FALLBACK_STYLE: &str = "src/user/system/linux/compositor/waybar/data/boot/style.css";
 
 /// Where the boot's files go in the image: under the desktop's `HOME`, `/`.
 pub(crate) const HOME_DIR: &str = ".config/waybar-boot";

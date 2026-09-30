@@ -108,7 +108,7 @@ pub enum XdgRole {
 /// What an `xdg_positioner` holds, as the wire carries it.
 ///
 /// The numbers and nothing else: where a popup *goes* is arithmetic, and it
-/// lives in `src/user/linux/compositor/layout` with the rest of the geometry. This crate
+/// lives in `src/user/system/linux/compositor/layout` with the rest of the geometry. This crate
 /// records what the client said and hands it on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Positioner {

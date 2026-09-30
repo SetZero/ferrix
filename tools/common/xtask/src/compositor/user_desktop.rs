@@ -30,8 +30,8 @@ use crate::{Error, Result};
 /// `zwp_virtual_keyboard_v1`, with the test pattern ranked first and
 /// selected; and after `vkbd` has pressed Return, fuzzel gone and the
 /// pattern's window it started tiled alone. The first two are the pictures
-/// `src/user/linux/compositor/fuzzel`'s own host test makes of the same frames -- fuzzel's
-/// drawing composited by `src/user/linux/compositor/render` as the compositor composites a
+/// `src/user/system/linux/compositor/fuzzel`'s own host test makes of the same frames -- fuzzel's
+/// drawing composited by `src/user/system/linux/compositor/render` as the compositor composites a
 /// layer surface -- so a launcher that drew one pixel differently on Ferrix
 /// fails here.
 pub(super) fn test_fuzzel(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {

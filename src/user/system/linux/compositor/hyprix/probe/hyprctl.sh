@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Drive the compositor with Hyprland's own `hyprctl`, and record what it said.
 #
-# `src/user/linux/compositor/ipc`'s tests check the answers against Hyprland's source. This
+# `src/user/system/linux/compositor/ipc`'s tests check the answers against Hyprland's source. This
 # checks them against Hyprland's client: the program people actually type, and
 # the one every script and bar is written around. If `hyprctl clients` prints
 # nothing here, no Hyprland script works on this compositor whatever the JSON
 # says.
 #
 # It runs each read-only command twice: once through Hyprland's `hyprctl` and
-# once through `src/user/linux/compositor/ctl`, the one Ferrix's image carries. The test
+# once through `src/user/system/linux/compositor/ctl`, the one Ferrix's image carries. The test
 # requires the two answers to be the same, which is the whole claim
-# `src/user/linux/compositor/ctl` makes -- that a script written for `hyprctl` works when the
+# `src/user/system/linux/compositor/ctl` makes -- that a script written for `hyprctl` works when the
 # program it calls is ours.
 #
 # Needs a Linux host with `hyprctl` on the PATH; it is a development-host

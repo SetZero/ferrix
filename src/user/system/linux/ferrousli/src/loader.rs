@@ -6,7 +6,7 @@
 //! and the program's own `PT_TLS` is all the thread-local storage there is.
 //! As `libferrousli.so` it knows neither -- those symbols are its own -- so
 //! it asks the loader, which exports [`Interface`] for the purpose
-//! (`src/user/linux/ferrousli/ld/src/interface.rs`, whose layout this mirrors).
+//! (`src/user/system/linux/ferrousli/ld/src/interface.rs`, whose layout this mirrors).
 //!
 //! The reference is weak. In a static program nothing defines the symbol and
 //! [`interface`] is `None`, which is also how the rest of the library tells

@@ -635,7 +635,7 @@ pub enum Command<'a> {
     /// Hand the host's renderer a command stream to run.
     ///
     /// The bytes are virgl's protocol, not virtio's: this carries them and
-    /// says how many there are, and `src/user/linux/compositor/virgl` is what will write
+    /// says how many there are, and `src/user/system/linux/compositor/virgl` is what will write
     /// them (`docs/GPU.md` step 3b).
     Submit3d {
         /// The stream.

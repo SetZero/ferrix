@@ -213,18 +213,18 @@ jobs:
 
       # Every workspace the check builds. Until 2026-09-28 this named
       # `compositor`, which the regroup of 2026-09-26 moved under
-      # `src/user/linux/`: its target was never saved, and the compositor was
+      # `src/user/system/linux/`: its target was never saved, and the compositor was
       # three minutes of compiling on every run.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             . -> target
-            src/user/linux/compositor -> target
-            src/user/linux/init -> target
-            src/user/linux/auth -> target
-            src/user/linux/media -> target
-            src/user/linux/adbd -> target
+            src/user/system/linux/compositor -> target
+            src/user/system/linux/init -> target
+            src/user/system/linux/auth -> target
+            src/user/system/linux/media -> target
+            src/user/system/linux/adbd -> target
 
       # `cargo xtask check` first asks whether the commit hooks are armed,
       # which is local configuration a fresh checkout does not have.
@@ -271,7 +271,7 @@ jobs:
   #
   # Seven of its unit tests compare with the glibc the test binary
   # links and skip on any other version than the one their data was
-  # recorded on (src/user/linux/ferrousli/src/host_glibc.rs); this runner's glibc
+  # recorded on (src/user/system/linux/ferrousli/src/host_glibc.rs); this runner's glibc
   # differs, so they print a note and every other test runs.
   # ----------------------------------------------------------------
   ferrousli:
@@ -291,11 +291,11 @@ jobs:
         with:
           workspaces: |
             . -> target
-            src/user/linux/ferrousli -> target
+            src/user/system/linux/ferrousli -> target
 
       # ferrousli's math tests judge every function against libc-test's
       # tables, read from a checkout at FERROUSLI_LIBC_TEST, never copied
-      # (src/user/linux/ferrousli/src/math/mtest.rs). This is the commit the landings are
+      # (src/user/system/linux/ferrousli/src/math/mtest.rs). This is the commit the landings are
       # gated against; move it here and in mtest.rs together.
       - name: Fetch libc-test's tables
         env:

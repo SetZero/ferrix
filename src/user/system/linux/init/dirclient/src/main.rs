@@ -19,7 +19,7 @@ use ferrix_native::port;
 use ferrix_native::{Deadline, Error, Object, Raw, Signals, Syscall};
 use ferrix_native_abi::directory::{Kind, MAX_MESSAGE, Message};
 
-/// Native calls through `syscall`, as `src/user/linux/init/init/src/sys.rs` makes them.
+/// Native calls through `syscall`, as `src/user/system/linux/init/init/src/sys.rs` makes them.
 #[derive(Debug, Clone, Copy)]
 struct Native;
 

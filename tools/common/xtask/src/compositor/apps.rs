@@ -62,7 +62,7 @@ const FOOT_ERROR: &str = "err: ";
 /// A window with nothing drawn in it is a handful: the compositor's
 /// background, the border, and foot's own background -- seven, as the
 /// development host's probe of a foot with no output records
-/// (`src/user/linux/compositor/hyprix/probe/real-client.txt`). Text is antialiased, and
+/// (`src/user/system/linux/compositor/hyprix/probe/real-client.txt`). Text is antialiased, and
 /// every glyph's edges are greys between foot's foreground and background,
 /// so three short lines of it are dozens more.
 const TEXT_COLOURS: usize = 24;
@@ -94,12 +94,12 @@ fn colours(screen: &Image) -> usize {
 ///
 /// `docs/CHROME.md` §6's first milestone. The compositor's own tests use
 /// clients written against its own crates, which proves the two halves
-/// agree, not that the protocol is right; `src/user/linux/compositor/hyprix/probe` runs
+/// agree, not that the protocol is right; `src/user/system/linux/compositor/hyprix/probe` runs
 /// foot against the compositor on a development host, which proves the
 /// protocol and nothing about Ferrix. This is both at once: foot and every
 /// library it links -- libwayland-client, libxkbcommon, pixman, freetype,
 /// fontconfig, fcft -- built against ferrousli by
-/// `src/user/linux/ferrousli/tools/ports/foot`, started by the compositor on the guest,
+/// `src/user/system/linux/ferrousli/tools/ports/foot`, started by the compositor on the guest,
 /// drawing text in a font the image carries.
 ///
 /// No picture is blessed: foot's text is foot's rendering of a font, and an
@@ -240,7 +240,7 @@ const VKGEARS_PATIENCE: Duration = Duration::from_secs(120);
 /// `test-vkgears`: Vulkan's gears on Ferrix, drawn by the host's GPU.
 ///
 /// `docs/GPU.md` §6.1's exit. vkgears is mesa-demos' own, and Mesa's Venus
-/// driver is linked into it (`src/user/linux/ferrousli/tools/ports/vkgears`): it opens the
+/// driver is linked into it (`src/user/system/linux/ferrousli/tools/ports/vkgears`): it opens the
 /// render node, makes a Venus context and its rings in host memory mapped
 /// through the device's window, compiles nothing -- the SPIR-V goes to the
 /// host's Vulkan driver -- and fences each frame on a ring, polling the

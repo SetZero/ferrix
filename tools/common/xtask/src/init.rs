@@ -2,11 +2,11 @@
 //!
 //! # Building it
 //!
-//! `src/user/linux/init/` is a workspace of its own, built as zinc is: a static program
+//! `src/user/system/linux/init/` is a workspace of its own, built as zinc is: a static program
 //! against the target's own musl, linked by rust-lld, so any host builds it.
 //! [`carried`] returns what an image carries for it: `/sbin/init`,
 //! `/sbin/getty`, the getty generator in `/lib/ferrix/generators`, and the
-//! units of `src/user/linux/init/units` in `/lib/ferrix/units`, with `default.target` a link
+//! units of `src/user/system/linux/init/units` in `/lib/ferrix/units`, with `default.target` a link
 //! to `multi-user.target`.
 //!
 //! Only images that name `/sbin/init` carry it. With nothing named and
@@ -62,7 +62,7 @@ use crate::{Error, Result, btrfs_disk, cargo, fat, initramfs, native, zinc};
 pub(crate) const PATH: &str = "/sbin/init";
 
 /// The shipped units, beside this module in the tree.
-const UNITS: &str = "src/user/linux/init/units";
+const UNITS: &str = "src/user/system/linux/init/units";
 
 /// How long to wait for the answer to one line typed at the prompt.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -328,7 +328,7 @@ const PASSWD: &str = "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/:/bi
 /// Their groups.
 const GROUP: &str = "root:x:0:\nferrix:x:1000:\n";
 
-/// The three programs of `src/user/linux/init/` for one architecture.
+/// The three programs of `src/user/system/linux/init/` for one architecture.
 #[derive(Debug)]
 pub(crate) struct Built {
     init: PathBuf,
@@ -339,7 +339,7 @@ pub(crate) struct Built {
     dirclient: PathBuf,
 }
 
-/// Build `src/user/linux/init/` for `arch`, or `None` on an architecture it is not built
+/// Build `src/user/system/linux/init/` for `arch`, or `None` on an architecture it is not built
 /// for yet.
 pub(crate) fn built(arch: Arch) -> Result<Option<Built>> {
     let Some(target) = zinc::target(arch) else {
@@ -358,7 +358,7 @@ pub(crate) fn built(arch: Arch) -> Result<Option<Built>> {
     };
     crate::builds::Build::cargo(
         format!("cargo build (init) --target {target}"),
-        paths::workspace_root().join("src/user/linux/init"),
+        paths::workspace_root().join("src/user/system/linux/init"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

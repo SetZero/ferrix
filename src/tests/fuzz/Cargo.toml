@@ -48,8 +48,8 @@ ferrix-cgroupfs = { path = "../../lib/fs/cgroupfs" }
 ferrix-sysfs = { path = "../../lib/fs/sysfs" }
 ferrix-svc = { path = "../../lib/init/svc" }
 ferrix-svc-proto = { path = "../../lib/init/svc-proto" }
-compositor-config = { path = "../../user/linux/compositor/config" }
-compositor-wire = { path = "../../user/linux/compositor/wire" }
+compositor-config = { path = "../../user/system/linux/compositor/config" }
+compositor-wire = { path = "../../user/system/linux/compositor/wire" }
 
 [[bin]]
 name = "elf_parse"

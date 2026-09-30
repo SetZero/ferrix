@@ -55,7 +55,7 @@ pub(crate) fn files(arch: Arch) -> Result<Option<Vec<ports::File>>> {
         .join("ferrix-install");
     crate::builds::Build::cargo(
         format!("cargo build (ferrix-install) --target {target}"),
-        paths::workspace_root().join("src/user/linux/installer"),
+        paths::workspace_root().join("src/user/system/linux/installer"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

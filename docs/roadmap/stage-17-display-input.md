@@ -39,12 +39,12 @@ driver's HELLO on a control channel `DISPLAY_CONTROL_CREATE` (0x104C) makes,
 checks it through `ferrix-displayctl`'s session, refuses it when the firmware
 framebuffer is memory the allocator owns, and publishes `/dev/dri/card0`: a
 256 MiB card VMO whose ranges are dumb buffers, mapped by the program through
-the card's inode and pinned read-only by the driver. `src/user/native/drivers/display/virtio-gpu`, started by
+the card's inode and pinned read-only by the driver. `src/user/system/native/drivers/display/virtio-gpu`, started by
 devmgr for 0x1050, drives virtio-gpu's 2D commands through
 `ferrix-virtio-gpu` behind VT-d or the SMMUv3. The card answers the legacy
 DRM subset — resources, connector, encoder, CRTC, dumb buffers, `ADDFB`,
 `ADDFB2`, `SETCRTC`, `PAGE_FLIP` with its event, `DIRTYFB` — to one open at a
-time. `cargo xtask test-display` boots `src/user/linux/compositor/blank` as init on x86-64
+time. `cargo xtask test-display` boots `src/user/system/linux/compositor/blank` as init on x86-64
 and AArch64 and requires every pixel of QEMU's screendump of the virtio-gpu
 to be its colour, and its negative control to fail at exactly pixel (0, 0).
 
@@ -83,7 +83,7 @@ rule to Linux it follows `drivers/input/evdev.c` and `input.c`, and
 the design's first text, for L6 to settle. No kernel code uses it yet.
 
 **Done — L4 of the input iteration, the virtio-input driver (2026-09-17).**
-`src/lib/drivers/input/virtio-input` is the driver a `src/user/native/drivers/input/virtio-input` process will run: the logic
+`src/lib/drivers/input/virtio-input` is the driver a `src/user/system/native/drivers/input/virtio-input` process will run: the logic
 over a [`Transport`], pinned pages and an event area the process hands it, as
 `src/lib/drivers/display/virtio-gpu` is written. Bring-up negotiates features, reads the device's
 description through L2's configuration queries and builds the event queue, and
@@ -110,15 +110,15 @@ without a failure. No kernel code uses it yet: L5 is the process.
 HELLO on a control channel `INPUT_CONTROL_CREATE` (0x104D) makes, judges it
 through `ferrix-inputctl`'s session, and publishes `/dev/input/eventN` with a
 boot line naming the device and what it publishes -- `input    event0 QEMU
-Virtio Keyboard: keys, LEDs, repeat`. `src/user/native/drivers/input/virtio-input`, started by devmgr for
+Virtio Keyboard: keys, LEDs, repeat`. `src/user/system/native/drivers/input/virtio-input`, started by devmgr for
 0x1052, drives the device through `ferrix-virtio-input` behind VT-d or the
-SMMUv3, as `src/user/native/drivers/display/virtio-gpu` drives the card. The nodes answer the evdev subset
+SMMUv3, as `src/user/system/native/drivers/display/virtio-gpu` drives the card. The nodes answer the evdev subset
 `docs/INPUT.md` §2.4 reads out of the `evdev` crate -- `EVIOCGVERSION`,
 `EVIOCGID`, `EVIOCGNAME`, `EVIOCGUNIQ`, `EVIOCGPROP`, `EVIOCGBIT` of each
 type that has a bitmap, `EVIOCGKEY`, `EVIOCGLED`, `EVIOCGSW`, `EVIOCGABS`,
 `EVIOCGREP`/`EVIOCSREP`, `EVIOCGRAB`, `EVIOCREVOKE`, `EVIOCSCLOCKID` -- with
 a queue per open following `evdev.c`'s size, drop and `SYN_DROPPED` rules.
-`src/user/linux/compositor/evecho` is the consumer, and it runs on a Linux host's own
+`src/user/system/linux/compositor/evecho` is the consumer, and it runs on a Linux host's own
 `/dev/input` as well as on Ferrix, which is where it found that `EVIOCGBIT`
 of `EV_REP` is `EINVAL` on Linux. `cargo xtask test-input` boots it as init
 on x86-64 and AArch64, sends a key press, a key release, an absolute position
@@ -159,9 +159,9 @@ other's writes through `MAP_SHARED`.
 **Done — the hardware row: the DK1's HDMI output (2026-09-23).** The
 STM32MP157D-DK1's LTDC and its SiI9022 HDMI bridge are a card like any
 other: the kernel clocks and muxes them and publishes a device-tree node,
-`src/user/native/drivers/display/stm32-ltdc` drives both, and the core fills the card's buffers with
+`src/user/system/native/drivers/display/stm32-ltdc` drives both, and the core fills the card's buffers with
 contiguous memory and cleans the caches for the LTDC, which does not snoop
-them. On the board `src/user/linux/compositor/blank` put a colour on a monitor through
+them. On the board `src/user/system/linux/compositor/blank` put a colour on a monitor through
 `/dev/dri/card0`, and `hyprix` ran as init at 1280x720 on `HDMI-A-1` with a
 terminal window. `docs/DISPLAY.md` §6 has the design.
 
@@ -170,7 +170,7 @@ terminal window. `docs/DISPLAY.md` §6 has the design.
 host and starts its PHY, and publishes a device-tree node; `vmo_pin`'s
 `PIN_COHERENT` gives a driver memory a device that does not snoop sees as the
 CPU does, mapped past the caches; the input core lets a USB host's node hold
-a control channel per keyboard or mouse. `src/user/native/drivers/usb/usbhid`, over `src/lib/drivers/usb/usb-host`
+a control channel per keyboard or mouse. `src/user/system/native/drivers/usb/usbhid`, over `src/lib/drivers/usb/usb-host`
 and tested against a model of EHCI and the board's bus, drives the
 controller, the USB2514B hub and HID boot-protocol devices through the hub's
 transaction translator. On the board a G502 mouse became `event0` and a
@@ -223,7 +223,7 @@ Cortex-A7 at 800 MHz, which the STM32MP157D is rated for and firmware runs
 at 650, a raise of VDDCORE through the PMIC first.
 
 **Done — the board's pointer on the LTDC's second layer (2026-09-24).**
-The DK1's card has a cursor plane: `src/user/native/drivers/display/stm32-ltdc` offers the LTDC's second
+The DK1's card has a cursor plane: `src/user/system/native/drivers/display/stm32-ltdc` offers the LTDC's second
 layer, shows the compositor's 64 × 64 image from its own buffer blended as
 premultiplied colour, and moves it by rewriting the layer's window at the
 next vertical blanking, clipped at the screen's edges and put back after a
@@ -347,7 +347,7 @@ the values `Overlay`, `Primary` and `Cursor`. Each follows Linux's
 objects. Since the second screen (2026-09-17) the card has a block of four
 ids per scanout, for up to sixteen — connector, encoder, CRTC and primary
 plane — so the `type` property is 65 and framebuffer ids start at 128; the
-first head's plane is still id 4. The numbers come from the extended `probe/drm.c`. `src/user/linux/compositor/blank`
+first head's plane is still id 4. The numbers come from the extended `probe/drm.c`. `src/user/system/linux/compositor/blank`
 reads the planes after its modeset as Smithay does, and `cargo xtask
 test-display` requires its marker line to end in `plane <id> Primary` on
 x86-64 and AArch64. With the plane's `type` value set to `Overlay`, the line

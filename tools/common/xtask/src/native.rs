@@ -1,7 +1,7 @@
 //! Native programs: built for the kernel's targets, checked, and put in the
 //! initramfs.
 //!
-//! A native program is a crate under `src/user/native/` that links `src/user/native/rt`. It is
+//! A native program is a crate under `src/user/system/native/` that links `src/user/system/native/rt`. It is
 //! built for the same target as the kernel — freestanding, soft float,
 //! statically relocated — because that is what the kernel's ELF loader takes,
 //! and it is checked here before it goes anywhere: an image the loader would
@@ -172,7 +172,7 @@ const MMAP_MIN_ADDR: u64 = 0x1_0000;
 struct Expected {
     /// `e_machine`.
     machine: u16,
-    /// The first instructions of `src/user/native/rt`'s `_start`, as bytes.
+    /// The first instructions of `src/user/system/native/rt`'s `_start`, as bytes.
     start: &'static [u8],
     /// The trap instruction a native call is made with.
     trap: &'static [u8],
@@ -181,7 +181,7 @@ struct Expected {
     step: usize,
 }
 
-/// The shape `arch`'s programs are held to, from `src/user/native/rt/src/arch/`.
+/// The shape `arch`'s programs are held to, from `src/user/system/native/rt/src/arch/`.
 const fn expected(arch: Arch) -> Expected {
     match arch {
         // xor ebp, ebp ; and rsp, -16 ; call
@@ -270,7 +270,7 @@ fn no_page_is_writable_and_executable(elf: &Elf<'_>) -> std::result::Result<(), 
 }
 
 /// The entry point is in user space, in an executable segment, and is
-/// `src/user/native/rt`'s `_start`.
+/// `src/user/system/native/rt`'s `_start`.
 fn entry_is_the_runtimes(elf: &Elf<'_>, expected: Expected) -> std::result::Result<(), String> {
     let entry = elf.entry();
     if entry < MMAP_MIN_ADDR {
@@ -289,7 +289,7 @@ fn entry_is_the_runtimes(elf: &Elf<'_>, expected: Expected) -> std::result::Resu
     let length = u64::try_from(expected.start.len()).unwrap_or(u64::MAX);
     if elf.vaddr_to_bytes(entry, length) != Some(expected.start) {
         return Err(format!(
-            "its entry point {entry:#x} does not begin with src/user/native/rt's _start"
+            "its entry point {entry:#x} does not begin with src/user/system/native/rt's _start"
         ));
     }
     Ok(())

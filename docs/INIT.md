@@ -147,7 +147,7 @@ src/lib/init/svc         no_std + alloc; host-tested, Miri, fuzzed
                  the slice tree, restart policy, and
                  Manager::step(event, now) -> actions
 src/lib/init/svc-proto   the control and notify wire formats, shared with `svc`
-src/user/linux/init/            its own workspace, std on *-linux-musl, like src/user/linux/zinc/
+src/user/system/linux/init/            its own workspace, std on *-linux-musl, like src/user/system/linux/zinc/
   init           /sbin/init: the event loop and the Linux backends
   svc            /bin/svc: the control client
   getty          /sbin/getty
@@ -597,7 +597,7 @@ Four things follow:
 | **Power** | `reboot(2)` | the power handle from K2 |
 | **Directory** | init's own, over bootstrap channels | unchanged: it is already what a root task is |
 
-Each backend is a Rust trait in `src/user/linux/init/`, and the Linux implementations are
+Each backend is a Rust trait in `src/user/system/linux/init/`, and the Linux implementations are
 the only ones built in version 1. The table's right-hand column is not
 promised work. It is the check that nothing in `src/lib/init/svc` would have to change
 if that column were built. It holds for the Groups, Resources and Supervise
@@ -1163,10 +1163,10 @@ did not survive poweroff -f -n"), and no `ferrix.onexit=panic` ("did not
 panic with FX-1501"). Under zinc only the first boot runs, because zinc
 cannot make the call.
 
-**L4, as built (10 points).** `src/user/linux/init/` is a workspace of its own beside
+**L4, as built (10 points).** `src/user/system/linux/init/` is a workspace of its own beside
 zinc's and built the same way, a static musl program linked by rust-lld on
 any host, for all three architectures: `/sbin/init`, `/sbin/getty` and
-`/lib/ferrix/generators/getty-generator`, with the units of `src/user/linux/init/units` in
+`/lib/ferrix/generators/getty-generator`, with the units of `src/user/system/linux/init/units` in
 `/lib/ferrix/units`. `cargo xtask check` runs its formatting, clippy and 8
 host tests by default, as it runs the compositor's.
 
@@ -1410,7 +1410,7 @@ pid-ok-0`".
 
 **K2, K3, K4, K6, as built (2026-09-26, the kernel half of L8).** Four
 native calls, numbered in `src/lib/proto/native-abi/src/nr.rs`, and one message
-layout in `src/lib/proto/native-abi/src/bootstrap.rs`, so `src/user/linux/init/` can take both by
+layout in `src/lib/proto/native-abi/src/bootstrap.rs`, so `src/user/system/linux/init/` can take both by
 path. A Linux program makes each with `syscall(number, ...)`; a failure is
 `-1` and `errno`, as `src/lib/proto/native-abi`'s `status` names it.
 
@@ -1476,7 +1476,7 @@ signal ended did not say killed, by it"), and the descriptor offering no wake
 queue ("a packet queued on a port did not wake an epoll_wait on its
 descriptor", after 51 ms with 0 waits woken).
 
-**L8's init side, as built (8 points).** `src/user/linux/init/init/src/directory.rs`.
+**L8's init side, as built (8 points).** `src/user/system/linux/init/init/src/directory.rs`.
 
 * **Pid 1's channel.** Init takes it with `process_bootstrap` at boot,
   reads the kernel's hello and says `the kernel greeted init, version 1`,
@@ -1504,10 +1504,10 @@ descriptor", after 51 ms with 0 waits woken).
   little-endian layouts in `src/lib/proto/native-abi/src/directory.rs`, which
   allocates nothing, since native programs have no allocator.
 
-**The gate, stage five.** `src/user/native/pong` is a native service (READY, then
+**The gate, stage five.** `src/user/system/native/pong` is a native service (READY, then
 `pong <name> to <client>` down each CONNECTed end); `pong.service` is
 `Type=native` with `Offers=ferrix.test` and wanted by nothing, so only an
-OPEN starts it. `src/user/linux/init/dirclient NAME` is a Linux client that OPENs a name
+OPEN starts it. `src/user/system/linux/init/dirclient NAME` is a Linux client that OPENs a name
 and prints `dir-answer: …` or `dir-refused: …`. `asker.service`
 (`Uses=ferrix.test`) must print `dir-answer: pong ferrix.test to
 asker.service`; `rogue.service` (`Uses=ferrix.other`) must be REFUSED;
@@ -1539,7 +1539,7 @@ it to use. Linux services' own OFFERs are kept but no gate offers one yet.
   `ferrix.checks=skip`, since its `CMDLINE.TXT` is its owner's.
 * **hyprix** asks init for a scope for each program it starts, on a thread
   of its own with a two-second limit: `app.slice/app-<name>-<pid>.scope`
-  (`src/user/linux/compositor/hyprix/src/scope.rs`). With no init, there is no socket, and
+  (`src/user/system/linux/compositor/hyprix/src/scope.rs`). With no init, there is no socket, and
   the program stays where it started.
 * **The compositor gates** count `hyprix.service` failing or being
   restarted as the compositor ending, where they counted pid 1's exit: a

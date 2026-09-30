@@ -2,8 +2,8 @@
 //! Pixel 7's gs201 -- in device mode, as logic over registers and DMA
 //! memory.
 //!
-//! `src/user/native/drivers/usb/usbdev` is to run this in a ring-3 process under devmgr, as
-//! `src/user/native/drivers/usb/usbhid` runs `ferrix-usb-host` for the DK boards
+//! `src/user/system/native/drivers/usb/usbdev` is to run this in a ring-3 process under devmgr, as
+//! `src/user/system/native/drivers/usb/usbhid` runs `ferrix-usb-host` for the DK boards
 //! (`docs/vendor/google/pixel7/USB-HANDOVER.md`, phase 3). The process holds an
 //! `IoMapping` of the controller's 64 KiB window at `0x1121_0000`, its
 //! interrupt (SPI 379), and pinned memory for what the controller reads

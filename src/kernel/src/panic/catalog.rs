@@ -1477,11 +1477,11 @@ pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
         "A driver the manifest names is not in the image, or its image does not fit a VMO: \
          `tools/common/xtask/src/native.rs` and the initramfs disagree.",
         "`/sbin/devmgr` does not load as a native program, or could not be claimed to start.",
-        "devmgr exited before reporting: its exit status names the step (see `src/user/native/devmgr`).",
+        "devmgr exited before reporting: its exit status names the step (see `src/user/system/native/devmgr`).",
         "devmgr reported nothing within twenty seconds: a driver did not bring its device up, \
          or the kernel never sent PUBLISHED for a disk it accepted.",
     ],
-    see: "src/kernel/src/discovery/devmgr.rs; src/user/native/devmgr/src/main.rs; docs/DEVMGR.md; docs/ROADMAP.md \
+    see: "src/kernel/src/discovery/devmgr.rs; src/user/system/native/devmgr/src/main.rs; docs/DEVMGR.md; docs/ROADMAP.md \
           stage 10",
 };
 
@@ -1499,7 +1499,7 @@ pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
               to match what `xtask` wrote into the test disk. The driver is left running.",
     causes: &[
         "The driver exited before publishing: the line above this report gives its exit \
-         status, which is the step `src/user/native/drivers/block/virtio-blk` stopped at (1 START, 2 identity, 3 registers, \
+         status, which is the step `src/user/system/native/drivers/block/virtio-blk` stopped at (1 START, 2 identity, 3 registers, \
          4 memory, 5 device bring-up, 6 ring or HELLO, 7 events), or from 20 up the fault that \
          stopped it serving (its `fault_status`: 23 the device refused a request, 30 up a \
          virtqueue check).",
@@ -1509,7 +1509,7 @@ pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
          addresses, the IOMMU domain, or the ring's data copy disagree with the device.",
         "The initramfs carries no `/sbin/blk`: `tools/common/xtask/src/native.rs` no longer lists it.",
     ],
-    see: "src/kernel/src/interfaces/block_ring/driver_check.rs; src/user/native/drivers/block/virtio-blk/src/main.rs; docs/BLOCK-RING.md; \
+    see: "src/kernel/src/interfaces/block_ring/driver_check.rs; src/user/system/native/drivers/block/virtio-blk/src/main.rs; docs/BLOCK-RING.md; \
           docs/ROADMAP.md stage 10",
 };
 

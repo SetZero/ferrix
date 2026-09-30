@@ -1,6 +1,6 @@
 //! The `windowrule` lines, and what they do to a window when it opens.
 //!
-//! `src/user/linux/compositor/config` reads a rule into what it matches and what it does;
+//! `src/user/system/linux/compositor/config` reads a rule into what it matches and what it does;
 //! this is where the doing happens. Hyprland applies a window's rules when
 //! it maps, and so does this: the window is already in the layout by then,
 //! so a rule that floats it, moves it, sizes it or sends it somewhere is

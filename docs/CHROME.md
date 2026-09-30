@@ -60,7 +60,7 @@ what is left:
 **Done, 2026-09-24: a foreign toolkit client inside the guest** (§6).
 `foot` 1.24.0, a real Wayland terminal nobody here wrote, runs on Ferrix's
 compositor and draws a program's output in the image's font. It is built
-by `src/user/linux/ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
+by `src/user/system/linux/ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
 wayland 1.24.0, wayland-protocols 1.45, libxkbcommon 1.11.0, pixman 0.46.4,
 freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
@@ -112,11 +112,11 @@ are worth naming because each was built for something else and pays here.
   since. Threads are complete down to
   robust and priority-inheriting mutexes and cancellation, and the thread
   control block keeps glibc's layout.
-* **A C++ runtime that is exercised.** `src/user/linux/ferrousli/tools/ports/libcxx` builds
+* **A C++ runtime that is exercised.** `src/user/system/linux/ferrousli/tools/ports/libcxx` builds
   LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli, exceptions
   and all, and btop 1.4.7 -- a C++23 program with threads -- draws its panels
   on Ferrix. curl fetches over HTTPS and git clones, both built the same way.
-* **A compositor a toolkit will start against.** `src/user/linux/compositor/hyprix` advertises
+* **A compositor a toolkit will start against.** `src/user/system/linux/compositor/hyprix` advertises
   every global Chromium's Ozone backend binds: `wl_compositor`,
   `wl_subcompositor`, `wl_shm`, `wl_seat`, `wl_data_device_manager`,
   `xdg_wm_base` at 6, `zxdg_decoration_manager_v1`, `wp_viewporter`,
@@ -363,8 +363,8 @@ that a program which asks for isolation now finds out it cannot have it.
   fontconfig with freetype and expat, plus an actual font on the image. They
   are static libraries in foot's build today; Chromium, built dynamically,
   will want them as shared ones. The compositor still draws its own text
-  with the coverage cells `src/user/linux/compositor/term` carries; a client brings its own
-  fonts, which is what these are for. Note that `src/user/linux/compositor/README.md`'s "no
+  with the coverage cells `src/user/system/linux/compositor/term` carries; a client brings its own
+  fonts, which is what these are for. Note that `src/user/system/linux/compositor/README.md`'s "no
   C device stack, ever" is a rule about the compositor, not about its
   clients.
 * ~~**No audio at all**, which a browser survives and a person notices.~~
@@ -418,8 +418,8 @@ expensive one -- there is still no loader anywhere. What follows is how it
 stood on 2026-09-18.
 
 **Overtaken again on 2026-09-21: 27 of the 39 are done, 12 left.**
-`src/user/linux/ferrousli/ld` is a working loader -- symbol versions, `COPY`, initial-exec
-TLS, `DT_FINI` -- and `src/user/linux/ferrousli/tools/build-shared.sh` links ferrousli as a
+`src/user/system/linux/ferrousli/ld` is a working loader -- symbol versions, `COPY`, initial-exec
+TLS, `DT_FINI` -- and `src/user/system/linux/ferrousli/tools/build-shared.sh` links ferrousli as a
 versioned `libc.so.6`. Debian's own dynamic busybox runs on Ferrix with
 glibc's loader on all three architectures, and with ferrousli's in glibc's
 place on x86-64. What Chrome still needs of it is most of the 12:
@@ -434,7 +434,7 @@ arithmetic, a real `dl_iterate_phdr` and a real `dladdr`, which is what makes
 C++ unwinding work. What does not exist anywhere, on any ref, is a loader: a
 search of every commit in the repository for `PT_INTERP`, `DT_NEEDED`,
 `JUMP_SLOT` and GNU-hash code finds only musl's vendored
-`src/user/linux/ferrousli/include/elf.h`. **34 points remain**, not 39.
+`src/user/system/linux/ferrousli/include/elf.h`. **34 points remain**, not 39.
 
 *(btrfs write is overtaken too: stage 12 landed on 2026-09-21, and the
 roadmap has how it stands. What follows is 2026-09-18.)*
@@ -494,7 +494,7 @@ So the row is not a cost a browser would have to carry; it is already paid.
 Two milestones before the browser, each of which is worth having on its own.
 
 **First, a foreign toolkit client inside the guest.** `foot` is already the
-compositor's real-client probe, but `src/user/linux/compositor/hyprix/probe/real-client.sh`
+compositor's real-client probe, but `src/user/system/linux/compositor/hyprix/probe/real-client.sh`
 says in its own header that it is a development-host check: no client that was
 not written against this tree's crates has ever run *on* Ferrix. Building
 libwayland-client and libxkbcommon against ferrousli and running foot in the
@@ -502,7 +502,7 @@ guest proves the client story end to end for a fraction of a browser's cost,
 and it is on the browser's path rather than beside it.
 
 **Done, 2026-09-24.** `cargo xtask ports` builds foot and the ten libraries
-under it statically against ferrousli (`src/user/linux/ferrousli/tools/ports/foot`), and
+under it statically against ferrousli (`src/user/system/linux/ferrousli/tools/ports/foot`), and
 `cargo xtask test-foot` boots the compositor with foot running `hyprctl
 version`. foot finds DejaVu Sans Mono through fontconfig, lays out a 7x13
 grid, starts four render threads and draws the three lines, which came
@@ -552,8 +552,8 @@ telling a caller something untrue.
 
 Read for this: `src/kernel/src/syscall/` against the `Syscall` enum, `src/lib/platform/elf`,
 `src/lib/fs/btrfs` and `src/lib/fs/btrfs-vfs`, `src/lib/drivers/block/virtio-blk` and `src/lib/proto/blkring`,
-`src/user/linux/ferrousli/src` and `src/user/linux/ferrousli/tools`, `src/user/linux/compositor/server` and
-`src/user/linux/compositor/hyprix`, `tools/common/xtask/src/initramfs.rs`, and the history of every ref for
+`src/user/system/linux/ferrousli/src` and `src/user/system/linux/ferrousli/tools`, `src/user/system/linux/compositor/server` and
+`src/user/system/linux/compositor/hyprix`, `tools/common/xtask/src/initramfs.rs`, and the history of every ref for
 the two prerequisites in §4. Chromium's own requirements were taken from
 Alpine's `community/chromium` APKBUILD and its musl patch set, which is the
 only evidence that a Chromium against a musl-shaped C library builds at all.
@@ -1110,7 +1110,7 @@ Chrome for Testing is for automated testing only.
 
 The user agent has spaces, and the compositor split an `exec` line at every
 space. It now splits the line as `sh -c` would for quoting alone
-(`src/user/linux/compositor/hyprix/src/command.rs`), which is what a Hyprland
+(`src/user/system/linux/compositor/hyprix/src/command.rs`), which is what a Hyprland
 configuration assumes, since Hyprland hands the line to the shell.
 
 ---

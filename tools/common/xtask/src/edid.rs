@@ -37,7 +37,7 @@ pub(crate) const SYSFS_DRM: &str = "/sys/class/drm";
 
 /// `hwdata`'s copy of the PNP registry, which turns `LEN` into `Lenovo Group
 /// Limited`: on the host, and at the same place in the guest, where the
-/// compositor looks for it (`src/user/linux/compositor/drm`'s `registered`).
+/// compositor looks for it (`src/user/system/linux/compositor/drm`'s `registered`).
 pub(crate) const REGISTRY: &str = "/usr/share/hwdata/pnp.ids";
 
 /// A monitor found on this machine.
@@ -138,7 +138,7 @@ pub(crate) fn find(root: &Path, wanted: &str, registry: Option<&str>) -> Result<
 }
 
 /// What a monitor's EDID says it is, as Hyprland's short description and
-/// `src/user/linux/compositor/drm`'s `Edid::describe` put it: the make, the model and the
+/// `src/user/system/linux/compositor/drm`'s `Edid::describe` put it: the make, the model and the
 /// serial, with single spaces and no commas. The make is the registry's
 /// name for the PNP id where `registry` has it, and the id where not.
 pub(crate) fn describe(bytes: &[u8], registry: Option<&str>) -> Option<String> {

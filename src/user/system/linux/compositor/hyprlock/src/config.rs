@@ -181,7 +181,7 @@ const WIDGET_OPTIONS: [(&str, &[&str]); 5] = [
     ),
 ];
 
-/// What `hyprlock.conf` may hold, for `src/user/linux/compositor/hyprlang`.
+/// What `hyprlock.conf` may hold, for `src/user/system/linux/compositor/hyprlang`.
 #[must_use]
 pub fn schema() -> Schema {
     let mut schema = Schema::new()

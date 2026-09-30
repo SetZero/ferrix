@@ -31,8 +31,8 @@ src/user/
       src/
 ```
 
-`src/user/system/` is phase 3's move of today's `src/user/native/` and
-`src/user/linux/` (§8); until then they stay where they are, and "the
+`src/user/system/` is phase 3's move of today's `src/user/system/native/` and
+`src/user/system/linux/` (§8); until then they stay where they are, and "the
 system" in this document means them.
 
 The line between the two is whether Ferrix is still useful without it. The
@@ -92,7 +92,7 @@ on Ferrix will read the same records.
   linker, so the app needs no `.cargo/config.toml`.
 * `kind = "script"`: `bash build.sh <arch> <out>`, which installs into
   `<out>` the paths `from` names. For C ports, which source ferrousli's port
-  toolkit (`src/user/linux/ferrousli/tools/ports/common.sh`) as a native app
+  toolkit (`src/user/system/linux/ferrousli/tools/ports/common.sh`) as a native app
   links the runtime; it needs a Linux host. `check` runs `bash -n` over it.
 
 Each app builds into `target/apps/<name>/`, never the system's target
@@ -107,7 +107,7 @@ what it boots. A cargo build is incremental, and every image makes it.
 
 ### 3.2 What an app may depend on
 
-A native app links the runtime, `src/user/native/rt` -- the SDK -- by a
+A native app links the runtime, `src/user/system/native/rt` -- the SDK -- by a
 relative path. That path is the one reference an app makes outside its
 folder, and apps never refer to each other's folders. A Linux app needs
 nothing of the tree.
@@ -208,7 +208,7 @@ What this leaves room for, and deliberately does not build yet:
    on zlib and curl) the `depends` they have implicitly today. A library
    only built against, as libcxx is for btop, stays a port: it installs
    nothing an image carries.
-3. **`src/user/native` and `src/user/linux` move under `src/user/system/`**,
+3. **`src/user/system/native` and `src/user/system/linux` move under `src/user/system/`**,
    a mechanical move of paths in xtask, the generators, CI and
    `LAYOUT.md`, done apart from the rest so it collides with as little
    other work as it can.

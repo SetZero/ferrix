@@ -136,7 +136,7 @@ pub(crate) fn surfaces(
 /// The two clients' frame after the dispatchers in `after` have run,
 /// presented into a dumb-buffer-shaped target with no padding, as bytes.
 ///
-/// The dispatchers are `src/user/linux/compositor/layout`'s own, by the names a keybind
+/// The dispatchers are `src/user/system/linux/compositor/layout`'s own, by the names a keybind
 /// writes, so the picture a keybind makes and the picture this blesses come
 /// from one piece of code.
 fn frame_after(after: &[(&str, &str)]) -> Vec<u8> {
@@ -382,7 +382,7 @@ fn the_second_monitor_draws_the_window_moved_to_it() {
 /// checkerboard with the tiling to itself, and the gradient floating over it
 /// at the place and size the rule gave.
 ///
-/// The rule is carried out by `src/user/linux/compositor/hyprix`'s `rules`, which calls
+/// The rule is carried out by `src/user/system/linux/compositor/hyprix`'s `rules`, which calls
 /// `State::float_window`; this calls the same thing, so the picture the
 /// compositor draws on Ferrix and the picture blessed here are made by one
 /// piece of code.
@@ -575,7 +575,7 @@ fn two_client_frame() -> Vec<u8> {
 /// A bar across the top, and the two clients tiled in what is left.
 ///
 /// The bar's height is 30 and its exclusive zone all of it, which is what
-/// `src/user/linux/compositor/pattern --bar 30` asks for; where it goes is
+/// `src/user/system/linux/compositor/pattern --bar 30` asks for; where it goes is
 /// `compositor_layout::layers`' answer and what it leaves is the monitor's
 /// reserved strip, so the picture is made by the same two crates the
 /// compositor uses.
@@ -2392,7 +2392,7 @@ fn the_gradient_angle_turns_the_bands_clockwise() {
 /// ```
 ///
 /// The four grading values are put on the style rather than read out of the
-/// configuration because `src/user/linux/compositor/config`'s option table does not carry
+/// configuration because `src/user/system/linux/compositor/config`'s option table does not carry
 /// the five `blur:` grading options yet:
 /// `the_grading_waits_on_the_options_table` below is the test that says so,
 /// and the day it fails is the day these come out of the file.

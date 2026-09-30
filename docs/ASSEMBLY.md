@@ -117,8 +117,8 @@ enters in SVC mode unless the machine was built with virtualisation.
 
 ### A native program, on every architecture
 
-`src/user/native/rt`, the runtime a native program links, has one file per architecture
-under `src/user/native/rt/src/arch/`, and each holds the same three things.
+`src/user/system/native/rt`, the runtime a native program links, has one file per architecture
+under `src/user/system/native/rt/src/arch/`, and each holds the same three things.
 
 | Site | Why |
 |---|---|

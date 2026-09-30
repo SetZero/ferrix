@@ -513,7 +513,7 @@ impl Drop for Mapping {
 }
 
 /// virgl's `PIPE_BUFFER`: a resource with no shape, which is what bytes on
-/// their way to a shader are. From Mesa's `p_defines.h`, as `src/user/native/drivers/display/virtio-gpu` takes
+/// their way to a shader are. From Mesa's `p_defines.h`, as `src/user/system/native/drivers/display/virtio-gpu` takes
 /// it.
 const PIPE_BUFFER: u32 = 0;
 

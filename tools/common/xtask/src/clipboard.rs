@@ -4,7 +4,7 @@
 //! The host half is this program, not QEMU's `qemu-vdagent`: the clipboard
 //! port's far end is a Unix socket xtask listens on, and it speaks vdagent to
 //! the guest's agent as a viewer's QEMU would. So the whole guest path --
-//! the device, `src/user/native/drivers/console/vport`, the agent, the compositor, `clip` --
+//! the device, `src/user/system/native/drivers/console/vport`, the agent, the compositor, `clip` --
 //! is what is under test, and no display or host clipboard is.
 //!
 //! 1. The host grabs its clipboard with [`host_text`], which is longer than

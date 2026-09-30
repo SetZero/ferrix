@@ -1,4 +1,4 @@
-//! adbd, the device end of the Android Debug Bridge (`src/user/linux/adbd`,
+//! adbd, the device end of the Android Debug Bridge (`src/user/system/linux/adbd`,
 //! `docs/ADB.md`): building it for the initramfs, and `test-adb`, which
 //! drives it with this machine's own `adb`.
 //!
@@ -60,7 +60,7 @@ pub(crate) fn file(arch: Arch) -> Result<Option<ports::File>> {
     let program = target_dir.join(target).join("release").join("adbd");
     crate::builds::Build::cargo(
         format!("cargo build (adbd) --target {target}"),
-        paths::workspace_root().join("src/user/linux/adbd"),
+        paths::workspace_root().join("src/user/system/linux/adbd"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

@@ -3,11 +3,11 @@
 POSIX.1-2024 is a goal by the customer's decision of 2026-09-13, on the
 condition that it never breaks Linux compatibility: where the two differ, Linux
 wins (`docs/BACKLOG.md`, Decisions). Ferrix takes POSIX through its C library
-over the Linux ABI, so the library half of that goal is `src/user/linux/ferrousli/`'s. This
+over the Linux ABI, so the library half of that goal is `src/user/system/linux/ferrousli/`'s. This
 file measures it, one interface at a time, against the standard's own list of
 system interfaces, and prices what is missing in story points.
 
-It was measured on 2026-09-14 at `develop` 55753ea, whose `src/user/linux/ferrousli/` is
+It was measured on 2026-09-14 at `develop` 55753ea, whose `src/user/system/linux/ferrousli/` is
 unchanged since 5e9b0b6. Each landing that closes part of the gap updates the
 tables below in the same commit, the way a stage's roadmap section is updated.
 Measured again on 2026-09-30 at `main` 7c9df826, the same way (§ *How it was
@@ -108,7 +108,7 @@ change. What follows from it:
 ## Headers
 
 `include/` holds musl 1.2.5's headers, unmodified but for five edits each
-marked as ferrousli's (`src/user/linux/ferrousli/include/README.md`), and musl
+marked as ferrousli's (`src/user/system/linux/ferrousli/include/README.md`), and musl
 1.2.5 predates POSIX.1-2024.
 
 * **Missing:** `<devctl.h>` and `<ndbm.h>`.
@@ -183,7 +183,7 @@ binary names (`__xstat`, the `*64` names, `__isoc23_`, `__*_chk`,
    index without `CX` and `OH`. `_Exit.html` and `_exit.html` are one file on a
    case-insensitive disk, so those two headers were set by hand.
 2. **The library's list.** `nm -g --defined-only` over
-   `src/user/linux/ferrousli/target/x86_64-unknown-linux-gnu/release/libferrousli.a`, built
+   `src/user/system/linux/ferrousli/target/x86_64-unknown-linux-gnu/release/libferrousli.a`, built
    from 5e9b0b6, minus the 30 names in `src/stubs.rs`. Sort both lists with
    `LC_ALL=C` before comparing them.
 3. **Macros.** A name counts as present through `include/` only when the

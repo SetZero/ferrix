@@ -1,6 +1,6 @@
 //! The expected images, and how a screendump is held to one.
 //!
-//! The pictures are `src/user/linux/compositor/render`'s, blessed by its own tests and
+//! The pictures are `src/user/system/linux/compositor/render`'s, blessed by its own tests and
 //! kept run-length encoded; a screendump is QEMU's PPM. A boot passes on
 //! every pixel or fails saying how many differ and where the first is, and a
 //! screen that is all background is told apart from a wrong one, because the
@@ -37,7 +37,7 @@ pub(super) fn unexpected(
 
 /// The expected image, as the `(red, green, blue)` bytes a screendump holds.
 ///
-/// `src/user/linux/compositor/render/src/golden.rs` writes the format and says why: a
+/// `src/user/system/linux/compositor/render/src/golden.rs` writes the format and says why: a
 /// run-length image of `XRGB8888` rows, with a row that repeats the one above
 /// written as a single byte.
 pub(super) fn expected(relative: &str) -> Result<Vec<u8>> {

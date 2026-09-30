@@ -25,7 +25,7 @@ compositor-shm = { path = "../shm" }
 compositor-socket = { path = "../socket" }
 compositor-wire = { path = "../wire" }
 compositor-xkb = { path = "../xkb" }
-ferrix-fbtext = { path = "../../../../lib/kernel/fbtext" }
+ferrix-fbtext = { path = "../../../../../lib/kernel/fbtext" }
 # Declarations only: the pseudoterminal's `open`, `ioctl`, `fork` and `execve`.
 libc = "0.2.189"
 

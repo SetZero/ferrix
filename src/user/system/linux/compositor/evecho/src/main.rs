@@ -5,7 +5,7 @@
 //! reports, prints `evecho: ready`, and then prints one line per event for
 //! as long as it runs. QEMU's `input-send-event` puts events in at the far
 //! end, so a line here is the whole path -- QEMU, the virtio-input device,
-//! `src/user/native/drivers/input/virtio-input`, the kernel's input core, the evdev node -- proven at once.
+//! `src/user/system/native/drivers/input/virtio-input`, the kernel's input core, the evdev node -- proven at once.
 //!
 //! It reports and carries on wherever it can: a device that cannot be opened
 //! is one device, not the end of the program, because a machine with a
