@@ -269,3 +269,32 @@ pub(super) fn check_dma_switch(nodes: &[Arc<DeviceNode>]) -> Result<(), Failure>
     let _ = vmap::unmap_device(config);
     switched
 }
+
+/// How many reserved ranges came from the memory map, how many did not, and
+/// a digest of the latter that does not depend on their order: what the
+/// `reserved` boot line prints, so that a change to how they are gathered is
+/// compared by it.
+///
+/// The memory map's ranges are counted and left out of the digest: the
+/// loader places them around the kernel image, so they move whenever the
+/// image changes size, whatever gathered them.
+pub(crate) fn reserved(reserved: &Reserved) -> (usize, usize, u64) {
+    let (first, last) = reserved.map;
+    let mut others = 0;
+    // FNV-1a over each range's two ends, summed, so that gathering the same
+    // ranges in another order gives the same digest.
+    let digest = reserved
+        .ranges
+        .iter()
+        .enumerate()
+        .filter(|&(index, _)| index < first || index >= last)
+        .fold(0_u64, |sum, (_, &(low, high))| {
+            others += 1;
+            let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+            for byte in low.to_le_bytes().into_iter().chain(high.to_le_bytes()) {
+                hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+            }
+            sum.wrapping_add(hash)
+        });
+    (last - first, others, digest)
+}

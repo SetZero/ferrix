@@ -89,7 +89,7 @@ use crate::mmio::Mmio;
 use crate::sync::SpinLock;
 use crate::{arch, iommu, irq, vmap};
 
-mod check;
+pub(crate) mod check;
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
@@ -262,6 +262,10 @@ pub(crate) struct Reserved {
     /// The ranges, unsorted: there are a few dozen, and they are searched
     /// once per aperture at boot.
     ranges: Vec<(u64, u64)>,
+    /// Which of `ranges` came from the memory map, as `start..end` indices:
+    /// they move with the loader's allocations, so [`check::reserved`]
+    /// counts them and leaves them out of its digest.
+    map: (usize, usize),
 }
 
 impl Reserved {
@@ -280,11 +284,13 @@ impl Reserved {
         }
         // Firmware's own `MMIO` descriptions are left out: they are where it
         // says device memory is, and a BAR is device memory.
+        let first = reserved.ranges.len();
         for region in view.regions() {
             if region.kind != MemKind::Mmio {
                 reserved.add(region.base, region.len);
             }
         }
+        reserved.map = (first, reserved.ranges.len());
         // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
         reserved.ranges.extend_from_slice(ecam);
         // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.

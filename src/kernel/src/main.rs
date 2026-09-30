@@ -812,6 +812,11 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
         report.refusals,
         device::devices().len(),
     );
+    let (map, others, digest) = device::check::reserved(reserved);
+    println!(
+        "  reserved {map} memory-map ranges and {others} others no aperture may overlap, \
+         digest of the others {digest:#018x}"
+    );
 
     // After publishing, so that it can pick interrupt lines no device names.
     if checks::run() {
