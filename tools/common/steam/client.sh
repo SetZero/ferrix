@@ -74,7 +74,10 @@ while [ $n -lt 4 ]; do
     unpack_runtime
     link_steamrt
     # Scout's pinned libraries, as steam.sh has its setup.sh make them.
-    bash $RT/setup.sh > /dev/null 2>&1 || echo "steam-window: scout's setup.sh exited $?"
+    bash $RT/setup.sh > /tmp/setup.log 2>&1 || {
+        echo "steam-window: scout's setup.sh exited $?; its last lines:"
+        tail -n 5 /tmp/setup.log | sed 's/^/steam-window: setup: /'
+    }
     echo "steam-window: starting the client, try $n"
     # The updater's progress lines, several a second while it downloads,
     # are left out of the transcript (GNU grep, which can flush each line).
