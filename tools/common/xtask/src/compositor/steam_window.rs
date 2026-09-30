@@ -69,6 +69,19 @@ const DESKTOP: &[u8] = include_bytes!("../../../steam/desktop.sh");
 /// Where [`DESKTOP`] is in the image.
 const DESKTOP_PATH: &str = "steam/desktop.sh";
 
+/// fuzzel's entry for Steam, so a client closed on the `--everything`
+/// desktop can be started again: [`DESKTOP`] once more, as `exec-once` ran
+/// it. A second start while the client runs is the client's to hand to the
+/// running one, as it does on Linux.
+const LAUNCHER_ENTRY: &str = "[Desktop Entry]\nType=Application\nName=Steam\n\
+     GenericName=Game Library\nComment=Valve's Steam client, from the data disk\n\
+     Exec=/bin/busybox sh /steam/desktop.sh\nIcon=ferrix-games\nTerminal=false\n\
+     Keywords=steam;games;valve;\nCategories=Game;\n";
+
+/// [`LAUNCHER_ENTRY`]'s icon, in the `hicolor` theme fuzzel's own icons are
+/// in: the volume carries none of Steam's until the client has installed.
+const LAUNCHER_ICON: &[u8] = include_bytes!("../../../steam/ferrix-games.svg");
+
 /// Where `crate::steam::UNAME` is: a directory `client.sh` alone puts first
 /// in `PATH`, so the desktop's own `uname` still says Ferrix.
 const UNAME_PATH: &str = "steam/bin/uname";
@@ -165,9 +178,9 @@ fn scripts(scripts: &[(&str, &[u8], u32)]) -> Vec<File> {
 
 /// What `run-compositor --everything` adds to the archive for Steam, when
 /// the volume `tools/common/fetch/fetch-steam-window.sh` makes is merged into
-/// its own: [`SCRIPTS`] but `run.sh`, [`DESKTOP`], and Steam's links less
-/// any path `carried` already has -- Chrome's, the compiler's and yserver's
-/// name the same Debian's paths.
+/// its own: [`SCRIPTS`] but `run.sh`, [`DESKTOP`], fuzzel's entry for it and
+/// its icon, and Steam's links less any path `carried` already has --
+/// Chrome's, the compiler's and yserver's name the same Debian's paths.
 pub(crate) fn desktop_files(carried: &[File]) -> Vec<File> {
     let taken = |path: &str| {
         carried.iter().any(|file| {
@@ -194,6 +207,16 @@ pub(crate) fn desktop_files(carried: &[File]) -> Vec<File> {
         .collect();
     desktop.push((DESKTOP_PATH, DESKTOP, 0o644));
     files.extend(scripts(&desktop));
+    files.push(File {
+        path: "usr/share/applications/steam.desktop".to_owned(),
+        mode: 0o644,
+        content: Content::Bytes(LAUNCHER_ENTRY.as_bytes().to_vec()),
+    });
+    files.push(File {
+        path: "usr/share/icons/hicolor/scalable/apps/ferrix-games.svg".to_owned(),
+        mode: 0o644,
+        content: Content::Bytes(LAUNCHER_ICON.to_vec()),
+    });
     files
 }
 
@@ -416,5 +439,9 @@ mod tests {
         let desktop = std::str::from_utf8(DESKTOP).expect("desktop.sh is text");
         assert!(desktop.contains("/steam/client.sh"));
         assert!(desktop.contains("/tmp/.X11-unix/X0"));
+        assert!(paths.contains(&"usr/share/applications/steam.desktop"));
+        assert!(paths.contains(&"usr/share/icons/hicolor/scalable/apps/ferrix-games.svg"));
+        assert!(LAUNCHER_ENTRY.contains(&format!("\nExec=/bin/busybox sh /{DESKTOP_PATH}\n")));
+        assert!(LAUNCHER_ENTRY.contains("\nIcon=ferrix-games\n"));
     }
 }

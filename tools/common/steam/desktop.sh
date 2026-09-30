@@ -1,5 +1,6 @@
 # Steam on the `cargo xtask run-compositor --everything` desktop
-# (docs/STEAM.md): started by hyprix's exec-once, as root. The desktop's own
+# (docs/STEAM.md): started by hyprix's exec-once, as root, and again by
+# fuzzel's Steam entry. The desktop's own
 # script starts yserver on :0 and the network's lease; this waits for the
 # X server, gives the volume's home and Steam's tree to uid 1000, and runs
 # client.sh as that user, as `run-steam` does. The client installs itself
@@ -13,5 +14,10 @@ if [ ! -S /tmp/.X11-unix/X0 ]; then
     echo "steam-desktop: no X server on :0 after ${waited}s; Steam is not started" | tee /tmp/steam.log
     exit 1
 fi
-chown -R 1000:1000 /data/home /data/steam
+# fuzzel's Steam entry runs this again after the client was closed; by then
+# the client has written its tree as uid 1000, and a second walk of it is
+# only slow.
+if [ "$(stat -c %u /data/steam)" != 1000 ] || [ "$(stat -c %u /data/home)" != 1000 ]; then
+    chown -R 1000:1000 /data/home /data/steam
+fi
 su -p -s /bin/sh ferrix -c '/bin/busybox sh /steam/client.sh' 2>&1 | tee /tmp/steam.log

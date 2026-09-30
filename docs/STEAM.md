@@ -48,6 +48,9 @@ unless `--memory` says otherwise. Steam's tree carries its own yserver, so
 the desktop takes it in yserver's own volume's place; make both volumes at
 the same pin. The first start installs the client, as above, and the
 desktop's volume is attached under `snapshot=on` too, so every boot does.
+fuzzel lists Steam too (`steam.desktop`, which runs `desktop.sh` again), so
+a client that was closed can be started again; the entry is there only when
+the volume is merged.
 
 **The store, gated.** `test-steam-store` boots that desktop's Steam as
 `run-compositor --everything` does -- the merged volume, the same archive
