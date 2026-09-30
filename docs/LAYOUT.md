@@ -11,8 +11,9 @@ src/         everything that runs on Ferrix, and its tests
   kernel/      the kernel
   lib/         host-testable logic, grouped by layer
   user/        programs that run in ring 3
-    native/      on Ferrix's own ABI: runtime, devmgr, drivers
-    linux/       on the Linux ABI, each its own cargo workspace
+    system/      first party: what Ferrix needs to be useful
+      native/      on Ferrix's own ABI: runtime, devmgr, drivers
+      linux/       on the Linux ABI, each its own cargo workspace
     apps/        optional programs, each a folder of its own that xtask finds
   tests/       test programs and fuzzing that live outside any one crate
 tools/       everything that runs on the host
