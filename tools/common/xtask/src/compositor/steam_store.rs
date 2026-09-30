@@ -1025,20 +1025,29 @@ impl Gate<'_, '_> {
     }
 
     /// The sign-in window `window` is still up `after` Sign in: fail if it
-    /// shows its error in red, which is the sign-in refused, or, from
-    /// [`GUARD_AFTER`], if its account name field has gone, which is the
-    /// client asking for more.
+    /// shows red, which is the sign-in refused or Steam Guard asking for a
+    /// code, or, from [`GUARD_AFTER`], if its account name field has gone,
+    /// which is the client asking for more.
+    ///
+    /// Email Steam Guard's code prompt has red enough to count too: on
+    /// 2026-09-30 a correct name and password failed here with 420 red
+    /// pixels while Steam mailed the account a code. The connection log's
+    /// answers are the way to tell the two apart, so the message carries
+    /// them.
     fn still_asking(&mut self, window: &Listed, after: Duration) -> Result<()> {
         let (screen, kept) = self.dump("after-sign-in")?;
         let red = error_red(&screen, window);
         if red >= REFUSED {
             return Err(Error::new(format!(
-                "Steam refused the sign-in: {}s after Sign in its sign-in window shows its error \
-                 in red ({red} pixels) and still has its fields. The name or the password in the \
-                 account file is not the account's, or Steam is refusing sign-ins from this \
-                 address after several failures, which passes within the hour. The screen, \
-                 shrunk past reading: {}",
+                "Steam did not take the sign-in: {}s after Sign in its sign-in window shows red \
+                 ({red} pixels) and still has its fields; the connection log's answers {:?}. \
+                 Either the name or the password in the account file is not the account's, \
+                 Steam is refusing sign-ins from this address after several failures (which \
+                 passes within the hour), or the account has Steam Guard on and Steam has mailed \
+                 it a code: turn Guard off (docs/STEAM.md §1). The screen, shrunk past reading: \
+                 {}",
                 after.as_secs(),
+                logons(self.watching.after()),
                 kept.display()
             )));
         }

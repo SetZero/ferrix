@@ -71,9 +71,13 @@ passes when that window shows the store: at least 15% of it the store's
 dark blues (`#171d25` to `#1b2838`) and at least 10,000 colours, which its
 art brings and an empty page does not. Without the file it says the store
 step was skipped, and how to enable it, and passes on the first step. A
-sign-in window that shows its error in red fails as a refused sign-in, and
-one still up three minutes after Sign in with its account name field gone
-fails as Steam Guard. The account is typed into the guest and nowhere
+sign-in window that shows red fails as a sign-in not taken, with the
+connection log's answers: a wrong name or password, Steam refusing the
+address after several failures, or email Steam Guard's code prompt, which
+has red enough to count (the test account's first run met that one). One
+still up three minutes after Sign in with its account name field gone
+fails as Steam Guard too. With the test account and Guard off, the gate
+signed in and found the store on 2026-09-30. The account is typed into the guest and nowhere
 else: every line of the transcript and the gate's error are redacted of
 both, and a screen dumped after the typing is kept shrunk eight times, too
 small to read (`store.ppm`, `not-signed-in.ppm`, `after-sign-in.ppm`).
