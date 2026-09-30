@@ -145,11 +145,13 @@ fuzz_target!(|bytes: &[u8]| {
     let field32 =
         |at: usize| i32::from_le_bytes(std::array::from_fn(|index| union_byte(union, at + index)));
     if let Ok(info) = abs_info(&mut device(), u16::from(asked)) {
-        assert!((20..=128).contains(&size));
+        // crosvm answers the 16 bytes from before `res`, which reads as 0.
+        assert!((16..=128).contains(&size));
         assert!(info.min <= info.max);
+        let res = if size >= 20 { field32(16) } else { 0 };
         assert_eq!(
             [info.min, info.max, info.fuzz, info.flat, info.res],
-            [field32(0), field32(4), field32(8), field32(12), field32(16)]
+            [field32(0), field32(4), field32(8), field32(12), res]
         );
     }
     if let Ok(ids) = devids(&mut device()) {

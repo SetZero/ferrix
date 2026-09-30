@@ -54,7 +54,9 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // Split the input into two paths at the first NUL, each into components
-    // at '/', and require the link between them to be well formed.
+    // at '/', and require the link between them to be well formed. No sysfs
+    // name is `.` or `..`, and a target component spelt `..` would be copied
+    // into the link and counted as a climb, so neither is a component here.
     let (from, to) = match data.iter().position(|&byte| byte == 0) {
         Some(at) => (&data[..at], &data[at + 1..]),
         None => (data, &[][..]),
@@ -62,7 +64,7 @@ fuzz_target!(|data: &[u8]| {
     let components = |bytes: &'_ [u8]| -> Vec<Vec<u8>> {
         bytes
             .split(|&byte| byte == b'/')
-            .filter(|part| !part.is_empty())
+            .filter(|part| !matches!(*part, b"" | b"." | b".."))
             .map(<[u8]>::to_vec)
             .collect()
     };
