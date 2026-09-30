@@ -237,6 +237,44 @@ session's name in its owner cell in your first landing.
 
 ---
 
+## Stage 13: where Ferrix differs from Linux
+
+Each row is a difference from Linux that a stage 13 landing knowingly left, with
+what closing it takes. Rows are added by the landing that leaves the
+difference, and removed by the one that closes it. A difference that is
+stricter than Linux and deliberate says so; it stays a row because a program
+may one day need the relaxation.
+
+| Item | Owner | Stage |
+|---|---|---|
+| **Set-id bits are ignored in any child user namespace** (U7), where Linux honours an owner mapped in the caller's namespace. `sudo`, `su`, `newgrp` and a set-group-id `ssh-agent` run inside a container as their caller. Deliberate (customer, 2026-09-28; consultant). Relax by `bprm_fill_uid` with `kuid_has_mapping`, on a mount without `nosuid` and without `PR_SET_NO_NEW_PRIVS`, as its own landing with a boot check (`docs/NAMESPACES.md` §4) | open, relax on demand | 13 |
+| **A child user namespace honours five capabilities** (`CAP_SETUID`, `CAP_SETGID`, `CAP_SETPCAP`, `CAP_SYS_CHROOT`, `CAP_SYS_ADMIN`), where Linux honours the rest over files whose owner is mapped: `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_KILL`, `CAP_MKNOD` do nothing there (U8). `unshare -r` then `chown`, rootless podman and buildah do not work. Deliberate. Relax one capability at a time by `capable_wrt_inode_uidgid` (both uid and gid mapped), never `CAP_MKNOD` | open, relax on demand | 13 |
+| `CLONE_NEWNS` by a holder of `CAP_SYS_ADMIN` in a child user namespace is allowed: it copies, and every mount, unmount and remount beneath still needs the mount namespace owner's capability (N5). Linux is the same; the row is here so a later change to `Namespace::copy_as` does not assume otherwise | open | 13 |
+| `verify_root_map` (Linux's `CAP_SETFCAP` to map root) is not built: Ferrix has no file capabilities. If it ever has, `userns::write_map` needs the check | open, with file capabilities | 13 |
+| The audit record never carries a uid: `Subject::of` answers `NO_UID`. `userns_check` holds the subject to the kernel's id or none, so the day a personality supplies one it fails on the inside id. The supplier and its record-level check are not built | open | 13, 15 |
+| **A boot check cannot run a real set-id `execve`, or a process that shares its fs context or has several threads**, so three rules stand on code and on `Credentials`/`namespaces_asked` checks: a set-uid file under a namespace (`Credentials::exec`), `unshare(CLONE_NEWUSER)` with a shared fs context, and the multithread `EINVAL` of `unshare` and `setns`. A gate that runs a program for each (`test-container`'s family) closes all three | open | 13 |
+| `max_mnt_namespaces` is not a sysctl and mount namespaces are not counted; F-37's fill bounds them by the job's memory, and `mount-max` bounds one namespace's mounts. Linux has a per-user count. `max_user_namespaces` is a global 4096 in N5, not per user | open | 13 |
+| N5's plain `MS_REMOUNT` rule approximates Linux's superblock owner by "every mount of the filesystem is in the caller's namespace" (`Namespace::sole_filesystem`). Linux asks `CAP_SYS_ADMIN` over the user namespace that made the superblock, so a child can still remount read-only a tmpfs it made and then bound into a namespace it shares. Close by recording the creating user namespace on `Superblock` | open | 13 |
+| N5's detach of another namespace's mounts on a removed name (`detach_elsewhere`) takes each other table's lock but not that namespace's change lock, so a mount made in that namespace at that instant can race it. Linux takes `namespace_sem` for all. Close by giving `Tree` a handle to its namespace's change lock | open | 13 |
+| Mount locks (M3, M4) are set by `Namespace::copy_as` alone. `MS_MOVE`, `open_tree`, `fsopen` and `mount_setattr` are not built (`EINVAL`/`ENOSYS`); whichever is built first must honour the locks and set them where a mount crosses into a less privileged namespace | open, with the new mount API | 13 |
+| **M5 (a bind's source must be in the caller's namespace) has no boot check**: `Namespace::owns` gives it, and a descriptor kept across an `unshare` is the test to build, with its control | open | 13 |
+| A device node on a user `tmpfs` (`nodev` forced) has no check that the open is refused | open | 13 |
+| `/proc`'s private links (`root`, `cwd`, `exe`, `fd`, `fdinfo`, `maps`, `mountinfo`, `ns/*`) ask `ptrace_may_access` for `mountinfo` too, stricter than Linux, which lets any process read another's; it follows the design (`docs/NAMESPACES.md` M8). `environ`, `stat` and `io` are not guarded. `/proc/<pid>/mem` does not exist | open | 13 |
+| A set-id `execve` clearing dumpable stands on code (`exec.rs`); the boot harness cannot run a real set-id file. Linux also clears it when the file is not readable by the caller | open | 13 |
+| **Seccomp** (`docs/SECCOMP.md`): `TRACE` and `USER_NOTIF` answer `ENOSYS` (no tracer, no supervisor); `SECCOMP_FILTER_FLAG_NEW_LISTENER` and `WAIT_KILLABLE_RECV` are `EINVAL`; `SECCOMP_FILTER_FLAG_LOG` and the `LOG` action do not log; `SPEC_ALLOW` is accepted and changes nothing. User notification would need an fd type and a supervisor protocol | open, S3 to S5 | 13 |
+| Seccomp: x86-64 `uretprobe` (335) and `uprobe` (336) pass through Linux's filter unfiltered; Ferrix, with no probes, lets a filter judge them like any unknown number, which is stricter and safe. Recorded in `tests/chrome.rs` | open, deliberate | 13 |
+| Seccomp's design keeps the filter per thread with `TSYNC` as Linux has it (`docs/SECCOMP.md` §3.4); `KILL_THREAD` ends the whole process while a process has one thread each, and differs from Linux once a process has several | open, S2 to S5 | 13 |
+| **UTS, IPC and cgroup namespaces belong to the process, not the thread** (`syscall/nsproxy.rs`). `clone(CLONE_THREAD)` with one of the three flags, and `unshare` or `setns` into one from a multithreaded process, are `EINVAL`; Linux gives a thread its own. Close by moving the proxy onto `Thread` | open | 13 |
+| `setns` into a mount or user namespace is `EINVAL` while the fs context is shared (`CLONE_FS`), where Linux copies the struct. A `Process` holds its context for life; closing it means letting a process swap its context | open | 13 |
+| Opening a `/proc/<pid>/ns/*` link asks the same user, or root in the first namespace, and not dumpability (Linux asks `ptrace_may_access`). Fold into NP's `credentials::may_access` | open | 13 |
+| A native `process_create` child starts in the first UTS, IPC and cgroup namespaces, not its creator's (the mount namespace it does inherit, `docs/NAMESPACES.md` §2.5). The same escape, for names, semaphores and cgroup views | open | 13 |
+| nsfs: `NS_GET_MNTNS_ID`, `NS_GET_ID` and the `NS_MNT_GET_*` ioctls answer `ENOTTY`; there is no per-namespace `/proc/sys/kernel/sem` and no `/proc/sysvipc/sem` at all | open | 13 |
+| The hostname sysctl is judged by the file's mode only, where Linux also asks `CAP_SYS_ADMIN` over the UTS namespace's owner at the write; the syscall does | open | 13 |
+| Two boot controls of the small namespaces show an older check's message, not their own (`nameable` letting everyone in fires the `userns` line first), one control's message only roughly matches its rule, and the namespace files' `kmem` fill has no control (the detached mount's charge bounds it). The pidfd `setns` all-or-none property stands on the code's shape | open | 13 |
+| The composite `CLONE_NEWUSER\|CLONE_NEWIPC\|CLONE_NEWCGROUP` has no end-to-end check; `test-container` (`src/tests/container`) is the place, once pid namespaces land | open | 13 |
+| The namespaces' numbers: user from 0xF800_0000, UTS, IPC and cgroup from 0xF900_0000, mount from 0xF000_0000, where Linux draws from one counter. Nothing compares across kinds; a program that does sees them apart | open | 13 |
+| Pid, network, time namespaces and the cgroup controllers (M2's reclaim, `cgroup.freeze`, `cpu.max`, `io`): their own differences are added here when those landings report | open | 13 |
+
 ## Red on `main`
 
 The customer's order of everything puts a working `main` first. These are
