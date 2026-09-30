@@ -214,6 +214,49 @@ fn every_page_of_a_librarys_bss_is_writable() {
     }
 }
 
+/// A library's `STB_GNU_UNIQUE` symbol is a definition like a global one:
+/// the binding GCC gives C++'s inline static data, without which
+/// `libstdc++.so.6`, and Mesa's LLVM through it, could not be loaded.
+#[test]
+fn a_gnu_unique_symbol_is_a_definition() {
+    let loader = loader();
+    let dir = scratch().join("ld-unique");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+    let library = dir.join("libunique.so");
+    compile(&[
+        "-shared",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/unique.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/unique_prog.c")
+            .to_str()
+            .expect("a path"),
+        library.to_str().expect("a path"),
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+    let status = Command::new(&program)
+        .env("LD_LIBRARY_PATH", &dir)
+        .status()
+        .expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "a GNU unique symbol: 127 the loader found no definition, 91 the \
+         program and library disagree on it"
+    );
+}
+
 /// `DT_RUNPATH` finds a directly needed library before the system defaults.
 ///
 /// The library lives in a new temporary directory, not beside the program and
