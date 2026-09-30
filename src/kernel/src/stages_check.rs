@@ -274,6 +274,34 @@ pub(super) fn check_binds() {
     );
 }
 
+/// Mount namespaces: a copy private both ways, bubblewrap's sequence as root
+/// to its last `pivot_root(".", ".")`, a native child kept in its creator's
+/// namespace, and a btrfs write inside a detached subtree on the disk after
+/// the detach (`docs/NAMESPACES.md`, N3). After stage 12's check, whose
+/// volume at `/mnt-rw` the last is shown on; `disk` says it is there.
+pub(super) fn check_namespaces(disk: bool) {
+    let checked = match fs::namespace_check::run(disk) {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE13_MOUNT_NAMESPACES,
+            "mount namespace self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  mntns    {} calls answered as Linux answers them, {} of them refusals: openat2's \
+         resolve flags; a copy private \
+         both ways and named apart; bubblewrap's calls as root to pivot_root(\".\", \".\"), with \
+         nothing of the old tree reachable; a native child in its creator's namespace; {}",
+        checked.counts.calls,
+        checked.counts.refusals,
+        if checked.committed {
+            "a btrfs write inside a detached subtree on the disk after the detach"
+        } else {
+            "no stage 12 disk for the detach's write-out"
+        },
+    );
+}
+
 /// Stage 8's timerfd check: flags and clocks, expirations counted, the
 /// settings in both layouts, a clock set, and waiters woken at the deadline.
 pub(super) fn check_timerfd() {
@@ -901,7 +929,8 @@ pub(super) fn check_kernel_memory() {
     println!(
         "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
          {} descriptors in flight, {} epoll registrations, {} eventfds, {} regions of one \
-         mapping, {} record locks and {} semaphore sets, and was refused one more of each -- \
+         mapping, {} record locks, {} semaphore sets and {} mount namespaces of {} mounts, and \
+         was refused one more of each -- \
          ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged \
          came back",
         fs::kmem_check::LIMIT / 1024,
@@ -914,6 +943,8 @@ pub(super) fn check_kernel_memory() {
         2 * report.regions + 1,
         report.locks,
         report.sets,
+        report.namespaces,
+        fs::kmem_check::TREE,
     );
 }
 

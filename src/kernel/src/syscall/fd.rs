@@ -34,7 +34,7 @@ use ferrix_linux_abi::types::{
     SEEK_HOLE, SEEK_SET,
 };
 use ferrix_vfs::fd::FdTable;
-use ferrix_vfs::{FileType, Location, OpenFile, OpenFlags, Whence};
+use ferrix_vfs::{Context, FileType, Location, OpenFile, OpenFlags, Resolve, Whence};
 
 use crate::arch;
 use crate::fallible::AllocError;
@@ -217,30 +217,164 @@ pub(crate) fn sys_openat(
     mode: u32,
 ) -> Result<usize, Errno> {
     let path = user_path(process, path)?;
-    let (flags, cloexec) = decode_open_flags(raw_flags);
     let start = start_for(process, dirfd, &path)?;
-    // The descriptor before the path, as Linux takes it. An open refused for
-    // `EMFILE` only after it had created its file would leave the file
-    // behind, and the program's retry with `O_EXCL` would be `EEXIST`.
-    let reserved = process.files().lock().reserve(cloexec)?;
     // A copy of the context rather than the lock: the walk calls into
     // filesystems, and `chdir` on another thread must not wait for it. It
     // carries the caller's identity, which the walk and the open check.
     let context = crate::syscall::path::context(process);
+    open_with(
+        process,
+        &context,
+        start.as_ref(),
+        &path,
+        raw_flags,
+        mode,
+        Resolve::default(),
+    )
+}
+
+/// `openat2`'s `RESOLVE_NO_XDEV`, `RESOLVE_NO_MAGICLINKS`,
+/// `RESOLVE_NO_SYMLINKS`, `RESOLVE_BENEATH`, `RESOLVE_IN_ROOT` and
+/// `RESOLVE_CACHED`, from `include/uapi/linux/openat2.h`.
+const RESOLVE_NO_XDEV: u64 = 0x01;
+const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+const RESOLVE_BENEATH: u64 = 0x08;
+const RESOLVE_IN_ROOT: u64 = 0x10;
+const RESOLVE_CACHED: u64 = 0x20;
+
+/// The first `struct open_how`, `OPEN_HOW_SIZE_VER0`: `flags`, `mode` and
+/// `resolve`, a `u64` each.
+const OPEN_HOW_SIZE: usize = 24;
+
+/// `openat2(dirfd, path, how, size)`: `openat` with its flags in a `struct
+/// open_how` and a walk restricted as `how.resolve` says.
+///
+/// bubblewrap from 0.12 opens every place it binds from and onto this way,
+/// with `RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS`, and Debian builds it with
+/// no fallback (`docs/NAMESPACES.md`, N3). `RESOLVE_IN_ROOT` and
+/// `RESOLVE_BENEATH` walk with `dirfd` as the root; `RESOLVE_CACHED` asks to
+/// be refused `EAGAIN` rather than wait for a lookup, and every walk here
+/// runs to its end, which is the answer a caller that retries without it
+/// would get.
+///
+/// # Errors
+///
+/// Linux's, in `copy_struct_from_user` and `build_open_how`'s order:
+/// `EINVAL` for a `size` below the first version, `E2BIG` above a page or
+/// with a nonzero byte past what is known; `EINVAL` for flags above 32 bits,
+/// an unknown resolve flag, `RESOLVE_BENEATH` with `RESOLVE_IN_ROOT`, or a
+/// mode without `O_CREAT` or one outside `07777`; `EAGAIN` for
+/// `RESOLVE_CACHED` with `O_CREAT` or `O_TRUNC`; then `openat`'s own, and
+/// `ELOOP` or `EXDEV` where the walk is refused a step.
+pub(crate) fn sys_openat2(
+    process: &Process,
+    dirfd: i32,
+    path: u64,
+    how: u64,
+    size: u64,
+) -> Result<usize, Errno> {
+    if size < OPEN_HOW_SIZE as u64 {
+        return Err(Errno::EINVAL);
+    }
+    if size > ferrix_bootinfo::PAGE_SIZE {
+        return Err(Errno::E2BIG);
+    }
+    let size = usize::try_from(size).map_err(|_| Errno::E2BIG)?;
+    let mut raw = [0_u8; OPEN_HOW_SIZE];
+    uaccess::copy_from_user(process.space(), how, &mut raw).map_err(|_| Errno::EFAULT)?;
+    if size > OPEN_HOW_SIZE {
+        let mut rest = alloc::vec![0_u8; size - OPEN_HOW_SIZE];
+        let past = how.checked_add(OPEN_HOW_SIZE as u64).ok_or(Errno::EFAULT)?;
+        uaccess::copy_from_user(process.space(), past, &mut rest).map_err(|_| Errno::EFAULT)?;
+        if rest.iter().any(|&byte| byte != 0) {
+            return Err(Errno::E2BIG);
+        }
+    }
+    let word = |at: usize| {
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(raw.get(at..at + 8).unwrap_or(&[0; 8]));
+        u64::from_ne_bytes(bytes)
+    };
+    let (flags, mode, resolve) = (word(0), word(8), word(16));
+    let raw_flags = u32::try_from(flags).map_err(|_| Errno::EINVAL)?;
+    let known = RESOLVE_NO_XDEV
+        | RESOLVE_NO_MAGICLINKS
+        | RESOLVE_NO_SYMLINKS
+        | RESOLVE_BENEATH
+        | RESOLVE_IN_ROOT
+        | RESOLVE_CACHED;
+    if resolve & !known != 0
+        || resolve & (RESOLVE_BENEATH | RESOLVE_IN_ROOT) == RESOLVE_BENEATH | RESOLVE_IN_ROOT
+        || mode & !0o7777 != 0
+        || (mode != 0 && raw_flags & O_CREAT == 0)
+    {
+        return Err(Errno::EINVAL);
+    }
+    if resolve & RESOLVE_CACHED != 0 && raw_flags & (O_CREAT | O_TRUNC) != 0 {
+        return Err(Errno::EAGAIN);
+    }
+    let path = user_path(process, path)?;
+    let mut context = crate::syscall::path::context(process);
+    let rooted = resolve & (RESOLVE_BENEATH | RESOLVE_IN_ROOT) != 0;
+    let start = if rooted {
+        // The walk's root is `dirfd`'s directory, absolute paths included.
+        let dir = start_location(process, dirfd)?.unwrap_or_else(|| context.cwd.clone());
+        context.root = dir.clone();
+        Some(dir)
+    } else {
+        start_for(process, dirfd, &path)?
+    };
+    let resolve = Resolve {
+        no_xdev: resolve & RESOLVE_NO_XDEV != 0,
+        no_magic_links: resolve & RESOLVE_NO_MAGICLINKS != 0,
+        no_symlinks: resolve & RESOLVE_NO_SYMLINKS != 0,
+        beneath: resolve & RESOLVE_BENEATH != 0,
+    };
+    // `mode` fits: it was checked against 07777 above.
+    open_with(
+        process,
+        &context,
+        start.as_ref(),
+        &path,
+        raw_flags,
+        mode as u32,
+        resolve,
+    )
+}
+
+/// Open `path` from `start` in `context`, resolving as `resolve` says, and
+/// install it: what `openat` and `openat2` share once their arguments are
+/// read.
+fn open_with(
+    process: &Process,
+    context: &Context,
+    start: Option<&Location>,
+    path: &[u8],
+    raw_flags: u32,
+    mode: u32,
+    resolve: Resolve,
+) -> Result<usize, Errno> {
+    let (flags, cloexec) = decode_open_flags(raw_flags);
+    // The descriptor before the path, as Linux takes it. An open refused for
+    // `EMFILE` only after it had created its file would leave the file
+    // behind, and the program's retry with `O_EXCL` would be `EEXIST`.
+    let reserved = process.files().lock().reserve(cloexec)?;
     // Whether this open makes the file, for inotify's `IN_CREATE`: asked
     // only while something is watched.
     let creating = flags.create
         && fs::inotify::watching()
         && fs::namespace()
-            .resolve(&context, start.as_ref(), &path, !flags.nofollow)
+            .resolve(context, start, path, !flags.nofollow)
             .is_err();
     let opened = fs::namespace()
-        .open(
-            &context,
-            start.as_ref(),
-            &path,
+        .open_resolving(
+            context,
+            start,
+            path,
             &flags,
             mode & 0o7777 & !process.umask(),
+            resolve,
         )
         // A read-only `/proc/sys` value opened for writing is refused, as is
         // a sysfs attribute opened for what it cannot do, a named pipe opens

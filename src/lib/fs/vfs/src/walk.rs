@@ -28,6 +28,31 @@ use crate::namespace::{Context, Location, Namespace};
 use crate::node::FileType;
 use crate::path::{Component, MAX_SYMLINKS, check_name, classify, ends_with_slash, is_absolute};
 
+/// How a walk may resolve, beyond what its context says: `openat2`'s
+/// `RESOLVE_*` flags. The default is what every other call asks, anything
+/// Linux's plain walk allows.
+///
+/// `RESOLVE_IN_ROOT` and `RESOLVE_BENEATH` are a context whose root is the
+/// directory the walk starts from, which the caller makes; `beneath` adds
+/// `EXDEV` where `IN_ROOT` would stay at that root.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Resolve {
+    /// `RESOLVE_NO_XDEV`: `EXDEV` for any step onto another mount -- down
+    /// across a mount point, `..` out of a mount's root, or a link, `/` or a
+    /// magic link that lands on one.
+    pub no_xdev: bool,
+    /// `RESOLVE_NO_MAGICLINKS`: `ELOOP` for a `/proc` link that stands for
+    /// an object rather than a path, where the walk would follow it.
+    pub no_magic_links: bool,
+    /// `RESOLVE_NO_SYMLINKS`: `ELOOP` for any link, magic ones included,
+    /// where the walk would follow it.
+    pub no_symlinks: bool,
+    /// `RESOLVE_BENEATH`: `EXDEV` for an absolute path or link, and for `..`
+    /// out of the context's root, which the caller has made the directory
+    /// the walk starts from.
+    pub beneath: bool,
+}
+
 /// What the last component of a walked path was.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LastPart {
@@ -185,10 +210,30 @@ impl Namespace {
         path: &[u8],
         follow_last: bool,
     ) -> Result<Walked> {
+        self.walk_resolving(ctx, start, path, follow_last, Resolve::default())
+    }
+
+    /// [`Namespace::walk`], resolving as `resolve` says.
+    ///
+    /// # Errors
+    ///
+    /// As [`Namespace::walk`], and `ELOOP` or `EXDEV` where `resolve` refuses
+    /// a step.
+    pub(crate) fn walk_resolving(
+        &self,
+        ctx: &Context,
+        start: &Location,
+        path: &[u8],
+        follow_last: bool,
+        resolve: Resolve,
+    ) -> Result<Walked> {
         if path.is_empty() {
             return Err(Errno::ENOENT);
         }
         let current = if is_absolute(path) {
+            if resolve.beneath || (resolve.no_xdev && !Arc::ptr_eq(&ctx.root.mount, &start.mount)) {
+                return Err(Errno::EXDEV);
+            }
             ctx.root.clone()
         } else {
             start.clone()
@@ -206,7 +251,7 @@ impl Namespace {
             require_directory(&at.current)?;
             require_search(ctx, &at.current)?;
             at.must_be_dir = step.must_be_dir;
-            if let Some(target) = self.advance(ctx, &mut at, &step, follow_last)? {
+            if let Some(target) = self.advance(ctx, &mut at, &step, follow_last, resolve)? {
                 steps.push(target, step.must_be_dir);
             }
         }
@@ -233,7 +278,13 @@ impl Namespace {
         at: &mut Cursor,
         step: &Step,
         follow_last: bool,
+        resolve: Resolve,
     ) -> Result<Option<Vec<u8>>> {
+        // Whether a step from `from` to `to` lands on another mount, which
+        // `RESOLVE_NO_XDEV` refuses.
+        let crosses = |from: &Location, to: &Location| {
+            resolve.no_xdev && !Arc::ptr_eq(&from.mount, &to.mount)
+        };
         let name = match classify(&step.component) {
             Component::Dot => {
                 at.parent = at.current.clone();
@@ -241,8 +292,15 @@ impl Namespace {
                 return Ok(None);
             }
             Component::DotDot => {
+                if resolve.beneath && at.current.same(&ctx.root) {
+                    return Err(Errno::EXDEV);
+                }
+                let above = up(&at.current, Some(&ctx.root));
+                if crosses(&at.current, &above) {
+                    return Err(Errno::EXDEV);
+                }
                 at.parent = at.current.clone();
-                at.current = up(&at.current, Some(&ctx.root));
+                at.current = above;
                 at.last = LastPart::DotDot;
                 return Ok(None);
             }
@@ -255,6 +313,9 @@ impl Namespace {
             mount: Arc::clone(&at.current.mount),
             dentry: child,
         });
+        if crosses(&at.current, &next) {
+            return Err(Errno::EXDEV);
+        }
         let Some(inode) = next.dentry.inode() else {
             if !step.is_last {
                 return Err(Errno::ENOENT);
@@ -272,7 +333,7 @@ impl Namespace {
         }
 
         at.links = at.links.saturating_add(1);
-        if at.links > MAX_SYMLINKS {
+        if at.links > MAX_SYMLINKS || resolve.no_symlinks {
             return Err(Errno::ELOOP);
         }
         // A magic link is not a path: the walk jumps to the object it stands
@@ -281,7 +342,13 @@ impl Namespace {
         // in, and it has no name to be created or removed by: nothing that
         // needs one may be done through a magic link.
         if let Some(target) = inode.link_location() {
+            if resolve.no_magic_links {
+                return Err(Errno::ELOOP);
+            }
             let target = target?;
+            if crosses(&at.current, &target) {
+                return Err(Errno::EXDEV);
+            }
             at.parent = up(&target, Some(&ctx.root));
             at.current = target;
             at.last = LastPart::Root;
@@ -292,6 +359,9 @@ impl Namespace {
             return Err(Errno::ENOENT);
         }
         if is_absolute(&target) {
+            if resolve.beneath || crosses(&at.current, &ctx.root) {
+                return Err(Errno::EXDEV);
+            }
             at.current = ctx.root.clone();
         }
         // A target of only slashes names the root and has no components; what
@@ -326,8 +396,12 @@ impl Namespace {
         }
     }
 
-    /// Step onto whatever is mounted on `at`, repeatedly.
-    pub(crate) fn descend_mounts(&self, mut at: Location) -> Location {
+    /// Step onto whatever is mounted on `at`, repeatedly: the mount on top
+    /// of a place, which `umount2` acts on for a path whose last step
+    /// crossed none -- `.` after `pivot_root(".", ".")`, Linux's
+    /// `LOOKUP_MOUNTPOINT`.
+    #[must_use]
+    pub fn descend_mounts(&self, mut at: Location) -> Location {
         while at.dentry.is_mountpoint() {
             let Some(mount) = self.mounted_on(&at) else {
                 break;

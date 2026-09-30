@@ -406,6 +406,7 @@ fn descriptors(
     let word = signal::word_of(abi);
     let answer = match call {
         Syscall::Openat => fd::sys_openat(process, fd, a[1], truncate(a[2]), truncate(a[3])),
+        Syscall::Openat2 => fd::sys_openat2(process, fd, a[1], a[2], a[3]),
         Syscall::Open => fd::sys_openat(process, AT_FDCWD, a[0], truncate(a[1]), truncate(a[2])),
         Syscall::Creat => fd::sys_openat(process, AT_FDCWD, a[0], CREAT_FLAGS, truncate(a[1])),
         Syscall::Close => fd::sys_close(process, fd),

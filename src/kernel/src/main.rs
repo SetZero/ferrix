@@ -690,6 +690,9 @@ fn check_btrfs_write() {
     };
     if let Some(why) = report.skipped {
         println!("  btrfs-rw not checked: {why}");
+        // Stage 13's mount namespaces, which show the detach's write-out on
+        // the stage 12 volume where there is one.
+        stages_check::check_namespaces(false);
         return;
     }
     println!(
@@ -697,6 +700,7 @@ fn check_btrfs_write() {
          as they were written",
         report.files, report.bytes, report.directories,
     );
+    stages_check::check_namespaces(true);
     // After the check, which has vdc to itself: `/` onto the root disk, if an
     // interactive boot brought one, and then a data disk into that `/`.
     fs::root_disk::switch();

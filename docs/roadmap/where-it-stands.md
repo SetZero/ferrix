@@ -19,9 +19,11 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
   X windows show on hyprix with their input, sizes, close, dialogs, menus
   and clipboard, and a window of a fixed size floats at that size. It is the
   X server stage 19 counted 40 for.
-* **Namespaces**: N1, per-mount flags (2026-09-28), and N2, binds and
-  detach (2026-09-30), are in and reviewed by the certification consultant;
-  N3, mount namespaces themselves, is next (`docs/NAMESPACES.md` §12).
+* **Namespaces**: N1, per-mount flags (2026-09-28), N2, binds and
+  detach, and N3, mount namespaces with `pivot_root` and `openat2`
+  (2026-09-30), are in, each reviewed by the certification consultant:
+  Debian's bubblewrap runs as root (`cargo xtask test-bwrap`). N4, user
+  namespaces, is next (`docs/NAMESPACES.md` §12).
 * **An installer MVP** (2026-09-28, `docs/INSTALLER.md` §11):
   `ferrix-install` partitions a VM's disk and installs the system, and
   `cargo xtask test-install` boots the result through OVMF. The customer
@@ -143,8 +145,9 @@ Stage 13 is under way, cgroups first because init needs them: cgroup2 with
 `pids`, `memory` and its scoped OOM kill, and `cpu.weight` (2026-09-26);
 reclaim, freezing, `cpu.max`, `io`, namespaces and seccomp are left. Of
 the namespaces, Steam's user and mount ones are being built
-(`docs/NAMESPACES.md`): per-mount flags (N1, 2026-09-28) and binds (N2,
-2026-09-30) are in, mount namespaces themselves (N3) are next.
+(`docs/NAMESPACES.md`): per-mount flags (N1, 2026-09-28), binds (N2) and
+mount namespaces with `pivot_root` (N3, both 2026-09-30) are in, and
+bubblewrap runs as root; user namespaces (N4) are next.
 
 Chrome runs on Ferrix (2026-09-24): Google's prebuilt Chrome for Testing,
 headless and in a window on the compositor, on x86-64, and both on ferrousli's

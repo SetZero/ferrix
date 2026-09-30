@@ -145,6 +145,9 @@ pub(crate) enum Content<T: 'static> {
     Link(fn(&T) -> Result<Vec<u8>>),
     /// `/proc/<pid>/fd`: a link per open descriptor.
     Descriptors,
+    /// `/proc/<pid>/ns`: a link per namespace the process is in, of which
+    /// there is one kind, `mnt` (`docs/NAMESPACES.md` §2.4).
+    Namespaces,
     /// `/proc/<pid>/task`: a directory per thread, each holding
     /// [`PER_THREAD`].
     Threads,
@@ -180,9 +183,10 @@ impl<T> Entry<T> {
         match self.content {
             Content::File { .. } => FileType::Regular,
             Content::Link(_) => FileType::Symlink,
-            Content::Descriptors | Content::Threads | Content::Directory { .. } => {
-                FileType::Directory
-            }
+            Content::Descriptors
+            | Content::Namespaces
+            | Content::Threads
+            | Content::Directory { .. } => FileType::Directory,
         }
     }
 }
@@ -329,23 +333,27 @@ static SYS: [Entry<Kernel>; 3] = [
 static SYS_VM: [Entry<Kernel>; 1] = [file(b"overcommit_memory", render::overcommit_memory)];
 
 /// `/proc/sys/fs`.
-static SYS_FS: [Entry<Kernel>; 2] = [
+static SYS_FS: [Entry<Kernel>; 3] = [
     file(b"file-max", render::file_max),
+    file(b"mount-max", render::mount_max),
     file(b"nr_open", render::nr_open),
 ];
 
-/// `/proc/sys/kernel`: what `uname` reports, and the pid limit.
-static SYS_KERNEL: [Entry<Kernel>; 6] = [
+/// `/proc/sys/kernel`: what `uname` reports, the pid limit, and the ids a
+/// namespace shows for one it has no mapping of.
+static SYS_KERNEL: [Entry<Kernel>; 8] = [
     sysctl_setting(b"domainname", render::domainname, render::set_domainname),
     sysctl_setting(b"hostname", render::hostname, render::set_hostname),
     file(b"osrelease", render::osrelease),
     file(b"ostype", render::ostype),
+    file(b"overflowgid", render::overflowgid),
+    file(b"overflowuid", render::overflowuid),
     file(b"pid_max", render::pid_max),
     file(b"version", render::sys_version),
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 14] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 15] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -363,6 +371,11 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 14] = [
     file(b"maps", render::maps),
     file(b"mounts", render::process_mounts),
     file(b"mountinfo", render::mountinfo),
+    Entry {
+        name: b"ns",
+        permissions: 0o511,
+        content: Content::Namespaces,
+    },
     file(b"cgroup", render::cgroup),
     Entry {
         name: b"oom_score_adj",
@@ -626,6 +639,8 @@ enum Place {
     Entry(u32, usize),
     /// `/proc/<pid>/fd/<fd>`.
     Descriptor(u32, i32),
+    /// `/proc/<pid>/ns/mnt`.
+    MountNamespace(u32),
     /// `/proc/<pid>/task/<tid>`.
     Thread(u32, u32),
     /// `PER_THREAD[index]` of the thread: `/proc/<pid>/task/<tid>/<name>`.
@@ -641,6 +656,10 @@ const PID_INODES: u64 = 1 << 17;
 /// is the block's first number, and `PER_PROCESS[i]` is `1 + i`.
 const ENTRY_INODES: u64 = 1;
 
+/// `/proc/<pid>/ns/mnt`'s number in its pid's block: after the process's
+/// entries, before its thread's.
+const NAMESPACE_INODES: u64 = 0x80;
+
 /// Where in a tid's block its thread's numbers start: `/proc/<pid>/task/<tid>`
 /// is here, and `PER_THREAD[i]` is one above it and on.
 const THREAD_INODES: u64 = 0x100;
@@ -653,8 +672,12 @@ const DESCRIPTOR_INODES: u64 = 0x200;
 const DESCRIPTOR_SPAN: u64 = PID_INODES - DESCRIPTOR_INODES;
 
 const _: () = assert!(
-    PER_PROCESS.len() as u64 + ENTRY_INODES <= THREAD_INODES,
-    "a process's entries run into its thread's inode numbers"
+    PER_PROCESS.len() as u64 + ENTRY_INODES <= NAMESPACE_INODES,
+    "a process's entries run into its namespace links' inode numbers"
+);
+const _: () = assert!(
+    NAMESPACE_INODES < THREAD_INODES,
+    "a process's namespace links run into its thread's inode numbers"
 );
 const _: () = assert!(
     PER_THREAD.len() as u64 + THREAD_INODES < DESCRIPTOR_INODES,
@@ -694,6 +717,7 @@ impl Place {
             Place::Descriptor(id, fd) => {
                 block(id) + DESCRIPTOR_INODES + u64::from(fd.unsigned_abs()) % DESCRIPTOR_SPAN
             }
+            Place::MountNamespace(id) => block(id) + NAMESPACE_INODES,
             Place::Thread(_, tid) => block(tid) + THREAD_INODES,
             Place::ThreadEntry(_, tid, index) => block(tid) + THREAD_INODES + 1 + index as u64,
         }
@@ -721,6 +745,7 @@ impl Place {
                     of(entry.kind(), entry.permissions)
                 }),
             Place::Descriptor(..) => of(FileType::Symlink, 0o700),
+            Place::MountNamespace(_) => of(FileType::Symlink, 0o777),
             Place::ThreadEntry(_, _, index) => PER_THREAD
                 .get(index)
                 .map_or(of(FileType::Regular, 0), |entry| {
@@ -845,6 +870,17 @@ impl Node {
         }
     }
 
+    /// Whether this node is a process's `ns` directory, and whose.
+    fn namespaces_of(&self) -> Option<u32> {
+        match self.place {
+            Place::Entry(pid, index) => PER_PROCESS
+                .get(index)
+                .filter(|entry| matches!(entry.content, Content::Namespaces))
+                .map(|_| pid),
+            _ => None,
+        }
+    }
+
     /// Whether this node is a process's descriptor directory, and whose.
     fn descriptors_of(&self) -> Option<u32> {
         match self.place {
@@ -929,6 +965,7 @@ impl Inode for Node {
             Place::Process(pid)
             | Place::Entry(pid, _)
             | Place::Descriptor(pid, _)
+            | Place::MountNamespace(pid)
             | Place::Thread(pid, _)
             | Place::ThreadEntry(pid, ..) => registry::find(pid).map_or((0, 0), |process| {
                 process.with_credentials(|ids| (ids.user.effective, ids.group.effective))
@@ -978,6 +1015,21 @@ impl Inode for Node {
 
     fn caches_lookups(&self) -> bool {
         false
+    }
+
+    /// Except the names of [`TOP`]'s tree: `/proc/sys`, `/proc/sysrq-trigger`
+    /// and the rest are always there and always the same place, and a mount
+    /// point has to be a remembered dentry. bubblewrap as root binds
+    /// `/proc/sys` and `/proc/sysrq-trigger` onto themselves and remounts
+    /// them read-only (`docs/NAMESPACES.md` §1.4), which a walk can only
+    /// cross if it finds the dentry the bind was made on. A process's
+    /// directory comes and goes with it, and is never one.
+    fn caches_lookup_of(&self, name: &[u8]) -> bool {
+        match self.place {
+            Place::Root => named_in(Tree::ROOT, name).is_some(),
+            Place::Top(tree) => tree.entries().is_some() && named_in(tree, name).is_some(),
+            _ => false,
+        }
     }
 
     fn open(&self) -> Result<Option<Arc<dyn Inode>>> {
@@ -1044,6 +1096,14 @@ impl Inode for Node {
                     .ok_or(Errno::ENOENT)?;
                 Ok(self.at(Place::ThreadEntry(pid, tid, index)))
             }
+            _ if self.namespaces_of().is_some() => {
+                let pid = self.namespaces_of().ok_or(Errno::ENOTDIR)?;
+                let _ = alive(pid)?;
+                if name != b"mnt" {
+                    return Err(Errno::ENOENT);
+                }
+                Ok(self.at(Place::MountNamespace(pid)))
+            }
             _ if self.threads_of().is_some() => {
                 let pid = self.threads_of().ok_or(Errno::ENOTDIR)?;
                 let tid = number(name).ok_or(Errno::ENOENT)?;
@@ -1083,6 +1143,19 @@ impl Inode for Node {
                 let _ = list_table(&PER_THREAD, cursor, ino, emit);
                 Ok(())
             }
+            _ if self.namespaces_of().is_some() => {
+                let pid = self.namespaces_of().ok_or(Errno::ENOTDIR)?;
+                let _ = alive(pid)?;
+                if cursor <= FIRST_CURSOR {
+                    let _ = emit(DirEntry {
+                        ino: Place::MountNamespace(pid).ino(),
+                        kind: FileType::Symlink,
+                        name: b"mnt",
+                        next: FIRST_CURSOR.saturating_add(1),
+                    });
+                }
+                Ok(())
+            }
             _ if self.threads_of().is_some() => {
                 let pid = self.threads_of().ok_or(Errno::ENOTDIR)?;
                 list_threads(pid, cursor, emit)
@@ -1105,6 +1178,7 @@ impl Inode for Node {
                 _ => Err(Errno::EINVAL),
             },
             Place::Descriptor(pid, fd) => render::descriptor(&*alive(pid)?, fd),
+            Place::MountNamespace(pid) => render::mount_namespace(&*alive(pid)?),
             _ => Err(Errno::EINVAL),
         }
     }

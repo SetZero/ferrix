@@ -343,7 +343,8 @@ pub(crate) static STAGE9_KMEM: Explanation = Explanation {
     meaning: "`fs::kmem_check::run` fills a job with a small memory limit with each kind of \
               object a program can make and keep through the Linux calls -- files in a \
               tmpfs, pipes, socket pairs, descriptors in flight, epoll registrations, \
-              eventfds, regions of an address space -- until one is refused. Each must be \
+              eventfds, regions of an address space, record locks, semaphore sets, and mount \
+              namespaces copied from one of 64 mounts -- until one is refused. Each must be \
               refused with ENOMEM by the job's limit and not by something else, with the \
               job's memory never past its limit and its kernel-memory count above zero; a \
               sibling job must still make one; and once the objects are gone every byte \
@@ -2090,6 +2091,46 @@ pub(crate) static STAGE8_BINDS: Explanation = Explanation {
           src/lib/fs/vfs/src/namespace.rs",
 };
 
+/// For `check_namespaces` in `stages_check.rs`, when
+/// `fs::namespace_check::run` fails.
+pub(crate) static STAGE13_MOUNT_NAMESPACES: Explanation = Explanation {
+    code: "FX-0887",
+    title: "A mount namespace failed its self-check",
+    meaning: "`fs::namespace_check::run` first opens with openat2 from a descriptor of its \
+              directory: an absolute link out of it must stay inside with RESOLVE_IN_ROOT \
+              (ENOENT), be ELOOP with RESOLVE_NO_SYMLINKS, `..` EXDEV with RESOLVE_BENEATH, a \
+              /proc/<pid>/fd link ELOOP with RESOLVE_NO_MAGICLINKS, and struct open_how's size \
+              judged as Linux judges it. It then makes two processes. The second must be refused \
+              unshare(CLONE_NEWNS) as uid 1000 (EPERM) and unshare of a pid namespace (EINVAL), \
+              and granted it as root; /proc/<pid>/ns/mnt must then name the two apart, and a \
+              tmpfs each mounts must show in its own mountinfo and not the other's. Then \
+              bubblewrap's calls as root: a tmpfs base, newroot bound onto itself, \
+              pivot_root(base, oldroot) (after a pivot_root whose put_old is not below the new \
+              root is refused EINVAL), a file, a proc, a tmpfs and the stage 12 btrfs bound or \
+              mounted into newroot, the old root detached, pivot_root(\".\", \".\") and \
+              umount2(\".\", MNT_DETACH). After it / must be the new tree, `..` must stay in \
+              it, nothing of the old tree may be reachable, and mountinfo must list the new \
+              tree's mounts alone. A btrfs file written through the old root just before its \
+              detach must be on the disk after it, as a second, read-only mount of the disk \
+              reads it. A native child the second process makes must be in its namespace and \
+              root (docs/NAMESPACES.md §2.5).",
+    causes: &[
+        "`Namespace::copy` shares a table or a mount with the namespace it copies, or leaves \
+         a context's root or working directory on the old mounts.",
+        "`Mount::tree` is not the copy's, so a walk crosses the first namespace's mount points.",
+        "`Namespace::pivot_root` checks in another order than Linux's, or leaves a parent \
+         pointer on the old mount.",
+        "`chroot_fs_refs` in `syscall/fsctl.rs` does not move the caller's root.",
+        "`sys_umount2` does not act on the mount on top of `.`, or does not write out every \
+         filesystem of a detached subtree.",
+        "`launch::load_native` starts a native child in the first namespace's root rather \
+         than its creator's context.",
+    ],
+    see: "src/kernel/src/fs/namespace_check.rs; src/kernel/src/syscall/namespace.rs; \
+          src/kernel/src/syscall/fsctl.rs; src/kernel/src/syscall/launch.rs; \
+          src/lib/fs/vfs/src/namespace.rs",
+};
+
 /// For `check_semaphores` in `stages_check.rs`, when `syscall::sem_check::run`
 /// fails.
 pub(crate) static STAGE7_SEMAPHORES: Explanation = Explanation {
@@ -2615,6 +2656,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_SIGNALFD,
     &STAGE8_MOUNT_FLAGS,
     &STAGE8_BINDS,
+    &STAGE13_MOUNT_NAMESPACES,
     &SYSFS,
     &STAGE9_OBJECTS,
     &STAGE9_ALLOCATION,

@@ -73,6 +73,7 @@ Causes are listed most likely first.
 | [FX-0884](#fx-0884) | signalfd failed its self-check |
 | [FX-0885](#fx-0885) | A mount's flags failed their self-check |
 | [FX-0886](#fx-0886) | A bind mount failed its self-check |
+| [FX-0887](#fx-0887) | A mount namespace failed its self-check |
 | [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-0902](#fx-0902) | an allocation failure was not survived |
@@ -1635,6 +1636,45 @@ a bind from it EINVAL.
 See: src/kernel/src/fs/bind_check.rs; src/kernel/src/syscall/fsctl.rs;
 src/lib/fs/vfs/src/namespace.rs.
 
+<a id="fx-0887"></a>
+
+## FX-0887 — A mount namespace failed its self-check
+
+`fs::namespace_check::run` first opens with openat2 from a descriptor of its
+directory: an absolute link out of it must stay inside with RESOLVE_IN_ROOT
+(ENOENT), be ELOOP with RESOLVE_NO_SYMLINKS, `..` EXDEV with RESOLVE_BENEATH, a
+/proc/<pid>/fd link ELOOP with RESOLVE_NO_MAGICLINKS, and struct open_how's size
+judged as Linux judges it. It then makes two processes. The second must be
+refused unshare(CLONE_NEWNS) as uid 1000 (EPERM) and unshare of a pid namespace
+(EINVAL), and granted it as root; /proc/<pid>/ns/mnt must then name the two
+apart, and a tmpfs each mounts must show in its own mountinfo and not the
+other's. Then bubblewrap's calls as root: a tmpfs base, newroot bound onto
+itself, pivot_root(base, oldroot) (after a pivot_root whose put_old is not below
+the new root is refused EINVAL), a file, a proc, a tmpfs and the stage 12 btrfs
+bound or mounted into newroot, the old root detached, pivot_root(".", ".") and
+umount2(".", MNT_DETACH). After it / must be the new tree, `..` must stay in it,
+nothing of the old tree may be reachable, and mountinfo must list the new tree's
+mounts alone. A btrfs file written through the old root just before its detach
+must be on the disk after it, as a second, read-only mount of the disk reads it.
+A native child the second process makes must be in its namespace and root
+(docs/NAMESPACES.md §2.5).
+
+1. `Namespace::copy` shares a table or a mount with the namespace it copies, or
+   leaves a context's root or working directory on the old mounts.
+2. `Mount::tree` is not the copy's, so a walk crosses the first namespace's
+   mount points.
+3. `Namespace::pivot_root` checks in another order than Linux's, or leaves a
+   parent pointer on the old mount.
+4. `chroot_fs_refs` in `syscall/fsctl.rs` does not move the caller's root.
+5. `sys_umount2` does not act on the mount on top of `.`, or does not write out
+   every filesystem of a detached subtree.
+6. `launch::load_native` starts a native child in the first namespace's root
+   rather than its creator's context.
+
+See: src/kernel/src/fs/namespace_check.rs; src/kernel/src/syscall/namespace.rs;
+src/kernel/src/syscall/fsctl.rs; src/kernel/src/syscall/launch.rs;
+src/lib/fs/vfs/src/namespace.rs.
+
 <a id="fx-0890"></a>
 
 ## FX-0890 — sysfs did not show the machine's devices as Linux shows them
@@ -1829,7 +1869,8 @@ src/kernel/src/mm.rs; docs/certification/IMPLEMENTATION.md.
 `fs::kmem_check::run` fills a job with a small memory limit with each kind of
 object a program can make and keep through the Linux calls -- files in a tmpfs,
 pipes, socket pairs, descriptors in flight, epoll registrations, eventfds,
-regions of an address space -- until one is refused. Each must be refused with
+regions of an address space, record locks, semaphore sets, and mount namespaces
+copied from one of 64 mounts -- until one is refused. Each must be refused with
 ENOMEM by the job's limit and not by something else, with the job's memory never
 past its limit and its kernel-memory count above zero; a sibling job must still
 make one; and once the objects are gone every byte charged must have come back.

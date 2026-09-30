@@ -178,7 +178,9 @@ pub(crate) fn load(
 /// [`Image::stack_top`], and its start argument is zero until a
 /// [`process::StartClaim`] starts it with one. `name` is what `/proc/<pid>/exe`
 /// and its command line report. It runs as `credentials` from the first moment
-/// anything can see it.
+/// anything can see it, and in `context` -- a creator's mount namespace, root
+/// and working directory -- when one is given, where a process the kernel
+/// starts is in `fs::root_disk::process_context`'s.
 ///
 /// # Errors
 ///
@@ -187,11 +189,17 @@ pub(crate) fn load_native(
     image: &[u8],
     name: &[u8],
     credentials: Credentials,
+    context: Option<Context>,
 ) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
     let process =
         Process::new(Arc::clone(&space)).map_err(|_| ExecError::Space(SpaceError::OutOfMemory))?;
     process.with_credentials(|held| *held = credentials);
+    if let Some(context) = context {
+        // Not shared with anything yet; what it replaces goes after the lock.
+        let started_in = core::mem::replace(&mut *process.fs_context().lock(), context);
+        drop(started_in);
+    }
     let loaded = load_into(&space, Source::Bytes(image), None)?;
     // A native process's start argument is a 64-bit handle, and it speaks
     // the native ABI through `SYSCALL`: a 32-bit image cannot be one.

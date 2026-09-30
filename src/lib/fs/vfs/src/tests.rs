@@ -16,8 +16,8 @@ use crate::initramfs::{self, makedev};
 use crate::path::split_last;
 use crate::tmpfs::{HeapStorage, Tmpfs};
 use crate::{
-    Access, Clock, Context, Errno, FileSystem, FileType, Namespace, OpenFile, OpenFlags,
-    RenameMode, Timespec, Whence,
+    Access, Clock, Context, Errno, FileSystem, FileType, Location, MOUNT_MAX, Namespace, OpenFile,
+    OpenFlags, RenameMode, Timespec, Whence,
 };
 
 /// A clock that advances a second every time it is read.
@@ -658,6 +658,7 @@ fn a_working_directory_follows_its_directory_through_a_rename() {
         root: ctx.root.clone(),
         cwd,
         who: ctx.who.clone(),
+        ns: None,
     };
     write_file(&ns, &here, "relative", b"r");
     assert_eq!(read_file(&ns, &ctx, "/renamed/b/relative").unwrap(), b"r");
@@ -1207,8 +1208,417 @@ fn dotdot_never_climbs_above_a_context_root() {
         root: jail.clone(),
         cwd: jail,
         who: ctx.who,
+        ns: None,
     };
     assert_eq!(read_file(&ns, &inside, "/../../secret").unwrap(), b"j");
+}
+
+// -- Mount namespaces (N3) ---------------------------------------------------
+
+/// A copy of `ns`, with `ctx`'s root and working directory moved into it, and
+/// a context naming it.
+fn copied(ns: &Namespace, ctx: &Context) -> (Arc<Namespace>, Context) {
+    let mut root = ctx.root.clone();
+    let mut cwd = ctx.cwd.clone();
+    let copy = Arc::new(ns.copy(&mut [&mut root, &mut cwd]).unwrap());
+    let inside = Context {
+        root,
+        cwd,
+        who: ctx.who.clone(),
+        ns: Some(Arc::clone(&copy)),
+    };
+    (copy, inside)
+}
+
+/// A context whose root and working directory are both `at`.
+fn rooted_at(ctx: &Context, at: &Location) -> Context {
+    Context {
+        root: at.clone(),
+        cwd: at.clone(),
+        ..ctx.clone()
+    }
+}
+
+#[test]
+fn a_copied_namespace_is_private_both_ways_and_shares_the_files() {
+    let (ns, ctx) = bind_fixture();
+    let (copy, inside) = copied(&ns, &ctx);
+    assert_ne!(copy.id(), ns.id());
+    assert_eq!(copy.mounts().len(), ns.mounts().len());
+    // The copy's mounts are new ones, of the same filesystems.
+    let src = ns.resolve(&ctx, None, b"/src", true).unwrap();
+    let copied_src = copy.resolve(&inside, None, b"/src", true).unwrap();
+    assert!(!Arc::ptr_eq(&src.mount, &copied_src.mount));
+    assert!(src.mount.shares_filesystem(&copied_src.mount));
+    assert!(copy.owns(&copied_src.mount) && !copy.owns(&src.mount));
+    assert!(ns.owns(&src.mount) && !ns.owns(&copied_src.mount));
+    assert_eq!(
+        read_file(&copy, &inside, "/src/a/deep/inner").unwrap(),
+        b"in"
+    );
+    // A mount in the copy is not in the first, and the reverse.
+    let d1 = copy.resolve(&inside, None, b"/d1", true).unwrap();
+    let _ = copy.mount(tmpfs(7), &d1).unwrap();
+    write_file(&copy, &inside, "/d1/only-inside", b"i");
+    assert_eq!(
+        read_file(&ns, &ctx, "/d1/only-inside").unwrap_err(),
+        Errno::ENOENT
+    );
+    let d2 = ns.resolve(&ctx, None, b"/d2", true).unwrap();
+    let _ = ns.mount(tmpfs(8), &d2).unwrap();
+    write_file(&ns, &ctx, "/d2/only-outside", b"o");
+    assert_eq!(
+        read_file(&copy, &inside, "/d2/only-outside").unwrap_err(),
+        Errno::ENOENT
+    );
+    // An unmount in one leaves the other's copy where it was.
+    let copied_deep = copy.resolve(&inside, None, b"/src/a/deep", true).unwrap();
+    copy.unmount(&copied_deep).unwrap();
+    assert_eq!(read_file(&ns, &ctx, "/src/a/deep/inner").unwrap(), b"in");
+    // A file written through a shared filesystem shows in both.
+    write_file(&copy, &inside, "/src/f", b"shared");
+    assert_eq!(read_file(&ns, &ctx, "/src/f").unwrap(), b"shared");
+    // A mount of the other namespace is refused as the place of a change.
+    assert_eq!(copy.bind(&src, &d1, false).unwrap_err(), Errno::EINVAL);
+}
+
+#[test]
+fn a_location_crosses_the_mounts_of_the_namespace_it_was_reached_in() {
+    let (ns, ctx) = bind_fixture();
+    let before = ns.resolve(&ctx, None, b"/src/a", true).unwrap();
+    let (copy, inside) = copied(&ns, &ctx);
+    let copied_deep = copy.resolve(&inside, None, b"/src/a/deep", true).unwrap();
+    copy.unmount(&copied_deep).unwrap();
+    // Walked from a place kept from before the copy, through the copy's
+    // methods, `deep` still crosses the first namespace's mount: the table
+    // is the mount's, not the walker's.
+    let from_before = Context {
+        cwd: before,
+        ..inside.clone()
+    };
+    assert_eq!(read_file(&copy, &from_before, "deep/inner").unwrap(), b"in");
+    assert_eq!(
+        read_file(&copy, &inside, "/src/a/deep/inner").unwrap_err(),
+        Errno::ENOENT
+    );
+}
+
+#[test]
+fn a_copy_moves_the_places_it_is_given_and_leaves_others() {
+    let (ns, ctx) = bind_fixture();
+    let mut cwd = ns.resolve(&ctx, None, b"/src/a", true).unwrap();
+    let kept = cwd.clone();
+    let copy = ns.copy(&mut [&mut cwd]).unwrap();
+    assert!(copy.owns(&cwd.mount) && !Arc::ptr_eq(&cwd.mount, &kept.mount));
+    assert!(Arc::ptr_eq(&cwd.dentry, &kept.dentry));
+    let fs = tmpfs(9);
+    let pipe = Location::detached(
+        Arc::clone(&fs),
+        fs.root(),
+        b"pipe:[1]",
+        Arc::new(SpinParker),
+    )
+    .unwrap();
+    let mut outside = pipe.clone();
+    let _ = ns.copy(&mut [&mut outside]).unwrap();
+    assert!(outside.same(&pipe));
+}
+
+#[test]
+fn an_ended_namespace_gives_its_mount_points_back() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/m", 0o755).unwrap();
+    let (copy, inside) = copied(&ns, &ctx);
+    let m = copy.resolve(&inside, None, b"/m", true).unwrap();
+    let mounted = copy.mount(tmpfs(2), &m).unwrap();
+    write_file(&copy, &inside, "/m/x", b"x");
+    // The dentry is a mount point in the copy, so the first may not remove it.
+    assert_eq!(ns.rmdir(&ctx, None, b"/m").unwrap_err(), Errno::EBUSY);
+    drop((copy, inside, m));
+    // Held on, the mount is disconnected: nothing above it.
+    assert!(mounted.parent().is_none());
+    ns.rmdir(&ctx, None, b"/m").unwrap();
+}
+
+#[test]
+fn a_namespace_holds_mount_max_mounts_and_refuses_the_next_with_enospc() {
+    let (ns, ctx) = fresh();
+    let root = ns.resolve(&ctx, None, b"/", true).unwrap();
+    let mut index = 0;
+    let refused = loop {
+        let name = alloc::format!("/m{index}");
+        index += 1;
+        ns.mkdir(&ctx, None, name.as_bytes(), 0o755).unwrap();
+        let at = ns.resolve(&ctx, None, name.as_bytes(), true).unwrap();
+        if let Err(errno) = ns.bind(&root, &at, false) {
+            break errno;
+        }
+        assert!(ns.mounts().len() <= MOUNT_MAX);
+    };
+    assert_eq!(refused, Errno::ENOSPC);
+    assert_eq!(ns.mounts().len(), MOUNT_MAX);
+    // A copy of a full namespace is as full, and no more.
+    let copy = ns.copy(&mut []).unwrap();
+    assert_eq!(copy.mounts().len(), MOUNT_MAX);
+}
+
+/// A namespace whose context's root is a mount with a parent, as a process's
+/// is after the root switch: `/sysroot`, a tmpfs, with `/new` in it a second
+/// one to pivot to, and `/new/old` for the old root.
+fn pivot_fixture() -> (Namespace, Context) {
+    let (ns, ctx) = fresh();
+    write_file(&ns, &ctx, "/first-root-only", b"f");
+    ns.mkdir(&ctx, None, b"/sysroot", 0o755).unwrap();
+    let at = ns.resolve(&ctx, None, b"/sysroot", true).unwrap();
+    let _ = ns.mount(tmpfs(2), &at).unwrap();
+    let sysroot = ns.resolve(&ctx, None, b"/sysroot", true).unwrap();
+    let ctx = rooted_at(&ctx, &sysroot);
+    write_file(&ns, &ctx, "/old-root-only", b"o");
+    ns.mkdir(&ctx, None, b"/new", 0o755).unwrap();
+    let new = ns.resolve(&ctx, None, b"/new", true).unwrap();
+    let _ = ns.mount(tmpfs(3), &new).unwrap();
+    write_file(&ns, &ctx, "/new/new-root-only", b"n");
+    ns.mkdir(&ctx, None, b"/new/old", 0o755).unwrap();
+    (ns, ctx)
+}
+
+#[test]
+fn pivot_root_swaps_the_root_and_puts_the_old_one_where_asked() {
+    let (ns, ctx) = pivot_fixture();
+    let (copy, inside) = copied(&ns, &ctx);
+    let new = copy.resolve(&inside, None, b"/new", true).unwrap();
+    let old = copy.resolve(&inside, None, b"/new/old", true).unwrap();
+    copy.pivot_root(&inside.root, &new, &old).unwrap();
+    // The caller moves its own root, as `chroot_fs_refs` does.
+    let pivoted = rooted_at(&inside, &new);
+    assert_eq!(read_file(&copy, &pivoted, "/new-root-only").unwrap(), b"n");
+    assert_eq!(
+        read_file(&copy, &pivoted, "/old/old-root-only").unwrap(),
+        b"o"
+    );
+    // `..` from the new root's top stops there, and from the old root climbs
+    // back into the new one.
+    let up = copy.resolve(&pivoted, None, b"/old/..", true).unwrap();
+    assert!(up.same(&new));
+    // The old root is mounted where `put_old` was, and leaves with a detach.
+    let old_root = copy.resolve(&pivoted, None, b"/old", true).unwrap();
+    assert!(old_root.is_mount_root());
+    copy.unmount_with(&old_root, true).unwrap();
+    assert_eq!(
+        read_file(&copy, &pivoted, "/old/old-root-only").unwrap_err(),
+        Errno::ENOENT
+    );
+    assert_eq!(
+        read_file(&copy, &pivoted, "/../../first-root-only").unwrap_err(),
+        Errno::ENOENT
+    );
+    // The first namespace is as it was.
+    assert_eq!(read_file(&ns, &ctx, "/new/new-root-only").unwrap(), b"n");
+    assert_eq!(read_file(&ns, &ctx, "/old-root-only").unwrap(), b"o");
+}
+
+#[test]
+fn pivot_root_dot_dot_stacks_the_old_root_on_the_new_one() {
+    let (ns, ctx) = pivot_fixture();
+    let (copy, inside) = copied(&ns, &ctx);
+    let new = copy.resolve(&inside, None, b"/new", true).unwrap();
+    copy.pivot_root(&inside.root, &new, &new).unwrap();
+    let pivoted = rooted_at(&inside, &new);
+    // `/` is the new root, and the old one is on top of it, where only
+    // `umount2(".")` reaches it: a walk of `.` stays, a crossing finds it.
+    assert_eq!(read_file(&copy, &pivoted, "/new-root-only").unwrap(), b"n");
+    let stacked = copy.descend_mounts(new.clone());
+    assert!(!stacked.same(&new));
+    let on_top = rooted_at(&pivoted, &stacked);
+    assert_eq!(read_file(&copy, &on_top, "/old-root-only").unwrap(), b"o");
+    copy.unmount_with(&stacked, true).unwrap();
+    assert!(copy.descend_mounts(new.clone()).same(&new));
+    assert_eq!(read_file(&copy, &pivoted, "/new-root-only").unwrap(), b"n");
+    assert_eq!(
+        read_file(&copy, &pivoted, "/../old-root-only").unwrap_err(),
+        Errno::ENOENT
+    );
+}
+
+#[test]
+fn pivot_root_refuses_what_linux_refuses_and_changes_nothing() {
+    let (ns, ctx) = pivot_fixture();
+    let (copy, inside) = copied(&ns, &ctx);
+    let new = copy.resolve(&inside, None, b"/new", true).unwrap();
+    let old = copy.resolve(&inside, None, b"/new/old", true).unwrap();
+    let root = inside.root.clone();
+    // On the caller's own root mount: `EBUSY`.
+    copy.mkdir(&inside, None, b"/plain", 0o755).unwrap();
+    let plain = copy.resolve(&inside, None, b"/plain", true).unwrap();
+    assert_eq!(
+        copy.pivot_root(&root, &plain, &old).unwrap_err(),
+        Errno::EBUSY
+    );
+    assert_eq!(
+        copy.pivot_root(&root, &new, &plain).unwrap_err(),
+        Errno::EBUSY
+    );
+    // `new_root` not a mount's root.
+    let other = copy.resolve(&inside, None, b"/plain", true).unwrap();
+    let _ = copy.mount(tmpfs(4), &other).unwrap();
+    copy.mkdir(&inside, None, b"/plain/sub", 0o755).unwrap();
+    let sub = copy.resolve(&inside, None, b"/plain/sub", true).unwrap();
+    assert_eq!(
+        copy.pivot_root(&root, &sub, &sub).unwrap_err(),
+        Errno::EINVAL
+    );
+    // `put_old` not below `new_root`.
+    assert_eq!(
+        copy.pivot_root(&root, &new, &sub).unwrap_err(),
+        Errno::EINVAL
+    );
+    // A root with no parent -- the namespace's own, as on initramfs.
+    assert_eq!(
+        copy.pivot_root(&copy.root(), &new, &old).unwrap_err(),
+        Errno::EINVAL
+    );
+    // A mount of another namespace.
+    let theirs = ns.resolve(&ctx, None, b"/new", true).unwrap();
+    assert_eq!(
+        copy.pivot_root(&root, &theirs, &old).unwrap_err(),
+        Errno::EINVAL
+    );
+    // Not a directory.
+    write_file(&copy, &inside, "/new/file", b"");
+    let file = copy.resolve(&inside, None, b"/new/file", true).unwrap();
+    assert_eq!(
+        copy.pivot_root(&root, &new, &file).unwrap_err(),
+        Errno::ENOTDIR
+    );
+    // The refusals changed nothing, and the pivot then goes through.
+    assert_eq!(
+        read_file(&copy, &inside, "/new/new-root-only").unwrap(),
+        b"n"
+    );
+    copy.pivot_root(&root, &new, &old).unwrap();
+    let pivoted = rooted_at(&inside, &new);
+    assert_eq!(
+        read_file(&copy, &pivoted, "/old/plain/sub/../../old-root-only").unwrap(),
+        b"o"
+    );
+}
+
+// -- openat2's resolve flags ---------------------------------------------------
+
+/// Open `path` from `dir` as `openat2` with `resolve` would: for `in_root`,
+/// a context whose root is `dir`.
+fn open_resolving(
+    ns: &Namespace,
+    ctx: &Context,
+    dir: &[u8],
+    path: &[u8],
+    resolve: crate::Resolve,
+    in_root: bool,
+) -> Result<Vec<u8>, Errno> {
+    let dir = ns.resolve(ctx, None, dir, true)?;
+    let ctx = if in_root {
+        rooted_at(ctx, &dir)
+    } else {
+        ctx.clone()
+    };
+    let flags = OpenFlags {
+        read: true,
+        ..OpenFlags::default()
+    };
+    let file = ns.open_resolving(&ctx, Some(&dir), path, &flags, 0, resolve)?;
+    let mut buf = vec![0_u8; 64];
+    let len = file.read(&mut buf)?;
+    buf.truncate(len);
+    Ok(buf)
+}
+
+/// A tree to resolve in: `/jail` holding a file, an absolute link and a
+/// relative one out of it, and a tmpfs mounted at `/jail/m`.
+fn resolve_fixture() -> (Namespace, Context) {
+    let (ns, ctx) = fresh();
+    write_file(&ns, &ctx, "/secret", b"outside");
+    ns.mkdir(&ctx, None, b"/jail", 0o755).unwrap();
+    write_file(&ns, &ctx, "/jail/secret", b"inside");
+    ns.symlink(&ctx, None, b"/jail/abs", b"/secret").unwrap();
+    ns.symlink(&ctx, None, b"/jail/rel", b"../secret").unwrap();
+    ns.mkdir(&ctx, None, b"/jail/m", 0o755).unwrap();
+    let m = ns.resolve(&ctx, None, b"/jail/m", true).unwrap();
+    let _ = ns.mount(tmpfs(2), &m).unwrap();
+    write_file(&ns, &ctx, "/jail/m/f", b"mounted");
+    (ns, ctx)
+}
+
+#[test]
+fn resolve_in_root_keeps_every_path_and_link_inside_the_directory() {
+    let (ns, ctx) = resolve_fixture();
+    let in_root = crate::Resolve::default();
+    for path in [&b"/secret"[..], b"abs", b"rel", b"../../secret"] {
+        assert_eq!(
+            open_resolving(&ns, &ctx, b"/jail", path, in_root, true).unwrap(),
+            b"inside",
+            "{}",
+            String::from_utf8_lossy(path)
+        );
+    }
+    // Without it, the links lead out.
+    assert_eq!(
+        open_resolving(&ns, &ctx, b"/jail", b"abs", in_root, false).unwrap(),
+        b"outside"
+    );
+}
+
+#[test]
+fn resolve_beneath_refuses_what_in_root_would_clamp() {
+    let (ns, ctx) = resolve_fixture();
+    let beneath = crate::Resolve {
+        beneath: true,
+        ..crate::Resolve::default()
+    };
+    for path in [&b"/secret"[..], b"abs", b"rel", b"../secret"] {
+        assert_eq!(
+            open_resolving(&ns, &ctx, b"/jail", path, beneath, true).unwrap_err(),
+            Errno::EXDEV,
+            "{}",
+            String::from_utf8_lossy(path)
+        );
+    }
+    assert_eq!(
+        open_resolving(&ns, &ctx, b"/jail", b"m/../secret", beneath, true).unwrap(),
+        b"inside"
+    );
+}
+
+#[test]
+fn resolve_no_symlinks_and_no_xdev_refuse_their_steps() {
+    let (ns, ctx) = resolve_fixture();
+    let no_symlinks = crate::Resolve {
+        no_symlinks: true,
+        ..crate::Resolve::default()
+    };
+    assert_eq!(
+        open_resolving(&ns, &ctx, b"/jail", b"rel", no_symlinks, false).unwrap_err(),
+        Errno::ELOOP
+    );
+    assert_eq!(
+        open_resolving(&ns, &ctx, b"/jail", b"secret", no_symlinks, false).unwrap(),
+        b"inside"
+    );
+    let no_xdev = crate::Resolve {
+        no_xdev: true,
+        ..crate::Resolve::default()
+    };
+    assert_eq!(
+        open_resolving(&ns, &ctx, b"/jail", b"m/f", no_xdev, false).unwrap_err(),
+        Errno::EXDEV
+    );
+    assert_eq!(
+        open_resolving(&ns, &ctx, b"/jail/m", b"../secret", no_xdev, false).unwrap_err(),
+        Errno::EXDEV
+    );
+    assert_eq!(
+        open_resolving(&ns, &ctx, b"/jail", b"secret", no_xdev, false).unwrap(),
+        b"inside"
+    );
 }
 
 // -- Permissions -------------------------------------------------------------
@@ -1850,10 +2260,10 @@ fn a_directory_that_does_not_cache_lookups_is_asked_every_time() {
 
 use core::sync::atomic::AtomicBool;
 
+use crate::StatFs;
 use crate::file::Status;
 use crate::pipe::PIPEFS_MAGIC;
 use crate::statfs::StatfsLayout;
-use crate::{Location, StatFs};
 
 fn stream_metadata() -> crate::Metadata {
     crate::Metadata {

@@ -67,6 +67,7 @@ mod btrfs_check;
 mod btrfs_disk;
 mod builds;
 mod busybox;
+mod bwrap;
 mod cargo;
 mod check;
 mod chrome;
@@ -234,6 +235,8 @@ COMMANDS:
                   and log in to Steam anonymously, over the network
     test-steam-bootstrap  Attach the volume tools/common/fetch/fetch-steam.sh makes, and require Valve's steam.sh to update the
                   client and run it until it asks for an X display, over the network
+    test-bwrap    Boot on a fresh btrfs root and require Debian's bubblewrap, which tools/common/fetch/fetch-bwrap.sh fetches,
+                  to run Steam's requirements check and a pressure-vessel-shaped container as root (docs/NAMESPACES.md §8)
     test-steam-window  Attach the volume tools/common/fetch/fetch-steam-window.sh makes, and require Steam's sign-in window
                   on hyprix, drawn through yserver, over the network (docs/STEAM.md)
     run-steam     The same boot, the screen dumped into build/x86_64/steam/ every few seconds until the timeout
@@ -520,6 +523,7 @@ fn run() -> Result<()> {
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
         "test-steamcmd" | "test-steam-bootstrap" => steamcmd::run(command, &args),
+        "test-bwrap" => bwrap::test_bwrap(&args),
         "test-yserver" | "test-xwindow" => yserver::run(command, &args),
         "run-steam" => compositor::steam_window::run(&args, false),
         "test-steam-window" => compositor::steam_window::run(&args, true),

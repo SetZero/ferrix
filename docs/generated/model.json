@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "a2e512c6a2ffab5d63d4e03bd91e6bf008835b6344de198f1b331d94999b290c",
+  "digest": "89915befe78cd7d711d250f2d85c521970ba1e5f13d084544ff6b5233389daeb",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -32,7 +32,7 @@
     },
     {
       "path": "docs/sysml/07-isolation.sysml",
-      "synopsis": "Ferrix — SysML v2 model, part 7: isolation.\n\ndocs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. The credentials exist since stage 7, and cgroup v2 since 2026-09-23 (docs/CGROUPS.md), over the job tree. Of the namespaces, the mount table's groundwork is in (docs/NAMESPACES.md, N1 and N2) and the namespaces themselves are not, so unshare and setns still answer as a Linux built without namespaces does. Seccomp is not built."
+      "synopsis": "Ferrix — SysML v2 model, part 7: isolation.\n\ndocs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. The credentials exist since stage 7, and cgroup v2 since 2026-09-23 (docs/CGROUPS.md), over the job tree. Of the namespaces, mount namespaces are in (docs/NAMESPACES.md, N1 to N3): unshare and clone copy one, and bubblewrap runs as root. The other kinds still answer as a Linux built without them does, and setns refuses. Seccomp is not built."
     },
     {
       "path": "docs/sysml/08-drivers.sysml",
@@ -14690,7 +14690,7 @@
           "definition": true,
           "maturity": "inProgress",
           "stage": 13,
-          "doc": "Steam's user and mount namespaces first (docs/NAMESPACES.md, N1 to N6). N1 (2026-09-28): every mount's own flags enforced, MS_REMOUNT, and mountinfo. N2 (2026-09-30): binds of directories, files and sockets, MS_REC, MNT_DETACH of a subtree, and a superblock per filesystem. N3, mount namespaces themselves, is next.",
+          "doc": "Steam's user and mount namespaces first (docs/NAMESPACES.md, N1 to N6). N1 (2026-09-28): every mount's own flags enforced, MS_REMOUNT, and mountinfo. N2 (2026-09-30): binds of directories, files and sockets, MS_REC, MNT_DETACH of a subtree, and a superblock per filesystem. N3 (2026-09-30): mount namespaces, copied by unshare and clone, pivot_root, a native child kept in its creator's, and openat2's resolve flags. N4, user namespaces, is next.",
           "source": {
             "file": "docs/sysml/07-isolation.sysml",
             "line": 34
@@ -14704,7 +14704,7 @@
               "multiplicity": "8..*",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 42
+                "line": 44
               }
             },
             {
@@ -14713,7 +14713,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 43
+                "line": 45
               }
             },
             {
@@ -14722,7 +14722,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 44
+                "line": 46
               }
             }
           ]
@@ -14734,7 +14734,7 @@
           "definition": true,
           "source": {
             "file": "docs/sysml/07-isolation.sysml",
-            "line": 47
+            "line": 49
           },
           "children": [
             {
@@ -14743,7 +14743,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 48
+                "line": 50
               }
             },
             {
@@ -14752,7 +14752,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 49
+                "line": 51
               }
             },
             {
@@ -14761,7 +14761,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 50
+                "line": 52
               }
             },
             {
@@ -14770,7 +14770,7 @@
               "kind": "enum-literal",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 51
+                "line": 53
               }
             }
           ]
@@ -14784,7 +14784,7 @@
           "stage": 13,
           "source": {
             "file": "docs/sysml/07-isolation.sysml",
-            "line": 54
+            "line": 56
           },
           "children": [
             {
@@ -14795,7 +14795,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 56
+                "line": 58
               }
             },
             {
@@ -14806,7 +14806,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 57
+                "line": 59
               }
             },
             {
@@ -14817,7 +14817,7 @@
               "multiplicity": "0..1",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 58
+                "line": 60
               }
             },
             {
@@ -14828,7 +14828,7 @@
               "multiplicity": "0..1",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 59
+                "line": 61
               }
             },
             {
@@ -14839,7 +14839,7 @@
               "multiplicity": "0..1",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 60
+                "line": 62
               }
             }
           ]
@@ -14854,7 +14854,7 @@
           "doc": "One unified hierarchy (v2), exposed as cgroupfs. cpu is not a separate mechanism: it is bandwidth and weight handed to the scheduling classes. memory scopes reclaim and the OOM kill.\n\nBuilt (docs/CGROUPS.md, 55 of its 85 points): every cgroup a Job, cgroupfs mounted as cgroup2, cgroup.events, clone3 into a cgroup, delegation by chown; pids, memory's charging and its scoped OOM kill, and cpu.weight, over the certification's job quotas. Left: the rest of memory.stat, memory's reclaim, freezing, cpu.max and io.",
           "source": {
             "file": "docs/sysml/07-isolation.sysml",
-            "line": 63
+            "line": 65
           },
           "children": [
             {
@@ -14864,7 +14864,7 @@
               "type": "Cgroup",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 75
+                "line": 77
               }
             }
           ]
@@ -14879,7 +14879,7 @@
           "doc": "Classic BPF filters evaluated on syscall entry. The interpreter is a pure function over bytes in src/lib/, fuzzable and Miri-able.",
           "source": {
             "file": "docs/sysml/07-isolation.sysml",
-            "line": 78
+            "line": 80
           },
           "children": [
             {
@@ -14889,7 +14889,7 @@
               "type": "ClassicBpfInterpreter",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 82
+                "line": 84
               }
             },
             {
@@ -14898,7 +14898,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 83
+                "line": 85
               }
             },
             {
@@ -14907,7 +14907,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 84
+                "line": 86
               }
             }
           ]
@@ -14922,7 +14922,7 @@
           "doc": "src/lib/kernel/seccomp, owed before seccomp is built.",
           "source": {
             "file": "docs/sysml/07-isolation.sysml",
-            "line": 87
+            "line": 89
           }
         },
         {
@@ -14935,7 +14935,7 @@
           "doc": "Unix: uid, gid, supplementary groups, POSIX capability sets, no-new-privs. They sit on top of the handle system rather than beside it.\n\nsrc/kernel/src/syscall/credentials.rs: Linux's four user ids and four group ids and the supplementary groups on every Process, copied by fork, kept by execve with the saved and filesystem ids made the effective ones, and changed by the set*id calls under kernel/sys.c's rules. They are enforced: the VFS checks file permissions against the filesystem ids, and the calls only root may make, and those that reach another user's processes, refuse anyone else. A set-user-id program runs as its file's owner unless PR_SET_NO_NEW_PRIVS forbade it.",
           "source": {
             "file": "docs/sysml/07-isolation.sysml",
-            "line": 92
+            "line": 94
           },
           "children": [
             {
@@ -14945,7 +14945,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 107
+                "line": 109
               }
             },
             {
@@ -14955,7 +14955,7 @@
               "type": "Natural",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 108
+                "line": 110
               }
             },
             {
@@ -14966,7 +14966,7 @@
               "multiplicity": "0..*",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 109
+                "line": 111
               }
             },
             {
@@ -14978,7 +14978,7 @@
               "doc": "No capability sets are kept: an effective uid of 0 stands for every capability, capget reports every set empty for any other, and capset refuses a process whose real or saved uid is 0 and whose effective uid is not.",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 110
+                "line": 112
               }
             },
             {
@@ -14988,7 +14988,7 @@
               "type": "Boolean",
               "source": {
                 "file": "docs/sysml/07-isolation.sysml",
-                "line": 116
+                "line": 118
               }
             }
           ]

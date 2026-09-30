@@ -833,7 +833,8 @@ next, on branch `steam-userns`. Each landing's diff goes to the consultant
 before `land.sh take`. **N2 landed (2026-09-30)**: binds, `MS_REC`,
 `MNT_DETACH` of a subtree, the propagation no-ops, the kernel-wide ids,
 cache and rename lock, and a superblock per filesystem so that a plain
-remount reaches every bind of it (the note below); N3 is next.
+remount reaches every bind of it (the note below). N3 is built and
+waiting for its review (below); N4 is next.
 
 **For N2 (interim reviewer, N1's review, 2026-09-29):** once binds exist,
 a plain `MS_REMOUNT` read-only must reach the whole filesystem -- every
@@ -871,3 +872,65 @@ namespace. For the landings after it:
   them on a bind" is met only for `ro` through `open`: N5's check, where a
   bind is the boundary, shows a bind of a `nosuid`, `nodev`, `noexec` and
   read-only mount inheriting and enforcing each.
+
+**N3 built (2026-09-30, os-98), for the consultant's review before it
+lands.** A process's fs context names its mount namespace;
+`unshare(CLONE_NEWNS)` and `clone(CLONE_NEWNS)` copy it for a privileged
+caller (`EPERM` otherwise, `EINVAL` with `CLONE_FS` or a shared context),
+every mount new and charged, the caller's root and working directory
+moved to the copies. A mount records its namespace's table, and a walk
+crosses a mount point in that table, so a kept descriptor stays in its
+own tree. `pivot_root` is Linux's, checks and order, with its parent
+pointers written new root first so the parents stay acyclic, then
+`chroot_fs_refs` over the registry; `umount2` acts on the mount on top of
+the place it names, which is what takes the old root after
+`pivot_root(".", ".")`. A namespace ends with the last context naming it,
+its mounts disconnected. `/proc/<pid>/ns/mnt` reads `mnt:[N]`,
+`/proc/sys/fs/mount-max` is 4096 (`ENOSPC` past it), `/proc/<pid>/mounts`
+and `mountinfo` are the process's namespace's, and a native child starts
+in its creator's namespace, root and working directory (§2.5).
+
+Evidence: the `mntns` boot line (FX-0887, `fs/namespace_check.rs`) on all
+three architectures -- privacy both ways, bubblewrap's calls as root to the
+last `pivot_root(".", ".")`, the native child, and the write-out owed
+above: a file written into the stage 12 btrfs through the old root just
+before its detach, read back by a second read-only mount of the disk. The
+`kmem` line's mount-namespace fill (F-37, §5). Eleven host tests of the
+VFS (eight of namespaces, three of `openat2`'s resolve flags), and the
+`vfs_ops` fuzzer's copy, `chroot` and `pivot_root` operations. `cargo xtask
+test-bwrap` runs Debian's bubblewrap 0.12 as root on a fresh btrfs root:
+the requirements check's four argument lists and a container shaped like
+pressure-vessel's. Five negative controls, each stopping the boot with its
+own message: the native child in the first namespace's root, the detach's
+write-out narrowed to the target, `pivot_root` not moving the caller's
+root, `RESOLVE_IN_ROOT` not rooting the walk, a copy's mounts uncharged.
+
+What the design did not foresee, and what N3 did about it:
+
+* **`openat2`.** bubblewrap from 0.12 opens every place it binds from and
+  onto with `openat2(RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS)` (its fix for
+  GHSA-pxhw-h44j-8pfx), and Debian builds it with no fallback, so it made no
+  sandbox at all. N3 answers `openat2` with all of Linux's resolve flags
+  and `struct open_how`'s size rules, in the `mntns` line and host tests.
+* **procfs's fixed names are remembered**, so that bubblewrap as root can
+  bind `/proc/sys` and `/proc/sysrq-trigger` onto themselves and remount
+  them read-only (§1.4): a walk crosses only a mount on a dentry it finds
+  again. `/proc/sys/kernel/overflowuid` and `overflowgid` read 65534.
+* **`pivot_root` refuses a root mount with no parent**, as Linux refuses
+  it on an initramfs, so bubblewrap needs `/` on a disk: `test-bwrap`
+  boots a fresh btrfs root. `test-steam-bootstrap` still boots `/` in
+  memory, so its requirements check would fail at `pivot_root` there; it
+  was not run for N3 (an hour on the internet), and N6, which runs it as
+  uid 1000, gives it a disk root.
+* **Deferred to N4:** the first namespace's root recorded as a `Location`
+  (§2.1). Only U6, "a chrooted process may not make a user namespace",
+  reads it, and U6 is N4's; `mountinfo` prints from the reader's root, as
+  it did.
+* **A mount point counts in every namespace**: a directory a mount of any
+  namespace covers is `EBUSY` to `rmdir`, `unlink` and `rename`, as on
+  Linux before 3.18, where since then only the caller's namespace counts.
+  Stricter, and simpler to argue.
+* `sync` writes out the caller's namespace's filesystems and the first's,
+  once each, where Linux writes out every superblock: a filesystem mounted
+  in a third namespace alone is written by that namespace's own `sync` or
+  unmount.

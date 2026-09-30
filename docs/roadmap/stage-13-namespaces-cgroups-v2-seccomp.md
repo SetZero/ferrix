@@ -159,8 +159,19 @@ table lock. A mount point reached through another bind can be neither
 removed nor renamed (`EBUSY`), and `MNT_DETACH` writes out every
 filesystem of the subtree first. The `binds` boot line (FX-0886), seven
 host tests and the
-`vfs_ops` fuzzer's bind, detach and remount operations prove it. Next is
-N3, mount namespaces.
+`vfs_ops` fuzzer's bind, detach and remount operations prove it.
+
+**N3, mount namespaces (2026-09-30):** `unshare` and `clone` with
+`CLONE_NEWNS` copy the caller's namespace, every mount new and charged to
+its job; a walk crosses a mount point in the table of the mount it is on;
+`pivot_root` is Linux's, with `chroot_fs_refs`; a native child starts in its
+creator's namespace; `/proc/<pid>/ns/mnt` and `/proc/sys/fs/mount-max`
+exist. bubblewrap 0.12 needs `openat2` with `RESOLVE_IN_ROOT`, so N3
+answers it, every resolve flag. The `mntns` boot line (FX-0887) proves it
+on all three architectures, with five negative controls, and `cargo xtask
+test-bwrap` runs Debian's bubblewrap as root: Steam's requirements check's
+four argument lists and a pressure-vessel-shaped container. Next is N4,
+user namespaces.
 
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,

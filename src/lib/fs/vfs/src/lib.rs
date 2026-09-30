@@ -92,12 +92,13 @@ pub use dentry::Dentry;
 pub use ferrix_linux_abi::errno::Errno;
 pub use file::{OpenFile, OpenFlags, Whence};
 pub use namespace::{
-    Context, DEFAULT_CACHE, Location, Mount, MountFlags, Namespace, RenameMode, Stat,
+    Context, DEFAULT_CACHE, Location, MOUNT_MAX, Mount, MountFlags, Namespace, RenameMode, Stat,
 };
 pub use node::{
     Clock, DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Readiness,
     SetAttributes, StatFs, Timespec, WakeSource,
 };
+pub use walk::Resolve;
 
 /// The result every operation here returns: a value, or the error number a
 /// program would be given.

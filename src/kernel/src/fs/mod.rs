@@ -47,6 +47,7 @@ pub(crate) mod kmem_check;
 pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
 pub(crate) mod mount_check;
+pub(crate) mod namespace_check;
 mod pages;
 pub(crate) mod partitions;
 pub(crate) mod pidfd;
@@ -88,8 +89,10 @@ use crate::syscall::program::ProgramFile;
 use crate::syscall::time;
 use crate::vmap;
 
-/// The namespace every process resolves paths in.
-static NAMESPACE: Once<Namespace> = Once::new();
+/// The first mount namespace: the kernel's own, and every process's until
+/// an `unshare` or `clone` with `CLONE_NEWNS` gives it a copy
+/// (`docs/NAMESPACES.md` §2.1).
+static NAMESPACE: Once<Arc<Namespace>> = Once::new();
 
 /// `/`'s commit before the machine stops: the root disk's last half-minute,
 /// which its committer has not reached yet.
@@ -137,9 +140,39 @@ static NEXT_ANONYMOUS: AtomicU32 = AtomicU32::new(1);
 /// Nanoseconds in a second.
 const NANOS: u64 = 1_000_000_000;
 
-/// The namespace, built empty on first use if [`init`] has not run yet.
+/// The first namespace, built empty on first use if [`init`] has not run
+/// yet: the one the kernel's own walks, `root_disk`, `devmgr` and the boot
+/// checks use. A walk may go through it whatever namespace its context is
+/// in, since crossing a mount point looks in the mount's own table; a change
+/// to the tree goes through [`namespace_of`].
 pub(crate) fn namespace() -> &'static Namespace {
-    NAMESPACE.call_once(|| Namespace::new(kernel_tmpfs(), Arc::new(crate::sync::SchedParker)))
+    first_namespace()
+}
+
+/// The first namespace, shared.
+pub(crate) fn first_namespace() -> &'static Arc<Namespace> {
+    NAMESPACE.call_once(|| {
+        Arc::new(Namespace::new(
+            kernel_tmpfs(),
+            Arc::new(crate::sync::SchedParker),
+        ))
+    })
+}
+
+/// The mount namespace `ctx` names: the one its mounts, unmounts and
+/// `pivot_root` act on, and whose mounts `/proc/<pid>/mounts` lists.
+pub(crate) fn namespace_of(ctx: &Context) -> Arc<Namespace> {
+    ctx.ns
+        .clone()
+        .unwrap_or_else(|| Arc::clone(first_namespace()))
+}
+
+/// Whether `ctx` is in `ns`.
+pub(crate) fn is_in(ctx: &Context, ns: &Namespace) -> bool {
+    match &ctx.ns {
+        Some(own) => core::ptr::eq(Arc::as_ptr(own), ns),
+        None => core::ptr::eq(Arc::as_ptr(first_namespace()), ns),
+    }
 }
 
 /// The initramfs as the loader handed it over, kept for the root disk to

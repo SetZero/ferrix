@@ -4,10 +4,10 @@
  * docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials.
  * Stage 13, designed in from the start so that no global table has to be
  * found later. The credentials exist since stage 7, and cgroup v2 since
- * 2026-09-23 (docs/CGROUPS.md), over the job tree. Of the namespaces, the
- * mount table's groundwork is in (docs/NAMESPACES.md, N1 and N2) and the
- * namespaces themselves are not, so unshare and setns still answer as a
- * Linux built without namespaces does. Seccomp is not built.
+ * 2026-09-23 (docs/CGROUPS.md), over the job tree. Of the namespaces,
+ * mount namespaces are in (docs/NAMESPACES.md, N1 to N3): unshare and clone
+ * copy one, and bubblewrap runs as root. The other kinds still answer as a
+ * Linux built without them does, and setns refuses. Seccomp is not built.
  */
 package FerrixIsolation {
     private import ScalarValues::*;
@@ -37,8 +37,10 @@ package FerrixIsolation {
              * N1 to N6). N1 (2026-09-28): every mount's own flags enforced,
              * MS_REMOUNT, and mountinfo. N2 (2026-09-30): binds of
              * directories, files and sockets, MS_REC, MNT_DETACH of a
-             * subtree, and a superblock per filesystem. N3, mount namespaces
-             * themselves, is next. */
+             * subtree, and a superblock per filesystem. N3 (2026-09-30):
+             * mount namespaces, copied by unshare and clone, pivot_root, a
+             * native child kept in its creator's, and openat2's resolve
+             * flags. N4, user namespaces, is next. */
         part every : Namespace[8..*];
         action unshare;
         action setns;

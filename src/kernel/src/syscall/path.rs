@@ -45,7 +45,8 @@ use ferrix_linux_abi::types::{
 use ferrix_vfs::access::{Access, MAY_EXEC};
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{
-    Context, FileType, Location, NewNode, OpenFile, RenameMode, SetAttributes, Stat, Timespec,
+    Context, FileType, Location, Namespace, NewNode, OpenFile, RenameMode, SetAttributes, Stat,
+    Timespec,
 };
 
 use crate::fs;
@@ -170,6 +171,12 @@ fn word(value: u64) -> u32 {
 // ---------------------------------------------------------------------------
 // Names, and where they start
 // ---------------------------------------------------------------------------
+
+/// The mount namespace the process is in: the one its `mount`, `umount2` and
+/// `pivot_root` change.
+pub(crate) fn mount_namespace(process: &Process) -> Arc<Namespace> {
+    fs::namespace_of(&process.fs_context().lock())
+}
 
 /// The process's root and working directory, copied out of their lock, and
 /// the identity its permission checks are made as: its filesystem ids.

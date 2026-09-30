@@ -12,7 +12,7 @@
 //! is asked, which is a true answer rather than a pretence. On btrfs each
 //! commits: `fsync` writes the file back and commits the transaction,
 //! `syncfs` the filesystem the descriptor is on, and `sync` every mount in
-//! the namespace. What they check is what Linux checks -- a descriptor that
+//! the caller's namespace and the first. What they check is what Linux checks -- a descriptor that
 //! names nothing is `EBADF`, and an object with no storage to sync, a pipe
 //! or a terminal, is `EINVAL`.
 //!
@@ -88,6 +88,16 @@
 //! (`docs/NAMESPACES.md` §1.5). `umount2` with `MNT_DETACH` takes the mounts
 //! inside the target with it; without, they make it `EBUSY`.
 //!
+//! # Namespaces
+//!
+//! Each change acts on the caller's mount namespace, and a place on a mount
+//! of another is `EINVAL`, as Linux's `check_mnt` has it. `pivot_root` swaps
+//! the caller's root mount for another and mounts the old one where it is
+//! asked, then moves every process of the namespace that was at the old root
+//! to the new one. `umount2` acts on the mount on top of the place it names,
+//! so that `umount2(".", MNT_DETACH)` after `pivot_root(".", ".")` takes
+//! the old root stacked there (`docs/NAMESPACES.md` §2.1).
+//!
 //! # No extended attributes
 //!
 //! tmpfs keeps none. So every file answers that it has none: `getxattr` is
@@ -108,7 +118,7 @@ use ferrix_linux_abi::types::{
 };
 use ferrix_vfs::access::{MAY_EXEC, MAY_WRITE};
 use ferrix_vfs::statfs::StatfsLayout;
-use ferrix_vfs::{FileSystem, FileType, Location, MountFlags};
+use ferrix_vfs::{FileSystem, FileType, Location, MountFlags, Namespace};
 
 use crate::fs;
 use crate::fs::devfs::Devfs;
@@ -116,7 +126,7 @@ use crate::fs::procfs::Procfs;
 use crate::syscall::credentials;
 use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
-use crate::syscall::{fd, pipe, uaccess};
+use crate::syscall::{fd, pipe, registry, uaccess};
 use crate::trap::Abi;
 
 /// The propagation changes, one of which a `mount` call names alone.
@@ -181,7 +191,7 @@ pub(crate) fn dispatch(
         Syscall::Fstatfs => sys_fstatfs(process, fd, a[1]),
         Syscall::Statfs64 => sys_statfs64(process, a[0], a[1], a[2]),
         Syscall::Fstatfs64 => sys_fstatfs64(process, fd, a[1], a[2]),
-        Syscall::Sync => sys_sync(),
+        Syscall::Sync => sys_sync(process),
         Syscall::Syncfs => sys_syncfs(process, fd),
         Syscall::Fsync => sys_fsync(process, fd, false),
         Syscall::Fdatasync => sys_fsync(process, fd, true),
@@ -202,10 +212,7 @@ pub(crate) fn dispatch(
         Syscall::Chroot => sys_chroot(process, a[0]),
         Syscall::Mount => sys_mount(process, a[0], a[1], a[2], super::linux::truncate(a[3])),
         Syscall::Umount2 => sys_umount2(process, a[0], super::linux::truncate(a[1])),
-        // `pivot_root` moves the root mount aside and puts another in its
-        // place. The namespace's root is fixed at its creation and has no
-        // parent to move under, which is the case Linux answers `EINVAL` for.
-        Syscall::PivotRoot => Err(Errno::EINVAL),
+        Syscall::PivotRoot => sys_pivot_root(process, a[0], a[1]),
         Syscall::Getxattr | Syscall::Listxattr | Syscall::Setxattr | Syscall::Removexattr => {
             xattr_at(process, a[0], 0, call)
         }
@@ -321,11 +328,26 @@ fn sys_syncfs(process: &Process, fd: i32) -> Result<usize, Errno> {
     Ok(0)
 }
 
-/// `sync`: write out every filesystem in the namespace, and answer nothing,
-/// as Linux does — `sync(2)` has no error to give.
-fn sys_sync() -> Result<usize, Errno> {
-    for mount in fs::namespace().mounts() {
-        let _ = mount.filesystem().sync();
+/// `sync`: write out every filesystem in the caller's namespace and the
+/// first, and answer nothing, as Linux does — `sync(2)` has no error to give.
+/// Linux writes out every filesystem of the kernel; the two namespaces hold
+/// every one a process can have written to but one mounted only in a third,
+/// which that namespace's own `sync` or unmount writes.
+fn sys_sync(process: &Process) -> Result<usize, Errno> {
+    let own = path::mount_namespace(process);
+    let first = fs::first_namespace();
+    let mut mounts = own.mounts();
+    if !Arc::ptr_eq(&own, first) {
+        mounts.extend(first.mounts());
+    }
+    for (index, mount) in mounts.iter().enumerate() {
+        if mounts
+            .iter()
+            .take(index)
+            .all(|earlier| !earlier.shares_filesystem(mount))
+        {
+            let _ = mount.filesystem().sync();
+        }
     }
     Ok(0)
 }
@@ -542,6 +564,9 @@ pub(crate) fn sys_mount(
     // mount. Each ignores the flags that name the ones after it.
     // `may_mount`: `CAP_SYS_ADMIN`, asked before any flag is judged.
     credentials::require_privilege(process)?;
+    // The caller's own namespace: a mount of another is `EINVAL` to each
+    // of its changes, Linux's `check_mnt`.
+    let mounts = path::mount_namespace(process);
     let remount = flags & MS_REMOUNT != 0;
     let bind = !remount && flags & MS_BIND != 0;
     let propagation = !remount && !bind && flags & PROPAGATION_FLAGS != 0;
@@ -556,7 +581,7 @@ pub(crate) fn sys_mount(
         }
     }
     if remount {
-        return remount_at(&place, flags);
+        return remount_at(&mounts, &place, flags);
     }
     if bind {
         // `do_loopback`: no source, or an empty one, is `EINVAL`.
@@ -566,20 +591,20 @@ pub(crate) fn sys_mount(
         let from = path::target(process, AT_FDCWD, source, 0)?
             .location()
             .clone();
-        let _ = fs::namespace().bind(&from, &place, flags & MS_REC != 0)?;
+        let _ = mounts.bind(&from, &place, flags & MS_REC != 0)?;
         return Ok(0);
     }
     if propagation {
         // Nothing is ever shared, so nothing changes; Linux's
         // `do_change_type` still wants a mount's root in this tree.
-        if !place.is_mount_root() || !fs::namespace().owns(&place.mount) {
+        if !place.is_mount_root() || !mounts.owns(&place.mount) {
             return Err(Errno::EINVAL);
         }
         return Ok(0);
     }
     let read_only = flags & MS_RDONLY != 0;
     let filesystem = filesystem_named(process, &kind.ok_or(Errno::EINVAL)?, source, read_only)?;
-    let _ = fs::namespace().mount_with(filesystem, &place, mount_flags(flags))?;
+    let _ = mounts.mount_with(filesystem, &place, mount_flags(flags))?;
     Ok(0)
 }
 
@@ -592,8 +617,8 @@ pub(crate) fn sys_mount(
 /// `umount2` writes it: a write-out that fails leaves the mount as it was
 /// and answers the error, so nothing is lost silently. `EINVAL` for a place
 /// that is not a mount's root, before anything is written.
-fn remount_at(place: &Location, flags: u32) -> Result<usize, Errno> {
-    if !place.is_mount_root() {
+fn remount_at(mounts: &Namespace, place: &Location, flags: u32) -> Result<usize, Errno> {
+    if !place.is_mount_root() || !mounts.owns(&place.mount) {
         return Err(Errno::EINVAL);
     }
     let mut wanted = mount_flags(flags);
@@ -608,9 +633,9 @@ fn remount_at(place: &Location, flags: u32) -> Result<usize, Errno> {
         place.mount.filesystem().sync()?;
     }
     if flags & MS_BIND != 0 {
-        fs::namespace().remount(place, wanted)?;
+        mounts.remount(place, wanted)?;
     } else {
-        fs::namespace().remount_filesystem(place, wanted)?;
+        mounts.remount_filesystem(place, wanted)?;
     }
     Ok(0)
 }
@@ -643,16 +668,21 @@ pub(crate) fn sys_umount2(process: &Process, target: u64, flags: u32) -> Result<
     } else {
         0
     };
-    let place = path::target(process, AT_FDCWD, target, follow)?
+    let mounts = path::mount_namespace(process);
+    // The mount on top of the place named: what `.` names after
+    // `pivot_root(".", ".")` stacked the old root on the new one, which a
+    // walk of `.` does not cross (Linux's `LOOKUP_MOUNTPOINT`).
+    let named = path::target(process, AT_FDCWD, target, follow)?
         .location()
         .clone();
+    let place = mounts.descend_mounts(named);
     let detach = flags & MNT_DETACH != 0;
     // With `MNT_DETACH` every filesystem mounted inside goes too, so each is
     // written out, once however many binds of it there are; a mount made
     // inside after this and before the unmount is not, as a write after
     // the one sync is not.
     let going = if detach {
-        fs::namespace().subtree(&place)?
+        mounts.subtree(&place)?
     } else {
         alloc::vec![Arc::clone(&place.mount)]
     };
@@ -668,8 +698,66 @@ pub(crate) fn sys_umount2(process: &Process, target: u64, flags: u32) -> Result<
             return Err(error);
         }
     }
-    fs::namespace().unmount_with(&place, detach)?;
+    mounts.unmount_with(&place, detach)?;
     Ok(0)
+}
+
+/// `pivot_root(new_root, put_old)`: the mount whose root `new_root` is
+/// becomes the caller's `/`, the old root is mounted on `put_old`, and every
+/// process of the namespace whose root or working directory was the old root
+/// is moved to the new one (Linux's `chroot_fs_refs`), all in the caller's
+/// namespace (`docs/NAMESPACES.md` §2.1). The checks are Linux's, in its
+/// order; see [`Namespace::pivot_root`].
+///
+/// # Errors
+///
+/// `EPERM` without privilege, before either path is looked up, as
+/// `may_mount` is asked first; then the walks' own, and the pivot's.
+fn sys_pivot_root(process: &Process, new_root: u64, put_old: u64) -> Result<usize, Errno> {
+    credentials::require_privilege(process)?;
+    let new_root = path::target(process, AT_FDCWD, new_root, 0)?
+        .location()
+        .clone();
+    let put_old = path::target(process, AT_FDCWD, put_old, 0)?
+        .location()
+        .clone();
+    let ctx = path::context(process);
+    let mounts = fs::namespace_of(&ctx);
+    mounts.pivot_root(&ctx.root, &new_root, &put_old)?;
+    chroot_fs_refs(&mounts, &ctx.root, &new_root)?;
+    Ok(0)
+}
+
+/// Move every process of `mounts` whose root or working directory is `old` to
+/// `new`: `pivot_root`'s last step. Each fs context is locked alone, after
+/// the namespace's locks are released (`docs/NAMESPACES.md` §6), and what it
+/// held is dropped after its lock. A context shared through `CLONE_FS` is met
+/// once per process and changed the first time.
+///
+/// # Errors
+///
+/// `ENOMEM` when there is no memory to list the processes: the pivot has
+/// happened, as Linux's has when its own walk of the tasks cannot be undone.
+fn chroot_fs_refs(mounts: &Namespace, old: &Location, new: &Location) -> Result<(), Errno> {
+    for other in registry::live()? {
+        let displaced = {
+            let mut context = other.fs_context().lock();
+            if !fs::is_in(&context, mounts) {
+                continue;
+            }
+            let root = context
+                .root
+                .same(old)
+                .then(|| core::mem::replace(&mut context.root, new.clone()));
+            let cwd = context
+                .cwd
+                .same(old)
+                .then(|| core::mem::replace(&mut context.cwd, new.clone()));
+            (root, cwd)
+        };
+        drop(displaced);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

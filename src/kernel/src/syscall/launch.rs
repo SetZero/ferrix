@@ -96,21 +96,30 @@ fn process_give(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno>
 /// A native process with `image` loaded, named `name`, made and not started,
 /// running as `creator` runs, or as root with none ([`native::LoadNative`]).
 ///
+/// "As `creator` runs" is its ids and its fs context: its mount namespace,
+/// its root and its working directory (`docs/NAMESPACES.md` §2.5). A child
+/// started in the first namespace's root instead would be an escape from a
+/// namespace, or a `chroot`, in one call. A process with no creator -- one
+/// the kernel starts, as `devmgr` is -- starts in the first namespace's
+/// root, as root.
+///
 /// A creator of another personality's has no ids to give, and is refused
 /// rather than given root's.
-fn load_native(
+pub(crate) fn load_native(
     creator: Option<&dyn Host>,
     image: &[u8],
     name: &[u8],
 ) -> Result<Arc<dyn Host>, Errno> {
-    let credentials = match creator {
-        Some(creator) => process::of_host(creator)
-            .ok_or(status::BAD_STATE)?
-            .with_credentials(|held| held.clone()),
-        None => Credentials::root(),
+    let (credentials, context) = match creator {
+        Some(creator) => {
+            let creator = process::of_host(creator).ok_or(status::BAD_STATE)?;
+            let context = creator.fs_context().lock().clone();
+            (creator.with_credentials(|held| held.clone()), Some(context))
+        }
+        None => (Credentials::root(), None),
     };
     let process: Arc<dyn Host> =
-        exec::load_native(image, name, credentials).map_err(load_status)?;
+        exec::load_native(image, name, credentials, context).map_err(load_status)?;
     Ok(process)
 }
 

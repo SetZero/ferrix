@@ -196,12 +196,27 @@ pub(super) fn meminfo(_: &Kernel) -> Result<Vec<u8>> {
 /// which the kernel enforces (`ferrix_vfs::MountFlags`), and `ro` for a
 /// filesystem that takes no writes whatever the mount says.
 pub(super) fn mounts(_: &Kernel) -> Result<Vec<u8>> {
-    let ns = fs::namespace();
-    let root = process::current().map_or_else(
-        || ns.root(),
-        |caller| caller.fs_context().lock().root.clone(),
-    );
-    mounts_from(ns, &root)
+    match process::current() {
+        Some(caller) => process_mounts(&caller),
+        None => {
+            let ns = fs::namespace();
+            mounts_from(ns, &ns.root())
+        }
+    }
+}
+
+/// `/proc/<pid>/ns/mnt`'s text, `mnt:[N]`: the number of the mount namespace
+/// the process is in, which two processes share exactly when they are in
+/// the same one, as Linux's nsfs inode number is compared.
+pub(super) fn mount_namespace(process: &Process) -> Result<Vec<u8>> {
+    let id = fs::namespace_of(&process.fs_context().lock()).id();
+    Ok(alloc::format!("mnt:[{id}]").into_bytes())
+}
+
+/// The mount namespace `process` is in, and its root.
+fn namespace_and_root(process: &Process) -> (Arc<Namespace>, Location) {
+    let context = process.fs_context().lock();
+    (fs::namespace_of(&context), context.root.clone())
 }
 
 /// `/proc/<pid>/mounts`: [`mounts`], with each mount point as that process's
@@ -209,9 +224,8 @@ pub(super) fn mounts(_: &Kernel) -> Result<Vec<u8>> {
 /// `/proc/self/mounts` more often than `/proc/mounts`, which on Linux is a
 /// link to it; btop reads nothing else when there is no `/etc/mtab`.
 pub(super) fn process_mounts(process: &Process) -> Result<Vec<u8>> {
-    let ns = fs::namespace();
-    let root = process.fs_context().lock().root.clone();
-    mounts_from(ns, &root)
+    let (ns, root) = namespace_and_root(process);
+    mounts_from(&ns, &root)
 }
 
 /// The mount table, with each mount point as `root` sees it.
@@ -256,8 +270,7 @@ fn shown_flags(mount: &ferrix_vfs::Mount) -> MountFlags {
 /// `seq_path_root` leaves it out; the namespace's root mount, above a root
 /// that `/` was switched to, is one.
 pub(super) fn mountinfo(process: &Process) -> Result<Vec<u8>> {
-    let ns = fs::namespace();
-    let root = process.fs_context().lock().root.clone();
+    let (ns, root) = namespace_and_root(process);
     let mut all = ns.mounts();
     all.sort_unstable_by_key(|mount| mount.id());
     let mut out = Vec::new();
@@ -554,6 +567,23 @@ pub(super) fn set_oom_score_adj(process: &Process, data: &[u8]) -> Result<usize>
     Ok(data.len())
 }
 
+/// The id a namespace shows for one it has no mapping of: Linux's
+/// `DEFAULT_OVERFLOWUID` and `DEFAULT_OVERFLOWGID`, nobody and nogroup.
+const OVERFLOW_ID: u64 = 65534;
+
+/// `kernel/overflowuid`: the uid shown for one that cannot be shown, which
+/// bubblewrap reads before it makes a sandbox and cannot run without
+/// (`docs/NAMESPACES.md` §1.2). Read-only here: nothing in the kernel shows
+/// another.
+pub(super) fn overflowuid(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(number(OVERFLOW_ID))
+}
+
+/// `kernel/overflowgid`: [`overflowuid`]'s group.
+pub(super) fn overflowgid(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(number(OVERFLOW_ID))
+}
+
 /// `kernel/pid_max`: one past the highest pid the registry hands out.
 pub(super) fn pid_max(_: &Kernel) -> Result<Vec<u8>> {
     Ok(number(u64::from(PID_MAX)))
@@ -593,6 +623,14 @@ pub(super) fn nr_open(_: &Kernel) -> Result<Vec<u8>> {
 /// systemd writes into it to mean unlimited.
 pub(super) fn file_max(_: &Kernel) -> Result<Vec<u8>> {
     Ok(number(isize::MAX.unsigned_abs() as u64))
+}
+
+/// `/proc/sys/fs/mount-max`: the most mounts one namespace holds, its root
+/// included, past which a mount, a bind or a copy is `ENOSPC`
+/// (`ferrix_vfs::MOUNT_MAX`, Linux's default). Read-only here: a limit to
+/// print, not one to raise.
+pub(super) fn mount_max(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(number(ferrix_vfs::MOUNT_MAX as u64))
 }
 
 // -- A process ----------------------------------------------------------------

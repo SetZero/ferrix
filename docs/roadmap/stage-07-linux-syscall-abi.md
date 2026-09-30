@@ -320,7 +320,8 @@ destination below 64 KiB is `EPERM`, as from `mmap`, but only after the
 overlap (`EINVAL`) and unmapped-source (`EFAULT`) refusals Linux reaches
 first. `execveat`
 shares `execve`'s path, `AT_EMPTY_PATH` included. `unshare` answers what a
-process without namespaces can honestly answer, and `setns` refuses. A program
+process without namespaces can honestly answer, and `setns` refuses (mount
+namespaces came with stage 13, `docs/NAMESPACES.md` N3). A program
 is recorded as the absolute path of the file actually loaded, symlinks
 resolved and a script's interpreter rather than the script, which is what
 glibc's static start-up reads back through `/proc/self/exe`; `AT_EXECFN` is the

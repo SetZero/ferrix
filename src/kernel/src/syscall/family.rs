@@ -45,7 +45,7 @@ use crate::fs::cgroupfs;
 use crate::object::job::{self, Job};
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::{self, Thread};
-use crate::syscall::{fd, registry, thread_area, uaccess};
+use crate::syscall::{credentials, fd, namespace, registry, thread_area, uaccess};
 use crate::trap::Abi;
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
@@ -396,6 +396,23 @@ fn give_thread_pointer(state: &mut arch::UserState, tls: u64, thread_area: Optio
     }
 }
 
+/// Whether the namespaces `flags` asks for can be given: `EINVAL` for one
+/// Ferrix does not have and for `CLONE_NEWNS` with `CLONE_FS`, as Linux
+/// refuses a namespace a shared fs context would leave; `EPERM` for
+/// `CLONE_NEWNS` without privilege.
+fn namespaces_asked(parent: &Process, flags: u64) -> Result<(), Errno> {
+    if flags & (CLONE_NAMESPACES & !CLONE_NEWNS) != 0 {
+        return Err(Errno::EINVAL);
+    }
+    if flags & CLONE_NEWNS != 0 {
+        if flags & CLONE_FS != 0 {
+            return Err(Errno::EINVAL);
+        }
+        credentials::require_privilege(parent)?;
+    }
+    Ok(())
+}
+
 /// Make the process `request` asks for. See [`sys_clone`].
 fn clone_with(
     parent: &Arc<Process>,
@@ -415,10 +432,10 @@ fn clone_with(
     // flag would answer a sandbox's request for isolation with a child that
     // has none and no way to tell, which is worse than refusing; `EINVAL` is
     // what a kernel built without the namespace answers, and what `unshare`
-    // here has always answered for the same flags.
-    if flags & CLONE_NAMESPACES != 0 {
-        return Err(Errno::EINVAL);
-    }
+    // here answers for the same flags. A mount namespace exists: a copy of
+    // the parent's, for a child that shares no fs context with it (Linux's
+    // `EINVAL` for `CLONE_NEWNS | CLONE_FS`), made with privilege.
+    namespaces_asked(parent, flags)?;
     // Linux's own refusals: a thread shares its process's handlers, and
     // handlers shared without the memory they are in would run nothing.
     if flags & CLONE_THREAD != 0 && flags & CLONE_SIGHAND == 0 {
@@ -458,6 +475,11 @@ fn clone_with(
     // `EAGAIN` for both. The child charged nothing, and goes unstarted.
     if pid == 0 || child.over_quota() {
         return Err(Errno::EAGAIN);
+    }
+    // Its own copy of the namespace, before anything can see it: a refusal
+    // goes with the child, unstarted.
+    if flags & CLONE_NEWNS != 0 {
+        namespace::copy_namespace(child.fs_context())?;
     }
     child.set_exit_signal((flags & CSIGNAL) as u32);
     // What glibc's `posix_spawn` asks for, so that its child need not reset

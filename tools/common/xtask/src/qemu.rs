@@ -144,6 +144,12 @@ pub(crate) fn test_boot_lines(
                     watched.log.display()
                 )));
             }
+            if let Some(problem) = namespace_problem(&watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             if let Some(problem) = fault_problem(arch, &watched.lines) {
                 return Err(Error::new(format!(
                     "{arch}: {problem}.\n  Serial output is in {}",
@@ -310,6 +316,38 @@ const NO_STAGE_2: &str = "left alone: it has no AArch64 stage 2";
 /// What stage 10's PCI check prints when the host bridges came from the device
 /// tree rather than ACPI's MCFG.
 const DEVICE_TREE_HOSTS: &str = " device-tree hosts";
+
+/// What the stage 12 check prints when it wrote the third disk.
+const STAGE12_WROTE: &str = "btrfs-rw vdc written";
+
+/// What the mount namespace line ends with when it saw the detach's
+/// write-out reach that disk.
+const MNTNS_COMMITTED: &str = "on the disk after the detach";
+
+/// Why a boot whose stage 12 check wrote the third disk did not show the
+/// mount namespace check's write-out reaching it, if it did not.
+///
+/// The `mntns` line (FX-0887) passes on a machine with no third disk and
+/// says so; on one with it, the write-out of a btrfs inside a detached
+/// subtree is the evidence the N2 review asked N3 for
+/// (`docs/NAMESPACES.md` §12), and it must not go missing quietly.
+fn namespace_problem(lines: &[String]) -> Option<String> {
+    if !lines.iter().any(|line| line.contains(STAGE12_WROTE)) {
+        return None;
+    }
+    match lines.iter().find(|line| line.contains("  mntns   ")) {
+        None => Some(
+            "the stage 12 disk was written, and the kernel never reported on mount namespaces"
+                .to_owned(),
+        ),
+        Some(line) if line.contains(MNTNS_COMMITTED) => None,
+        Some(line) => Some(format!(
+            "the stage 12 disk was written, and the mount namespace check did not show a \
+             detached subtree's write-out reach it: `{}`",
+            line.trim()
+        )),
+    }
+}
 
 /// What stage 10's devmgr line ends with.
 const DEVMGR_FAILED: &str = " failed";
@@ -2279,7 +2317,9 @@ fn attach_install_disks(command: &mut Command, arch: Arch, image: &Path, args: &
 /// each time so the boot depends on nothing an earlier one left, for
 /// `test-init`, whose pid 1 the switch moves onto it (`docs/INIT.md` §7.3),
 /// `test-clipboard`, whose driver starts before that switch and whose agent
-/// after it, and `test-chrome-window` and `test-restart` under `--btrfs-root`.
+/// after it, `test-bwrap`, whose `pivot_root` wants a `/` with a mount under
+/// it as a disk root has, and `test-chrome-window` and `test-restart` under
+/// `--btrfs-root`.
 fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()> {
     // A test's root is made fresh for it, so its boot still depends on
     // nothing an earlier one left.
@@ -2290,7 +2330,7 @@ fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()
         ))
         || matches!(
             args.command.as_deref(),
-            Some("test-init" | "test-clipboard")
+            Some("test-init" | "test-clipboard" | "test-bwrap")
         );
     if !test && !matches!(args.command.as_deref(), Some("run" | "run-compositor")) {
         return Ok(());
@@ -2608,7 +2648,7 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 mod tests {
     use super::{
         Arch, SUCCESS_MARKER, UNCHECKED_MARKER, devmgr_problem, entropy_problem, fault_problem,
-        iommu_problem, parse_qemu_version,
+        iommu_problem, namespace_problem, parse_qemu_version,
     };
 
     /// What QEMU prints, from the two versions CI and this host have.
@@ -2642,6 +2682,29 @@ mod tests {
         assert_eq!(devmgr_problem(&absent), None, "an image without devmgr");
         let silent = lines(&["FERRIX-BOOT-OK stages 1-12"]);
         assert!(devmgr_problem(&silent).is_some(), "no line at all");
+    }
+
+    #[test]
+    fn a_boot_that_wrote_the_stage_12_disk_must_show_the_detach_reach_it() {
+        let wrote = "  btrfs-rw vdc written and remounted: 8 files";
+        let seen = "  mntns    55 calls ...; a btrfs write inside a detached subtree on the disk \
+                    after the detach";
+        let unseen = "  mntns    55 calls ...; no stage 12 disk for the detach's write-out";
+        assert_eq!(namespace_problem(&lines(&[wrote, seen])), None);
+        assert!(
+            namespace_problem(&lines(&[wrote, unseen])).is_some(),
+            "the quiet variant"
+        );
+        assert!(
+            namespace_problem(&lines(&[wrote])).is_some(),
+            "no line at all"
+        );
+        let no_disk = "  btrfs-rw not checked: no third disk is served";
+        assert_eq!(
+            namespace_problem(&lines(&[no_disk, unseen])),
+            None,
+            "no third disk"
+        );
     }
 
     #[test]

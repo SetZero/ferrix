@@ -30,8 +30,11 @@
 //!   binds the same directory is reached through more than one mount, so a
 //!   directory counts as reached twice only through the same mount.
 //! * **Every mount's parents end** (`docs/NAMESPACES.md` §10): binds,
-//!   recursive binds, remounts and `MNT_DETACH` of a subtree never leave a
-//!   mount that is its own ancestor.
+//!   recursive binds, remounts, `MNT_DETACH` of a subtree, copies of the
+//!   namespace and `pivot_root` never leave a mount that is its own
+//!   ancestor. A copy replaces the namespace the sequence goes on in, and the
+//!   one it was copied from ends there; a `chroot` gives `pivot_root` a root
+//!   with a parent to swap.
 //!
 //! Paths are built from a tiny alphabet — three names, `.`, `..`, and a link
 //! — so that operations collide with each other constantly rather than
@@ -46,8 +49,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use ferrix_vfs::dirent::{DirentWriter, records};
 use ferrix_vfs::tmpfs::{HeapStorage, Tmpfs};
 use ferrix_vfs::{
-    Clock, Context, FileSystem, FileType, MountFlags, Namespace, OpenFlags, RenameMode,
-    Timespec, Whence,
+    Clock, Context, FileSystem, FileType, MountFlags, Namespace, OpenFlags, RenameMode, Timespec,
+    Whence,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -146,9 +149,22 @@ fn listing_agrees(ns: &Namespace, ctx: &Context, dir: &[u8]) {
         if name == b".." {
             let mut up = dir.to_vec();
             up.extend_from_slice(b"/..");
-            let parent = ns.resolve(ctx, None, &up, true).expect("a listed directory has ..");
+            let parent = ns
+                .resolve(ctx, None, &up, true)
+                .expect("a listed directory has ..");
+            // At a `chroot`'s root, `..` walks nowhere while the listing
+            // names the directory's real parent, as Linux's does.
+            if ns
+                .resolve(ctx, None, dir, true)
+                .is_ok_and(|here| here.same(&ctx.root))
+            {
+                continue;
+            }
             let stat = ns.stat(&parent).expect("a directory's parent stats");
-            assert_eq!(stat.metadata.ino, ino, "a listing's .. is not where .. walks to");
+            assert_eq!(
+                stat.metadata.ino, ino,
+                "a listing's .. is not where .. walks to"
+            );
             continue;
         }
         if name == b"." {
@@ -199,7 +215,9 @@ fn tree_is_a_tree(ns: &Namespace, ctx: &Context) {
     let mut seen = HashSet::new();
     let mut pending = vec![b"/".to_vec()];
     while let Some(path) = pending.pop() {
-        let at = ns.resolve(ctx, None, &path, false).expect("a listed name resolves");
+        let at = ns
+            .resolve(ctx, None, &path, false)
+            .expect("a listed name resolves");
         assert_eq!(
             ns.path_of(&at, &ctx.root),
             path,
@@ -221,7 +239,9 @@ fn tree_is_a_tree(ns: &Namespace, ctx: &Context) {
             "a directory is inside itself: reached again at {}",
             String::from_utf8_lossy(&path)
         );
-        let file = ns.open(ctx, None, &path, &flags, 0).expect("a directory opens");
+        let file = ns
+            .open(ctx, None, &path, &flags, 0)
+            .expect("a directory opens");
         file.read_dir(&mut |entry| {
             if entry.name != b"." && entry.name != b".." {
                 let mut child = path.clone();
@@ -238,8 +258,12 @@ fn tree_is_a_tree(ns: &Namespace, ctx: &Context) {
 }
 
 fuzz_target!(|data: &[u8]| {
-    let ns = Namespace::with_cache(tmpfs(1), 16, Arc::new(ferrix_sync::SpinParker));
-    let ctx = ns.context();
+    let mut ns = Arc::new(Namespace::with_cache(
+        tmpfs(1),
+        16,
+        Arc::new(ferrix_sync::SpinParker),
+    ));
+    let mut ctx = ns.context();
     let _ = ns.mkdir(&ctx, None, b"/mnt", 0o755);
     let mut input = Input { rest: data };
     let mut devices = 2_u64;
@@ -251,7 +275,7 @@ fuzz_target!(|data: &[u8]| {
         let Some(path) = input.path() else {
             break;
         };
-        match op % 15 {
+        match op % 18 {
             0 => {
                 let _ = ns.mkdir(&ctx, None, &path, 0o755);
             }
@@ -344,6 +368,36 @@ fuzz_target!(|data: &[u8]| {
                     } else {
                         ns.remount_filesystem(&at, flags)
                     };
+                }
+            }
+            15 => {
+                let (mut root, mut cwd) = (ctx.root.clone(), ctx.cwd.clone());
+                if let Ok(copy) = ns.copy(&mut [&mut root, &mut cwd]) {
+                    ns = Arc::new(copy);
+                    ctx.root = root;
+                    ctx.cwd = cwd;
+                    ctx.ns = Some(Arc::clone(&ns));
+                }
+            }
+            16 => {
+                if let Ok(at) = ns.resolve(&ctx, None, &path, true)
+                    && ns
+                        .stat(&at)
+                        .is_ok_and(|stat| stat.metadata.kind == FileType::Directory)
+                {
+                    ctx.root = at.clone();
+                    ctx.cwd = at;
+                }
+            }
+            17 => {
+                let Some(other) = input.path() else { break };
+                if let Ok(new) = ns.resolve(&ctx, None, &path, true)
+                    && let Ok(old) = ns.resolve(&ctx, None, &other, true)
+                    && ns.pivot_root(&ctx.root, &new, &old).is_ok()
+                {
+                    // What `chroot_fs_refs` does for the one context there is.
+                    ctx.root = new.clone();
+                    ctx.cwd = new;
                 }
             }
             _ => listing_agrees(&ns, &ctx, &path),

@@ -16,7 +16,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_vfs::{Errno, OpenFile, OpenFlags};
+use ferrix_vfs::{Errno, Namespace, OpenFile, OpenFlags};
 use ferrix_vma::VmaFlags;
 
 use crate::fs;
@@ -60,7 +60,14 @@ pub(crate) struct Report {
     pub(crate) locks: usize,
     /// System V semaphore sets of one semaphore each.
     pub(crate) sets: usize,
+    /// Mount namespaces, each a copy of one holding [`TREE`] mounts, as
+    /// `unshare(CLONE_NEWNS)` copies them (`docs/NAMESPACES.md` §5).
+    pub(crate) namespaces: usize,
 }
+
+/// How many mounts the namespace the mount namespaces are copied from
+/// holds, its root included.
+pub(crate) const TREE: usize = 64;
 
 /// Run every kind.
 ///
@@ -89,6 +96,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         report.sets = kind(&tree, "semaphore sets", |_| {
             crate::syscall::sem_check::private_set(1, 0o600)
         })?;
+        report.namespaces = namespaces(&tree)?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))
@@ -234,6 +242,40 @@ fn files(tree: &Arc<Job>) -> Result<usize, &'static str> {
             }
         },
     )?;
+    Ok(made)
+}
+
+/// Mount namespaces, each a copy of one of [`TREE`] mounts: the namespace
+/// and every mount copied are charged to the job asking, and a copy refused
+/// part way gives back what it had made.
+fn namespaces(tree: &Arc<Job>) -> Result<usize, &'static str> {
+    let source = Namespace::new(fs::kernel_tmpfs(), Arc::new(crate::sync::SchedParker));
+    let ctx = source.context();
+    for at in 1..TREE {
+        let name = format!("/m{at}");
+        let place = source
+            .mkdir(&ctx, None, name.as_bytes(), 0o755)
+            .and_then(|()| source.resolve(&ctx, None, name.as_bytes(), true))
+            .map_err(|_| "kmem: no place for a mount to copy")?;
+        let filesystem = fs::new_tmpfs().map_err(|_| "kmem: no tmpfs to mount")?;
+        let _ = source
+            .mount(filesystem, &place)
+            .map_err(|_| "kmem: a mount to copy was refused")?;
+    }
+    if source.mounts().len() != TREE {
+        return Err("kmem: the namespace to copy does not hold its mounts");
+    }
+    let made = kind(tree, "mount namespaces", |_| source.copy(&mut []))?;
+    // Every mount a copy makes is charged, not only the namespace: at least
+    // a small object's worth each, or the limit held more copies than it
+    // could pay for.
+    const LEAST_A_MOUNT_COSTS: u64 = 64;
+    let charged = (made as u64)
+        .saturating_mul(TREE as u64)
+        .saturating_mul(LEAST_A_MOUNT_COSTS);
+    if charged > LIMIT {
+        return Err("kmem: a mount namespace's copied mounts were not charged to its job");
+    }
     Ok(made)
 }
 

@@ -123,6 +123,7 @@ pub(crate) fn process_context() -> Context {
             root: root.clone(),
             cwd: root.clone(),
             who: Access::root(),
+            ns: None,
         },
         None => fs::namespace().context(),
     }
@@ -201,6 +202,7 @@ fn switch_to(rdev: u64) -> Result<Installed, &'static str> {
         root: root.clone(),
         cwd: root.clone(),
         who: Access::root(),
+        ns: None,
     };
 
     let installed = install(&inside)?;
