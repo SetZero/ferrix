@@ -833,8 +833,10 @@ next, on branch `steam-userns`. Each landing's diff goes to the consultant
 before `land.sh take`. **N2 landed (2026-09-30)**: binds, `MS_REC`,
 `MNT_DETACH` of a subtree, the propagation no-ops, the kernel-wide ids,
 cache and rename lock, and a superblock per filesystem so that a plain
-remount reaches every bind of it (the note below). N3 is built and
-waiting for its review (below); N4 is next.
+remount reaches every bind of it (the note below). **N3 landed
+(2026-09-30, 1384e6e6)**: a mount namespace per process, `pivot_root`,
+`openat2`, and bubblewrap as root (below), reviewed with conditions for N4
+and N5; N4 is next.
 
 **For N2 (interim reviewer, N1's review, 2026-09-29):** once binds exist,
 a plain `MS_REMOUNT` read-only must reach the whole filesystem -- every
@@ -934,3 +936,46 @@ What the design did not foresee, and what N3 did about it:
   once each, where Linux writes out every superblock: a filesystem mounted
   in a third namespace alone is written by that namespace's own `sync` or
   unmount.
+
+**N3's review (certification consultant, 2026-09-30): OK**, on 992fc6e6,
+with one change made before landing: `test-boot` fails a boot whose stage
+12 check wrote `vdc` if its `mntns` line is missing or lacks "on the disk
+after the detach", so the write-out's evidence cannot drop out unnoticed
+(`namespace_problem` in `tools/common/xtask/src/qemu.rs`). The landed
+1384e6e6 differs from what was reviewed by that and by refactors that do
+not change behaviour. The item is touched only by a check and data:
+`check_namespaces`'s two calls in `main.rs`, its line in
+`stages_check.rs`, and FX-0887 in `panic/catalog.rs`; no `unsafe` added;
+the boundary gate reads no upward reference. What N2's review asked of N3
+is met: the write-out is read back by a fresh read-only btrfs mount of
+the disk, which sees only what was committed; the native child is in its
+creator's tree; `Namespace::copy` makes every mount and map entry under the
+change lock and moves the map in under the spin lock (§6). `openat2`
+answers Linux's size and flag rules, and the procfs names and overflow ids
+are accepted as built. For the landings after it:
+
+* **N4.** A write through a read-only bind of `/proc/sys`, as bubblewrap
+  as root makes one, is refused `EROFS`, by a check with a negative
+  control: bubblewrap's read-only `/proc/sys` is what keeps a container's
+  root from the host's sysctls, and today only `test-bwrap` runs it,
+  without looking. The first namespace's root recorded as a `Location`
+  lands with U6, which reads it.
+* **Before N5.** A namespace's end writes out each filesystem whose last
+  mount it drops, as a final unmount does on Linux. `Namespace`'s `Drop`
+  disconnects its mounts and writes nothing, and btrfs commits on its own
+  only `/` and `/data`, so a disk mounted inside a namespace alone loses
+  what it wrote since its last commit when the namespace ends (F-53's
+  class, as N2's B2 was). Not reachable today: only root mounts a disk, and
+  every path that does -- bubblewrap's binds, the stage 12 disk -- shares
+  its superblock with the first namespace, which `sync` and the periodic
+  commit reach. The check: `vdc` mounted inside a namespace alone, written,
+  the namespace ended, and a read-only mount reading it back. It also
+  closes the gap `sync` leaves above.
+* **N5.** "A mount point counts in every namespace" is stricter for the
+  namespace holding the mount and looser for everyone else. Once uid 1000
+  can mount a `tmpfs` in its own namespace, it can pin any directory it can
+  see against its owner's `rmdir` and `rename`, and the `EBUSY` tells the
+  owner a mount is there -- why Linux changed this in 3.18. N5 either takes
+  Linux's rule, removing a name detaching the other namespaces' mounts on
+  it, or confines an unprivileged mount point to where pinning it harms no
+  one else, with a check either way.
