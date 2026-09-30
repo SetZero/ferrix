@@ -968,14 +968,25 @@ the disk, which sees only what was committed; the native child is in its
 creator's tree; `Namespace::copy` makes every mount and map entry under the
 change lock and moves the map in under the spin lock (§6). `openat2`
 answers Linux's size and flag rules, and the procfs names and overflow ids
-are accepted as built. For the landings after it:
+are accepted as built. The bottom mount (5f640790) was reviewed on
+33489ca6 and landed with the same patch: OK. The bottom is an empty,
+read-only filesystem no path reaches; `Namespace::root` descends from it
+to the top, as Linux's `current_chrooted` does, so the kernel's walks and
+new processes start where they did; `umount2("/")` is `EBUSY`, stricter
+than Linux's remount or lazy detach, and init remounts explicitly (F-53);
+`/proc/mounts` hides what the reader's root cannot reach, as `mountinfo`
+does. No item file was touched, and `test-init --arch all`, which runs the
+root switch and F-53's shutdown remount, passed. For the landings after
+it:
 
 * **N4.** A write through a read-only bind of `/proc/sys`, as bubblewrap
   as root makes one, is refused `EROFS`, by a check with a negative
   control: bubblewrap's read-only `/proc/sys` is what keeps a container's
   root from the host's sysctls, and today only `test-bwrap` runs it,
   without looking. The first namespace's root recorded as a `Location`
-  lands with U6, which reads it.
+  lands with U6, which reads it, and U6 compares a process's root with
+  `Namespace::root`, the top, not the bottom mount, or every process reads
+  as chrooted.
 * **Before N5.** A namespace's end writes out each filesystem whose last
   mount it drops, as a final unmount does on Linux. `Namespace`'s `Drop`
   disconnects its mounts and writes nothing, and btrfs commits on its own
