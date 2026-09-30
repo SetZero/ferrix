@@ -8,17 +8,22 @@
 //! device. The driver times the device alone -- from handing it a request to
 //! draining its completion -- in each completion's `device_ticks`, where the
 //! processor's counter is one ring 3 can read and the kernel's clock counts
-//! (`arch::vdso_can_read_counter`). The difference is the seam: everything
+//! (`arch::ring3_reads_counter`). The difference is the seam: everything
 //! between the kernel and the device that a driver in ring 0 would not pay.
 //!
 //! It prints one line, and asserts nothing about the numbers: they are a
 //! measurement, and a slow host is not a failure. What it does require is
 //! that every read answers, and answers the bytes `xtask` wrote.
+//!
+//! The depth-1 reads are traced as well (`sched::trip`), after one untimed
+//! read that names the ring's ports to the trace, and [`super::trip_check`]
+//! prints where their time went on two more lines.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use super::trip_check::Trace;
 use crate::fs::block::BlockDevice;
 use crate::sync::SpinLock;
 use crate::{arch, sched, timer};
@@ -66,7 +71,7 @@ pub(crate) fn run(disk: &Arc<dyn BlockDevice>) -> Result<(), &'static str> {
     if sectors < (SECTORS as u64) * 2 {
         return Ok(());
     }
-    let one = depth_one(disk.as_ref(), sectors)?;
+    let (one, trace) = depth_one(disk.as_ref(), sectors)?;
     let deep = depth_many(disk, sectors)?;
     crate::console::println!(
         "  seam     a 4 KiB read through the ring: depth 1 mean {} p50 {} p99 {} us, {}; \
@@ -80,7 +85,7 @@ pub(crate) fn run(disk: &Arc<dyn BlockDevice>) -> Result<(), &'static str> {
         micros(deep.p99),
         device_part(&deep),
     );
-    Ok(())
+    trace.print(READS)
 }
 
 /// What the device took, and the rest, which is the seam's.
@@ -107,13 +112,19 @@ fn sector_of(index: usize, sectors: u64) -> u64 {
     (index as u64).wrapping_mul(STRIDE) % pages.max(1) * SECTORS as u64
 }
 
-/// Time one read of `sector`, in nanoseconds, requiring it to answer.
-fn timed_read(disk: &dyn BlockDevice, sector: u64) -> Result<u64, &'static str> {
+/// Time one read of `sector`, in nanoseconds, requiring it to answer, with
+/// its trip when it was traced whole, or else the stamp it did not reach.
+fn timed_read(
+    disk: &dyn BlockDevice,
+    sector: u64,
+) -> Result<(u64, Result<sched::trip::Trip, usize>), &'static str> {
     let mut page = [0_u8; SECTORS * SECTOR_SIZE];
     let started = timer::now_nanos();
+    sched::trip::issued();
     disk.read(sector, &mut page)
         .map_err(|_| "a timed read through the ring failed")?;
-    Ok(timer::now_nanos().saturating_sub(started))
+    let trip = sched::trip::done();
+    Ok((timer::now_nanos().saturating_sub(started), trip))
 }
 
 /// The device's ticks and timed completions so far.
@@ -130,7 +141,7 @@ fn device_mean(before: (u64, u64), after: (u64, u64)) -> Option<u64> {
     let ticks = after.0.saturating_sub(before.0);
     let timed = after.1.saturating_sub(before.1);
     let hz = timer::counter_hz();
-    if timed == 0 || hz == 0 || !arch::vdso_can_read_counter() {
+    if timed == 0 || hz == 0 || !arch::ring3_reads_counter() {
         return None;
     }
     let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(hz) / u128::from(timed);
@@ -151,17 +162,38 @@ fn summary(mut samples: Vec<u64>, device: Option<u64>) -> Run {
     }
 }
 
-/// [`READS`] reads, one at a time.
-fn depth_one(disk: &dyn BlockDevice, sectors: u64) -> Result<Run, &'static str> {
+/// [`READS`] reads, one at a time, traced.
+fn depth_one(disk: &dyn BlockDevice, sectors: u64) -> Result<(Run, Trace), &'static str> {
     let mut samples = Vec::new();
     samples
         .try_reserve_exact(READS)
         .map_err(|_| "no memory for the seam's samples")?;
+    let mut trace = Trace::new(READS)?;
+    sched::trip::arm();
+    let device = traced_reads(disk, sectors, &mut samples, &mut trace);
+    sched::trip::disarm();
+    Ok((summary(samples, device?), trace))
+}
+
+/// The depth-1 reads, after an untimed one that names the ring's ports to
+/// the trace: the driver's mean device time over them.
+fn traced_reads(
+    disk: &dyn BlockDevice,
+    sectors: u64,
+    samples: &mut Vec<u64>,
+    trace: &mut Trace,
+) -> Result<Option<u64>, &'static str> {
+    let _ = timed_read(disk, sector_of(0, sectors))?;
+    trace.start();
     let before = device_now();
     for index in 0..READS {
-        samples.push(timed_read(disk, sector_of(index, sectors))?);
+        let (nanos, trip) = timed_read(disk, sector_of(index, sectors))?;
+        samples.push(nanos);
+        trace.add(trip);
     }
-    Ok(summary(samples, device_mean(before, device_now())))
+    let device = device_mean(before, device_now());
+    trace.stop();
+    Ok(device)
 }
 
 /// The disk the deeper run's readers share.
@@ -221,7 +253,7 @@ fn reader_task(reader: usize) {
     if let Some(disk) = disk {
         for index in (reader..READS).step_by(DEPTH) {
             match timed_read(disk.as_ref(), sector_of(index, sectors)) {
-                Ok(nanos) => {
+                Ok((nanos, _)) => {
                     let mut samples = SAMPLES.lock();
                     if samples.len() < samples.capacity() {
                         samples.push(nanos);

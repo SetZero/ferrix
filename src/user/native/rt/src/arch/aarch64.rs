@@ -149,11 +149,24 @@ pub(crate) fn device_barrier() {
     unsafe { asm!("dsb sy", options(nostack, preserves_flags)) }
 }
 
-/// The processor's free-running counter, when ring 3 may read it: not yet
-/// here. Whether EL0 may read the virtual counter is the kernel's to set, and
-/// until it does a read would fault, so there is none.
+/// The processor's free-running counter: the virtual counter, `CNTVCT_EL0`,
+/// the one the kernel's clock counts. The kernel lets EL0 read it on every
+/// processor (`CNTKCTL_EL1.EL0VCTEN`, which Linux sets for its vDSO too).
+/// No `isb` before it, unlike the kernel's read: the read may be taken a few
+/// instructions early, which does not matter to a driver timing a device in
+/// tens of microseconds, and the file's assembly budget is spent.
 pub(crate) fn counter() -> Option<u64> {
-    None
+    let count: u64;
+    // SAFETY: a read of a system register the kernel lets EL0 read; no
+    // memory or other register changes.
+    unsafe {
+        asm!(
+            "mrs {}, cntvct_el0",
+            out(reg) count,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    Some(count)
 }
 
 /// `exit_group(status)`.

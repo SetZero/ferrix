@@ -2192,6 +2192,7 @@ fn port_queue(process: &Process, port: Handle, packet: u64) -> Result<usize, Err
     let key = read_u64(process, packet)?;
     let first = read_u64(process, packet.checked_add(16).ok_or(status::FAULT)?)?;
     let second = read_u64(process, packet.checked_add(24).ok_or(status::FAULT)?)?;
+    crate::sched::trip::port_rung(port.waiters());
     port.queue_user(key, [first, second])
         .map_err(|_| status::SHOULD_WAIT)?;
     Ok(0)
@@ -2226,6 +2227,7 @@ fn port_wait(
         // Another waiter on the same port may have taken the packet that
         // woke this one; that is a spurious wake-up, not a timeout.
         if let Some(packet) = port.take() {
+            crate::sched::trip::port_taken(port.waiters(), packet.kind == types::PACKET_INTERRUPT);
             break packet;
         }
         if crate::timer::now_nanos() >= deadline {

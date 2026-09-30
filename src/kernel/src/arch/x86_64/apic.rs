@@ -395,6 +395,7 @@ fn send(apic_id: u32, command: u32) -> Result<(), &'static str> {
 /// Write an interrupt command, with its destination if it has one, and wait
 /// for the local APIC to accept it.
 fn issue(destination: Option<u32>, command: u32) -> Result<(), &'static str> {
+    crate::sched::trip::count(crate::sched::trip::Count::Ipi);
     let regs = lapic();
 
     // Masked, because a command can be two writes: an interrupt handler that

@@ -1558,6 +1558,13 @@ pub(crate) fn counter_hz() -> u64 {
     clock::counter_hz()
 }
 
+/// Whether a program can read the counter [`counter_now`] reads: when it is
+/// the TSC, which `rdtsc` reads in ring 3, and not the HPET. What a driver's
+/// own timings, in its counter's ticks, need to mean something here.
+pub(crate) fn ring3_reads_counter() -> bool {
+    clock::counter_is_tsc()
+}
+
 /// Fire the timer interrupt once, `nanos` from now.
 pub(crate) fn timer_arm(nanos: u64) {
     apic::arm(nanos);

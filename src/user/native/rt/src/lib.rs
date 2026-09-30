@@ -84,9 +84,9 @@ pub fn exit(status: i32) -> ! {
 }
 
 /// The processor's free-running counter, when a program may read it: the
-/// TSC on x86-64, and `None` on the Arm architectures until the kernel lets
-/// ring 3 read the virtual counter. For a driver timing its own device, as
-/// the block driver does for the seam's measurement.
+/// TSC on x86-64, the virtual counter on AArch64, and `None` on ARMv7-A,
+/// where the kernel does not let user mode read it. For a driver timing its
+/// own device, as the block driver does for the seam's measurement.
 #[must_use]
 pub fn counter() -> Option<u64> {
     arch::counter()

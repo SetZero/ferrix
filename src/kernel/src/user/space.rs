@@ -359,6 +359,7 @@ impl AddressSpace {
         // on it and the kernel is reachable through it on the architecture
         // that needs that; the caller guarantees it outlives the installation.
         unsafe { arch::install_user_root(self.root * PAGE_SIZE) };
+        crate::sched::trip::count(crate::sched::trip::Count::RootInstall);
         if let Some(previous) = replacing
             && !core::ptr::eq(previous, self)
         {
@@ -381,6 +382,7 @@ impl AddressSpace {
         // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted, and the kernel
         // is reachable without one on every architecture.
         unsafe { arch::uninstall_user_root() };
+        crate::sched::trip::count(crate::sched::trip::Count::RootUninstall);
         self.cpus.leave(cpu);
     }
 }

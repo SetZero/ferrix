@@ -128,6 +128,7 @@ impl Line {
     /// interrupt-safe locks only, and the wakes after those are released: see
     /// the module documentation.
     fn fire(&self) {
+        crate::sched::trip::count(crate::sched::trip::Count::DeviceInterrupt);
         let port = {
             let binding = self.binding.lock();
             if self.pending.swap(true, Ordering::AcqRel) {
@@ -135,6 +136,7 @@ impl Line {
             }
             binding.as_ref().and_then(|bound| {
                 let port = bound.port.port()?;
+                crate::sched::trip::interrupt_queued(port.waiters());
                 let _ = port.queue_from_interrupt(bound.key, crate::timer::now_nanos());
                 Some(port)
             })
