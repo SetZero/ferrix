@@ -96,7 +96,7 @@ pub(crate) struct Report {
 }
 
 /// `path` with its NUL, staged on a fresh page.
-fn staged(page: &mut Page<'_>, path: &[u8]) -> Result<u64, &'static str> {
+pub(super) fn staged(page: &mut Page<'_>, path: &[u8]) -> Result<u64, &'static str> {
     page.reset();
     page.put(path)
 }
@@ -171,7 +171,7 @@ fn pivot_root(
 }
 
 /// `unshare(flags)`.
-fn unshare(process: &Process, flags: u64) -> Result<usize, Errno> {
+pub(super) fn unshare(process: &Process, flags: u64) -> Result<usize, Errno> {
     by_number(process, Syscall::Unshare, [flags, 0, 0, 0, 0, 0])
 }
 
@@ -203,7 +203,10 @@ fn write_file(
 
 /// The file at `path`, up to [`READ_ROOM`] bytes of it, or why it would not
 /// open.
-fn read_file(page: &mut Page<'_>, path: &[u8]) -> Result<Result<Vec<u8>, Errno>, &'static str> {
+pub(super) fn read_file(
+    page: &mut Page<'_>,
+    path: &[u8],
+) -> Result<Result<Vec<u8>, Errno>, &'static str> {
     page.reset();
     let fd = match open(page, path, O_RDONLY, 0)? {
         Ok(fd) => fd,
@@ -222,7 +225,7 @@ fn read_file(page: &mut Page<'_>, path: &[u8]) -> Result<Result<Vec<u8>, Errno>,
 }
 
 /// What the link at `path` reads.
-fn read_link(page: &mut Page<'_>, path: &[u8]) -> Result<Vec<u8>, &'static str> {
+pub(super) fn read_link(page: &mut Page<'_>, path: &[u8]) -> Result<Vec<u8>, &'static str> {
     let at = staged(page, path)?;
     let len = by_number(
         page.process,

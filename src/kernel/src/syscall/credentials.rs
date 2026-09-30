@@ -27,6 +27,7 @@
 //! with `setuid(0)` or `seteuid(0)`, because 0 is one of its own ids, and that
 //! is how every program that drops privilege for a while takes it back.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
@@ -35,6 +36,7 @@ use ferrix_linux_abi::nr::Syscall;
 use crate::syscall::attributes::{self, int, subject};
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
+use crate::syscall::userns::{self, CAP_SETGID, CAP_SETPCAP, CAP_SETUID, CapSets, UserNamespace};
 
 /// `(uid_t)-1` and `(gid_t)-1`: "unchanged" to the calls that take several,
 /// and not a valid id to the ones that take one.
@@ -152,6 +154,13 @@ pub(crate) struct Credentials {
     pub(crate) group: Ids,
     /// The supplementary groups, sorted, as `setgroups` leaves them on Linux.
     pub(crate) groups: Vec<u32>,
+    /// The user namespace the process is in. Every id above is a kernel id,
+    /// whatever namespace this is (`docs/NAMESPACES.md` §2.2).
+    pub(crate) user_ns: Arc<UserNamespace>,
+    /// The capability sets. Real in a child namespace; in the first, an
+    /// effective uid of 0 stands for every capability and the sets are kept
+    /// and reported, not enforced.
+    pub(crate) caps: CapSets,
 }
 
 /// Which ids a call is about.
@@ -171,13 +180,38 @@ impl Credentials {
             user: Ids::ROOT,
             group: Ids::ROOT,
             groups: Vec::from([0]),
+            user_ns: Arc::clone(userns::first()),
+            caps: CapSets::ROOT,
         }
     }
 
-    /// Whether it may take ids and groups it does not have. See the module
-    /// documentation.
+    /// Whether it may take ids and groups it does not have, and make the
+    /// calls only root may. See the module documentation.
+    ///
+    /// An effective uid of 0 *in the first user namespace*: a process in a
+    /// child namespace, whatever its ids say there, is never privileged in
+    /// the whole system's sense (rule U1 of `docs/NAMESPACES.md` §4).
     pub(crate) fn privileged(&self) -> bool {
-        self.user.effective == 0
+        self.user.effective == 0 && self.user_ns.is_first()
+    }
+
+    /// Whether `cap` is effective in the namespace the process is in: in the
+    /// first, an effective uid of 0; in a child, the bit, for the capabilities
+    /// a child namespace honours at all ([`userns::HONOURED`]).
+    pub(crate) fn holds(&self, cap: u32) -> bool {
+        if self.user_ns.is_first() {
+            self.user.effective == 0
+        } else {
+            self.caps.effective & userns::HONOURED & (1_u64 << cap) != 0
+        }
+    }
+
+    /// Whether the kernel id `euid` is the root of the process's namespace:
+    /// what makes `execve` give it the bounding set.
+    fn is_namespace_root(&self) -> bool {
+        self.user_ns
+            .name_of(userns::Kind::User, self.user.effective)
+            == Some(0)
     }
 
     /// What `execve` does to them, from `cap_bprm_creds_from_file`: a
@@ -187,6 +221,14 @@ impl Credentials {
     /// effective id a program starts with is not its real one: a set-id file,
     /// or a process that moved its own effective id before `execve`.
     pub(crate) fn exec(&mut self, set_uid: Option<u32>, set_gid: Option<u32>) -> bool {
+        // U7: in a child namespace a set-id bit gives nothing. Stricter than
+        // Linux, which honours an owner mapped in.
+        let in_child = !self.user_ns.is_first();
+        let (set_uid, set_gid) = if in_child {
+            (None, None)
+        } else {
+            (set_uid, set_gid)
+        };
         if let Some(uid) = set_uid {
             self.user.effective = uid;
         }
@@ -196,6 +238,9 @@ impl Credentials {
         for ids in [&mut self.user, &mut self.group] {
             ids.saved = ids.effective;
             ids.filesystem = ids.effective;
+        }
+        if in_child {
+            self.caps = self.caps.after_exec(self.is_namespace_root());
         }
         self.user.effective != self.user.real || self.group.effective != self.group.real
     }
@@ -218,6 +263,36 @@ impl Credentials {
         self.user.effective == self.user.real && self.group.effective == self.group.real
     }
 
+    /// The name this process's own namespace gives kernel id `kernel`, or
+    /// the overflow id: what a program is told.
+    fn shown(&self, kind: Kind, kernel: u32) -> u32 {
+        userns::from_kid_munged(&self.user_ns, kind.mapped(), kernel)
+    }
+
+    /// Linux's `cap_emulate_setxuid`, in a child namespace, where the sets
+    /// are real: a process that loses its namespace's root loses the
+    /// capabilities that came with it. `before` is the user ids as they were.
+    fn emulate_setxuid(&mut self, before: Ids) {
+        if self.user_ns.is_first() {
+            return;
+        }
+        let Some(root) = self.user_ns.make_kid(userns::Kind::User, 0) else {
+            return;
+        };
+        let had_root = [before.real, before.effective, before.saved].contains(&root);
+        let has_root = [self.user.real, self.user.effective, self.user.saved].contains(&root);
+        if had_root && !has_root {
+            self.caps.permitted = 0;
+            self.caps.effective = 0;
+        }
+        if before.effective == root && self.user.effective != root {
+            self.caps.effective = 0;
+        }
+        if before.effective != root && self.user.effective == root {
+            self.caps.effective = self.caps.permitted;
+        }
+    }
+
     /// The ids of `kind`.
     fn ids(&self, kind: Kind) -> Ids {
         match kind {
@@ -235,13 +310,83 @@ impl Credentials {
     }
 }
 
+impl Kind {
+    /// The map this kind of id is translated by.
+    fn mapped(self) -> userns::Kind {
+        match self {
+            Kind::User => userns::Kind::User,
+            Kind::Group => userns::Kind::Group,
+        }
+    }
+
+    /// The capability that lets a process take ids of this kind it does not
+    /// have.
+    fn capability(self) -> u32 {
+        match self {
+            Kind::User => CAP_SETUID,
+            Kind::Group => CAP_SETGID,
+        }
+    }
+}
+
+/// The kernel id a program's `id` names in `process`'s namespace: `EINVAL`
+/// for one the namespace does not map (rule U9), and `-1` ("unchanged")
+/// passed through.
+fn kernel_id(process: &Process, kind: Kind, id: u32) -> Result<u32, Errno> {
+    if id == UNCHANGED {
+        return Ok(id);
+    }
+    process.with_credentials(|credentials| {
+        if credentials.user_ns.is_first() {
+            Ok(id)
+        } else {
+            credentials
+                .user_ns
+                .make_kid(kind.mapped(), id)
+                .ok_or(Errno::EINVAL)
+        }
+    })
+}
+
+/// What the running process's namespace calls kernel user id `kernel`, or
+/// the overflow id: the one helper every place that *tells* a program an id
+/// goes through (`docs/NAMESPACES.md` §2.2). The kernel's own reads, with no
+/// running process, see the first namespace's names.
+pub(crate) fn show_uid(kernel: u32) -> u32 {
+    show(userns::Kind::User, kernel)
+}
+
+/// [`show_uid`] for a group id.
+pub(crate) fn show_gid(kernel: u32) -> u32 {
+    show(userns::Kind::Group, kernel)
+}
+
+fn show(kind: userns::Kind, kernel: u32) -> u32 {
+    match userns::acting() {
+        Some(reader) => {
+            reader.with_credentials(|held| userns::from_kid_munged(&held.user_ns, kind, kernel))
+        }
+        None => kernel,
+    }
+}
+
+/// The kernel user id a program's `id` names in `process`'s namespace, or
+/// `EINVAL` for one it does not map (rule U9). `-1` is passed through.
+pub(crate) fn kernel_uid(process: &Process, id: u32) -> Result<u32, Errno> {
+    kernel_id(process, Kind::User, id)
+}
+
+/// [`kernel_uid`] for a group id.
+pub(crate) fn kernel_gid(process: &Process, id: u32) -> Result<u32, Errno> {
+    kernel_id(process, Kind::Group, id)
+}
+
 /// Answer `call` if it is one of this module's.
 pub(crate) fn dispatch(
     call: Syscall,
     a: &[u64; 6],
     process: &Process,
 ) -> Option<Result<usize, Errno>> {
-    let id = |slot: usize| a.get(slot).map_or(0, |&value| value as u32);
     let kind = match call {
         Syscall::Setgid
         | Syscall::Setregid
@@ -250,24 +395,42 @@ pub(crate) fn dispatch(
         | Syscall::Getresgid => Kind::Group,
         _ => Kind::User,
     };
+    let raw = |slot: usize| a.get(slot).map_or(0, |&value| value as u32);
+    // The ids a `set*id` call names, as kernel ids; unmapped is `EINVAL`.
+    let id = |slot: usize| kernel_id(process, kind, raw(slot));
     let answer = match call {
-        Syscall::Setuid | Syscall::Setgid => change(process, kind, |ids, privileged| {
-            set_id(ids, id(0), privileged)
+        Syscall::Setuid | Syscall::Setgid => id(0).and_then(|new| {
+            change(process, kind, |ids, privileged| {
+                set_id(ids, new, privileged)
+            })
         }),
-        Syscall::Setreuid | Syscall::Setregid => change(process, kind, |ids, privileged| {
-            set_real_effective(ids, id(0), id(1), privileged)
+        Syscall::Setreuid | Syscall::Setregid => id(0).and_then(|real| {
+            id(1).and_then(|effective| {
+                change(process, kind, |ids, privileged| {
+                    set_real_effective(ids, real, effective, privileged)
+                })
+            })
         }),
-        Syscall::Setresuid | Syscall::Setresgid => change(process, kind, |ids, privileged| {
-            set_real_effective_saved(ids, [id(0), id(1), id(2)], privileged)
+        Syscall::Setresuid | Syscall::Setresgid => id(0).and_then(|real| {
+            id(1).and_then(|effective| {
+                id(2).and_then(|saved| {
+                    change(process, kind, |ids, privileged| {
+                        set_real_effective_saved(ids, [real, effective, saved], privileged)
+                    })
+                })
+            })
         }),
         // No error return: the previous id, whether or not it changed. A
         // refused change is found by calling again.
         Syscall::Setfsuid | Syscall::Setfsgid => {
-            Ok(set_filesystem_id(process, kind, id(0)) as usize)
+            // An id the namespace does not map changes nothing: the old one
+            // is the answer either way.
+            let asked = id(0).unwrap_or(UNCHANGED);
+            Ok(set_filesystem_id(process, kind, asked) as usize)
         }
         Syscall::Getresuid | Syscall::Getresgid => sys_getresid(process, kind, [a[0], a[1], a[2]]),
         Syscall::Getgroups => sys_getgroups(process, int(a[0]), a[1]),
-        Syscall::Setgroups => sys_setgroups(process, id(0), a[1]),
+        Syscall::Setgroups => sys_setgroups(process, raw(0), a[1]),
         Syscall::Capget => sys_capget(process, a[0], a[1]),
         Syscall::Capset => sys_capset(process, a[0], a[1]),
         _ => return None,
@@ -279,10 +442,12 @@ pub(crate) fn dispatch(
 /// any other call. The lock is taken only for one of the four.
 pub(crate) fn identity(call: Syscall, process: &Process) -> Option<u32> {
     let pick: fn(&Credentials) -> u32 = match call {
-        Syscall::Getuid => |credentials| credentials.user.real,
-        Syscall::Geteuid => |credentials| credentials.user.effective,
-        Syscall::Getgid => |credentials| credentials.group.real,
-        Syscall::Getegid => |credentials| credentials.group.effective,
+        Syscall::Getuid => |credentials| credentials.shown(Kind::User, credentials.user.real),
+        Syscall::Geteuid => |credentials| credentials.shown(Kind::User, credentials.user.effective),
+        Syscall::Getgid => |credentials| credentials.shown(Kind::Group, credentials.group.real),
+        Syscall::Getegid => {
+            |credentials| credentials.shown(Kind::Group, credentials.group.effective)
+        }
         _ => return None,
     };
     Some(process.with_credentials(|credentials| pick(credentials)))
@@ -301,8 +466,12 @@ fn change(
 ) -> Result<usize, Errno> {
     let (answer, changed) = process.with_credentials(|credentials| {
         let before = credentials.acting();
-        let privileged = credentials.privileged();
+        let user_before = credentials.user;
+        let privileged = credentials.holds(kind.capability());
         let answer = rule(credentials.ids_mut(kind), privileged);
+        if answer.is_ok() && kind == Kind::User {
+            credentials.emulate_setxuid(user_before);
+        }
         (answer, credentials.acting() != before)
     });
     if changed {
@@ -392,13 +561,14 @@ fn set_real_effective_saved(
 /// process's dumpability, as in [`change`].
 fn set_filesystem_id(process: &Process, kind: Kind, id: u32) -> u32 {
     let (old, changed) = process.with_credentials(|credentials| {
-        let privileged = credentials.privileged();
+        let privileged = credentials.holds(kind.capability());
         let ids = credentials.ids_mut(kind);
         let old = ids.filesystem;
         if id != UNCHANGED && (privileged || ids.is_own(id) || id == old) {
             ids.filesystem = id;
         }
-        (old, ids.filesystem != old)
+        let changed = ids.filesystem != old;
+        (credentials.shown(kind, old), changed)
     });
     if changed {
         attributes::credentials_changed(process);
@@ -410,8 +580,11 @@ fn set_filesystem_id(process: &Process, kind: Kind, id: u32) -> u32 {
 /// this kernel has (the 16-bit calls are not in its tables), written one after
 /// another as `kernel/sys.c` writes them.
 fn sys_getresid(process: &Process, kind: Kind, at: [u64; 3]) -> Result<usize, Errno> {
-    let ids = process.with_credentials(|credentials| credentials.ids(kind));
-    for (address, id) in at.into_iter().zip([ids.real, ids.effective, ids.saved]) {
+    let ids = process.with_credentials(|credentials| {
+        let ids = credentials.ids(kind);
+        [ids.real, ids.effective, ids.saved].map(|kernel| credentials.shown(kind, kernel))
+    });
+    for (address, id) in at.into_iter().zip(ids) {
         uaccess::put_u32(process.space(), address, id)?;
     }
     Ok(0)
@@ -424,7 +597,13 @@ fn sys_getresid(process: &Process, kind: Kind, at: [u64; 3]) -> Result<usize, Er
 /// answers. Each `gid_t` is 32 bits on all three architectures.
 pub(crate) fn sys_getgroups(process: &Process, size: i32, list: u64) -> Result<usize, Errno> {
     let size = usize::try_from(size).map_err(|_| Errno::EINVAL)?;
-    let groups = process.with_credentials(|credentials| credentials.groups.clone());
+    let groups: Vec<u32> = process.with_credentials(|credentials| {
+        credentials
+            .groups
+            .iter()
+            .map(|&group| credentials.shown(Kind::Group, group))
+            .collect()
+    });
     if size == 0 {
         return Ok(groups.len());
     }
@@ -445,13 +624,24 @@ pub(crate) fn sys_getgroups(process: &Process, size: i32, list: u64) -> Result<u
 /// `EINVAL` for more than [`NGROUPS_MAX`], then the list is read -- `EFAULT`
 /// for a bad pointer, `EINVAL` for a group of `-1` -- and stored sorted.
 fn sys_setgroups(process: &Process, size: u32, list: u64) -> Result<usize, Errno> {
-    if !process.with_credentials(|credentials| credentials.privileged()) {
+    // Linux's `may_setgroups`: `CAP_SETGID` in the namespace, and a
+    // namespace that has a `gid_map` and has not denied it (U4).
+    let allowed = process.with_credentials(|credentials| {
+        credentials.holds(CAP_SETGID)
+            && (credentials.user_ns.is_first()
+                || (credentials.user_ns.setgroups_allowed()
+                    && credentials.user_ns.mapped_any(userns::Kind::Group)))
+    });
+    if !allowed {
         return Err(Errno::EPERM);
     }
     if size > NGROUPS_MAX {
         return Err(Errno::EINVAL);
     }
     let mut groups = read_groups(process, size, list)?;
+    for group in &mut groups {
+        *group = kernel_id(process, Kind::Group, *group)?;
+    }
     groups.sort_unstable();
     process.with_credentials(|credentials| credentials.groups = groups);
     Ok(0)
@@ -527,20 +717,26 @@ pub(crate) fn sys_capget(process: &Process, header: u64, data: u64) -> Result<us
     if pid < 0 {
         return Err(Errno::EINVAL);
     }
-    let privileged =
-        subject(process, pid)?.with_credentials(|credentials| credentials.privileged());
-
-    let full = if privileged {
-        [u32::MAX, (1_u32 << (CAP_LAST_CAP - 31)) - 1]
-    } else {
-        [0, 0]
-    };
+    // In the first namespace the sets are reported, not enforced: root's
+    // are full and everyone else's empty. In a child they are the real ones.
+    let [effective, permitted, inheritable] = subject(process, pid)?.with_credentials(|held| {
+        if !held.user_ns.is_first() {
+            [
+                held.caps.effective,
+                held.caps.permitted,
+                held.caps.inheritable,
+            ]
+        } else if held.privileged() {
+            [userns::FULL, userns::FULL, 0]
+        } else {
+            [0, 0, 0]
+        }
+    });
     let mut bytes = [0_u8; CAP_DATA * 2];
     for (index, slot) in bytes.chunks_mut(CAP_DATA).enumerate() {
-        let word = full.get(index).copied().unwrap_or(0).to_le_bytes();
-        // effective, permitted, inheritable: the first two as above, the last empty.
-        for (byte, value) in slot.iter_mut().zip(word.iter().chain(word.iter())) {
-            *byte = *value;
+        let shift = 32 * index;
+        for (field, set) in slot.chunks_mut(4).zip([effective, permitted, inheritable]) {
+            field.copy_from_slice(&((set >> shift) as u32).to_le_bytes());
         }
     }
     let used = bytes.get(..CAP_DATA * count).ok_or(Errno::EINVAL)?;
@@ -568,6 +764,9 @@ pub(crate) fn sys_capset(process: &Process, header: u64, data: u64) -> Result<us
     let mut bytes = [0_u8; CAP_DATA * 2];
     let used = bytes.get_mut(..CAP_DATA * count).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), data, used).map_err(|_| Errno::EFAULT)?;
+    if !process.with_credentials(|credentials| credentials.user_ns.is_first()) {
+        return set_child_namespace_sets(process, &bytes, count);
+    }
     if !process.with_credentials(|credentials| credentials.privileged())
         && bytes.iter().any(|&byte| byte != 0)
     {
@@ -583,4 +782,40 @@ pub(crate) fn sys_capset(process: &Process, header: u64, data: u64) -> Result<us
         return Err(Errno::EPERM);
     }
     Ok(0)
+}
+
+/// `capset` in a child namespace, by Linux's `cap_capset`: the new permitted
+/// set within the old, the new effective set within the new permitted, and
+/// the new inheritable set within the old inheritable and the bounding set
+/// -- and, without `CAP_SETPCAP`, within the old inheritable and permitted
+/// ones. A version that carries only the low words leaves the high words
+/// empty, as Linux does.
+fn set_child_namespace_sets(process: &Process, bytes: &[u8], count: usize) -> Result<usize, Errno> {
+    let mut new = [0_u64; 3];
+    for (index, chunk) in bytes.chunks(CAP_DATA).take(count).enumerate() {
+        for (set, field) in new.iter_mut().zip(chunk.chunks(4)) {
+            if let [a, b, c, d] = *field {
+                *set |= u64::from(u32::from_le_bytes([a, b, c, d])) << (32 * index);
+            }
+        }
+    }
+    let [effective, permitted, inheritable] = new;
+    process.with_credentials(|held| {
+        let old = held.caps;
+        let inheritable_limit = if held.holds(CAP_SETPCAP) {
+            old.inheritable | old.bounding
+        } else {
+            (old.inheritable | old.permitted) & (old.inheritable | old.bounding)
+        };
+        if permitted & !old.permitted != 0
+            || effective & !permitted != 0
+            || inheritable & !inheritable_limit != 0
+        {
+            return Err(Errno::EPERM);
+        }
+        held.caps.effective = effective;
+        held.caps.permitted = permitted;
+        held.caps.inheritable = inheritable;
+        Ok(0)
+    })
 }

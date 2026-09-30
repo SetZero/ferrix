@@ -90,6 +90,7 @@ fn service() -> Credentials {
         user: ids,
         group: ids,
         groups: Vec::from([SERVICE]),
+        ..Credentials::root()
     }
 }
 

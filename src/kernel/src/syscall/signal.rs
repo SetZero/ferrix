@@ -56,6 +56,7 @@ use ferrix_linux_abi::types::{
 use crate::arch;
 use crate::fallible::{self, AllocError};
 use crate::signal_frame::StackRecord;
+use crate::syscall::credentials;
 use crate::syscall::deliver;
 use crate::syscall::process::Process;
 use crate::syscall::thread::Thread;
@@ -152,11 +153,16 @@ pub(crate) enum Origin {
     User {
         /// The sender.
         pid: u32,
+        /// Its real user id, as a kernel id: told to the receiver as its
+        /// namespace names it, or 65534 (`si_uid`).
+        uid: u32,
     },
     /// `tkill` or `tgkill` from the process with this pid.
     Thread {
         /// The sender.
         pid: u32,
+        /// Its real user id, as [`Origin::User`]'s.
+        uid: u32,
     },
     /// A child changed state.
     Child {
@@ -164,6 +170,8 @@ pub(crate) enum Origin {
         code: i32,
         /// The child.
         pid: u32,
+        /// Its real user id, as [`Origin::User`]'s.
+        uid: u32,
         /// Its exit code, or the signal that ended, stopped or continued it.
         status: i32,
     },
@@ -199,16 +207,24 @@ impl Origin {
         put_int(&mut info, 0, signal as i32);
         let code = match self {
             Origin::Kernel => SI_KERNEL,
-            Origin::User { pid } => {
+            Origin::User { pid, uid } => {
                 put_int(&mut info, union, pid as i32);
+                put_int(&mut info, union + 4, credentials::show_uid(uid) as i32);
                 SI_USER
             }
-            Origin::Thread { pid } => {
+            Origin::Thread { pid, uid } => {
                 put_int(&mut info, union, pid as i32);
+                put_int(&mut info, union + 4, credentials::show_uid(uid) as i32);
                 SI_TKILL
             }
-            Origin::Child { code, pid, status } => {
+            Origin::Child {
+                code,
+                pid,
+                uid,
+                status,
+            } => {
                 put_int(&mut info, union, pid as i32);
+                put_int(&mut info, union + 4, credentials::show_uid(uid) as i32);
                 put_int(&mut info, union + 8, status);
                 code
             }
@@ -226,23 +242,30 @@ impl Origin {
     /// (`include/uapi/linux/signalfd.h`). `ssi_signo`, `ssi_errno` and
     /// `ssi_code` at 0, 4 and 8; the sender's `ssi_pid` at 12 and `ssi_uid`
     /// at 16; a child's `ssi_status` at 40; a fault's `ssi_addr` at 72. The
-    /// sender's uid is zero, as in [`Origin::encode`]: an origin does not
-    /// record it.
+    /// sender's uid is the reader's namespace's name for it, or 65534.
     pub(crate) fn encode_signalfd(self, signal: u32) -> [u8; SIGINFO_BYTES] {
         let mut info = [0_u8; SIGINFO_BYTES];
         put_int(&mut info, 0, signal as i32);
         let code = match self {
             Origin::Kernel => SI_KERNEL,
-            Origin::User { pid } => {
+            Origin::User { pid, uid } => {
                 put_int(&mut info, 12, pid as i32);
+                put_int(&mut info, 16, credentials::show_uid(uid) as i32);
                 SI_USER
             }
-            Origin::Thread { pid } => {
+            Origin::Thread { pid, uid } => {
                 put_int(&mut info, 12, pid as i32);
+                put_int(&mut info, 16, credentials::show_uid(uid) as i32);
                 SI_TKILL
             }
-            Origin::Child { code, pid, status } => {
+            Origin::Child {
+                code,
+                pid,
+                uid,
+                status,
+            } => {
                 put_int(&mut info, 12, pid as i32);
+                put_int(&mut info, 16, credentials::show_uid(uid) as i32);
                 put_int(&mut info, 40, status);
                 code
             }

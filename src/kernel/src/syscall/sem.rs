@@ -63,7 +63,8 @@ use ferrix_linux_abi::nr::Syscall;
 use crate::arch::{self, StatLayout};
 use crate::sched::{self, Task, WaitQueue};
 use crate::sync::SpinLock;
-use crate::syscall::process::Process;
+use crate::syscall::credentials;
+use crate::syscall::process::{self, Process};
 use crate::syscall::time::{self, TimeWidth};
 use crate::syscall::uaccess;
 use crate::trap::Abi;
@@ -1020,10 +1021,10 @@ fn encode_semid(set: &Set, state: &State, layout: Layout) -> Vec<u8> {
         }
     };
     put(0, &set.key.to_le_bytes());
-    put(4, &state.perm.uid.to_le_bytes());
-    put(8, &state.perm.gid.to_le_bytes());
-    put(12, &state.perm.cuid.to_le_bytes());
-    put(16, &state.perm.cgid.to_le_bytes());
+    put(4, &credentials::show_uid(state.perm.uid).to_le_bytes());
+    put(8, &credentials::show_gid(state.perm.gid).to_le_bytes());
+    put(12, &credentials::show_uid(state.perm.cuid).to_le_bytes());
+    put(16, &credentials::show_gid(state.perm.cgid).to_le_bytes());
     put(20, &state.perm.mode.to_le_bytes());
     put(24, &(seq as u16).to_le_bytes());
     let (otime, ctime, nsems, narrow) = layout.fields();
@@ -1202,7 +1203,16 @@ fn set_perm(
         }
         u32::from_le_bytes(four)
     };
-    let (uid, gid) = (word(4), word(8));
+    // As the caller's user namespace names them; one it does not map is
+    // `EINVAL`, so an unmapped id is never stored (rule U9).
+    let (uid, gid) = match process::current() {
+        Some(running) => (
+            credentials::kernel_uid(&running, word(4))?,
+            credentials::kernel_gid(&running, word(8))?,
+        ),
+        // The kernel's own checks run with no process: the ids are kernel ids.
+        None => (word(4), word(8)),
+    };
     // A 16-bit mode's high half is padding a caller need not clear.
     let mode = word(20) & 0o777;
     let set = lookup(id).ok_or(Errno::EINVAL)?;
