@@ -1527,7 +1527,7 @@
     },
     {
       "file": "object/interrupt.rs",
-      "lines": "230-231",
+      "lines": "302-303",
       "category": "defensive",
       "match": "let _unclaimed = BOUND.lock().remove(&number);",
       "why": "The interrupt controller refused to unmask a line it had just registered a handler for. A vector is minted by its device node only for a line the controller can route (`device::DeviceNode::vector`), and unmasking one is a register write the controller does not refuse; the branch unclaims the line so a controller that did refuse would not leave it claimed."

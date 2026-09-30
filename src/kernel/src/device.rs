@@ -220,6 +220,26 @@ impl Vector {
         self.set_masked(false)
     }
 
+    /// Whether a delivery may leave it unmasked: an edge-triggered MSI-X
+    /// vector, whose message does not stay asserted and whose mask is a write
+    /// to device memory (`object::interrupt`'s module documentation). A line
+    /// the controller holds is masked per delivery whatever its trigger.
+    pub(crate) const fn coalesces(self) -> bool {
+        matches!(self.masking, Masking::MsiX { .. }) && matches!(self.trigger, Some(Trigger::Edge))
+    }
+
+    /// Whether it reads back masked, where that can be read: an MSI-X
+    /// entry's vector control. `None` for a controller line.
+    pub(crate) fn reads_masked(self) -> Option<bool> {
+        match self.masking {
+            Masking::Controller => None,
+            Masking::MsiX { node, entry } => devices()
+                .get(node)
+                .and_then(|node| node.msix.as_ref())
+                .and_then(|table| table.is_masked(entry)),
+        }
+    }
+
     /// Mask or unmask it.
     fn set_masked(self, masked: bool) -> Result<(), &'static str> {
         match self.masking {

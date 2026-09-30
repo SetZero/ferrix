@@ -980,6 +980,17 @@ pub(super) fn check_device_objects() {
             report.slowest_wake / 1_000,
         );
     }
+    if report.coalesced > 0 {
+        println!(
+            "  irq      {} edge-triggered MSI-X vector left unmasked by its deliveries, a delivery \
+             between acknowledgement and drain queued its own packet, and the delivery past {} \
+             unacknowledged masked it until the acknowledgement ({} us for those, charged to the \
+             task that ran them)",
+            report.coalesced,
+            object::interrupt::STORM_BOUND,
+            report.storm_nanos / 1_000,
+        );
+    }
 }
 
 /// Stage 10's block ring control plane, from a process given a device: all
