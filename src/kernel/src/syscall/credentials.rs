@@ -479,17 +479,30 @@ fn change(
     kind: Kind,
     rule: impl FnOnce(&mut Ids, bool) -> Result<(), Errno>,
 ) -> Result<usize, Errno> {
-    process
-        .with_credentials(|credentials| {
-            let privileged = credentials.holds(kind.capability());
-            let before = credentials.user;
-            rule(credentials.ids_mut(kind), privileged)?;
-            if kind == Kind::User {
-                credentials.emulate_setxuid(before);
-            }
-            Ok(())
-        })
-        .map(|()| 0)
+    let changed = process.with_credentials(|credentials| {
+        let privileged = credentials.holds(kind.capability());
+        let before = credentials.user;
+        let acted_as = credentials.ids(kind);
+        rule(credentials.ids_mut(kind), privileged)?;
+        if kind == Kind::User {
+            credentials.emulate_setxuid(before);
+        }
+        let now = credentials.ids(kind);
+        Ok::<bool, Errno>(
+            now.effective != acted_as.effective || now.filesystem != acted_as.filesystem,
+        )
+    })?;
+    make_undumpable_if(process, changed);
+    Ok(0)
+}
+
+/// Linux's `commit_creds`: a process whose effective or filesystem id changed
+/// is not dumpable, so that what it keeps private is private from the user it
+/// was before (`docs/AUTH.md` phase 2). Done with the credentials unlocked.
+fn make_undumpable_if(process: &Process, changed: bool) {
+    if changed {
+        attributes::update(process, |held| held.dumpable = false);
+    }
 }
 
 /// `setuid` and `setgid`, as `__sys_setuid` has them.
@@ -571,15 +584,18 @@ fn set_real_effective_saved(
 /// becomes `id` if it is one of the process's four, or the process is
 /// privileged, and the old one is the answer either way.
 fn set_filesystem_id(process: &Process, kind: Kind, id: u32) -> u32 {
-    process.with_credentials(|credentials| {
+    let (old, changed) = process.with_credentials(|credentials| {
         let privileged = credentials.holds(kind.capability());
         let ids = credentials.ids_mut(kind);
         let old = ids.filesystem;
         if id != UNCHANGED && (privileged || ids.is_own(id) || id == old) {
             ids.filesystem = id;
         }
-        credentials.shown(kind, old)
-    })
+        let changed = ids.filesystem != old;
+        (credentials.shown(kind, old), changed)
+    });
+    make_undumpable_if(process, changed);
+    old
 }
 
 /// `getresuid` and `getresgid`: three `uid_t`s, 32 bits on every architecture

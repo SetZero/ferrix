@@ -1093,3 +1093,20 @@ How it differs from the design, and what is open:
   architectures and the x86_64 boot. Not yet: `cargo xtask check`, the
   aarch64 and armv7a boots (`--smp 2`), `test-shell`, `test-vfs`,
   `test-init --arch all`, `carry-coverage`.
+
+**NP built (2026-09-30, os-7c, branch `stage13-np`).** `credentials::may_access`
+is Linux's `ptrace_may_access`: a process always, a caller whose filesystem ids
+(its real ones for `get_robust_list`) are every one of the target's real,
+effective and saved ids when the target is dumpable, and a caller with
+`CAP_SYS_PTRACE` over the target's user namespace -- root in the first
+namespace, the namespace's owner from outside, nothing from a child
+namespace into a process it does not own. `/proc/<pid>/root`, `cwd`, `exe`,
+`fd` (its listing and its links), `maps`, `mountinfo` and `ns/*` ask it and
+are refused `EACCES`; `get_robust_list` of another process's thread is
+`EPERM`, closing the gap the review of f16ab27a named. A program that starts
+with ids other than it had, and a process whose effective or filesystem id
+changed, are not dumpable; `PR_SET_DUMPABLE` sets it again, as bubblewrap
+does after it drops its ids. The `procacc` line (FX-0894) proves the
+refusals for a same-uid reader, for root and for root inside a user
+namespace. A set-id `execve` clearing dumpable stands on code, because the
+boot harness cannot run a real set-id file; AUTH.md's P2.1 names the rest.
