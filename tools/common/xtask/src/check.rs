@@ -767,7 +767,7 @@ fn host_cargo(
 /// A test below reads `.github/workflows/ci.yml` and fails when the two
 /// disagree, so a step added to one and not the other is found by `cargo
 /// xtask check` rather than by a contributor who trusted `--miri`.
-const MIRI_PACKAGES: [&str; 16] = [
+const MIRI_PACKAGES: [&str; 17] = [
     "ferrix-elf",
     "ferrix-bootinfo",
     "ferrix-ustack",
@@ -784,6 +784,7 @@ const MIRI_PACKAGES: [&str; 16] = [
     "ferrix-paging",
     "ferrix-svc",
     "ferrix-argon2",
+    "ferrix-seccomp",
 ];
 
 /// CI's Miri steps: every crate in [`MIRI_PACKAGES`], `jobs` at a time.

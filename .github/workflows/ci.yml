@@ -651,6 +651,13 @@ jobs:
         if: matrix.part == 2
         run: cargo +nightly miri test -p ferrix-argon2 --lib
 
+      # seccomp's verifier and interpreter, which run a filter a process wrote
+      # in ring 0. The crate forbids `unsafe`, so what Miri checks is the
+      # arithmetic and the indexing of the machine, over every rule's tests.
+      - name: Miri (seccomp)
+        if: matrix.part == 2
+        run: cargo +nightly miri test -p ferrix-seccomp --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #
