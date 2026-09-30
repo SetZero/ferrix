@@ -987,6 +987,13 @@ it:
   lands with U6, which reads it, and U6 compares a process's root with
   `Namespace::root`, the top, not the bottom mount, or every process reads
   as chrooted.
+* **NP.** `get_robust_list` of another process's thread answers its
+  robust-list head, an address in that process, with no permission check;
+  Linux asks `PTRACE_MODE_READ_REALCREDS`. This predates the namespaces:
+  f16ab27a moved the head per thread and kept the lookup as it was. NP's
+  `ptrace_may_access` gates it along with M8's procfs links, with a check
+  that another uid's thread is refused (the certification consultant's
+  review of f16ab27a, 2026-09-30).
 * **Before N5.** A namespace's end writes out each filesystem whose last
   mount it drops, as a final unmount does on Linux. `Namespace`'s `Drop`
   disconnects its mounts and writes nothing, and btrfs commits on its own
