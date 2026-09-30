@@ -15,15 +15,15 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 609 | 341 | 268 |
+| Low (`L.*`) | 610 | 342 | 268 |
 
-1178 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1181 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1178 |
+| Named by a low-level requirement | 1181 |
 | Accessors, covered by the requirement they serve | 560 |
-| Check code in a product file | 55 |
+| Check code in a product file | 54 |
 | Named by none | 595 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
@@ -65,9 +65,9 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 | `mm::unlinked::UnlinkedTables::frames` | The frames a list holds, for smp/check.rs's check that an unmap's tables are still held; it reads the list's private links. |
 | `object::as_if_draining_elsewhere` | Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs. |
 | `object::process::Exit::for_check` | An end no process has, for object/pin/check.rs's check_quarantine; it needs Exit's private constructor. |
-| `sched::trip::answered` | A stamp point of the seam's depth-1 trace (block_ring/trip_check.rs). Unarmed it loads TRACING and returns; only hop_check arms it. It sits in block_ring's complete() under the disk's state lock, which is what keeps it in product code. |
+| `sched::trip::answered` | A stamp point of the seam's depth-1 trace (block_ring/trip_check.rs). Unarmed it loads TRACING and returns; only hop_check arms it. It sits where block_ring takes completions off the ring -- in the driver's port_queue, or in the ring task's tend -- under the disk's state lock, which is what keeps it in product code. |
 | `sched::trip::arm` | Raises the seam's depth-1 trace and zeroes its counts; its only caller is block_ring/hop_check.rs. |
-| `sched::trip::bell` | A stamp point of the seam's depth-1 trace, on the ring task's bell to the driver. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::bell` | A stamp point of the seam's depth-1 trace, on the bell a reader rings the driver with after putting its command on the ring. Unarmed it loads TRACING and returns; only hop_check arms it. |
 | `sched::trip::count` | Counts switches, root writes, IPIs and device interrupts for the seam's trace, called on those product paths. Unarmed it loads TRACING and returns; only hop_check arms it, and only trip_check reads the counts. |
 | `sched::trip::counted` | Reads the trace's counts for block_ring/trip_check.rs, its only caller. |
 | `sched::trip::disarm` | Lowers the seam's depth-1 trace; its only caller is block_ring/hop_check.rs. |
@@ -76,12 +76,11 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 | `sched::trip::issued` | A stamp point of the seam's depth-1 trace: the check calls a read. Its only caller is block_ring/hop_check.rs. |
 | `sched::trip::name` | Records which wait queue a traced trip uses; reached only from stamp points while the trace is armed. |
 | `sched::trip::now_here` | Reads the counter and the processor for a stamp; reached only from stamp points while the trace is armed. |
-| `sched::trip::on_ring` | A stamp point of the seam's depth-1 trace, as the ring task puts a request on the ring. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::on_ring` | A stamp point of the seam's depth-1 trace, as whoever holds the disk's lock puts a request on the ring. Unarmed it loads TRACING and returns; only hop_check arms it. |
 | `sched::trip::port_rung` | A stamp point of the seam's depth-1 trace, in port_queue on the ring's kernel port. Unarmed it loads TRACING and returns; only hop_check arms it. |
 | `sched::trip::port_taken` | A stamp point of the seam's depth-1 trace, in port_wait on the driver's port. Unarmed it loads TRACING and returns; only hop_check arms it. |
 | `sched::trip::queued` | A stamp point of the seam's depth-1 trace, as a read is queued. Unarmed it loads TRACING and returns; only hop_check arms it. |
 | `sched::trip::reader_running` | A stamp point of the seam's depth-1 trace, as the reader runs again. Unarmed it loads TRACING and returns; only hop_check arms it. |
-| `sched::trip::ring_running` | A stamp point of the seam's depth-1 trace, as the ring task runs. Unarmed it loads TRACING and returns; only hop_check arms it. |
 | `sched::trip::slept` | Counts sleeps on the traced queues ended by a wake or by the recheck, called from WaitQueue::wait_until_deadline. Unarmed it loads TRACING and returns; only hop_check arms it, and only trip_check reads the counts. |
 | `sched::trip::stamp` | Stores one stamp if the traced trip has reached it; reached only from stamp points while the trace is armed. |
 | `sched::trip::store` | Writes a stamp slot; reached only from stamp points while the trace is armed. |
@@ -354,6 +353,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.object.29` | Port::take shall return a user packet exactly as it was queued, and give back its share of the bound it was counted in. | A queued user packet is taken with its key, its kind and both data words as queued. | H.OBJ.11 | `object::port::Port::take`, `object::port::Port::queue_user` | `src/kernel/src/object/check.rs::check_ports` | reached | reached | reached |
 | `L.object.30` | A registration and an interrupt binding shall reserve room for their packet on the port when they are made, and be refused for memory then if it cannot be reserved, so that queueing a signal or interrupt packet never allocates and never finds the port without room. | Across rounds of native calls with every nth allocation failing, every port reports 0 packets lost for want of room. | H.MEM.11, H.OBJ.17 | `object::port::Port::promise`, `object::port::Port::release_promise`, `object::port::Promise::new`, `object::port::Promise::drop`, `object::port::Observer::new`, `object::port::Port::queue_signal`, `object::port::Queue::push_fitting` | `src/kernel/src/object/alloc_check.rs::round` | reached | reached | reached |
 | `L.object.31` | Port::put_back shall queue a packet the caller took and could not deliver ahead of every other, with its share of the bound, so that the next take returns it. | A packet taken for a buffer that faults -- a user packet, a signal packet fired on a change and one fired as it was registered -- is returned by the next wait with a good buffer. | H.OBJ.7 | `object::port::Port::put_back` | `src/kernel/src/object/edge_check.rs::check_a_packet_is_put_back` | reached | reached | reached |
+| `L.object.106` | Port::queue_from_program shall offer a program's packet to the port's server, if it was made with one that is still there, and shall queue it as Port::queue_user does, with the same bound, whenever the server does not take it; a port made with Port::new shall have no server. | Through the block ring's completion port, completions of stage 10's seam run are taken in the driver's port_queue, and with that path declined none is; a port made with Port::new, and one whose server has gone, each queue a program's packet and give it back as queued. | H.OBJ.10 | `object::port::Port::queue_from_program`, `object::port::Port::new_served`, `object::port::Port::with_server`, `object::port::Port::new` | `src/kernel/src/interfaces/block_ring/driver_check.rs::bells_taken_in_the_drivers_time` | not reached | not reached | not reached |
 | `L.object.32` | A registration shall not fire before a signal it asked for is asserted, and shall fire once when one is, reporting it with its key, and not again. | A registration does not fire before its signal, fires once on the message that asserts it with its key and READABLE, and a second write fires nothing. | H.OBJ.17 | `object::port::trigger`, `object::port::deliver`, `object::port::Observer::fire`, `object::port::register` | `src/kernel/src/object/check.rs::check_ports` | reached | reached | reached |
 | `L.object.33` | trigger shall fire only the registrations whose signals the change asserts, leaving every other listed. | A message fires the registration waiting for READABLE and not the one waiting for PEER_CLOSED listed ahead of it. | H.OBJ.17 | `object::port::trigger` | `src/kernel/src/object/edge_check.rs::check_a_change_fires_only_what_wants_it` | reached | reached | reached |
 | `L.object.34` | register shall refuse a registration as full when the object already holds 64, counted after dropping those whose port has gone. | The 65th registration on one object is refused SHOULD_WAIT; after its ports are closed the object takes 64 again. | H.OBJ.10 | `object::port::register` | *baselined* | — | — | — |
@@ -1275,6 +1275,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/interfaces/block_ring/check.rs::refusals` | kernel | L.quiesce.1 |
 | `src/kernel/src/interfaces/block_ring/check.rs::round` | kernel | L.quiesce.2, H.DEV.2, H.DEV.4 |
 | `src/kernel/src/interfaces/block_ring/check.rs::run` | kernel | L.quiesce.3 |
+| `src/kernel/src/interfaces/block_ring/driver_check.rs::bells_taken_in_the_drivers_time` | kernel | L.object.106 |
 | `src/kernel/src/iommu/check.rs::check_dma_faults` | kernel | H.DMA.6 |
 | `src/kernel/src/iommu/check.rs::check_domains` | kernel | L.device.8 |
 | `src/kernel/src/iommu/check.rs::pin_and_unpin` | kernel | L.iommu.19, L.iommu.20, L.iommu.21, L.iommu.22, L.iommu.29, H.DMA.3 |

@@ -11,15 +11,27 @@
 //! 2. holds the ring and data VMOs, attaches [`KernelSide`] over the ring, and
 //!    publishes the disk as a block device before answering READY with its
 //!    completion port;
-//! 3. serves the disk's requests: it moves them from `src/lib/fs/block`'s queue onto
-//!    the ring, copying a write's bytes into the data VMO, rings the driver
-//!    when the driver asked to be rung, takes completions off the ring and
-//!    wakes each finished request's caller, who copies a read's bytes out of
-//!    its data region into its own buffer and gives the region back. A
-//!    caller nudges the task only when the task went to sleep with nothing
-//!    to do (`TaskIs`);
+//! 3. tends the ring while it is served -- takes what completed while nobody
+//!    was rung, dispatches what nobody else could, and asks to be rung
+//!    before it sleeps -- but serves no request on its own path;
 //! 4. ends when the driver's control channel closes, the driver says STOPPED
 //!    or the ring is corrupt.
+//!
+//! # Who serves a request
+//!
+//! The ring is the disk's ([`Live`], under the disk's lock), and whoever
+//! holds the lock drives it, in its own time. A caller queues its request,
+//! moves what it can from `src/lib/fs/block`'s queue onto the ring, copying a
+//! write's bytes into its data region, and rings the driver's port itself.
+//! The driver answers by ringing the completion port, and its `port_queue`
+//! takes the completions there and then (`object::port::Server`): it
+//! answers each request and wakes its caller, in the driver's time. The
+//! caller copies a read's bytes out of its data region into its own buffer,
+//! gives the region back, and dispatches whatever was waiting for one. A
+//! trip is caller, driver, caller. The task is woken only for what those
+//! paths leave it: the control channel, a corrupt ring, completions past the
+//! driver's budget, a command a completion made dispatchable, and its own
+//! recheck.
 //!
 //! # A disk outlives a driver that dies
 //!
@@ -52,7 +64,7 @@
 //! reads and writes through.
 
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::Infallible;
@@ -61,8 +73,8 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_blkring::kernel::Ending;
 use ferrix_blkring::{
-    Block, Completed, Device, DeviceFlags, DiskName, KernelSide, Location, Message, Refusal,
-    RingMemory, Slot, Start as StartMessage, Status, Submission, SubmitError, Wait,
+    BELL_COMPLETE, Block, Completed, Device, DeviceFlags, DiskName, KernelSide, Location, Message,
+    Refusal, RingMemory, Slot, Start as StartMessage, Status, Submission, SubmitError, Wait,
 };
 use ferrix_block::{Config, Limits, Op, Queue, Request, Token};
 use ferrix_bootinfo::PAGE_SIZE;
@@ -70,14 +82,12 @@ use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::{
-    CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, PACKET_SIGNAL, PACKET_USER,
-};
+use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, PACKET_SIGNAL};
 use ferrix_vfs::Errno;
 
 use crate::device::{self, DeviceNode};
 use crate::object::channel::{Endpoint, ReadError};
-use crate::object::port::{Observer, Port};
+use crate::object::port::{Observer, Port, Server};
 use crate::object::{self, Object, Transfer};
 use crate::sched::{Task, WaitQueue};
 use crate::sync::SpinLock;
@@ -122,9 +132,6 @@ const RECHECK_NANOS: u64 = 50_000_000;
 /// The completion port's key for the control channel's signals. Keys 1 and 2
 /// are the ring's own bells.
 const CONTROL_KEY: u64 = 3;
-
-/// The completion port's key for a reader's nudge that a read was queued.
-const SUBMIT_KEY: u64 = 4;
 
 /// The most reads `src/lib/fs/block` merges into one ring submission.
 const MAX_PARTS: u32 = 16;
@@ -511,8 +518,7 @@ fn run(id: usize) {
             return;
         }
     };
-    let mut storage = vec![Slot::EMPTY; accepted.regions];
-    let Some(mut ring) = attach(&start, accepted, &mut storage) else {
+    let Some(mut ring) = attach(&start, accepted) else {
         unclaim(id);
         return;
     };
@@ -639,8 +645,8 @@ fn refuse(control: &Endpoint, refusal: Refusal) {
 
 /// Take up the ring an accepted HELLO describes, publish its disk and answer
 /// READY; or refuse, and answer `None`.
-fn attach<'s>(start: &Start, accepted: Accepted, storage: &'s mut [Slot]) -> Option<Serving<'s>> {
-    match take_up(start, accepted, storage) {
+fn attach(start: &Start, accepted: Accepted) -> Option<Serving> {
+    match take_up(start, accepted) {
         Ok(ring) => Some(ring),
         Err(refusal) => {
             refuse(&start.control, refusal);
@@ -650,11 +656,7 @@ fn attach<'s>(start: &Start, accepted: Accepted, storage: &'s mut [Slot]) -> Opt
 }
 
 /// [`attach`]'s body: every step that can refuse, then READY.
-fn take_up<'s>(
-    start: &Start,
-    accepted: Accepted,
-    storage: &'s mut [Slot],
-) -> Result<Serving<'s>, Refusal> {
+fn take_up(start: &Start, accepted: Accepted) -> Result<Serving, Refusal> {
     let device = accepted.device;
     let ring_held = accepted
         .ring
@@ -665,8 +667,19 @@ fn take_up<'s>(
         .hold(0, accepted.data.len_pages())
         .map_err(|_| Refusal::Device)?;
     let memory = Pages::over(&ring_held, accepted.ring.len_bytes());
-    let side = KernelSide::attach(memory, accepted.ring.len_bytes(), device, storage)
-        .map_err(|_| Refusal::Header)?;
+    // The wire protocol has no refusal for memory; the device's is nearest.
+    let mut storage = Vec::new();
+    storage
+        .try_reserve_exact(accepted.regions)
+        .map_err(|_| Refusal::Device)?;
+    storage.resize(accepted.regions, Slot::EMPTY);
+    let side = KernelSide::attach_owned(
+        memory,
+        accepted.ring.len_bytes(),
+        device,
+        storage.into_boxed_slice(),
+    )
+    .map_err(|_| Refusal::Header)?;
     let limits = Limits::new(
         device.block_size(),
         device.capacity(),
@@ -675,8 +688,6 @@ fn take_up<'s>(
         u32::try_from(side.capacity()).unwrap_or(u32::MAX).max(1),
     )
     .map_err(|_| Refusal::Device)?;
-    // The wire protocol has no refusal for memory; the device's is nearest.
-    let kernel_port = Port::new().map_err(|_| Refusal::Device)?;
     let fresh = Regions::over(
         data_held,
         accepted.data.len_bytes(),
@@ -684,42 +695,17 @@ fn take_up<'s>(
         side.capacity(),
     )
     .ok_or(Refusal::Device)?;
-    let regions = Arc::clone(&fresh.data);
     let name = accepted.name;
-    let (disk, registration) = match take_parked(start.location, &device, &name) {
-        // A dead driver's disk, taken up with what waited on it.
-        Some(parked) => {
-            parked.disk.take_up(Arc::clone(&kernel_port));
-            (parked.disk, parked.registration)
-        }
-        None => {
-            let disk = Arc::new(RingDisk::new(device, limits, Arc::clone(&kernel_port)));
-            // The device node the ring was made for, which sysfs shows the
-            // disk in.
-            let node = CLAIMS
-                .lock()
-                .iter()
-                .find(|claim| claim.id == start.id)
-                .map(|claim| claim.device.index());
-            let registration = register_block_from(
-                name.as_str().as_bytes(),
-                VIRTIO_BLK_MAJOR,
-                name.minor(),
-                Arc::clone(&disk) as Arc<dyn BlockDevice>,
-                Origin {
-                    node,
-                    serial: accepted.serial,
-                },
-            )
-            .map_err(|refused| match refused {
-                BlockRefused::InvalidName => Refusal::Name,
-                BlockRefused::NameInUse | BlockRefused::NumberInUse => Refusal::NameInUse,
-            })?;
-            (disk, registration)
-        }
+    let (disk, registration) = disk_for(start, device, limits, name, accepted.serial)?;
+    // The completion port, whose bells the disk takes in the driver's own
+    // `port_queue`. Refused: a disk taken up waits on, parked, for a ring
+    // that is not.
+    let server: Weak<dyn Server> = Arc::downgrade(&disk) as Weak<RingDisk>;
+    let Ok(kernel_port) = Port::new_served(server) else {
+        park(start.location, name, disk, registration);
+        return Err(Refusal::Device);
     };
     if served_elsewhere(start.id, start.location) {
-        // Refused: a disk taken up waits on, parked, for a ring that is not.
         park(start.location, name, disk, registration);
         return Err(Refusal::LocationInUse);
     }
@@ -733,8 +719,18 @@ fn take_up<'s>(
     if let Some(node) = node {
         object::pin::quarantine_release(&node);
     }
-    // Where a read's bytes will wait, before anything goes on the ring.
-    disk.serve_from(fresh);
+    // Served before anything can be put on the ring.
+    disk.serve_from(Live {
+        side,
+        data: fresh.data,
+        free: fresh.free,
+        leases: fresh.leases,
+        held_back: false,
+        for_task: false,
+        driver_port: accepted.driver_port,
+        kernel_port: Arc::clone(&kernel_port),
+        _ring_held: ring_held,
+    });
     // Served from before READY goes out, not after: the driver may act on
     // READY, and devmgr may ask after the device, the instant it is sent.
     set_served(start.id, Some((start.location, Arc::clone(&start.control))));
@@ -747,24 +743,54 @@ fn take_up<'s>(
         .is_err()
     {
         set_served(start.id, None);
-        disk.unserved();
+        drop(disk.unserved());
         park(start.location, name, disk, registration);
         return Err(Refusal::Malformed);
     }
     Ok(Serving {
-        side,
         disk,
         control: Arc::clone(&start.control),
         kernel_port,
-        driver_port: accepted.driver_port,
-        regions,
-        _ring_held: ring_held,
         registration,
         location: start.location,
         name,
-        flying: BTreeMap::new(),
         watching: false,
     })
+}
+
+/// The disk a ring serves: the one parked at its location for the same disk
+/// under the same name, taken up with what waited on it, or a new one
+/// published under `name`.
+fn disk_for(
+    start: &Start,
+    device: Device,
+    limits: Limits,
+    name: DiskName,
+    serial: [u8; 20],
+) -> Result<(Arc<RingDisk>, BlockRegistration), Refusal> {
+    if let Some(parked) = take_parked(start.location, &device, &name) {
+        parked.disk.take_up();
+        return Ok((parked.disk, parked.registration));
+    }
+    let disk = Arc::new(RingDisk::new(device, limits));
+    // The device node the ring was made for, which sysfs shows the disk in.
+    let node = CLAIMS
+        .lock()
+        .iter()
+        .find(|claim| claim.id == start.id)
+        .map(|claim| claim.device.index());
+    let registration = register_block_from(
+        name.as_str().as_bytes(),
+        VIRTIO_BLK_MAJOR,
+        name.minor(),
+        Arc::clone(&disk) as Arc<dyn BlockDevice>,
+        Origin { node, serial },
+    )
+    .map_err(|refused| match refused {
+        BlockRefused::InvalidName => Refusal::Name,
+        BlockRefused::NameInUse | BlockRefused::NumberInUse => Refusal::NameInUse,
+    })?;
+    Ok((disk, registration))
 }
 
 /// A data VMO's pages as the ring hands them out: a region per command, each
@@ -1115,18 +1141,29 @@ impl RingMemory for Pages {
 /// wakes only the queue its own caller sleeps on, so one completion wakes one
 /// caller rather than every caller of the disk; two callers that share a
 /// queue wake each other for nothing, which costs a look and no more. At most
-/// 64, the bits of the mask [`answer`] returns.
+/// 64, the bits of a [`Rung`]'s mask.
 const WAKE_SLOTS: usize = 64;
 const _: () = assert!(WAKE_SLOTS <= 64, "a wake mask is one u64");
 
-/// Requests that found the ring's task asleep and nudged it.
-pub(crate) static NUDGES_SENT: AtomicU64 = AtomicU64::new(0);
-/// Requests that found it awake, or nudged already, and did not.
-pub(crate) static NUDGES_SPARED: AtomicU64 = AtomicU64::new(0);
-/// Nudges the task found missing on waking: something it could have
-/// dispatched was queued while it slept, and either nobody nudged it or the
-/// nudge claimed never reached its port. The driver check holds this at zero.
-pub(crate) static NUDGES_LOST: AtomicU64 = AtomicU64::new(0);
+/// The most completions one of the driver's `port_queue`s takes off the ring.
+/// A driver posting completions as fast as the kernel takes them could
+/// otherwise keep one system call in the kernel for as long as it liked;
+/// past this, the bell is queued and the ring's task takes the rest.
+const INLINE_BUDGET: usize = 64;
+
+/// Completions taken off the ring in the driver's own `port_queue`.
+pub(crate) static TAKEN_INLINE: AtomicU64 = AtomicU64::new(0);
+/// Completions the ring's task took: those posted while it was awake, and
+/// what an inline take left past its budget.
+pub(crate) static TAKEN_BY_TASK: AtomicU64 = AtomicU64::new(0);
+/// Times the ring's task woke to find a request it could have put on the
+/// ring that nobody had: every path that makes a request dispatchable --
+/// a caller queuing it or giving a region back, the task taking a
+/// completion -- dispatches it before letting go of the disk's lock, and
+/// the driver's `port_queue`, which may not, hands it to the task with its
+/// bell. So this is a path that forgot, and a caller left waiting for the
+/// task's recheck. The driver check holds it at zero.
+pub(crate) static STRANDED: AtomicU64 = AtomicU64::new(0);
 
 /// A finished read's bytes, waiting in a data region for their caller to
 /// copy them out. The region is not handed out again until every caller it
@@ -1146,8 +1183,8 @@ struct Landing {
 /// A request a caller is waiting on.
 #[derive(Debug)]
 struct Pending {
-    /// A write's bytes, until the ring's task copies them into the data
-    /// region it dispatches the command through.
+    /// A write's bytes, until the command is dispatched and they are copied
+    /// into its data region.
     payload: Option<Vec<u8>>,
     /// What came of it, once it has: where a read's bytes wait, or nothing
     /// for a write or a flush.
@@ -1158,72 +1195,39 @@ struct Pending {
     slot: usize,
 }
 
-/// Where the ring's task is, as the readers that might nudge it see it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum TaskIs {
-    /// Running, or about to look at the queue again: nobody nudges it.
-    Awake,
-    /// Asleep with nothing it could dispatch: the next caller to make
-    /// something dispatchable nudges it.
-    Idle,
-    /// Asleep, and a caller has queued its nudge.
-    Nudged,
-}
-
-/// What a ring's disk shares between its readers and its task.
+/// The ring serving a disk. Whoever holds the disk's lock drives it: a
+/// caller that queued a request or gave a region back, the driver ringing
+/// its completion bell, or the ring's task. Nothing here allocates.
 #[derive(Debug)]
-struct DiskState {
-    /// Reads not yet on the ring, and commands on it.
-    queue: Queue,
-    /// Every read submitted and not yet collected, by its request id.
-    reads: BTreeMap<u64, Pending>,
-    /// The next request id.
-    next_id: u64,
-    /// Whether the ring is over.
-    ended: bool,
-    /// When its driver died, while it waits parked for the next one.
-    parked_at: Option<u64>,
-    /// The serving ring's data regions, while a ring serves the disk.
-    data: Option<Arc<Regions>>,
-    /// Its regions not in use. Its capacity is every region, so giving one
-    /// back never allocates.
+struct Live {
+    /// The kernel's side of the ring.
+    side: KernelSide<'static, Pages>,
+    /// The data VMO's regions.
+    data: Arc<Regions>,
+    /// Regions not in use. Its capacity is every region, so giving one back
+    /// never allocates.
     free: Vec<u32>,
-    /// For each of its regions, how many callers still have to copy a
-    /// read's bytes out of it.
+    /// For each region, how many callers still have to copy a read's bytes
+    /// out of it.
     leases: Vec<u32>,
     /// Whether the queue holds back what it has queued until a command on
-    /// the ring completes -- barrier order, or no room on the ring -- so
-    /// that only the completion, whose bell wakes the task, can change it.
+    /// the ring completes -- barrier order, no room on the ring, or a ring
+    /// found corrupt -- so that only a completion or the ring's end can
+    /// change it.
     held_back: bool,
-    /// Where the ring's task is: see [`DiskState::claim_nudge`].
-    task: TaskIs,
+    /// Whether the driver's `port_queue` left something for the ring's task
+    /// -- completions past its budget, or a command a completion made
+    /// dispatchable -- and queued its bell to wake it.
+    for_task: bool,
+    /// The driver's port, rung when the driver asks.
+    driver_port: Arc<Port>,
+    /// The completion port, which the trip trace names the ring by.
+    kernel_port: Arc<Port>,
+    /// The ring VMO's pages, held while the ring is served.
+    _ring_held: Held,
 }
 
-impl DiskState {
-    /// Whether the task could put something on the ring now.
-    fn dispatchable(&self) -> bool {
-        !self.held_back && !self.free.is_empty() && self.queue.queued() > 0
-    }
-
-    /// Asked, under the disk's lock, by whoever just made something
-    /// dispatchable -- a request queued, a region given back: `true` if the
-    /// task went to sleep without it and this caller must nudge it, which
-    /// it does before letting go of the lock.
-    ///
-    /// The task says it is going to sleep under the same lock, and only
-    /// after finding nothing dispatchable ([`Serving::go_idle`]). Whichever
-    /// takes the lock second sees what the other did: a caller that came
-    /// first left something the task's look finds, and one that came second
-    /// finds the task `Idle` and nudges it. Once nudged, it is not nudged
-    /// again until it has woken, so a burst of requests costs one packet.
-    fn claim_nudge(&mut self) -> bool {
-        if self.task == TaskIs::Idle && self.dispatchable() {
-            self.task = TaskIs::Nudged;
-            return true;
-        }
-        false
-    }
-
+impl Live {
     /// Put `region` back on the free list.
     fn give_back(&mut self, region: u32) {
         debug_assert!(
@@ -1236,43 +1240,260 @@ impl DiskState {
         }
     }
 
+    /// The region a command on the ring uses: a read's or a write's, from
+    /// the kernel's own copy of its submission; a flush has none.
+    fn region_of(&self, submission: &Submission) -> Option<u32> {
+        if submission.op == ferrix_blkring::Op::Flush {
+            return None;
+        }
+        let region = submission.data_offset / self.data.region_bytes.max(1);
+        u32::try_from(region)
+            .ok()
+            .filter(|&region| (region as usize) < self.leases.len())
+    }
+}
+
+/// Callers to wake, and a bell to ring, once the disk's lock is let go.
+#[derive(Debug, Default)]
+#[must_use]
+struct Rung {
+    /// The wait queues, a bit each.
+    wake: u64,
+    /// The driver's port and the bell, if the driver asked to be rung.
+    bell: Option<(Arc<Port>, ferrix_blkring::Doorbell)>,
+    /// The wait queues of the callers whose commands went on the ring, for
+    /// the trip trace's bell.
+    dispatched: u64,
+}
+
+/// What taking completions off the ring came to.
+#[derive(Debug, Default)]
+struct Reaped {
+    /// The wait queues of the callers answered.
+    wake: u64,
+    /// Whether the ring had no more when it stopped.
+    drained: bool,
+    /// Whether it was found corrupt, which only the ring's task acts on.
+    corrupt: bool,
+}
+
+/// What a ring's disk shares between its callers, its driver and its task.
+#[derive(Debug)]
+struct DiskState {
+    /// Reads not yet on the ring, and commands on it.
+    queue: Queue,
+    /// Every read submitted and not yet collected, by its request id.
+    reads: BTreeMap<u64, Pending>,
+    /// The next request id.
+    next_id: u64,
+    /// Whether the ring is over.
+    ended: bool,
+    /// When its driver died, while it waits parked for the next one.
+    parked_at: Option<u64>,
+    /// The ring serving the disk, while one does.
+    live: Option<Live>,
+}
+
+impl DiskState {
+    /// Whether something queued could go on the ring now.
+    fn dispatchable(&self) -> bool {
+        self.queue.queued() > 0
+            && self
+                .live
+                .as_ref()
+                .is_some_and(|live| !live.held_back && !live.free.is_empty())
+    }
+
     /// A caller has copied its bytes out of `landing`'s region: the region
     /// goes back once nobody else is still to.
     fn return_lease(&mut self, landing: &Landing) {
-        if !self
-            .data
-            .as_ref()
-            .is_some_and(|data| Arc::ptr_eq(data, &landing.data))
-        {
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+        if !Arc::ptr_eq(&live.data, &landing.data) {
             // Its ring has ended, and its regions went with it.
             return;
         }
         let region = landing.region;
-        let Some(count) = self.leases.get_mut(region as usize) else {
+        let Some(count) = live.leases.get_mut(region as usize) else {
             return;
         };
         debug_assert!(*count > 0, "a data region's lease was returned twice");
         *count = count.saturating_sub(1);
         if *count == 0 {
-            self.give_back(region);
+            live.give_back(region);
         }
     }
+
+    /// Move queued requests onto the ring while regions and ring slots last,
+    /// and publish them. Called by whoever made something dispatchable,
+    /// before letting go of the lock, in its own context.
+    ///
+    /// `done` is the disk's wait queues, for the trip trace's stamps.
+    fn pump(&mut self, done: &[WaitQueue]) -> Rung {
+        let DiskState {
+            queue, reads, live, ..
+        } = self;
+        let Some(live) = live.as_mut() else {
+            return Rung::default();
+        };
+        let mut wake = 0;
+        let mut dispatched = 0;
+        live.held_back = false;
+        let block = u64::from(queue.limits().logical_block_size());
+        while !live.free.is_empty() {
+            let Some(command) = queue.dispatch(ticks()) else {
+                // What is still queued waits for a command on the ring to
+                // complete.
+                live.held_back = queue.queued() > 0;
+                break;
+            };
+            let (token, op, sector, count) =
+                (command.token, command.op, command.sector, command.count);
+            let (room, len) = parts_of(command.parts);
+            let whole = len == command.parts.len();
+            let parts = room.get(..len).unwrap_or_default();
+            let region = live.free.last().copied().unwrap_or(0);
+            let offset = u64::from(region) * live.data.region_bytes;
+            let submission = match op {
+                // More parts than the queue was told it may merge.
+                _ if !whole => None,
+                Op::Flush => Some(Submission::flush(token.raw())),
+                Op::Write if !fill(reads, &live.data, parts, sector, offset, block) => None,
+                Op::Write => Some(Submission::write(token.raw(), sector, count, offset)),
+                _ => Some(Submission::read(token.raw(), sector, count, offset)),
+            };
+            let Some(submission) = submission else {
+                wake |= answer(queue, reads, token, Err(Errno::EIO), None).0;
+                continue;
+            };
+            match live.side.submit(submission) {
+                Ok(()) => {
+                    if op != Op::Flush {
+                        let _ = live.free.pop();
+                    }
+                    crate::fs::seam::submitted();
+                    let slots = slots_of(reads, parts);
+                    stamp_on_ring(done, slots, &live.kernel_port);
+                    dispatched |= slots;
+                }
+                // No room on the ring, or a ring that has ended: the command
+                // waits, queued, for a completion or for the next ring.
+                Err(SubmitError::Full | SubmitError::Corrupt(_) | SubmitError::NotRunning) => {
+                    let _ = queue.requeue(token);
+                    live.held_back = true;
+                    break;
+                }
+                Err(_) => wake |= answer(queue, reads, token, Err(Errno::EIO), None).0,
+            }
+        }
+        let bell = live
+            .side
+            .publish()
+            .map(|bell| (Arc::clone(&live.driver_port), bell));
+        Rung {
+            wake,
+            bell,
+            dispatched,
+        }
+    }
+
+    /// Take up to `budget` completions off the ring and answer their
+    /// requests; `inline` says whose time it is, for the counts.
+    fn reap(&mut self, budget: usize, inline: bool) -> Reaped {
+        let DiskState {
+            queue, reads, live, ..
+        } = self;
+        let mut reaped = Reaped::default();
+        let Some(live) = live.as_mut() else {
+            reaped.drained = true;
+            return reaped;
+        };
+        for _ in 0..budget {
+            let completed = match live.side.poll() {
+                Ok(Some(completed)) => completed,
+                Ok(None) => {
+                    reaped.drained = true;
+                    return reaped;
+                }
+                Err(_) => {
+                    reaped.corrupt = true;
+                    return reaped;
+                }
+            };
+            let counter = if inline {
+                &TAKEN_INLINE
+            } else {
+                &TAKEN_BY_TASK
+            };
+            let _ = counter.fetch_add(1, Ordering::Relaxed);
+            crate::fs::seam::completed();
+            if completed.device_ticks != 0 {
+                let _ = hop_check::DEVICE_TICKS
+                    .fetch_add(u64::from(completed.device_ticks), Ordering::Relaxed);
+                let _ = hop_check::DEVICE_TIMED.fetch_add(1, Ordering::Relaxed);
+            }
+            let region = live.region_of(&completed.submission);
+            let at = region.map(|region| {
+                let offset = u64::from(region) * live.data.region_bytes;
+                (&live.data, region, offset)
+            });
+            let token = Token::from_raw(completed.submission.id);
+            let (wake, leases) = answer(queue, reads, token, outcome(&completed), at);
+            reaped.wake |= wake;
+            // A read's region waits for its callers to copy their bytes out;
+            // anything else's is free again now.
+            if let Some(region) = region {
+                match live.leases.get_mut(region as usize) {
+                    Some(count) if leases > 0 => *count = count.saturating_add(leases),
+                    _ => live.give_back(region),
+                }
+            }
+            live.held_back = false;
+        }
+        reaped
+    }
+}
+
+/// Put a write command's bytes into the region at `offset` it is dispatched
+/// through, before the driver is told about it.
+///
+/// A merged command's parts tile its range, so each part's bytes go where
+/// its own sectors are. `false` if a part's payload is missing or does not
+/// fit, and the command is then failed rather than sent with whatever the
+/// region held.
+fn fill(
+    reads: &BTreeMap<u64, Pending>,
+    data: &Regions,
+    parts: &[(u64, u64)],
+    sector: u64,
+    offset: u64,
+    block: u64,
+) -> bool {
+    parts.iter().all(|&(id, at)| {
+        let bytes = reads
+            .get(&id)
+            .and_then(|pending| pending.payload.as_deref());
+        bytes.is_some_and(|bytes| {
+            data.pages.copy_in(
+                offset + at.saturating_sub(sector).saturating_mul(block),
+                bytes,
+            )
+        })
+    })
 }
 
 /// A block device served by a ring-3 driver through a ring.
 pub(crate) struct RingDisk {
     /// The device, as HELLO described it.
     device: Device,
-    /// Reads, shared with the ring's task.
+    /// Requests and the ring, shared by callers, the driver and the task.
     state: SpinLock<DiskState>,
     /// Woken when a request finishes, each its own caller's queue, and all
     /// of them when the ring ends.
     done: [WaitQueue; WAKE_SLOTS],
     /// The queue the next caller sleeps on.
     next_slot: AtomicUsize,
-    /// The serving ring's completion port, nudged when a read is queued:
-    /// the next ring's once a parked disk is taken up again.
-    port: SpinLock<Arc<Port>>,
 }
 
 impl fmt::Debug for RingDisk {
@@ -1284,8 +1505,8 @@ impl fmt::Debug for RingDisk {
 }
 
 impl RingDisk {
-    /// A disk for `device`, whose queue takes `limits`, nudging `port`.
-    fn new(device: Device, limits: Limits, port: Arc<Port>) -> RingDisk {
+    /// A disk for `device`, whose queue takes `limits`.
+    fn new(device: Device, limits: Limits) -> RingDisk {
         RingDisk {
             device,
             state: SpinLock::new(DiskState {
@@ -1294,59 +1515,31 @@ impl RingDisk {
                 next_id: 0,
                 ended: false,
                 parked_at: None,
-                data: None,
-                free: Vec::new(),
-                leases: Vec::new(),
-                held_back: false,
-                task: TaskIs::Awake,
+                live: None,
             }),
             done: [const { WaitQueue::new() }; WAKE_SLOTS],
             next_slot: AtomicUsize::new(0),
-            port: SpinLock::new(port),
         }
     }
 
-    /// Be served by a new ring, which `port` is the completion port of.
-    fn take_up(&self, port: Arc<Port>) {
-        *self.port.lock() = port;
+    /// A parked disk is taken up by a new ring.
+    fn take_up(&self) {
         self.state.lock().parked_at = None;
     }
 
-    /// Hand out `fresh`'s regions from now on: the serving ring's, whose
-    /// task is awake and about to look at the queue.
-    fn serve_from(&self, fresh: Fresh) {
-        let Fresh {
-            data,
-            mut free,
-            mut leases,
-        } = fresh;
-        let mut data = Some(data);
-        {
-            let mut state = self.state.lock();
-            core::mem::swap(&mut state.data, &mut data);
-            core::mem::swap(&mut state.free, &mut free);
-            core::mem::swap(&mut state.leases, &mut leases);
-            state.held_back = false;
-            state.task = TaskIs::Awake;
-        }
+    /// Be served by `live` from now on. Its task is about to look at the
+    /// queue, so what waited is dispatched without anyone else's help.
+    fn serve_from(&self, live: Live) {
+        let earlier = self.state.lock().live.replace(live);
         // Whatever an earlier ring left, let go of outside the lock.
-        drop((data, free, leases));
+        drop(earlier);
     }
 
-    /// No ring serves the disk any more. Its regions go once the last
-    /// caller still copying out of one has let go of it.
-    fn unserved(&self) {
-        let left = {
-            let mut state = self.state.lock();
-            state.held_back = false;
-            state.task = TaskIs::Awake;
-            (
-                state.data.take(),
-                core::mem::take(&mut state.free),
-                core::mem::take(&mut state.leases),
-            )
-        };
-        drop(left);
+    /// No ring serves the disk any more: the one that did, for its task to
+    /// end outside the lock. Its regions go once the last caller still
+    /// copying out of one lets go of it.
+    fn unserved(&self) -> Option<Live> {
+        self.state.lock().live.take()
     }
 
     /// The disk is over: fail every outstanding request and wake every
@@ -1368,23 +1561,20 @@ impl RingDisk {
         }
     }
 
-    /// Wake the queues `mask` names, one bit each.
-    fn wake(&self, mask: u64) {
+    /// Wake the callers and ring the driver as `rung` says: holding no lock,
+    /// since both wake tasks.
+    fn ring(&self, rung: Rung) {
         for (index, queue) in self.done.iter().enumerate() {
-            if mask & (1 << index) != 0 {
+            if rung.wake & (1 << index) != 0 {
                 queue.wake_all();
             }
         }
-    }
-
-    /// Run `stamp` on each of the wait queues `mask` names: the trip trace's
-    /// points (`sched::trip`), which name a traced read by its caller's queue.
-    fn each(&self, mut mask: u64, mut stamp: impl FnMut(&WaitQueue)) {
-        while mask != 0 {
-            if let Some(queue) = self.done.get(mask.trailing_zeros() as usize) {
-                stamp(queue);
-            }
-            mask &= mask - 1;
+        if let Some((port, bell)) = rung.bell {
+            each(&self.done, rung.dispatched, |reader| {
+                sched::trip::bell(reader, port.waiters());
+            });
+            // A full port already holds a bell the driver has not taken.
+            let _ = port.queue_user(bell.key(), bell.packet().data);
         }
     }
 
@@ -1393,60 +1583,49 @@ impl RingDisk {
         self.next_slot.fetch_add(1, Ordering::Relaxed) % WAKE_SLOTS
     }
 
-    /// Nudge the task: called holding the disk's lock, having claimed the
-    /// nudge, so that the packet is on the port before anyone else can look
-    /// at the task's state -- which is what lets [`Serving::wake_up`] tell a
-    /// nudge that is on its way from one that was lost.
-    fn nudge(&self) {
-        // A full port already holds a packet the task has not taken.
-        let _ = self.port.lock().queue_user(SUBMIT_KEY, [0; 2]);
-        let _ = NUDGES_SENT.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Queue one request for a caller that will sleep on queue `slot`, and
-    /// answer its id; the id in `request` is replaced by the disk's next one.
-    /// `payload` is a write's bytes, which the ring's task copies into the
-    /// data region when it dispatches the command.
+    /// Queue one request for a caller that will sleep on queue `slot`, put
+    /// it on the ring if it can go, and answer its id; the id in `request`
+    /// is replaced by the disk's next one. `payload` is a write's bytes,
+    /// copied into its data region when the command is dispatched.
     fn submit(
         &self,
         request: Request,
         payload: Option<Vec<u8>>,
         slot: usize,
     ) -> Result<u64, Errno> {
-        let mut state = self.state.lock();
-        let given_up = state
-            .parked_at
-            .is_some_and(|at| timer::now_nanos().saturating_sub(at) > PARK_PATIENCE_NANOS);
-        if state.ended || given_up {
-            return Err(Errno::EIO);
-        }
-        let id = state.next_id;
-        state.next_id = id.wrapping_add(1);
-        let request = Request {
-            id: ferrix_block::RequestId(id),
-            ..request
+        let (id, rung) = {
+            let mut state = self.state.lock();
+            let given_up = state
+                .parked_at
+                .is_some_and(|at| timer::now_nanos().saturating_sub(at) > PARK_PATIENCE_NANOS);
+            if state.ended || given_up {
+                return Err(Errno::EIO);
+            }
+            let id = state.next_id;
+            state.next_id = id.wrapping_add(1);
+            let request = Request {
+                id: ferrix_block::RequestId(id),
+                ..request
+            };
+            state
+                .queue
+                .submit(ticks(), request)
+                .map_err(|_| Errno::EIO)?;
+            let _ = state.reads.insert(
+                id,
+                Pending {
+                    payload,
+                    result: None,
+                    abandoned: false,
+                    slot,
+                },
+            );
+            if let Some(queue) = self.done.get(slot) {
+                sched::trip::queued(queue);
+            }
+            (id, state.pump(&self.done))
         };
-        state
-            .queue
-            .submit(ticks(), request)
-            .map_err(|_| Errno::EIO)?;
-        let _ = state.reads.insert(
-            id,
-            Pending {
-                payload,
-                result: None,
-                abandoned: false,
-                slot,
-            },
-        );
-        if let Some(queue) = self.done.get(slot) {
-            sched::trip::queued(queue);
-        }
-        if state.claim_nudge() {
-            self.nudge();
-        } else {
-            let _ = NUDGES_SPARED.fetch_add(1, Ordering::Relaxed);
-        }
+        self.ring(rung);
         Ok(id)
     }
 
@@ -1523,15 +1702,15 @@ impl RingDisk {
     }
 
     /// The caller has its bytes: `landing`'s region may be handed out again
-    /// once nobody else is still to copy out of it.
+    /// once nobody else is still to copy out of it, and whatever waited for
+    /// a region goes on the ring now, in this caller's time.
     fn let_go(&self, landing: Landing) {
-        {
+        let rung = {
             let mut state = self.state.lock();
             state.return_lease(&landing);
-            if state.claim_nudge() {
-                self.nudge();
-            }
-        }
+            state.pump(&self.done)
+        };
+        self.ring(rung);
         // The regions, if their ring has ended and this was the last hold on
         // them, are let go of outside the lock.
         drop(landing);
@@ -1563,6 +1742,89 @@ impl RingDisk {
     /// a barrier no request crosses.
     fn flush_request(&self) -> Result<(), Errno> {
         self.request(Request::flush(0), None, &mut [])
+    }
+
+    /// The ring's task, awake: take what completed while nobody was rung,
+    /// dispatch, and ask to be rung before sleeping (BLOCK-RING.md §5.1).
+    /// [`Wait::Pending`] means look again rather than sleep.
+    ///
+    /// # Errors
+    ///
+    /// The ring is corrupt: the task ends it.
+    fn tend(&self) -> Result<Wait, ()> {
+        let (reaped, mut rung, wait) = {
+            let mut state = self.state.lock();
+            let reaped = state.reap(usize::MAX, false);
+            each(&self.done, reaped.wake, sched::trip::answered);
+            let rung = state.pump(&self.done);
+            let wait = match state.live.as_mut() {
+                Some(live) if !reaped.corrupt => {
+                    live.for_task = false;
+                    live.side.prepare_to_sleep()
+                }
+                _ => Ok(Wait::Sleep),
+            };
+            (reaped, rung, wait)
+        };
+        rung.wake |= reaped.wake;
+        self.ring(rung);
+        if reaped.corrupt {
+            return Err(());
+        }
+        wait.map_err(|_| ())
+    }
+
+    /// The ring's task has woken: it stops asking to be rung until it has
+    /// looked (BLOCK-RING.md §5.1), and a request it finds it could put on
+    /// the ring, that nobody did, is counted stranded.
+    fn woke(&self) {
+        let mut state = self.state.lock();
+        let left = state.live.as_ref().is_some_and(|live| live.for_task);
+        if state.dispatchable() && !left {
+            let _ = STRANDED.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(live) = state.live.as_mut() {
+            live.side.woke();
+        }
+    }
+}
+
+/// The driver's completion bell, taken in the driver's own `port_queue`:
+/// the completions are answered and their callers woken from there, in the
+/// driver's time, with no task to wake first. At most [`INLINE_BUDGET`]
+/// completions, allocating nothing; past that, on a ring found corrupt, with
+/// something now to dispatch, or with no ring serving, the bell is declined
+/// and queued for the ring's task, which ends a corrupt ring itself.
+impl Server for RingDisk {
+    fn take_packet(&self, key: u64, _data: [u64; 2]) -> bool {
+        if key != BELL_COMPLETE {
+            return false;
+        }
+        let (wake, taken) = {
+            let mut state = self.state.lock();
+            if state.live.is_none() {
+                return false;
+            }
+            let reaped = state.reap(INLINE_BUDGET, true);
+            // Stamped before the lock goes, which a reader already awake
+            // takes the answer at.
+            each(&self.done, reaped.wake, sched::trip::answered);
+            // What a completion made dispatchable -- a write's region free
+            // again, a barrier passed -- is left to the task: putting a
+            // command on the ring allocates in the block queue, and nothing
+            // allocates here under the disk's lock. A read's region comes
+            // back in its caller's time, which dispatches what waited for it.
+            let leave = !reaped.drained || reaped.corrupt || state.dispatchable();
+            if leave && let Some(live) = state.live.as_mut() {
+                live.for_task = true;
+            }
+            (reaped.wake, !leave)
+        };
+        self.ring(Rung {
+            wake,
+            ..Rung::default()
+        });
+        taken
     }
 }
 
@@ -1665,23 +1927,19 @@ fn ticks() -> u64 {
     timer::now_nanos() / 1_000_000
 }
 
-/// A ring being served, owned by its task.
-struct Serving<'s> {
-    /// The kernel's side of the ring.
-    side: KernelSide<'s, Pages>,
+/// A ring's task's hold on what it serves. The ring itself is the disk's
+/// ([`Live`]); the task keeps what only it acts on -- the control channel,
+/// the completion port it sleeps on, the node -- and wakes for STOPPED, a
+/// dead driver, a corrupt ring, a bell the driver's own `port_queue`
+/// declined, or its recheck.
+struct Serving {
     /// The disk it serves.
     disk: Arc<RingDisk>,
     /// The kernel's end of the control channel.
     control: Arc<Endpoint>,
-    /// The completion port: the driver's bells, the control channel's
-    /// signals and readers' nudges.
+    /// The completion port: the control channel's signals, and the bells
+    /// the driver's `port_queue` did not take.
     kernel_port: Arc<Port>,
-    /// The driver's port, rung when the driver asks.
-    driver_port: Arc<Port>,
-    /// The data VMO's regions, which the disk hands out and takes back.
-    regions: Arc<Regions>,
-    /// The ring VMO's pages, held while the ring is served.
-    _ring_held: Held,
     /// The disk's node, unpublished when a stopped ring is over and kept
     /// with the disk when its driver died.
     registration: BlockRegistration,
@@ -1689,51 +1947,32 @@ struct Serving<'s> {
     location: Location,
     /// The disk's name, which the next driver must give again.
     name: DiskName,
-    /// The region each submission on the ring uses, by its token.
-    flying: BTreeMap<u64, u32>,
     /// Whether a registration on the control channel is waiting to fire.
     watching: bool,
 }
 
-impl fmt::Debug for Serving<'_> {
+impl fmt::Debug for Serving {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Serving")
-            .field("side", &self.side)
-            .field("flying", &self.flying.len())
+            .field("disk", &self.disk)
             .finish_non_exhaustive()
     }
 }
 
-impl Serving<'_> {
+impl Serving {
     /// Serve until the ring is over, and say how it ended.
     fn serve(&mut self) -> Ending {
         loop {
             if let Some(ending) = self.take_control() {
                 return ending;
             }
-            let dispatched = self.dispatch();
-            if let Some(bell) = self.side.publish() {
-                self.disk.each(dispatched, |reader| {
-                    sched::trip::bell(reader, self.driver_port.waiters());
-                });
-                // A full port already holds a bell the driver has not taken.
-                let _ = self.driver_port.queue_user(bell.key(), bell.packet().data);
-            }
-            if self.complete().is_err() {
-                return Ending::DriverDied;
-            }
-            match self.side.prepare_to_sleep() {
+            match self.disk.tend() {
                 Ok(Wait::Pending(_)) => continue,
                 Ok(Wait::Sleep) => {}
-                Err(_) => return Ending::DriverDied,
+                Err(()) => return Ending::DriverDied,
             }
-            if !self.go_idle() {
-                self.side.woke();
-                continue;
-            }
-            let nudged = self.sleep();
-            self.wake_up(nudged);
-            self.side.woke();
+            self.sleep();
+            self.disk.woke();
         }
     }
 
@@ -1762,186 +2001,11 @@ impl Serving<'_> {
         }
     }
 
-    /// About to sleep: say so, unless something could be dispatched now,
-    /// and answer whether to sleep. See [`DiskState::claim_nudge`] for why
-    /// the look and the flag are one step under the disk's lock.
-    fn go_idle(&self) -> bool {
-        let mut state = self.disk.state.lock();
-        if state.dispatchable() {
-            return false;
-        }
-        state.task = TaskIs::Idle;
-        true
-    }
-
-    /// Awake again, for whatever reason, having taken a nudge's packet if
-    /// `nudged`. Something dispatchable found here while the task is still
-    /// `Idle` was queued with nobody nudging it; one found `Nudged` with no
-    /// packet taken and none on the port is a nudge claimed and never sent.
-    /// Either is a nudge lost, which cost a caller the wait for this task's
-    /// recheck, and is counted for the driver check.
-    fn wake_up(&self, nudged: bool) {
-        let mut state = self.disk.state.lock();
-        let lost = match state.task {
-            TaskIs::Idle => state.dispatchable(),
-            TaskIs::Nudged => !nudged && self.kernel_port.is_empty(),
-            TaskIs::Awake => false,
-        };
-        if lost {
-            let _ = NUDGES_LOST.fetch_add(1, Ordering::Relaxed);
-        }
-        state.task = TaskIs::Awake;
-    }
-
-    /// Put a write command's bytes into the region it is dispatched through,
-    /// before the driver is told about it.
-    ///
-    /// A merged command's parts tile its range, so each part's bytes go where
-    /// its own sectors are. `false` if a part's payload is missing or does
-    /// not fit, and the command is then failed rather than sent with
-    /// whatever the region held.
-    fn fill(
-        &self,
-        state: &DiskState,
-        parts: &[(u64, u64)],
-        sector: u64,
-        offset: u64,
-        block: u64,
-    ) -> bool {
-        parts.iter().all(|&(id, at)| {
-            let bytes = state
-                .reads
-                .get(&id)
-                .and_then(|pending| pending.payload.as_deref());
-            bytes.is_some_and(|bytes| {
-                self.regions.pages.copy_in(
-                    offset + at.saturating_sub(sector).saturating_mul(block),
-                    bytes,
-                )
-            })
-        })
-    }
-
-    /// Move queued requests onto the ring while regions and ring slots last,
-    /// and answer the wait queues of the callers whose requests went on.
-    fn dispatch(&mut self) -> u64 {
-        let mut wake = 0;
-        let mut dispatched = 0;
-        {
-            let mut state = self.disk.state.lock();
-            state.held_back = false;
-            let block = u64::from(state.queue.limits().logical_block_size());
-            while let Some(&region) = state.free.last() {
-                let Some(command) = state.queue.dispatch(ticks()) else {
-                    // What is still queued waits for a command on the ring
-                    // to complete, and the completion's bell wakes the task.
-                    state.held_back = state.queue.queued() > 0;
-                    break;
-                };
-                let (token, op, sector, count) =
-                    (command.token, command.op, command.sector, command.count);
-                // Copied out, into room on the stack rather than the heap, so
-                // the queue is no longer borrowed while the payloads, which
-                // live beside it, are read.
-                let (room, len) = parts_of(command.parts);
-                let whole = len == command.parts.len();
-                let parts = room.get(..len).unwrap_or_default();
-                let offset = u64::from(region) * self.regions.region_bytes;
-                let submission = match op {
-                    // More parts than the queue was told it may merge.
-                    _ if !whole => None,
-                    Op::Flush => Some(Submission::flush(token.raw())),
-                    Op::Write if !self.fill(&state, parts, sector, offset, block) => None,
-                    Op::Write => Some(Submission::write(token.raw(), sector, count, offset)),
-                    _ => Some(Submission::read(token.raw(), sector, count, offset)),
-                };
-                let Some(submission) = submission else {
-                    wake |= answer(&mut state, token, Err(Errno::EIO), None);
-                    continue;
-                };
-                match self.side.submit(submission) {
-                    Ok(()) => {
-                        let _ = state.free.pop();
-                        let _ = self.flying.insert(token.raw(), region);
-                        crate::fs::seam::submitted();
-                        let slots = slots_of(&state.reads, parts);
-                        self.stamp_on_ring(slots);
-                        dispatched |= slots;
-                    }
-                    Err(SubmitError::Full) => {
-                        let _ = state.queue.requeue(token);
-                        state.held_back = true;
-                        break;
-                    }
-                    Err(_) => wake |= answer(&mut state, token, Err(Errno::EIO), None),
-                }
-            }
-        }
-        // Only the callers something happened to: the ones whose requests
-        // failed here. The rest are on the ring, and wait for completions.
-        if wake != 0 {
-            self.disk.wake(wake);
-        }
-        dispatched
-    }
-
-    /// The trip trace's `OnRing` for the callers `slots` names.
-    fn stamp_on_ring(&self, slots: u64) {
-        let port = self.kernel_port.waiters();
-        self.disk
-            .each(slots, |reader| sched::trip::on_ring(reader, port));
-    }
-
-    /// Take every completion off the ring and answer its requests.
-    fn complete(&mut self) -> Result<(), ferrix_blkring::Corruption> {
-        let mut wake = 0;
-        while let Some(completed) = self.side.poll()? {
-            let token = completed.submission.id;
-            let Some(region) = self.flying.remove(&token) else {
-                continue;
-            };
-            crate::fs::seam::completed();
-            if completed.device_ticks != 0 {
-                let _ = hop_check::DEVICE_TICKS
-                    .fetch_add(u64::from(completed.device_ticks), Ordering::Relaxed);
-                let _ = hop_check::DEVICE_TIMED.fetch_add(1, Ordering::Relaxed);
-            }
-            let result = outcome(&completed);
-            let offset = u64::from(region) * self.regions.region_bytes;
-            let mut state = self.disk.state.lock();
-            let answered = answer(
-                &mut state,
-                Token::from_raw(token),
-                result,
-                Some((&self.regions, region, offset)),
-            );
-            // Stamped before the lock goes, which a reader already awake
-            // takes the answer at.
-            self.disk.each(answered, sched::trip::answered);
-            wake |= answered;
-            // A read's region waits for its callers to copy their bytes out;
-            // anything else's is free again now.
-            if state
-                .leases
-                .get(region as usize)
-                .is_none_or(|&count| count == 0)
-            {
-                state.give_back(region);
-            }
-            state.held_back = false;
-        }
-        if wake != 0 {
-            self.disk.wake(wake);
-        }
-        Ok(())
-    }
-
-    /// Sleep on the completion port until something arrives, or a while,
-    /// and answer whether a caller's nudge was among what arrived.
+    /// Sleep on the completion port until something arrives, or a while.
     ///
     /// Runs in the ring's own kernel thread, never in a process, so the wait
     /// need not watch for a terminated process.
-    fn sleep(&mut self) -> bool {
+    fn sleep(&mut self) {
         if !self.watching {
             let observer = Observer::new(
                 &self.kernel_port,
@@ -1955,31 +2019,37 @@ impl Serving<'_> {
         let _ = port
             .waiters()
             .wait_until_deadline(|| !port.is_empty(), deadline);
-        // Whichever reader is traced: the task serves them all.
-        self.disk.each(u64::MAX, sched::trip::ring_running);
-        let mut nudged = false;
         while let Some(packet) = port.take() {
             if packet.key == CONTROL_KEY && packet.kind == PACKET_SIGNAL {
                 self.watching = false;
             }
-            nudged |= packet.key == SUBMIT_KEY && packet.kind == PACKET_USER;
         }
-        nudged
     }
 
     /// The ring is over. STOPPED ends the disk: every outstanding request
     /// fails and the node goes. A dead driver's disk is parked instead, with
     /// the commands it held put back on the queue for the next ring.
-    fn finish(mut self, ending: Ending) {
-        let _outstanding = self.side.end(ending).count();
-        self.disk.unserved();
+    fn finish(self, ending: Ending) {
+        // Taken off the disk first, so nobody puts anything more on it, and
+        // ended outside the disk's lock.
+        let mut held = Vec::new();
+        if let Some(mut live) = self.disk.unserved() {
+            if held.try_reserve_exact(live.side.outstanding()).is_ok() {
+                // NOALLOC: room for every outstanding submission, reserved
+                // above.
+                held.extend(live.side.end(ending).map(|submission| submission.id));
+            } else {
+                let _ = live.side.end(ending).count();
+            }
+            drop(live);
+        }
         if ending != Ending::DriverDied {
             self.disk.end();
             return;
         }
         {
             let mut state = self.disk.state.lock();
-            for &token in self.flying.keys() {
+            for &token in &held {
                 let _ = state.queue.requeue(Token::from_raw(token));
             }
         }
@@ -2004,32 +2074,33 @@ fn outcome(completed: &Completed) -> Result<(), Errno> {
 }
 
 /// Finish the command `token` names with `result`, and answer the mask of
-/// the wait queues whose callers it answered.
+/// the wait queues whose callers it answered and how many of them hold bytes
+/// in its region.
 ///
 /// A read that succeeded brought its bytes into a region: `at` is the
 /// regions, the region and the command's offset in the data VMO. Each of its
-/// requests is answered with where its own bytes are, and the region counts
-/// one lease more for each, which its caller returns once it has copied
-/// them. Nothing is copied here, and nothing allocated: this runs under the
-/// disk's lock.
+/// requests is answered with where its own bytes are, and the caller adds a
+/// lease on the region for each. Nothing is copied here, and nothing
+/// allocated: this runs under the disk's lock.
 fn answer(
-    state: &mut DiskState,
+    queue: &mut Queue,
+    reads: &mut BTreeMap<u64, Pending>,
     token: Token,
     result: Result<(), Errno>,
     at: Option<(&Arc<Regions>, u32, u64)>,
-) -> u64 {
-    let Ok(completion) = state.queue.complete(token, ()) else {
-        return 0;
+) -> (u64, u32) {
+    let Ok(completion) = queue.complete(token, ()) else {
+        return (0, 0);
     };
-    let block = u64::from(state.queue.limits().logical_block_size());
+    let block = u64::from(queue.limits().logical_block_size());
     let mut wake = 0;
     let mut leases = 0_u32;
     for part in completion.parts() {
-        let Some(pending) = state.reads.get_mut(&part.id.0) else {
+        let Some(pending) = reads.get_mut(&part.id.0) else {
             continue;
         };
         if pending.abandoned {
-            let _ = state.reads.remove(&part.id.0);
+            let _ = reads.remove(&part.id.0);
             continue;
         }
         let answered = result.and_then(|()| {
@@ -2058,13 +2129,7 @@ fn answer(
         pending.result = Some(answered);
         wake |= 1_u64 << (pending.slot % WAKE_SLOTS);
     }
-    if leases > 0
-        && let Some((_, region, _)) = at
-        && let Some(count) = state.leases.get_mut(region as usize)
-    {
-        *count = count.saturating_add(leases);
-    }
-    wake
+    (wake, leases)
 }
 
 /// Each of `parts`' request id and first sector, in room on the stack: as
@@ -2078,6 +2143,18 @@ fn parts_of(parts: &[ferrix_block::Part]) -> ([(u64, u64); MAX_PARTS as usize], 
     (room, parts.len().min(MAX_PARTS as usize))
 }
 
+/// Run `stamp` on each of the wait queues of `done` that `mask` names: the
+/// trip trace's points (`sched::trip`), which name a traced read by its
+/// caller's queue.
+fn each(done: &[WaitQueue], mut mask: u64, mut stamp: impl FnMut(&WaitQueue)) {
+    while mask != 0 {
+        if let Some(queue) = done.get(mask.trailing_zeros() as usize) {
+            stamp(queue);
+        }
+        mask &= mask - 1;
+    }
+}
+
 /// The wait queues of the callers of `parts`, a bit each.
 fn slots_of(reads: &BTreeMap<u64, Pending>, parts: &[(u64, u64)]) -> u64 {
     parts
@@ -2086,4 +2163,11 @@ fn slots_of(reads: &BTreeMap<u64, Pending>, parts: &[(u64, u64)]) -> u64 {
         .fold(0, |mask, pending| {
             mask | 1_u64 << (pending.slot % WAKE_SLOTS)
         })
+}
+
+/// The trip trace's `OnRing` for the callers of `done` that `slots` names,
+/// on the ring whose completion port is `ring_port`.
+fn stamp_on_ring(done: &[WaitQueue], slots: u64, ring_port: &Port) {
+    let port = ring_port.waiters();
+    each(done, slots, |reader| sched::trip::on_ring(reader, port));
 }

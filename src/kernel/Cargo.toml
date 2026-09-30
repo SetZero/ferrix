@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 ferrix-acpi.workspace = true
-ferrix-blkring.workspace = true
+ferrix-blkring = { workspace = true, features = ["alloc"] }
 ferrix-devmgr-proto.workspace = true
 ferrix-block.workspace = true
 ferrix-bootinfo.workspace = true

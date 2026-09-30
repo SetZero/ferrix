@@ -403,6 +403,22 @@ package FerrixObjectRequirements {
             attribute :>> parent = "H.OBJ.7";
             attribute :>> unit = "object::port::Port::put_back";
         }
+        requirement <'L.object.106'> aServedPortOffersThePacketFirst : ItemLowLevel {
+            attribute :>> statement = "Port::queue_from_program shall offer a
+                program's packet to the port's server, if it was made with one that
+                is still there, and shall queue it as Port::queue_user does, with the
+                same bound, whenever the server does not take it; a port made with
+                Port::new shall have no server.";
+            attribute :>> criterion = "Through the block ring's completion port,
+                completions of stage 10's seam run are taken in the driver's
+                port_queue, and with that path declined none is; a port made with
+                Port::new, and one whose server has gone, each queue a program's
+                packet and give it back as queued.";
+            attribute :>> parent = "H.OBJ.10";
+            attribute :>> unit = ("object::port::Port::queue_from_program",
+                "object::port::Port::new_served", "object::port::Port::with_server",
+                "object::port::Port::new");
+        }
         requirement <'L.object.32'> aRegistrationFiresOnce : ItemLowLevel {
             attribute :>> statement = "A registration shall not fire before a signal
                 it asked for is asserted, and shall fire once when one is, reporting

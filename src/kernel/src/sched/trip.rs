@@ -41,6 +41,14 @@
 //! records it in its skipped mask. A trip whose [`Stamp::Done`] finds an
 //! earlier slot unreached is incomplete, and the check leaves it out.
 //!
+//! Since the ring's task left the data path (`docs/BLOCK-RING.md` §5, os-35),
+//! no trip takes either of its stamps: the reader puts its command on the
+//! ring and rings the driver itself, stamping [`Stamp::OnRing`] and
+//! [`Stamp::Bell`] in its own time, and the driver's `port_queue` answers the
+//! read, stamping [`Stamp::Posted`] and then [`Stamp::Answered`]. So
+//! [`Stamp::RingRunning`] and [`Stamp::RingAgain`] are passed over on every
+//! trip, and the `seam-trip` line counts them among the hops not taken.
+//!
 //! Which disk and which ports are the traced ones is recorded as the trip
 //! goes: [`Stamp::Queued`] names the disk by the address of its reader's wait
 //! queue, and [`Stamp::OnRing`] the ring's two ports by the addresses of
@@ -268,16 +276,6 @@ pub(crate) fn queued(reader: &WaitQueue) {
         name(Traced::Reader, reader);
         let _ = stamp(Stamp::Queued, Stamp::Queued);
     }
-}
-
-/// The ring task serving the disk of `reader` is running after a sleep: the
-/// first wake of a trip, or the one after the driver's completion.
-pub(crate) fn ring_running(reader: &WaitQueue) {
-    if !TRACING.load(Ordering::Relaxed) || !is(Traced::Reader, reader) {
-        return;
-    }
-    let _ = stamp(Stamp::RingRunning, Stamp::RingRunning);
-    let _ = stamp(Stamp::RingAgain, Stamp::RingAgain);
 }
 
 /// The ring serving the disk of `reader` put a command on the ring; its

@@ -194,6 +194,9 @@ mod ring;
 #[cfg(test)]
 extern crate std;
 
+#[cfg(any(feature = "alloc", test))]
+extern crate alloc;
+
 #[cfg(test)]
 mod tests;
 

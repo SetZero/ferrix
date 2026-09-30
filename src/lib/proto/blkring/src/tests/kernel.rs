@@ -11,7 +11,7 @@ use ferrix_native_abi::types::{PACKET_USER, PortPacket};
 use super::support::{Rng, Shared, Who, device, read, with_pair};
 use crate::bell::{BELL_COMPLETE, BELL_SUBMIT, Rung, Wait, port_queue_rung, rung};
 use crate::driver::{Consumed, DriverSide};
-use crate::kernel::{AttachError, Ending, KernelSide, Slot, SubmitError, Table};
+use crate::kernel::{AttachError, Ending, KernelSide, Slot, Slots, SubmitError, Table};
 use crate::layout::{HeaderError, RingLayout, Status, Submission, completion, header};
 use crate::{Corruption, InvalidSubmission};
 
@@ -525,7 +525,7 @@ fn the_outstanding_table_agrees_with_a_map() {
         let mut rng = Rng::new(seed);
         let size = 1 + rng.below(9) as usize;
         let mut slots = vec![Slot::EMPTY; size];
-        let mut table = Table::new(&mut slots, size);
+        let mut table = Table::new(Slots::Borrowed(&mut slots), size);
         let mut map = BTreeMap::new();
         for _ in 0..200 {
             let id = rng.below(4 * size as u64);
@@ -556,4 +556,46 @@ fn table_step(table: &mut Table<'_>, map: &mut BTreeMap<u64, ()>, op: u64, id: u
             "find {id}"
         ),
     }
+}
+
+#[test]
+fn a_side_that_owns_its_storage_keeps_the_same_table() {
+    let layout = RingLayout::standard(4).expect("valid");
+    let shared = Shared::new(layout.ring_bytes());
+    let mut driver = DriverSide::new(
+        shared.memory(Who::Driver, layout),
+        layout.ring_bytes(),
+        layout,
+        device(),
+    )
+    .expect("fits");
+    let none = KernelSide::attach_owned(
+        shared.memory(Who::Kernel, layout),
+        layout.ring_bytes(),
+        device(),
+        std::boxed::Box::new([]),
+    );
+    assert_eq!(none.err(), Some(AttachError::NoStorage), "no storage");
+    let mut kernel = KernelSide::attach_owned(
+        shared.memory(Who::Kernel, layout),
+        layout.ring_bytes(),
+        device(),
+        vec![Slot::EMPTY; 2].into_boxed_slice(),
+    )
+    .expect("attaches");
+    assert_eq!(kernel.capacity(), 2, "bounded by the slots it owns");
+    kernel.submit(read(1)).expect("room");
+    kernel.submit(read(2)).expect("room");
+    assert_eq!(kernel.submit(read(3)), Err(SubmitError::Full), "two slots");
+    let _ = kernel.publish();
+    for _ in 0..2 {
+        assert!(matches!(driver.consume(), Ok(Some(Consumed::Request(_)))));
+    }
+    driver.complete(2, Status::Ok, 512).expect("held");
+    let _ = driver.publish();
+    let completed = kernel.poll().expect("sound").expect("posted");
+    assert_eq!(completed.submission.id, 2);
+    assert_eq!(kernel.outstanding(), 1);
+    let left: Vec<u64> = kernel.end(Ending::DriverDied).map(|s| s.id).collect();
+    assert_eq!(left, vec![1], "the one still outstanding, once");
 }

@@ -32,9 +32,11 @@
 //! this check — a btrfs mount of the next disk is stage 11's exit — and the
 //! process ends with the machine.
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
+use ferrix_blkring::BELL_COMPLETE;
 use ferrix_blkring::control::Message;
 use ferrix_blkring::identity::DiskName;
 use ferrix_native_abi::handle::Handle;
@@ -52,6 +54,7 @@ use crate::fs::block::BlockDevice;
 use crate::object::Object;
 use crate::object::check::{Side, device_handle, reg};
 use crate::object::job::Job;
+use crate::object::port::{Port, Server};
 use crate::sched;
 use crate::timer;
 
@@ -158,10 +161,11 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
         let disk = first.ok_or("no disk was published")?;
         let read = if checks::run() {
             let read = read_back(disk.as_ref())?;
-            no_nudge_lost()?;
+            none_stranded()?;
             super::hop_check::run(&disk)?;
-            no_nudge_lost()?;
-            print_nudges();
+            none_stranded()?;
+            bells_taken_in_the_drivers_time()?;
+            print_taken();
             read
         } else {
             0
@@ -210,10 +214,11 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
     let disk = first.ok_or("no disk was published")?;
     let read = if checks::run() {
         let read = read_back(disk.as_ref())?;
-        no_nudge_lost()?;
+        none_stranded()?;
         super::hop_check::run(&disk)?;
-        no_nudge_lost()?;
-        print_nudges();
+        none_stranded()?;
+        bells_taken_in_the_drivers_time()?;
+        print_taken();
         read
     } else {
         0
@@ -462,30 +467,55 @@ fn names_str(count: usize) -> &'static str {
     }
 }
 
-/// Require that no caller's nudge to a ring's task was lost: the task, waking
-/// for any reason, never found something it could have dispatched that was
-/// queued while it slept without a nudge on its way (`block_ring`'s
-/// `Serving::wake_up`). A lost nudge does not fail a read -- the task's
-/// recheck finds the request 50 ms later -- so only this count shows it.
-fn no_nudge_lost() -> Result<(), &'static str> {
-    if super::NUDGES_LOST.load(core::sync::atomic::Ordering::Relaxed) != 0 {
-        print_nudges();
-        return Err(
-            "a request waited for the ring task's recheck: the nudge that should have woken it was lost",
-        );
+/// Require that no request was stranded: the ring's task, waking for any
+/// reason, never found something it could have put on the ring that nobody
+/// had (`block_ring`'s `RingDisk::woke`). A stranded request does not fail a
+/// read -- the task's recheck puts it on the ring 50 ms later -- so only this
+/// count shows it.
+fn none_stranded() -> Result<(), &'static str> {
+    if super::STRANDED.load(Ordering::Relaxed) != 0 {
+        print_taken();
+        return Err("a request waited for the ring task's recheck: nobody put it on the ring");
     }
     Ok(())
 }
 
-/// The nudge counts, for the boot log.
-fn print_nudges() {
-    let load =
-        |count: &core::sync::atomic::AtomicU64| count.load(core::sync::atomic::Ordering::Relaxed);
+/// Require that the driver's completion bells were taken in its own
+/// `port_queue`: at least one of the seam run's completions was, which is
+/// the path every one takes that the ring's task is asleep for. And that a
+/// port with no server, or one whose server has gone, still queues a
+/// program's packet as it always did.
+///
+/// Verifies: L.object.106
+fn bells_taken_in_the_drivers_time() -> Result<(), &'static str> {
+    if super::TAKEN_INLINE.load(Ordering::Relaxed) == 0 {
+        print_taken();
+        return Err(
+            "no completion was taken in the driver's port_queue: every one waited for the ring's task",
+        );
+    }
+    let plain = Port::new().map_err(|_| "no memory for a port")?;
+    let gone: Weak<dyn Server> = Weak::<super::RingDisk>::new();
+    let orphaned = Port::new_served(gone).map_err(|_| "no memory for a port")?;
+    for port in [&plain, &orphaned] {
+        port.queue_from_program(BELL_COMPLETE, [1, 2])
+            .map_err(|_| "a port refused a program's first packet")?;
+        match port.take() {
+            Some(packet) if packet.key == BELL_COMPLETE && packet.data == [1, 2] => {}
+            _ => return Err("a port with no server to take it did not queue a program's packet"),
+        }
+    }
+    Ok(())
+}
+
+/// Where the completions were taken, for the boot log.
+fn print_taken() {
+    let load = |count: &AtomicU64| count.load(Ordering::Relaxed);
     crate::console::println!(
-        "  nudge    {} requests found the ring's task asleep and nudged it, {} found it awake \
-         or nudged already, {} nudges lost",
-        load(&super::NUDGES_SENT),
-        load(&super::NUDGES_SPARED),
-        load(&super::NUDGES_LOST),
+        "  inline   {} completions taken in the driver's port_queue, {} by the ring's task, \
+         {} requests stranded",
+        load(&super::TAKEN_INLINE),
+        load(&super::TAKEN_BY_TASK),
+        load(&super::STRANDED),
     );
 }
