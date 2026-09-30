@@ -314,7 +314,7 @@ fn check_user_namespaces() {
         ),
     };
     println!(
-        "  userns   {} calls answered as Linux answers them, {} of them refusals: a namespace          named apart, ids 65534 until mapped, a gid_map refused before setgroups is denied,          kernel root and a second id unmappable, a map written once, fake root refused what          only root may do, a chrooted process refused, a set-id bit ignored, a read-only          /proc/sys refusing a write",
+        "  userns   {} calls answered as Linux answers them, {} of them refusals: a namespace named apart, ids 65534 until mapped, a gid_map refused before setgroups is denied, kernel root and a second id unmappable, a map written once, fake root refused what only root may do, a chrooted process refused, a set-id bit ignored, a read-only /proc/sys refusing a write",
         checked.calls, checked.refusals,
     );
 }
