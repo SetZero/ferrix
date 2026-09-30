@@ -55,6 +55,12 @@ pub(crate) struct Report {
 ///
 /// Verifies: L.user.101
 pub(crate) fn run() -> Result<Report, &'static str> {
+    crate::console::println!("NEGATIVE CONTROL nc5: an address space dropped holding a spin lock");
+    {
+        let held = LAST_WINDOW.lock();
+        drop(AddressSpace::new().map_err(|_| "could not make an address space")?);
+        drop(held);
+    }
     // Once before the window, for the reason `object::check::run` gives: the
     // heap keeps a page of each size class the first run touched, and the
     // held-page check is the first to touch some of them.
