@@ -400,7 +400,7 @@ fn give_thread_pointer(state: &mut arch::UserState, tls: u64, thread_area: Optio
 /// Ferrix does not have and for `CLONE_NEWNS` with `CLONE_FS`, as Linux
 /// refuses a namespace a shared fs context would leave; `EPERM` for
 /// `CLONE_NEWNS` without privilege.
-fn namespaces_asked(parent: &Process, flags: u64) -> Result<(), Errno> {
+pub(crate) fn namespaces_asked(parent: &Process, flags: u64) -> Result<(), Errno> {
     if flags & (CLONE_NAMESPACES & !(CLONE_NEWNS | CLONE_NEWUSER)) != 0 {
         return Err(Errno::EINVAL);
     }
