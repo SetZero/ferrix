@@ -17,7 +17,9 @@
 //!   `/proc/<pid>/ns/mnt` names the same namespace before the `unshare` and
 //!   different ones after; `unshare(CLONE_NEWNS)` by uid 1000 is `EPERM`, and
 //!   a namespace Ferrix does not have is still `EINVAL`;
-//! * bubblewrap's calls as root, in its order: a tmpfs for the new root,
+//! * bubblewrap's calls as root, in its order, from the namespace's own `/`
+//!   -- the kernel's tmpfs, in memory, on the bottom mount -- as on a machine
+//!   with no disk: a tmpfs for the new root,
 //!   `newroot` bound onto itself, `pivot_root(base, "oldroot")`, binds into
 //!   `newroot` from the old root -- a file, and with a data disk a btrfs --
 //!   and a `proc` and a tmpfs of its own, the old root detached, then
@@ -257,6 +259,14 @@ fn lists(mountinfo: &[u8], point: &[u8]) -> bool {
             .nth(4)
             .is_some_and(|field| field == point)
     })
+}
+
+/// A path under [`BASE`] as it is reached through bubblewrap's `oldroot`
+/// after its first `pivot_root`, which puts the old `/` there.
+fn old(name: &[u8]) -> Vec<u8> {
+    let mut path = b"/oldroot".to_vec();
+    path.extend_from_slice(&under(name));
+    path
 }
 
 /// A path under [`BASE`].
@@ -573,23 +583,16 @@ fn bubblewrap_as_root(
 /// A tmpfs base with `newroot` bound onto itself, and the first
 /// `pivot_root`, which puts the old root at `oldroot`.
 fn first_pivot(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static str> {
-    // A root with a parent, as every process's is after the root switch: the
-    // copy of [`BASE`].
+    // From the namespace's own `/`, the kernel's tmpfs in memory, as a
+    // program's root is where no disk was switched to: the mount the
+    // bottom one holds up.
+    let base = under(b"base");
     tally.ok(
-        with_path(page, Syscall::Chroot, BASE, [0, 0, 0])?,
-        "the namespace check could not chroot into its tmpfs",
-    )?;
-    tally.ok(
-        with_path(page, Syscall::Chdir, b"/", [0, 0, 0])?,
-        "the namespace check could not chdir to its root",
-    )?;
-
-    tally.ok(
-        mount(page, b"tmpfs", b"/base", b"tmpfs", MS_NODEV | MS_NOSUID)?,
+        mount(page, b"tmpfs", &base, b"tmpfs", MS_NODEV | MS_NOSUID)?,
         "bubblewrap's base tmpfs could not be mounted",
     )?;
     tally.ok(
-        with_path(page, Syscall::Chdir, b"/base", [0, 0, 0])?,
+        with_path(page, Syscall::Chdir, &base, [0, 0, 0])?,
         "bubblewrap could not chdir to its base",
     )?;
     tally.ok(
@@ -605,20 +608,20 @@ fn first_pivot(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'stati
         "bubblewrap's oldroot could not be made",
     )?;
     tally.refused(
-        pivot_root(page, b"/base/newroot", b"/base")?,
+        pivot_root(page, b"newroot", &base)?,
         Errno::EINVAL,
         "pivot_root to a place put_old is not below was not refused EINVAL",
     )?;
     tally.ok(
-        pivot_root(page, b"/base", b"oldroot")?,
-        "pivot_root(base, oldroot) was refused",
+        pivot_root(page, &base, b"oldroot")?,
+        "pivot_root(base, oldroot) from the namespace's own / was refused",
     )?;
     tally.ok(
         with_path(page, Syscall::Chdir, b"/", [0, 0, 0])?,
         "bubblewrap could not chdir to its new root",
     )?;
     // The caller's root moved with the pivot, so the old root is below it.
-    if read_file(page, b"/oldroot/old-only")? != Ok(CONTENT.to_vec()) {
+    if read_file(page, &old(b"old-only"))? != Ok(CONTENT.to_vec()) {
         return Err("after pivot_root the old root was not at put_old");
     }
     Ok(())
@@ -643,13 +646,7 @@ fn fill_newroot(
         "a file to bind onto could not be made in newroot",
     )?;
     tally.ok(
-        mount(
-            page,
-            b"/oldroot/old-only",
-            b"/newroot/file",
-            b"none",
-            MS_BIND,
-        )?,
+        mount(page, &old(b"old-only"), b"/newroot/file", b"none", MS_BIND)?,
         "a file from the old root could not be bound into newroot",
     )?;
     tally.ok(
@@ -670,7 +667,7 @@ fn fill_newroot(
         tally.ok(
             mount(
                 page,
-                b"/oldroot/disk",
+                &old(b"disk"),
                 b"/newroot/disk",
                 b"none",
                 MS_BIND | MS_REC,
@@ -679,7 +676,7 @@ fn fill_newroot(
         )?;
         // Written through the old root, which is detached next: its
         // write-out is what puts this on the disk.
-        let mut path = b"/oldroot/disk/".to_vec();
+        let mut path = old(b"disk/");
         path.extend_from_slice(DETACH_FILE);
         write_file(
             page,
@@ -693,7 +690,7 @@ fn fill_newroot(
         unmount(page, b"/oldroot", MNT_DETACH)?,
         "the old root could not be detached",
     )?;
-    if read_file(page, b"/oldroot/old-only")? != Err(Errno::ENOENT) {
+    if read_file(page, &old(b"old-only"))? != Err(Errno::ENOENT) {
         return Err("the old root was still reachable after its detach");
     }
     Ok(())
@@ -732,7 +729,7 @@ fn only_the_new_tree(page: &mut Page<'_>, disk: bool) -> Result<(), &'static str
     }
     for gone in [
         &b"/oldroot"[..],
-        b"/base",
+        BASE,
         b"/old-only",
         b"/../old-only",
         FIRST_ONLY,

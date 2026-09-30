@@ -228,7 +228,10 @@ pub(super) fn process_mounts(process: &Process) -> Result<Vec<u8>> {
     mounts_from(&ns, &root)
 }
 
-/// The mount table, with each mount point as `root` sees it.
+/// The mount table, with each mount point as `root` sees it, and without
+/// the mounts `root` cannot reach -- the namespace's bottom mount under `/`
+/// among them -- as Linux's `show_vfsmnt` skips what `seq_path_root` cannot
+/// name.
 fn mounts_from(ns: &Namespace, root: &Location) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     for mount in ns.mounts() {
@@ -236,7 +239,9 @@ fn mounts_from(ns: &Namespace, root: &Location) -> Result<Vec<u8>> {
             dentry: Arc::clone(mount.root()),
             mount: Arc::clone(&mount),
         };
-        let point = ns.path_of(&at, root);
+        let Some(point) = ns.path_within(&at, root) else {
+            continue;
+        };
         let name = mount.filesystem().name().as_bytes();
         let options = shown_flags(&mount).options();
         mounts::render(

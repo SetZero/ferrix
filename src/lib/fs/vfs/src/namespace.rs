@@ -13,6 +13,7 @@ use ferrix_sync::{Parker, SleepLock, SpinLock};
 
 use crate::Result;
 use crate::access::{Access, MAY_READ, MAY_WRITE};
+use crate::bottom::Bottom;
 use crate::dentry::Dentry;
 use crate::file::{OpenFile, OpenFlags};
 use crate::node::{FileSystem, FileType, Inode, Metadata, NewNode, SetAttributes, StatFs};
@@ -500,12 +501,19 @@ struct Tree {
 
 /// A mount table with a root: one mount namespace.
 ///
+/// Its root mount is the empty, read-only bottom filesystem
+/// (`crate::bottom`), and the filesystem it is made with is mounted on top
+/// of that as `/`, so that `/` is a mount with a parent, as every Linux
+/// machine's is once booted, and `pivot_root` can move it aside. What
+/// [`Namespace::root`] answers is that top.
+///
 /// The first is the kernel's, made at boot. Every other is a copy of one
 /// that already exists, made by [`Namespace::copy`] for `unshare` or `clone`
 /// with `CLONE_NEWNS`, and ends when the last context naming it does: then
 /// its mounts leave their mount points, and each goes when its last user
 /// does ([`Drop`]).
 pub struct Namespace {
+    /// The bottom mount, which has no parent and is never unmounted.
     root: Arc<Mount>,
     tree: Arc<Tree>,
     /// Held across every change to the tree -- a mount, a bind, an unmount
@@ -552,22 +560,35 @@ impl Namespace {
         parker: Arc<dyn Parker>,
     ) -> Namespace {
         // Made before any program runs: nobody to charge, and nothing to
-        // refuse.
+        // refuse. The bottom first, then `fs` on it as `/`.
         let tree = Arc::new(Tree {
             mounts: SpinLock::new(BTreeMap::new()),
         });
+        let bottom: Arc<dyn FileSystem> = Arc::new(Bottom);
         let root = Arc::new(Mount {
             id: 1,
-            flags: AtomicU32::new(0),
-            root: Dentry::uncharged_root(fs.root()),
-            sb: Superblock::new(fs),
+            flags: AtomicU32::new(MountFlags::READ_ONLY.bits()),
+            root: Dentry::uncharged_root(bottom.root()),
+            sb: Superblock::new(bottom),
             parent: SpinLock::new(None),
             tree: Arc::downgrade(&tree),
             parker: Arc::clone(&parker),
             _charge: Charge::none(),
         });
+        let top = Arc::new(Mount {
+            id: 2,
+            flags: AtomicU32::new(0),
+            root: Dentry::uncharged_root(fs.root()),
+            sb: Superblock::new(fs),
+            parent: SpinLock::new(Some((Arc::clone(&root), Arc::clone(&root.root)))),
+            tree: Arc::downgrade(&tree),
+            parker: Arc::clone(&parker),
+            _charge: Charge::none(),
+        });
+        root.root.add_mount();
+        let _ = tree.mounts.lock().insert((root.id, root.root.id()), top);
         let shared = Arc::new(Shared {
-            next_mount: AtomicU64::new(2),
+            next_mount: AtomicU64::new(3),
             rename_lock: SleepLock::new((), parker.as_ref()),
             cache: SpinLock::new(VecDeque::new()),
             cache_limit,
@@ -597,9 +618,18 @@ impl Namespace {
         &self.parker
     }
 
-    /// The root of the tree.
+    /// `/`: the mount on top of the bottom one, which a new process starts
+    /// at -- the filesystem the namespace was made with, until a
+    /// `pivot_root` puts another there.
     #[must_use]
     pub fn root(&self) -> Location {
+        self.descend_mounts(self.bottom())
+    }
+
+    /// The bottom mount's one directory, which nothing is ever made in and
+    /// no program's root is.
+    #[must_use]
+    pub(crate) fn bottom(&self) -> Location {
         Location {
             mount: Arc::clone(&self.root),
             dentry: Arc::clone(&self.root.root),
@@ -618,7 +648,7 @@ impl Namespace {
         }
     }
 
-    /// Every mount, the root first.
+    /// Every mount, the bottom one first.
     #[must_use]
     pub fn mounts(&self) -> Vec<Arc<Mount>> {
         let mut all = Vec::new();
@@ -1639,9 +1669,9 @@ impl Namespace {
     ///
     /// # Errors
     ///
-    /// `EINVAL` if `at` is not the root of a mount of this namespace's tree,
-    /// or is the namespace's root; `EBUSY` if something is mounted inside
-    /// it.
+    /// `EINVAL` if `at` is not the root of a mount of this namespace's tree;
+    /// `EBUSY` if it is `/` -- the mount on the bottom one -- or something is
+    /// mounted inside it.
     pub fn unmount(&self, at: &Location) -> Result<()> {
         self.unmount_with(at, false)
     }
@@ -1664,8 +1694,18 @@ impl Namespace {
             return Err(Errno::EINVAL);
         }
         let _changing = self.change.lock();
-        if at.mount.parent().is_none() || !self.owns(&at.mount) {
+        let Some((above, _)) = at.mount.parent() else {
             return Err(Errno::EINVAL);
+        };
+        if !self.owns(&at.mount) {
+            return Err(Errno::EINVAL);
+        }
+        // `/` stays: every process of the namespace that has not moved its
+        // root starts there, and the kernel's own walks do. Linux turns a
+        // plain unmount of `/` into a read-only remount and lets
+        // `MNT_DETACH` take it lazily; `pivot_root` is the way to move it.
+        if Arc::ptr_eq(&above, &self.root) {
+            return Err(Errno::EBUSY);
         }
         let mut going = Vec::new();
         going.try_reserve(1).map_err(|_| Errno::ENOMEM)?;

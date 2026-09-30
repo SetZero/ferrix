@@ -170,7 +170,10 @@ exist. bubblewrap 0.12 needs `openat2` with `RESOLVE_IN_ROOT`, so N3
 answers it, every resolve flag. The `mntns` boot line (FX-0887) proves it
 on all three architectures, with five negative controls, and `cargo xtask
 test-bwrap` runs Debian's bubblewrap as root: Steam's requirements check's
-four argument lists and a pressure-vessel-shaped container. Next is N4,
+four argument lists and a pressure-vessel-shaped container. Every
+namespace now stands on an empty bottom mount, as a booted Linux machine's
+`/` does, so `pivot_root` works from `/` in memory too: Steam's
+requirements check exits 0 as root in `test-steam-bootstrap`. Next is N4,
 user namespaces.
 
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`

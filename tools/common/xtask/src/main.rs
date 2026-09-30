@@ -235,7 +235,7 @@ COMMANDS:
                   and log in to Steam anonymously, over the network
     test-steam-bootstrap  Attach the volume tools/common/fetch/fetch-steam.sh makes, and require Valve's steam.sh to update the
                   client and run it until it asks for an X display, over the network
-    test-bwrap    Boot on a fresh btrfs root and require Debian's bubblewrap, which tools/common/fetch/fetch-bwrap.sh fetches,
+    test-bwrap    Boot with / in memory and require Debian's bubblewrap, which tools/common/fetch/fetch-bwrap.sh fetches,
                   to run Steam's requirements check and a pressure-vessel-shaped container as root (docs/NAMESPACES.md §8)
     test-steam-window  Attach the volume tools/common/fetch/fetch-steam-window.sh makes, and require Steam's sign-in window
                   on hyprix, drawn through yserver, over the network (docs/STEAM.md)

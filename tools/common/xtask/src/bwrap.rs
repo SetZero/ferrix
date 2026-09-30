@@ -29,10 +29,9 @@
 //!
 //! # Where `/` is
 //!
-//! `pivot_root` refuses a caller whose root mount has no parent, as Linux
-//! does for its initramfs; a machine's `/` is a disk mounted over one. So the
-//! boot has a fresh btrfs root, as `test-init`'s has, and the script runs in
-//! it.
+//! In memory, as `test-steam-bootstrap`'s is: the kernel's tmpfs, mounted on
+//! the empty bottom mount every namespace has, so that `pivot_root` can move
+//! it aside as it would a disk root (`docs/NAMESPACES.md` §2.1).
 //!
 //! As uid 1000 bubblewrap makes a user namespace too; that half is N4's and
 //! N5's, and this gate gains it then.
@@ -200,7 +199,7 @@ pub(crate) fn test_bwrap(args: &Args) -> Result<()> {
     let archive = initramfs::build(Some(&busybox), &natives, Some(&shell_bytes), &carried)?;
     let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
     println!(
-        "  {arch}: running bubblewrap on a fresh btrfs root (timeout {}s)",
+        "  {arch}: running bubblewrap with / in memory (timeout {}s)",
         args.timeout
     );
     let lines = qemu::watch_then(arch, &image, &kernel, args, shell::EXITED, |_| Ok(()))?;

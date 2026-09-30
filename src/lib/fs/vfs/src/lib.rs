@@ -70,6 +70,7 @@
 extern crate alloc;
 
 pub mod access;
+mod bottom;
 mod dentry;
 pub mod dirent;
 pub mod fd;

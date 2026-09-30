@@ -1191,7 +1191,7 @@ fn unmount_refuses_a_mount_with_mounts_inside_it() {
     let _ = ns.mount(tmpfs(3), &b).unwrap();
     let a_root = ns.resolve(&ctx, None, b"/a", true).unwrap();
     assert_eq!(ns.unmount(&a_root).unwrap_err(), Errno::EBUSY);
-    assert_eq!(ns.unmount(&ctx.root).unwrap_err(), Errno::EINVAL);
+    assert_eq!(ns.unmount(&ctx.root).unwrap_err(), Errno::EBUSY);
     let b_root = ns.resolve(&ctx, None, b"/a/b", true).unwrap();
     ns.unmount(&b_root).unwrap();
     ns.unmount(&a_root).unwrap();
@@ -1472,9 +1472,10 @@ fn pivot_root_refuses_what_linux_refuses_and_changes_nothing() {
         copy.pivot_root(&root, &new, &sub).unwrap_err(),
         Errno::EINVAL
     );
-    // A root with no parent -- the namespace's own, as on initramfs.
+    // A root with no parent: only the bottom mount, which no program's root
+    // is.
     assert_eq!(
-        copy.pivot_root(&copy.root(), &new, &old).unwrap_err(),
+        copy.pivot_root(&copy.bottom(), &new, &old).unwrap_err(),
         Errno::EINVAL
     );
     // A mount of another namespace.
@@ -1501,6 +1502,56 @@ fn pivot_root_refuses_what_linux_refuses_and_changes_nothing() {
         read_file(&copy, &pivoted, "/old/plain/sub/../../old-root-only").unwrap(),
         b"o"
     );
+}
+
+#[test]
+fn slash_is_a_mount_on_an_empty_bottom_and_pivots_from_memory() {
+    let (ns, ctx) = fresh();
+    // `/` is a mount with a parent, and the bottom under it holds nothing.
+    let root = ns.root();
+    assert!(root.is_mount_root());
+    let (below, _) = root.mount.parent().expect("/ is on the bottom mount");
+    assert!(below.parent().is_none());
+    assert!(
+        root.parent()
+            .dentry
+            .inode()
+            .unwrap()
+            .lookup(b"anything")
+            .is_err()
+    );
+    assert!(below.read_only());
+    // So a copy's `/`, a tmpfs in memory, pivots as a disk root would.
+    write_file(&ns, &ctx, "/old-only", b"o");
+    ns.mkdir(&ctx, None, b"/new", 0o755).unwrap();
+    let new = ns.resolve(&ctx, None, b"/new", true).unwrap();
+    let _ = ns.mount(tmpfs(2), &new).unwrap();
+    ns.mkdir(&ctx, None, b"/new/old", 0o755).unwrap();
+    let (copy, inside) = copied(&ns, &ctx);
+    let new = copy.resolve(&inside, None, b"/new", true).unwrap();
+    let old = copy.resolve(&inside, None, b"/new/old", true).unwrap();
+    copy.pivot_root(&inside.root, &new, &old).unwrap();
+    // The namespace's `/` for a new process follows the pivot.
+    assert!(copy.root().same(&new));
+    let pivoted = rooted_at(&inside, &new);
+    assert_eq!(read_file(&copy, &pivoted, "/old/old-only").unwrap(), b"o");
+    let old_root = copy.resolve(&pivoted, None, b"/old", true).unwrap();
+    copy.unmount_with(&old_root, true).unwrap();
+    assert_eq!(
+        read_file(&copy, &pivoted, "/old/old-only").unwrap_err(),
+        Errno::ENOENT
+    );
+    // The first namespace's `/` is where it was.
+    assert_eq!(read_file(&ns, &ctx, "/old-only").unwrap(), b"o");
+}
+
+#[test]
+fn slash_cannot_be_unmounted() {
+    let (ns, ctx) = fresh();
+    assert_eq!(ns.unmount(&ctx.root).unwrap_err(), Errno::EBUSY);
+    assert_eq!(ns.unmount_with(&ctx.root, true).unwrap_err(), Errno::EBUSY);
+    assert_eq!(ns.unmount(&ns.bottom()).unwrap_err(), Errno::EINVAL);
+    assert!(ns.root().same(&ctx.root));
 }
 
 // -- openat2's resolve flags ---------------------------------------------------

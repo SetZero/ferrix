@@ -251,7 +251,8 @@ fn files(tree: &Arc<Job>) -> Result<usize, &'static str> {
 fn namespaces(tree: &Arc<Job>) -> Result<usize, &'static str> {
     let source = Namespace::new(fs::kernel_tmpfs(), Arc::new(crate::sync::SchedParker));
     let ctx = source.context();
-    for at in 1..TREE {
+    // `/` and the bottom mount under it are two of them.
+    for at in 2..TREE {
         let name = format!("/m{at}");
         let place = source
             .mkdir(&ctx, None, name.as_bytes(), 0o755)

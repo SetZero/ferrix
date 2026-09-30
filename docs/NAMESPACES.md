@@ -224,6 +224,19 @@ what stage 8 kept apart for this stage, and it makes the change small:
   stays acyclic**, so a walk upward always ends. N2's binds and detaches
   hold it trivially; N3's `pivot_root` must order its pointer writes to
   hold it too.
+* **A namespace stands on an empty bottom mount.** Its root mount is a
+  read-only filesystem with one empty directory, and `/` is the filesystem
+  the namespace was made with, mounted on it. That is the shape a booted
+  Linux machine has -- on a Linux 7.0 host `/` is mount 34 whose parent,
+  2, `mountinfo` does not show, because the reader's root cannot reach it
+  -- and it is what `pivot_root` needs: Linux refuses a root mount with no
+  parent, which is why it cannot pivot away from an initramfs. Here every
+  `/` has one, in memory or on a disk. The bottom mount is hidden from
+  `mountinfo` and `/proc/mounts`, which leave out what the reader's root
+  cannot reach; `/` itself cannot be unmounted (`EBUSY`), since the kernel's
+  walks and every new process start there, and `pivot_root` is the way to
+  move it; after a pivot the namespace's `/` for a new process is the new
+  root.
 * **A namespace's recorded root is a `Location`,** not only a root mount:
   the root switch (`fs/root_disk.rs`) re-roots pid 1 at `/sysroot`, and in
   the same step now records that place as the first namespace's root. It is
@@ -918,12 +931,15 @@ What the design did not foresee, and what N3 did about it:
   bind `/proc/sys` and `/proc/sysrq-trigger` onto themselves and remount
   them read-only (§1.4): a walk crosses only a mount on a dentry it finds
   again. `/proc/sys/kernel/overflowuid` and `overflowgid` read 65534.
-* **`pivot_root` refuses a root mount with no parent**, as Linux refuses
-  it on an initramfs, so bubblewrap needs `/` on a disk: `test-bwrap`
-  boots a fresh btrfs root. `test-steam-bootstrap` still boots `/` in
-  memory, so its requirements check would fail at `pivot_root` there; it
-  was not run for N3 (an hour on the internet), and N6, which runs it as
-  uid 1000, gives it a disk root.
+* **Every namespace stands on an empty bottom mount** (landed after N3,
+  2026-09-30; §2.1). `pivot_root` refuses a root mount with no parent, as
+  Linux refuses it on an initramfs, and as N3 landed the kernel's tmpfs
+  was the first namespace's root mount itself, so bubblewrap worked only
+  on a disk root and `test-steam-bootstrap`, which boots `/` in memory,
+  could not pass its requirements check. Now `/` is always a mount on the
+  bottom one, in memory or on a disk: the requirements check exits 0 in
+  `test-steam-bootstrap` as root, and `test-bwrap` and the `mntns` line run
+  from the in-memory `/`. §9's promise for N3 is met.
 * **Deferred to N4:** the first namespace's root recorded as a `Location`
   (§2.1). Only U6, "a chrooted process may not make a user namespace",
   reads it, and U6 is N4's; `mountinfo` prints from the reader's root, as

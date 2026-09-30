@@ -190,7 +190,9 @@ and once more when it powers the machine off itself. `--reset-root` starts
 the volume over, and `--tmpfs-root` or `ferrix.root=tmpfs` keeps `/` in
 memory. The test boots keep the tmpfs root. What is still an init's work,
 which stage 15 owes: `pivot_root` itself, so the kernel's tmpfs can be
-unmounted from under the switched root. The root disk is found by its btrfs
+unmounted from under the switched root (the kernel allows it since every
+`/` stands on a bottom mount, `docs/NAMESPACES.md` §2.1; the init has yet
+to call it). The root disk is found by its btrfs
 label, `ferrix-root`, as Linux's `root=LABEL=` finds one, and any other btrfs
 disk from `vdd` on is mounted at `/data` inside whichever `/` processes have:
 `test-rustc` gives the guest its compiler that way. A page of a mapped
