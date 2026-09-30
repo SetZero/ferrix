@@ -477,6 +477,17 @@ pub(crate) fn sender_of(passed: Option<&Passed>) -> Ucred {
     })
 }
 
+/// `credentials` with the ids the running process's user namespace calls
+/// them, or the overflow id for ones it does not map: the stamp holds kernel
+/// ids, and a program is only ever told its own namespace's (rule U9).
+pub(crate) fn as_seen(credentials: Ucred) -> Ucred {
+    Ucred {
+        pid: credentials.pid,
+        uid: crate::syscall::credentials::show_uid(credentials.uid),
+        gid: crate::syscall::credentials::show_gid(credentials.gid),
+    }
+}
+
 /// The credentials `SO_PEERCRED` reports for a socket `process` made:
 /// its pid and effective ids, as Linux's `init_peercred` takes them.
 pub(crate) fn credentials_of(process: &Process) -> Ucred {
@@ -1399,14 +1410,13 @@ impl Socket {
             SO_SNDBUF => size(options.send_buffer),
             SO_RCVBUF => size(self.receive.buffer.lock().capacity()),
             SO_PASSCRED => int(i32::from(options.pass_credentials)),
-            SO_PEERCRED => (*self.peer_credentials.lock())
-                .unwrap_or(Ucred {
-                    pid: 0,
-                    uid: OVERFLOW_ID,
-                    gid: OVERFLOW_ID,
-                })
-                .to_bytes()
-                .to_vec(),
+            SO_PEERCRED => as_seen((*self.peer_credentials.lock()).unwrap_or(Ucred {
+                pid: 0,
+                uid: OVERFLOW_ID,
+                gid: OVERFLOW_ID,
+            }))
+            .to_bytes()
+            .to_vec(),
             SO_LINGER => Linger {
                 onoff: 0,
                 linger: 0,

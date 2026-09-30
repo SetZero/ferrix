@@ -715,13 +715,23 @@ fn sys_fchmod(process: &Process, fd: i32, mode: u32) -> Result<usize, Errno> {
 }
 
 /// `chown`'s change. An identifier of `-1` leaves that one alone.
-fn owner((uid, gid): (u64, u64)) -> SetAttributes {
+///
+/// The ids are as the caller's user namespace names them: one it does not map
+/// is `EINVAL`, so an unmapped id can never be written into a file's owner
+/// (rule U9).
+fn owner(process: &Process, (uid, gid): (u64, u64)) -> Result<SetAttributes, Errno> {
     let id = |value: u64| Some(word(value)).filter(|&id| id != u32::MAX);
-    SetAttributes {
-        uid: id(uid),
-        gid: id(gid),
+    let uid = id(uid)
+        .map(|id| credentials::kernel_uid(process, id))
+        .transpose()?;
+    let gid = id(gid)
+        .map(|id| credentials::kernel_gid(process, id))
+        .transpose()?;
+    Ok(SetAttributes {
+        uid,
+        gid,
         ..SetAttributes::default()
-    }
+    })
 }
 
 /// `fchownat`, `chown` and `lchown`.
@@ -738,12 +748,20 @@ fn sys_fchownat(
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
         return Err(Errno::EINVAL);
     }
-    set(process, &target(process, dirfd, at, flags)?, &owner(ids))
+    set(
+        process,
+        &target(process, dirfd, at, flags)?,
+        &owner(process, ids)?,
+    )
 }
 
 /// `fchown`.
 fn sys_fchown(process: &Process, fd: i32, ids: (u64, u64)) -> Result<usize, Errno> {
-    set(process, &open_for_change(process, fd)?, &owner(ids))
+    set(
+        process,
+        &open_for_change(process, fd)?,
+        &owner(process, ids)?,
+    )
 }
 
 /// `utimensat` and `utimensat_time64`.

@@ -106,6 +106,7 @@ fn delegatee() -> Credentials {
         user: ids,
         group: ids,
         groups: Vec::from([DELEGATE]),
+        ..Credentials::root()
     }
 }
 

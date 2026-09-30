@@ -38,6 +38,7 @@ use crate::syscall::process::{self, Process};
 use crate::syscall::registry::PID_MAX;
 use crate::syscall::system::{self, NAME_MAX, RELEASE, SYSNAME, VERSION};
 use crate::syscall::time;
+use crate::syscall::userns::{self, Kind as IdKind, UserNamespace};
 use crate::user::space::Region;
 
 /// Nanoseconds in a second.
@@ -211,6 +212,53 @@ pub(super) fn mounts(_: &Kernel) -> Result<Vec<u8>> {
 pub(super) fn mount_namespace(process: &Process) -> Result<Vec<u8>> {
     let id = fs::namespace_of(&process.fs_context().lock()).id();
     Ok(alloc::format!("mnt:[{id}]").into_bytes())
+}
+
+/// `/proc/<pid>/ns/user`.
+pub(super) fn user_namespace(process: &Process) -> Result<Vec<u8>> {
+    let id = process.with_credentials(|held| held.user_ns.id());
+    Ok(alloc::format!("user:[{id}]").into_bytes())
+}
+
+/// The user namespace the reading process is in: the first, for the kernel's
+/// own reads.
+fn reader_namespace() -> Arc<UserNamespace> {
+    process::current().map_or_else(
+        || Arc::clone(userns::first()),
+        |reader| reader.with_credentials(|held| Arc::clone(&held.user_ns)),
+    )
+}
+
+/// `/proc/<pid>/uid_map`, `gid_map` and `setgroups`, as the reader's
+/// namespace shows them.
+pub(super) fn id_map(process: &Process, file: super::MapFile) -> Vec<u8> {
+    let namespace = process.with_credentials(|held| Arc::clone(&held.user_ns));
+    match file {
+        super::MapFile::Uid => userns::render_map(&namespace, IdKind::User, &reader_namespace()),
+        super::MapFile::Gid => userns::render_map(&namespace, IdKind::Group, &reader_namespace()),
+        super::MapFile::Setgroups => userns::render_setgroups(&namespace),
+    }
+}
+
+/// A write to one of them: the namespace is the target process's, who opened
+/// the file is `opener` and who writes is the running process, and
+/// [`userns`] judges both.
+pub(super) fn write_id_map(
+    process: &Process,
+    file: super::MapFile,
+    opener: Option<&crate::syscall::credentials::Credentials>,
+    data: &[u8],
+) -> Result<usize> {
+    let opener = opener.ok_or(Errno::EPERM)?;
+    let writer = process::current()
+        .ok_or(Errno::EPERM)?
+        .with_credentials(|held| held.clone());
+    let namespace = process.with_credentials(|held| Arc::clone(&held.user_ns));
+    match file {
+        super::MapFile::Uid => userns::write_map(&namespace, IdKind::User, opener, &writer, data),
+        super::MapFile::Gid => userns::write_map(&namespace, IdKind::Group, opener, &writer, data),
+        super::MapFile::Setgroups => userns::write_setgroups(&namespace, opener, &writer, data),
+    }
 }
 
 /// The mount namespace `process` is in, and its root.
@@ -941,20 +989,23 @@ pub(super) fn thread_status(of: &ThreadOf) -> Result<Vec<u8>> {
 
 /// A status file, for the thread numbered `tid` of `process`.
 fn status_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
-    let (uid, gid) = process.with_credentials(|ids| {
+    let reader = reader_namespace();
+    let shown = |kind: IdKind, id: u32| userns::from_kid_munged(&reader, kind, id);
+    let (uid, gid, caps) = process.with_credentials(|ids| {
         (
             [
-                ids.user.real,
-                ids.user.effective,
-                ids.user.saved,
-                ids.user.filesystem,
+                shown(IdKind::User, ids.user.real),
+                shown(IdKind::User, ids.user.effective),
+                shown(IdKind::User, ids.user.saved),
+                shown(IdKind::User, ids.user.filesystem),
             ],
             [
-                ids.group.real,
-                ids.group.effective,
-                ids.group.saved,
-                ids.group.filesystem,
+                shown(IdKind::Group, ids.group.real),
+                shown(IdKind::Group, ids.group.effective),
+                shown(IdKind::Group, ids.group.saved),
+                shown(IdKind::Group, ids.group.filesystem),
             ],
+            capability_lines(ids),
         )
     });
     let memory = Memory::of(process);
@@ -983,7 +1034,33 @@ fn status_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
     };
     let mut out = Vec::new();
     status::render(&mut out, &status);
+    out.extend_from_slice(caps.as_bytes());
     Ok(out)
+}
+
+/// The `Cap*` lines of `status`. In the first namespace an effective uid of 0
+/// stands for every capability and the sets are not enforced, so they read as
+/// `capget` reports them; in a child they are the real ones.
+fn capability_lines(
+    credentials: &crate::syscall::credentials::Credentials,
+) -> alloc::string::String {
+    let [effective, permitted, inheritable] = if !credentials.user_ns.is_first() {
+        [
+            credentials.caps.effective,
+            credentials.caps.permitted,
+            credentials.caps.inheritable,
+        ]
+    } else if credentials.privileged() {
+        [userns::FULL, userns::FULL, 0]
+    } else {
+        [0, 0, 0]
+    };
+    alloc::format!(
+        "CapInh:\t{inheritable:016x}\nCapPrm:\t{permitted:016x}\nCapEff:\t{effective:016x}\n\
+         CapBnd:\t{:016x}\nCapAmb:\t{:016x}\n",
+        credentials.caps.bounding,
+        0_u64
+    )
 }
 
 /// `/proc/<pid>/stat`.
