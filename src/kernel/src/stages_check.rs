@@ -315,7 +315,7 @@ fn check_seccomp() {
         ),
     };
     println!(
-        "  seccomp  {} calls answered as Linux answers them, {} of them refusals: a filter          refused without no_new_privs and for what Linux refuses, a call failed with the errno          it names, the most restrictive of two filters winning, a fork child judged as its          parent, a kill ending the process, strict mode",
+        "  seccomp  {} calls answered as Linux answers them, {} of them refusals: a filter refused without no_new_privs and for what Linux refuses, a call failed with the errno it names, the most restrictive of two filters winning, a fork child judged as its parent, a kill ending the process, strict mode",
         checked.calls, checked.refusals,
     );
 }
