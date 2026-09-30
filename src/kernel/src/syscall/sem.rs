@@ -1205,11 +1205,14 @@ fn set_perm(
     };
     // As the caller's user namespace names them; one it does not map is
     // `EINVAL`, so an unmapped id is never stored (rule U9).
-    let running = process::current().ok_or(Errno::EPERM)?;
-    let (uid, gid) = (
-        credentials::kernel_uid(&running, word(4))?,
-        credentials::kernel_gid(&running, word(8))?,
-    );
+    let (uid, gid) = match process::current() {
+        Some(running) => (
+            credentials::kernel_uid(&running, word(4))?,
+            credentials::kernel_gid(&running, word(8))?,
+        ),
+        // The kernel's own checks run with no process: the ids are kernel ids.
+        None => (word(4), word(8)),
+    };
     // A 16-bit mode's high half is padding a caller need not clear.
     let mode = word(20) & 0o777;
     let set = lookup(id).ok_or(Errno::EINVAL)?;
