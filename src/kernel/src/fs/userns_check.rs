@@ -286,7 +286,7 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         read_file(&mut outside, format!("/proc/{pid}/status").as_bytes())
     })??
     .map_err(|_| "a namespace's status could not be read from outside")?;
-    if !seen.windows(13).any(|w| w == b"Uid:\t1000\t1000") {
+    if !seen.windows(14).any(|w| w == b"Uid:\t1000\t1000") {
         return Err("the first namespace did not see the kernel's ids in a child's status");
     }
     let seen = acting(watching, || read_file(&mut outside, uid_map.as_bytes()))??
