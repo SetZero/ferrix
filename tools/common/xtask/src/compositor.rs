@@ -51,8 +51,8 @@
 //! `pointer`, `protocols`, `machine`, `drawn_here`, `user_desktop` and
 //! `idle` are the boots in [`BOOTS`], each with the pictures, the
 //! configuration and the verdict it needs. `run` and `desktop` are the
-//! desktops a person watches; `browser`, `apps`, `bench` and `steam_window`
-//! are the other commands that boot the compositor.
+//! desktops a person watches; `browser`, `apps`, `bench`, `steam_window` and
+//! `steam_store` are the other commands that boot the compositor.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -72,6 +72,7 @@ mod picture;
 mod pointer;
 mod protocols;
 mod run;
+mod steam_store;
 pub(crate) mod steam_window;
 mod user_desktop;
 
@@ -83,6 +84,7 @@ pub(crate) use boot::{absolute, button_event, client_image, press};
 pub(crate) use browser::{test_chrome_audio, test_chrome_window};
 pub(crate) use drawing::test_video;
 pub(crate) use run::{board_files, run_compositor};
+pub(crate) use steam_store::test_steam_store;
 
 use crate::args::Args;
 use crate::paths::{self, Arch};

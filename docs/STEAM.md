@@ -17,6 +17,7 @@ and no library is preloaded into the client any more.
 tools/common/fetch/fetch-steam-window.sh     # once: the volume, about 7 GB sparse
 cargo xtask test-steam-window           # the gate: waits for the window, judges the screen
 cargo xtask run-steam                   # the same boot, screens dumped until the timeout
+cargo xtask test-steam-store            # the --everything desktop's Steam, on ferrousli: sign-in, then the store
 ```
 
 Both need KVM and the internet, as `test-steamcmd` does, and neither is in
@@ -47,6 +48,35 @@ unless `--memory` says otherwise. Steam's tree carries its own yserver, so
 the desktop takes it in yserver's own volume's place; make both volumes at
 the same pin. The first start installs the client, as above, and the
 desktop's volume is attached under `snapshot=on` too, so every boot does.
+
+**The store, gated.** `test-steam-store` boots that desktop's Steam as
+`run-compositor --everything` does -- the merged volume, the same archive
+with ferrousli's loader at `/lib64`, `desktop.sh` and `client.sh`, 16 GiB --
+without the host's `hyprland.conf`, the terminal, Chrome's window, the
+wallpaper, the clipboard and the 3D card (QMP cannot dump its screen), and
+with `tools/common/steam/store-watch.sh` listing hyprix's windows. It passes
+its first step when hyprix lists "Sign in to Steam" and the screen has the
+colours of a drawn window, as `test-steam-window` judges it, and the
+window its two fields (`build/x86_64/steam-store/sign-in.ppm`); an empty
+frame, which has enough colours for `test-steam-window`, does not pass. The
+second step needs a Steam account kept for the gate, with Steam Guard off:
+a mobile authenticator needs the phone, and email Steam Guard sends a code
+for every new machine, which every boot is. Put its name and its password,
+one a line, in `~/.config/ferrix/steam-test-account` on the machine that
+runs the gate, readable by its owner alone (`chmod 600`), or name another
+file with `FERRIX_STEAM_ACCOUNT_FILE`; never in a checkout. Then the gate
+clicks into the sign-in window's fields, types both through QMP on a US
+layout, presses Sign in, waits for the main window titled "Steam", and
+passes when that window shows the store: at least 15% of it the store's
+dark blues (`#171d25` to `#1b2838`) and at least 10,000 colours, which its
+art brings and an empty page does not. Without the file it says the store
+step was skipped, and how to enable it, and passes on the first step. A
+sign-in window that shows its error in red fails as a refused sign-in, and
+one still up three minutes after Sign in with its account name field gone
+fails as Steam Guard. The account is typed into the guest and nowhere
+else: every line of the transcript and the gate's error are redacted of
+both, and a screen dumped after the typing is kept shrunk eight times, too
+small to read (`store.ppm`, `not-signed-in.ppm`, `after-sign-in.ppm`).
 
 ## 2. How the pieces fit
 

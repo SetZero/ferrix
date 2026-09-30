@@ -246,6 +246,9 @@ COMMANDS:
     test-steam-window  Attach the volume tools/common/fetch/fetch-steam-window.sh makes, and require Steam's sign-in window
                   on hyprix, drawn through yserver, over the network (docs/STEAM.md)
     run-steam     The same boot, the screen dumped into build/x86_64/steam/ every few seconds until the timeout
+    test-steam-store  Steam as run-compositor --everything starts it, its 64-bit side on ferrousli: require its sign-in
+                  window, then, with the test account in ~/.config/ferrix/steam-test-account (FERRIX_STEAM_ACCOUNT_FILE),
+                  sign in and require its store on the screen; without the file the store step is skipped (docs/STEAM.md)
     test-yserver  Attach the volume tools/common/fetch/fetch-yserver.sh makes, start yserver headless on lavapipe and require xdpyinfo
                   to reach it
     test-xwindow  The same volume, yserver as a client of the compositor: its root must be the screen's size, and xev's window
@@ -554,6 +557,7 @@ fn run() -> Result<()> {
         "test-yserver" | "test-xwindow" => yserver::run(command, &args),
         "run-steam" => compositor::steam_window::run(&args, false),
         "test-steam-window" => compositor::steam_window::run(&args, true),
+        "test-steam-store" => compositor::test_steam_store(&args),
         "bench-chrome" => compositor::bench_chrome(&args),
         "bench-chrome-video" => compositor::bench_chrome_video(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),

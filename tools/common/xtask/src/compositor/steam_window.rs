@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 use super::boot::{build_image, undithered};
 use super::{Carried, EITHER, Programs, gates_busybox};
 use crate::args::Args;
-use crate::display::{DEVICE_ID, Qmp, free_port, parse_ppm};
+use crate::display::{DEVICE_ID, Image, Qmp, free_port, parse_ppm};
 use crate::paths::{self, Arch};
 use crate::ports::{Content, File};
 use crate::qemu::Watching;
@@ -88,6 +88,10 @@ const SCRIPTS: &[(&str, &[u8], u32)] = &[
     ("usr/bin/lsof", LSOF, 0o755),
 ];
 
+/// The title of Steam's sign-in window, which `run.sh`'s watcher looks for
+/// in hyprix's list and `test-steam-store` in its own.
+pub(super) const SIGN_IN: &str = "Sign in to Steam";
+
 /// What `run.sh`'s watcher prints once hyprix lists the sign-in window.
 const LOGIN: &str = "steam-window: login window";
 
@@ -96,12 +100,12 @@ const END: &str = "steam-window: end";
 
 /// How long the window gets to be painted after hyprix lists it: the
 /// title comes with the toplevel, before Chromium's first frame.
-const PAINT: Duration = Duration::from_secs(20);
+pub(super) const PAINT: Duration = Duration::from_secs(20);
 
 /// Fewer colours than this is not a drawn sign-in window: the window has
 /// Steam's gradients, antialiased text and a QR code, in hundreds, where
 /// an unpainted toplevel over the wallpaper-less background has a handful.
-const DRAWN_COLOURS: usize = 64;
+pub(super) const DRAWN_COLOURS: usize = 64;
 
 /// Memory for the guest. At 8 GiB, processes died of `SIGBUS` on library
 /// pages while Chromium started (steam-sigbus); 16 GiB has not shown it.
@@ -109,7 +113,7 @@ pub(crate) const MEMORY: u32 = 16384;
 
 /// Seconds: the download and install of the client (about nine minutes
 /// under KVM), a restart, and Chromium's start in software.
-const TIMEOUT: u64 = 2400;
+pub(super) const TIMEOUT: u64 = 2400;
 
 /// Where `tools/common/fetch/fetch-steam-window.sh` writes, unless
 /// `FERRIX_STEAM_WINDOW_VOLUME` names another directory.
@@ -333,12 +337,7 @@ fn judge(watching: &mut Watching<'_>, qmp: &mut Qmp, shots: &std::path::Path) ->
     qmp.screendump(Some(DEVICE_ID), &dump)?;
     let bytes = std::fs::read(&dump)
         .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
-    let screen = parse_ppm(&bytes)?;
-    let (pixels, _) = screen.pixels.as_chunks::<3>();
-    let colours = pixels
-        .iter()
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
+    let colours = colours(&parse_ppm(&bytes)?);
     if colours >= DRAWN_COLOURS {
         println!(
             "  steam-window: Steam's sign-in window is on the screen ({colours} colours), {}",
@@ -352,6 +351,16 @@ fn judge(watching: &mut Watching<'_>, qmp: &mut Qmp, shots: &std::path::Path) ->
             dump.display()
         )))
     }
+}
+
+/// How many colours `screen` has: a drawn sign-in window has at least
+/// [`DRAWN_COLOURS`].
+pub(super) fn colours(screen: &Image) -> usize {
+    let (pixels, _) = screen.pixels.as_chunks::<3>();
+    pixels
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 #[cfg(test)]
@@ -380,6 +389,7 @@ mod tests {
         assert!(run.contains(&format!("echo \"{LOGIN}\"")));
         assert!(run.contains(&format!("echo \"{END}\"")));
         assert!(run.contains("/steam/client.sh"));
+        assert!(run.contains(&format!("*'{SIGN_IN}'*)")));
         let client = std::str::from_utf8(CLIENT).expect("client.sh is text");
         assert!(client.contains("STEAM_RUNTIME_STEAMRT=/steam/steamrt"));
         assert!(client.contains("STEAM_RUNTIME_SCOUT=/steam/scout"));

@@ -177,8 +177,17 @@ The first step is met by hand (2026-09-30), not yet by a gate: on the
 `--everything` desktop, with its 64-bit side on ferrousli rather than glibc,
 the client starts, its browser helper draws the sign-in window, the customer
 signed in with the Steam app's QR code, and the client showed its store
-(`docs/STEAM.md` §5 lists what ferrousli needed for it). Still to do for
-the step: a gate that boots to the store without a person signing in, and
+(`docs/STEAM.md` §5 lists what ferrousli needed for it). Its gate is
+`cargo xtask test-steam-store` (`docs/STEAM.md` §1): it boots that
+desktop's Steam, on ferrousli, and requires the sign-in window drawn; with
+a Steam test account's name and password in
+`~/.config/ferrix/steam-test-account` on the gate host (Steam Guard off,
+never in a checkout) it types them in, signs in and requires the store on
+the screen, and without that file it says the store step was skipped. The
+sign-in step passes on nazuna. Still to do for the step: the store step
+passing there, which needs an account Steam accepts -- the file there on
+2026-09-30 was refused ("check your password and account name"), though
+the gate typed what it holds, as a probe of the same keys showed -- and
 the workarounds of `docs/STEAM.md` §3, which are still in use.
 
 None of it is sized past a first guess, and the sum of the first guesses is

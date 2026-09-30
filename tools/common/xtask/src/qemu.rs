@@ -898,6 +898,8 @@ pub(crate) struct Watching<'a> {
     /// How QEMU is ended when the hook returns: given the moment to power
     /// off that a finished boot gets, unless the hook said otherwise.
     ending: Ending,
+    /// What no line read from here on may show ([`Watching::redact`]).
+    hidden: Vec<String>,
 }
 
 /// How [`finish`] ends QEMU once the hook has returned.
@@ -1098,14 +1100,49 @@ impl Watching<'_> {
         }
     }
 
+    /// Keep `secret` out of every line read from here on: each is
+    /// [`redacted`] before it is printed, logged or kept. For a gate that
+    /// types a credential into the guest, whose programs may say it back.
+    pub(crate) fn redact(&mut self, secret: &str) {
+        if !secret.is_empty() {
+            self.hidden.push(secret.to_owned());
+        }
+    }
+
     /// Print, log and keep one line read after the marker.
     fn keep(&mut self, line: String) -> Result<()> {
+        let line = if self.hidden.is_empty() {
+            line
+        } else {
+            redacted(&line, &self.hidden)
+        };
         let at = self.started.elapsed().as_secs_f64();
         println!("  {at:6.2} | {line}");
         writeln!(self.log, "{at:6.2} | {line}")?;
         self.after.push(line);
         Ok(())
     }
+}
+
+/// `line` with each of `secrets` in it, in any case, replaced by
+/// `<redacted>`: an account name comes back from a program in the case it
+/// likes.
+pub(crate) fn redacted(line: &str, secrets: &[String]) -> String {
+    let mut line = line.to_owned();
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        let wanted = secret.to_ascii_lowercase();
+        let mut out = String::with_capacity(line.len());
+        let mut rest = line.as_str();
+        while let Some(at) = rest.to_ascii_lowercase().find(&wanted) {
+            // Lowering ASCII moves no byte, so `at` is a boundary of `rest`.
+            out.push_str(rest.get(..at).unwrap_or_default());
+            out.push_str("<redacted>");
+            rest = rest.get(at + wanted.len()..).unwrap_or_default();
+        }
+        out.push_str(rest);
+        line = out;
+    }
+    line
 }
 
 fn watch_hooked(
@@ -1343,6 +1380,7 @@ fn run_hook(
         after: Vec::new(),
         keyboard,
         ending: Ending::Grace,
+        hidden: Vec::new(),
     };
     let answered = hook(&mut watching);
     let ending = watching.ending;
@@ -2697,6 +2735,18 @@ mod tests {
         Arch, SUCCESS_MARKER, UNCHECKED_MARKER, devmgr_problem, entropy_problem, fault_problem,
         iommu_problem, namespace_problem, parse_qemu_version, xstate_problem,
     };
+
+    /// A secret goes in any case and every time, and nothing else does.
+    #[test]
+    fn a_redacted_line_shows_no_secret() {
+        let secrets = vec!["Tester".to_owned(), "p4ss!".to_owned(), String::new()];
+        assert_eq!(
+            super::redacted("logged in as tester (TESTER), pw p4ss!", &secrets),
+            "logged in as <redacted> (<redacted>), pw <redacted>"
+        );
+        assert_eq!(super::redacted("nothing here", &secrets), "nothing here");
+        assert_eq!(super::redacted("", &secrets), "");
+    }
 
     /// What QEMU prints, from the two versions CI and this host have.
     #[test]
