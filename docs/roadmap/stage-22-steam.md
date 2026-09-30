@@ -56,7 +56,8 @@ staged until now.
   Steam anonymously on Ferrix (`cargo xtask test-steamcmd`, under KVM, with
   the network): the i386 `stat64` family, `waitid`, `cpu MHz` in
   `/proc/cpuinfo`, and a certificate bundle on its volume. Still to do: the
-  client's bootstrapper (I5b), which needs XWayland for its window;
+  client's bootstrapper (I5b), which needed an X server for its window and
+  drew it through yserver on 2026-09-29 (below);
   System V semaphores, which steamcmd asks for through `ipc` and carries on
   without and the client does not -- built 2026-09-28 (`test-sem`,
   `docs/I386.md`); `modify_ldt` for 32-bit Wine.
