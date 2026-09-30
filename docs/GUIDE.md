@@ -1,6 +1,6 @@
 # Ferrix technical guide
 
-[Back to the project overview](README.md)
+[Back to the project overview](../README.md)
 
 This guide keeps the build commands, test evidence, desktop setup and remote
 use notes in one place. Start with [Getting started](#getting-started) if you
@@ -83,11 +83,12 @@ kept current with every landing. In short:
 * **A board.** ARMv7-A is the Cortex-A7 of the STM32MP157, and Ferrix boots
   an STM32MP157D-DK1 from its SD card ([the board guide](vendor/st/stm32mp157-dk.md)).
 
-Still to come, in the roadmap's order: the rest of stage 19 (XWayland and the
-second-pass effects), namespaces, seccomp and the rest of cgroups (13),
-real-time domains (14), the images booting the init, and authentication
-(the rest of 15), self-hosting (20), bare metal with a GPU of Ferrix's own
-(21), and Steam (22).
+Still to come, in the roadmap's order: the rest of stage 19 (client pages as
+texture backing and the second-pass effects), namespaces, seccomp and the
+rest of cgroups (13), real-time domains (14), the rest of authentication
+(15), self-hosting (20), bare metal with a GPU of Ferrix's own (21), and the
+rest of Steam (22), whose client already draws its sign-in window through
+[yserver](YSERVER.md), an X server in Rust ([docs/STEAM.md](STEAM.md)).
 
 Every boot proves its own claims rather than asserting them: the memory map
 is checked against the loader's allocations, the direct map is checked to
@@ -140,7 +141,9 @@ uses `auto` unless it is given `--accel` or `--gdb`; the tests keep `tcg`.
 Under `whpx` the guest gets one processor unless `--smp` says otherwise:
 QEMU 11.1's WHPX emulation of device registers faults ring-3 drivers with
 more than one, and `/sbin/blk` dies at boot. `--smp N` still works there,
-with a warning.
+with a warning. WHPX is given the invariant TSC as KVM is, so the kernel's
+clock is the TSC rather than the HPET, whose every read is an exit
+([`docs/CHROME.md`](CHROME.md) §8).
 
 `run` and `run-compositor` boot with `/` on btrfs: `build/root.img`, a 1 GiB
 volume made empty from `mkfs.btrfs`'s `root` fixture the first time and kept
@@ -689,7 +692,16 @@ the last three being the ones not in the line:
 in the shell beside Chrome. The kernel mounts one data disk, so it makes a
 third volume at `~/.local/share/ferrix/everything` out of the two trees the
 fetch scripts keep -- hard links, not a copy -- and makes it again when
-either is fetched again. Both volumes have to have been fetched. It is
+either is fetched again. Both volumes have to have been fetched. The trees
+of the optional volumes are merged in when they have been made:
+`fetch-steamcmd.sh`'s puts `steamcmd` in the shell, `fetch-yserver.sh`'s
+starts yserver on `:0` as a client of hyprix, with `DISPLAY=:0` for every
+program the desktop starts ([`docs/YSERVER.md`](YSERVER.md)), and
+`fetch-steam-window.sh`'s, on x86-64, takes yserver's place and starts
+Valve's Steam client beside Chrome and the terminal, in a guest of 16 GiB
+([`docs/STEAM.md`](STEAM.md)). It brings the sound card too, and `pulsed`,
+the PulseAudio-protocol server Chrome plays through
+([`docs/AUDIO.md`](AUDIO.md)). It is
 `run-compositor`'s alone: the gates still boot exactly the devices each asks
 for, since every device a boot does not need is one fewer on the bus, and
 several of them exist to assert exactly what a machine enumerates.
@@ -707,16 +719,16 @@ anyway; `run` is the one command that wants it said.
 
 **What `--clipboard` does today.** It puts a `virtio-serial` device on the
 bus with the port SPICE's agent protocol uses, and QEMU's own half of that
-protocol behind it, so the wire between the guest and the clipboard of
-whoever is watching is there and QEMU is talking on it. In the guest, the
-ring-3 driver `src/user/native/drivers/console/vport` opens the port and offers it at `/tmp/vport`, but
-**nothing speaks the agent protocol over it yet** -- the vdagent program and
-the terminal's paste are still to come, so copy and paste between Ferrix and
-the host does not work, and pressing `CTRL`+`V` will do nothing across that
-boundary.
-Copy and paste *between two Ferrix programs* is a different path and does
-work. [The clipboard design](CLIPBOARD.md) is the whole plan and §8
-says which parts of it are built.
+protocol behind it. In the guest, the ring-3 driver
+`src/user/native/drivers/console/vport` opens the port and offers it at
+`/tmp/vport`, and the agent, `src/user/linux/compositor/vdagent`, speaks the
+protocol over it, so the host's clipboard and the compositor's follow each
+other both ways: `clip copy` and `clip paste` in the guest, and the
+terminal's `CTRL`+`SHIFT`+`C` and `CTRL`+`SHIFT`+`V`. Over VNC the viewer
+has to speak the extended clipboard, as TigerVNC does. `cargo xtask
+test-clipboard` is the gate, on x86-64 and AArch64. X programs under
+yserver share the same clipboard and primary selection. [The clipboard
+design](CLIPBOARD.md) is the whole plan, and §8 records what it found.
 
 ### On an STM32MP157-DK1 board
 
@@ -838,4 +850,4 @@ Three gates are this project's own:
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](../LICENSE).

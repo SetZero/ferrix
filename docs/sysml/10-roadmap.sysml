@@ -479,7 +479,16 @@ package FerrixRoadmap {
              * 2026-09-26: a fault past a cgroup's memory.max kills the
              * process with the most resident pages in that cgroup, counted
              * in memory.events with POLLPRI. Left: the rest of memory.stat,
-             * M2's reclaim, F1, S2 and B1. */
+             * M2's reclaim, F1, S2 and B1.
+             *
+             * Namespaces, for Steam's container, designed in
+             * docs/NAMESPACES.md (39 points, N1 to N6) and reviewed by the
+             * certification consultant on 2026-09-28. N1 done on
+             * 2026-09-28: per-mount flags enforced, MS_REMOUNT and
+             * mountinfo. N2 done on 2026-09-30: binds, MS_REC, MNT_DETACH
+             * of a subtree, and a superblock per filesystem so a plain
+             * remount reaches every bind of it. N3, mount namespaces
+             * themselves, is next; seccomp is not started. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {
@@ -589,7 +598,7 @@ package FerrixRoadmap {
     #inProgress requirement <'S19'> stage19HyprlandFidelity : Stage {
         attribute :>> number = 19;
         attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "178 points, about 56 left";
+        attribute :>> size = "178 points, about 16 left";
         doc /* What makes a Hyprland rather than a tiling compositor:
              * animations with bezier curves, rounded corners, blur, shadows,
              * opacity rules, special workspaces, groups, multiple monitors,
@@ -618,12 +627,14 @@ package FerrixRoadmap {
              * stream return once they are on their way, so a frame waits
              * once, for its flush (docs/GPU.md 3.11).
              *
-             * Of the 178, about 56 are left: the desktop's speed as it is
+             * Of the 178, about 16 are left: the desktop's speed as it is
              * watched (client pages as texture backing: 8 of 34, the cursor
-             * plane and the device queue spent), XWayland's
-             * 40, and the
-             * pointer-driven options and second-pass effects
-             * (no_screen_share, blur_popups, precise_mouse_move). The rest
+             * plane and the device queue spent), and the pointer-driven
+             * options and second-pass effects (no_screen_share,
+             * blur_popups, precise_mouse_move). The X server the stage
+             * counted 40 for is yserver, a Rust X11 server with a rootless
+             * Wayland backend of Ferrix's own, 36 points, done on
+             * 2026-09-29 (docs/YSERVER.md). The rest
              * of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli --
              * is for clients that render for themselves, not for the
              * compositor.
@@ -641,9 +652,10 @@ package FerrixRoadmap {
              * The desktop's own clients, begun on 2026-09-26 at the
              * customer's request: waybar, fuzzel, hyprlock and hypridle in
              * Rust, reading their own configuration files unchanged, over a
-             * shared foundation of 21 points. fuzzel's pure core is on
-             * main; the foundation and the other programs are on
-             * branches. */
+             * shared foundation of 21 points. waybar and fuzzel are on
+             * main (2026-09-27) and run the customer's own configuration
+             * on run-compositor --everything; hyprlock is on a branch,
+             * hypridle not started. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {
@@ -685,7 +697,16 @@ package FerrixRoadmap {
              * ABI is designed in docs/I386.md, I1 to I4 at 42 points, and
              * I1 is met: a 32-bit program entered in compatibility mode,
              * making its calls through int $0x80, on a GDT in Linux's
-             * order. */
+             * order. I2 to I4 followed on 2026-09-27 (threads, signals,
+             * fork, and Alpine's and Debian's i386 busybox), with I5a:
+             * Valve's steamcmd logs in to Steam. Sound was finished the
+             * same day with alsa-lib and pulsed, a PulseAudio-protocol
+             * server. On 2026-09-29 the Steam client, unchanged, drew its
+             * sign-in window on hyprix through yserver (docs/STEAM.md,
+             * cargo xtask test-steam-window), with launch-side
+             * workarounds each owned by a fix: namespaces for
+             * pressure-vessel, the /proc gaps, and a SIGBUS that needs a
+             * 16 GiB guest. */
     }
 
     #inProgress requirement <'S20'> stage20SelfHosting : Stage {

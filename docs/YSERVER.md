@@ -331,7 +331,7 @@ its first buffer, centred over its parent. There are two defaults to add:
 | Y5a | Transients, compositor resize and close; the core helpers. **Done 2026-09-28** | 5 |
 | Y5b | Popups; the menu case. **Done 2026-09-28** | 3 |
 | Y6 | Clipboard: core selection hooks, `ext_data_control` bridge, text. **Done 2026-09-29** | 5 |
-| Y7 | yserver in `--everything`: `exec-once`, `DISPLAY`, window rules | 2 |
+| Y7 | yserver in `--everything`: `exec-once`, `DISPLAY`, window rules. **Done 2026-09-28** | 2 |
 
 That is 36 points, against stage 19's 40-point first guess for an X server.
 Y1 to Y4 are the smallest thing that shows a usable X window. After that,

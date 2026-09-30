@@ -1,4 +1,4 @@
-# Stage 19 — Hyprland fidelity, and the GPU  ·  *178 points, about 56 left*
+# Stage 19 — Hyprland fidelity, and the GPU  ·  *178 points, about 16 left*
 
 What makes it Hyprland rather than a tiling compositor: animations with its
 bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
@@ -1465,8 +1465,13 @@ evidence is:
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
   presses.
 
-**Where the points stand (reviewed 2026-09-23).** Of the stage's 178, about 56 are
-left: 8 of the 34 added on 2026-09-23 for the desktop's speed as it is
+**Where the points stand (reviewed 2026-09-30).** The X server is done: it
+is yserver, a Rust X11 server with a rootless Wayland backend of Ferrix's
+own, 36 points against the 40 guessed for XWayland here (`docs/YSERVER.md`,
+done 2026-09-29), so about 16 of the 178 are left -- client pages as
+texture backing (8) and the small remainder (about 8). The count of
+2026-09-23 follows. Of the stage's 178, about 56 were
+left then: 8 of the 34 added on 2026-09-23 for the desktop's speed as it is
 watched -- client pages as texture backing, the cursor plane's 13 and the
 device queue's 13 being spent (`docs/GPU.md` §3.9 to §3.11) -- XWayland's 40, and about 8 for the
 small remainder, whose items have changed since it was counted, as below. The GPU path's 52 are spent -- Path A landed on 2026-09-19, and what

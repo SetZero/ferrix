@@ -1,12 +1,45 @@
 # Where it stands, in full
 
-*Reviewed 2026-09-27.* The short version is on the [overview](README.md).
+*Reviewed 2026-09-30.* The short version is on the [overview](README.md).
 
-## Where we left off (2026-09-27)
+## Where it stands now (2026-09-30)
 
-The fleet wound down on the afternoon of 2026-09-27 with everything finished
-on `main` and pushed. Work that was not finished is on branches, pushed to
-GitHub, each with a row in `docs/BACKLOG.md` and a handover file:
+Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
+
+* **Steam's sign-in window** draws on hyprix through yserver
+  (2026-09-29, `docs/STEAM.md`, `cargo xtask test-steam-window`), and
+  `run-compositor --everything` starts the client beside Chrome and a
+  terminal once its volume has been made. It still runs with launch-side
+  workarounds, each owned by a fix (`docs/STEAM.md` §3): namespaces for
+  pressure-vessel and Chromium's sandbox, the `/proc` gaps behind the
+  runtime's logger, and the `SIGBUS` that needs a 16 GiB guest. The kernel
+  makes packet pipes for `pipe2(O_DIRECT)`, which retired the last
+  preloaded shim.
+* **yserver is done**, all 36 of its points (`docs/YSERVER.md`, Y1 to Y7):
+  X windows show on hyprix with their input, sizes, close, dialogs, menus
+  and clipboard, and a window of a fixed size floats at that size. It is the
+  X server stage 19 counted 40 for.
+* **Namespaces**: N1, per-mount flags (2026-09-28), and N2, binds and
+  detach (2026-09-30), are in and reviewed by the certification consultant;
+  N3, mount namespaces themselves, is next (`docs/NAMESPACES.md` §12).
+* **An installer MVP** (2026-09-28, `docs/INSTALLER.md` §11):
+  `ferrix-install` partitions a VM's disk and installs the system, and
+  `cargo xtask test-install` boots the result through OVMF. The customer
+  approved the full design the same day.
+* **Test run time**, cut 2 (2026-09-28, `docs/TEST-TIME.md`): a finished
+  guest is stopped rather than given its grace, and `test-compositor --arch
+  x86_64` went from 900 s to 512-616 s.
+* **Sound** is done: alsa-lib (U1) and `pulsed`, a PulseAudio-protocol
+  server Chrome plays through on the desktop (U2a to U2d, 2026-09-27).
+* **Windows**: the desktop runs under WHPX with the TSC as its clock
+  (2026-09-29), where it had fallen back to TCG.
+* **The tree moved** into `src/`, `tools/` and `docs/` (2026-09-29,
+  `docs/LAYOUT.md`).
+
+**Red on `main`** (`docs/BACKLOG.md`, *Red on `main`*): `test-compositor
+--arch x86_64` under KVM fails its submap boot, unowned.
+
+**Parked on branches**, pushed, each with a `docs/BACKLOG.md` row:
 
 | Branch | What | Left |
 |---|---|---|
@@ -15,44 +48,18 @@ GitHub, each with a row in `docs/BACKLOG.md` and a handover file:
 | `f46-power-off` | F-46, power-off gates that took a triple fault for a power-off | correct the message, rebase, gate, the consultant's OK |
 | `hyprlock` | hyprlock over `authd` (AUTH P1.5) | rebase and its boots |
 
-Not on a branch yet: F-49 (ARMv7-A `psci_system` not declaring `r12`
-clobbered; designed in its BACKLOG row) and the `ferrix.devmgr=init` coverage
-boot (one SUITE line).
-
-**Next, in the customer's order:**
-
-1. **Test and gate run time** (`docs/TEST-TIME.md`). Phase 1 measured it: an
-   item gate takes 828 s at a load of 12 to 30, a compositor boot 31.9 s of
-   which 12.6 s is the guest, and `test-compositor` over 1,107 s. The Arm
-   firmware waits are cut (7 s a boot pair); the other cuts are ordered in
-   that file. Targets: an item gate in 5 minutes, a desktop boot in 60 s, CI
-   green within an hour.
-2. **Steam's X server**: the yserver feasibility pass was met and the design
-   approved on 2026-09-28 (`docs/YSERVER.md`), and Y1 to Y5 were done the
-   same day: yserver runs as a client of hyprix, and X windows show on it,
-   take its input, its sizes and its close, float as dialogs where they are
-   transients, and open their menus as its popups. Y7 put yserver on the
-   `--everything` desktop, and Y6 (2026-09-29) made X's clipboard and
-   primary selection and hyprix's one, both ways, which finishes the
-   design's 36 points.
-   **Steam's sign-in window is on hyprix** (2026-09-29, `docs/STEAM.md`,
-   `cargo xtask test-steam-window`): the client installs itself from the
-   bootstrap and its browser helper draws through yserver, with launch-side
-   workarounds each owned by a kernel or yserver fix now under way.
-3. **W-8**: 21b, 21c and file 24, then the modules the traceability gate does
-   not yet hold complete.
-4. **The desktop**: fuzzel's second-press toggle, hyprlock P1.5, hypridle.
+**Next**, in the order the customer last gave: test and gate run time
+(the rest of cut 2, then architectures in parallel and KVM by default on
+x86-64); Steam, retiring its workarounds, with namespaces N3 to N6 under
+them; W-8's 21b, 21c and file 24; the desktop's hyprlock P1.5 and hypridle.
 
 **Waiting on the customer** (`docs/BACKLOG.md`, *Waiting on the customer*):
 F-43 (W^X for programs, or a narrower claim), the Common Criteria version
-(F-52), FMT_SMF.1 and FMT_MTD.1, and whether
-the customer's Python desktop scripts are rewritten for Ferrix. Hardware
-confirmations (F-44 on the Pixel 7, F-48 and F-50 on the DK1) wait for the
-product owner's word in daytime.
-
-CI: the Miri job's six-hour overrun is fixed (cf357e94), and the two fuzz
-crashes the night found are fixed (1bc64cc1, 3af00937); the first run to
-show all three green had not finished at the wind-down.
+(F-52), FMT_SMF.1 and FMT_MTD.1, whether the customer's Python desktop
+scripts are rewritten for Ferrix, and the installer's reference PC
+(`docs/INSTALLER.md` §10, decision 3). Hardware confirmations (F-44 on the
+Pixel 7, F-48 and F-50 on the DK1) wait for the product owner's word in
+daytime.
 
 ## Stage by stage
 
@@ -124,9 +131,12 @@ drive it, readiness, socket activation and resource limits, gives the console
 a getty, and powers the machine off, on all three architectures (`cargo xtask
 test-init`). `run` and the desktop boot it, and the compositor is its service.
 
-Stage 15's next is authentication (`docs/AUTH.md`, approved by the customer on
-2026-09-26): its kernel fix, P0, is in (a native process runs as the one that
-made it), and phase 1 is `authd`, passwords and a real hyprlock, 27 points.
+Stage 15's authentication (`docs/AUTH.md`, approved by the customer on
+2026-09-26) is under way: its kernel fix, P0, is in (a native process runs as
+the one that made it), and so is most of phase 1 -- Argon2id, `authd`,
+`passwd` and `authctl`, gated by `cargo xtask test-auth` on all three
+architectures (2026-09-27). Its last slice, hyprlock over `authd` (P1.5), is
+parked on branch `hyprlock`.
 
 Stage 13 is under way, cgroups first because init needs them: cgroup2 with
 `pids`, `memory` and its scoped OOM kill, and `cpu.weight` (2026-09-26);
@@ -144,7 +154,14 @@ sysfs, and `docs/CHROME.md`).
 
 Sound is a ring-3 virtio-snd driver, an audio core in the kernel and
 `/dev/snd`, gated by `cargo xtask test-audio` on x86-64 and AArch64
-(`docs/AUDIO.md`, 2026-09-26).
+(`docs/AUDIO.md`, 2026-09-26), with alsa-lib on ferrousli and `pulsed`, a
+PulseAudio-protocol server that mixes any number of streams, which Chrome
+plays through on the desktop (2026-09-27).
+
+An installer MVP puts Ferrix on a VM's own disk (`docs/INSTALLER.md`,
+2026-09-28): `cargo xtask build --installer` carries `ferrix-install`, which
+writes a GPT with an ESP and the btrfs root, and `cargo xtask test-install`
+boots the installed disk alone through OVMF.
 
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest.
@@ -164,9 +181,11 @@ shown the very texture the compositor drew into, which takes a 1920x1080 frame
 of a video wallpaper behind a blurred translucent terminal from 39 ms in
 software to 12 (`docs/GPU.md` §3.7 and §3.8; 60 fps is 16.7).
 
-What stage 19 still owes is XWayland, `dwindle:precise_mouse_move` and the
-second-pass effects; Mesa and `zwp_linux_dmabuf`, for clients that draw on the
-GPU themselves, are priced beside it.
+Stage 19's X server is yserver (`docs/YSERVER.md`, 36 points against the
+stage's 40 for XWayland, done 2026-09-29). What the stage still owes is
+client pages as texture backing, `dwindle:precise_mouse_move` and the
+second-pass effects; Mesa and `zwp_linux_dmabuf`, for clients that draw on
+the GPU themselves, are priced beside it.
 
 The desktop's own clients -- waybar, fuzzel, hyprlock and hypridle, written in
 Rust -- are half done. waybar and fuzzel are on `main` (2026-09-27):
@@ -183,10 +202,12 @@ busybox), and I5a: Valve's `steamcmd` logs in to Steam, from `test-steamcmd`
 and from the `--everything` desktop's terminal (2026-09-27). The Steam client
 itself draws through yserver, a Rust X11 server, with a rootless Wayland
 backend of Ferrix's own: its sign-in window is on hyprix since 2026-09-29,
-with launch-side workarounds listed in `docs/STEAM.md`. Ferrix also boots on the customer's Pixel
+with launch-side workarounds listed in `docs/STEAM.md`, and
+`run-compositor --everything` starts it beside Chrome. Ferrix also boots on the customer's Pixel
 7: natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest
 of the phone's own crosvm from a launcher app, which shows a desktop in that
-VM with Chromium on it (2026-09-27); during a native boot a USB serial port
+VM with Chromium on it (2026-09-27), and each release carries that desktop,
+full and minimal (2026-09-28); during a native boot a USB serial port
 streams the kernel log (2026-09-26). The kernel's certification
 set (`docs/certification/`) closed F-23, F-31 and F-35 on 2026-09-26: fallible
 allocation, side-channel defences with KASLR, and job quotas. On 2026-09-27

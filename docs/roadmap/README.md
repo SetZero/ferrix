@@ -7,7 +7,7 @@ stage has its own page, and the details are linked at the end.
 
 The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
 
-## Where it stands (2026-09-27)
+## Where it stands (2026-09-30)
 
 **Done**
 
@@ -20,28 +20,33 @@ The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
 
 **In progress**
 
-- **Stage 13:** cgroups with pids, memory, OOM kill and CPU weight;
-  namespaces and seccomp are left.
+- **Stage 13:** cgroups with pids, memory, OOM kill and CPU weight. Of the
+  namespaces, per-mount flags (N1) and binds (N2) are in, and mount
+  namespaces (N3) are next; seccomp is left.
 - **Stage 15:** the init is done (L1 to L12): `/sbin/init` boots every image,
   starts `devmgr` and runs the desktop as a service; logins go through `authd`
   (`docs/AUTH.md` phase 1), and hyprlock's lock over it is parked on a branch.
-- **Stage 19:** the desktop composites on the GPU; XWayland and the
+- **Stage 19:** the desktop composites on the GPU, and yserver, an X server
+  in Rust, shows X windows on it; client pages as texture backing and the
   second-pass effects are left. waybar and fuzzel, rewritten in Rust, run the
   customer's own config on `run-compositor --everything`; hyprlock and hypridle
   are left.
 - **Stage 20:** Ferrix builds its own x86-64 image.
-- **Stage 22 (Steam):** sound plays through `/dev/snd`, Chrome plays video
-  with sound, 32-bit x86 programs run, and Valve's `steamcmd` logs in to Steam.
-  The Steam client needs an X server: yserver, in Rust, with a Wayland backend
-  of Ferrix's own (decided 2026-09-27).
+- **Stage 22 (Steam):** sound plays through `/dev/snd` and a PulseAudio-protocol
+  server, Chrome plays video with sound, 32-bit x86 programs run, and Valve's
+  `steamcmd` logs in to Steam. The Steam client draws its sign-in window
+  through yserver (2026-09-29), with launch-side workarounds
+  (`docs/STEAM.md`).
+- **The installer:** an MVP installs Ferrix on a VM's disk (2026-09-28).
 - **Chrome** runs headless and in a window, on glibc and on ferrousli, Ferrix's
   own C library.
 - **Pixel 7:** boots natively on all eight cores, runs the desktop in a VM,
   and streams its log over USB.
 
 **Next:** cutting test and gate run time, the customer's priority one
-(`docs/TEST-TIME.md`); where the 2026-09-27 wind-down left each piece of work
-is in [Where it stands](where-it-stands.md).
+(`docs/TEST-TIME.md`), then Steam's workarounds and the namespaces under
+them; what is red, parked and waiting is in
+[Where it stands](where-it-stands.md).
 
 **Not started**
 
@@ -49,9 +54,11 @@ is in [Where it stands](where-it-stands.md).
 
 ## Forecast
 
-- About **442 sized points** are left.
-- At the recent pace the sized work ends in the **first days of October**;
-  unsized work (self-hosting, bare metal, most of Steam) is not in that date.
+- About **442 sized points** were left on 2026-09-26, the last count.
+  Since then stage 19's X server (40 of them), sound's alsa-lib and the
+  32-bit ABI's I2 to I4 have landed; the forecast is recounted in
+  [Status](status.md) at the next velocity count.
+- Unsized work (self-hosting, bare metal, most of Steam) is not in any date.
 
 ## Details
 
@@ -99,7 +106,7 @@ single file across.
 | 16 | [`rustc`](stage-16-rustc.md) | ✓ done | the goal; ≈ 40 guessed, 8 spent |
 | 17 | [Display and input](stage-17-display-input.md) | ✓ done | 74 points, spent |
 | 18 | [The compositor](stage-18-compositor.md) | ✓ done | 96 points, spent |
-| 19 | [Hyprland fidelity, and the GPU](stage-19-hyprland-fidelity-gpu.md) | ◐ in progress | 178 points, about 56 left |
+| 19 | [Hyprland fidelity, and the GPU](stage-19-hyprland-fidelity-gpu.md) | ◐ in progress | 178 points, about 16 left |
 | 20 | [Self-hosting](stage-20-self-hosting.md) | ◐ in progress |  |
 | 21 | [Bare metal, and a GPU of Ferrix's own](stage-21-bare-metal-gpu-ferrix.md) | ○ planned | unsized, over 100 points |
 | 22 | [Steam](stage-22-steam.md) | ◐ in progress | unsized, over 300 points |
