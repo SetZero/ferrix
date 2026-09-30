@@ -1385,6 +1385,7 @@ pub(crate) const fn ipi_irq() -> u32 {
 /// The barrier is here rather than in the shared driver because it is an
 /// instruction, and each architecture spells its own.
 pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
+    crate::sched::trip::count(crate::sched::trip::Count::Ipi);
     cpu::dsb_ishst();
     gicv2::send_sgi_to_others();
     Ok(())
@@ -1424,6 +1425,13 @@ pub(crate) fn counter_now() -> u64 {
 /// How fast it counts.
 pub(crate) fn counter_hz() -> u64 {
     timer::counter_hz()
+}
+
+/// Whether a program can read the counter [`counter_now`] reads: not here.
+/// Nothing sets `CNTKCTL.PL0VCTEN`, so a read of `CNTVCT` from user mode is
+/// an undefined instruction.
+pub(crate) fn ring3_reads_counter() -> bool {
+    false
 }
 
 /// Fire the timer interrupt once, `nanos` from now.

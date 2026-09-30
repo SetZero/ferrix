@@ -1339,6 +1339,7 @@ pub(crate) const fn ipi_irq() -> u32 {
 /// than in the shared driver because it is an instruction, and each
 /// architecture spells its own.
 pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
+    crate::sched::trip::count(crate::sched::trip::Count::Ipi);
     cpu::dsb_ishst();
     gic::send_sgi_to_others();
     Ok(())
@@ -1379,6 +1380,14 @@ pub(crate) fn counter_now() -> u64 {
 /// How fast it counts.
 pub(crate) fn counter_hz() -> u64 {
     timer::counter_hz()
+}
+
+/// Whether a program can read the counter [`counter_now`] reads: always.
+/// That is `CNTVCT_EL0`, and every processor sets `CNTKCTL_EL1.EL0VCTEN` as
+/// it starts (`cpu::allow_user_counter`), as Linux does for its vDSO. What a
+/// driver's own timings, in its counter's ticks, need to mean something here.
+pub(crate) fn ring3_reads_counter() -> bool {
+    true
 }
 
 /// Fire the timer interrupt once, `nanos` from now.

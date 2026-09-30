@@ -23,7 +23,7 @@ use aarch64::speculation as machine_speculation;
 #[cfg(target_arch = "arm")]
 use armv7a::speculation as machine_speculation;
 pub(crate) use speculation::{
-    HARDENED, nospec_below, nospec_index, report_exposure as report_speculation,
+    HARDENED, nospec_below, nospec_index, report_exposure as report_speculation, switch_barriers,
 };
 pub(crate) use speculation_check::check as check_speculation;
 #[cfg(target_arch = "x86_64")]
@@ -290,6 +290,16 @@ pub(crate) use aarch64::{USER_VDSO_PROGRAM, vdso_can_read_counter, vdso_spec};
 pub(crate) use armv7a::{USER_VDSO_PROGRAM, vdso_can_read_counter, vdso_spec};
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{USER_VDSO_PROGRAM, vdso_can_read_counter, vdso_spec};
+
+// Whether a program can read the counter the kernel's clock counts, for a
+// driver's own timings: a separate question from the vDSO's, which only
+// x86-64 has written.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::ring3_reads_counter;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::ring3_reads_counter;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::ring3_reads_counter;
 
 // Cache maintenance for a device that does not snoop the caches: the
 // DK board's display controller reads a framebuffer straight from memory, so

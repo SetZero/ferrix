@@ -89,6 +89,7 @@ use crate::syscall::native;
 pub(crate) mod check;
 pub(crate) mod driver_check;
 pub(crate) mod hop_check;
+pub(crate) mod trip_check;
 
 /// The block major every ring's disk is published under. Linux allocates
 /// virtio-blk's major dynamically, usually 253 or 254; nothing keys on it.
@@ -995,6 +996,7 @@ impl RingDisk {
                     abandoned: false,
                 },
             );
+            sched::trip::queued(&self.done);
             id
         };
         // A full port already holds a nudge the task has not taken.
@@ -1016,6 +1018,7 @@ impl RingDisk {
         let _ = self
             .done
             .wait_until_deadline(|| self.finished(id) || terminated(), deadline);
+        sched::trip::reader_running(&self.done);
         let mut state = self.state.lock();
         match state.reads.remove(&id) {
             Some(Pending {
@@ -1171,6 +1174,7 @@ impl Serving<'_> {
             }
             self.dispatch();
             if let Some(bell) = self.side.publish() {
+                sched::trip::bell(&self.disk.done, self.driver_port.waiters());
                 // A full port already holds a bell the driver has not taken.
                 let _ = self.driver_port.queue_user(bell.key(), bell.packet().data);
             }
@@ -1279,6 +1283,7 @@ impl Serving<'_> {
                         let _ = self.free.pop();
                         let _ = self.flying.insert(token.raw(), region);
                         crate::fs::seam::submitted();
+                        sched::trip::on_ring(&self.disk.done, self.kernel_port.waiters());
                     }
                     Err(SubmitError::Full) => {
                         let _ = state.queue.requeue(token);
@@ -1310,13 +1315,18 @@ impl Serving<'_> {
             }
             let result = outcome(&completed);
             let offset = u64::from(region) * self.region_bytes;
+            let mut state = self.disk.state.lock();
             answer(
-                &mut self.disk.state.lock(),
+                &mut state,
                 Token::from_raw(token),
                 result,
                 &self.data,
                 offset,
             );
+            // Stamped before the lock goes, which a reader already awake
+            // takes the answer at.
+            sched::trip::answered(&self.disk.done);
+            drop(state);
             self.free.push(region);
             answered = true;
         }
@@ -1344,6 +1354,7 @@ impl Serving<'_> {
         let _ = port
             .waiters()
             .wait_until_deadline(|| !port.is_empty(), deadline);
+        sched::trip::ring_running(&self.disk.done);
         while let Some(packet) = port.take() {
             if packet.key == CONTROL_KEY && packet.kind == PACKET_SIGNAL {
                 self.watching = false;

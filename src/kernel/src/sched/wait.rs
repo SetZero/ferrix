@@ -213,6 +213,7 @@ impl WaitQueue {
             // for the paths that leave without being drained: the recheck
             // timer, and the condition coming true.
             drained = !self.unqueue(task.id);
+            super::trip::slept(self, drained);
         }
     }
 

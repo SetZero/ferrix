@@ -131,6 +131,27 @@ less. On AArch64 under TCG the figures were 453 us and 145 us. At depth 32 a sta
 - The stall is a bug whatever is decided, and it costs the drivers already
   in ring 3 today.
 
+### Where a trip's time goes: the `seam-trip` and `seam-count` lines
+
+Since 2026-09-30 the boot check traces its 1,024 depth-1 reads
+(`sched::trip`) and prints two lines under `seam`. `seam-trip` gives each
+hop's p50/p99 in microseconds, in the order a read passes them: `issue`,
+`queued` (before the ring task is nudged), `ring` (the ring task running),
+`on-ring`, `bell` (the driver rung), `drv-bell` (its `port_wait` took the
+bell), `irq` (the device's interrupt queued), `drv-irq`, `posted` (the driver
+rang the ring's port), `ring-again`, `answered` (the bytes copied out),
+`reader` (the reader running) and `done`. Then the whole trip's p50/p99 and
+what the hops' medians add up to: near 100% means the hops account for the
+trip. Then, for each of the five wakes, how many trips woke the task on
+another processor than the waker's. Last, how often a hop was not taken: a
+ring task or driver that was already awake is not woken, and that hop reads
+as zero. `seam-count` divides what the run did by 1,024: switches, switch
+barriers (IBPB), user roots written and taken off, IPIs sent, device
+interrupts, and the sleeps on the reader's queue and the two ports, ended by
+a wake or by the recheck timer. A trip spent in recheck sleeps, rather than
+in wakes, is a missed wake-up. On AArch64 the driver now reads `CNTVCT_EL0`,
+so the `seam` line's device share is measured there too.
+
 ## 1. What "opaque" means here
 
 The kernel keeps what only a kernel can do:

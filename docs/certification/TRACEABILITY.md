@@ -22,8 +22,8 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Product functions | Count |
 |---|---:|
 | Named by a low-level requirement | 1164 |
-| Accessors, covered by the requirement they serve | 553 |
-| Check code in a product file | 35 |
+| Accessors, covered by the requirement they serve | 559 |
+| Check code in a product file | 55 |
 | Named by none | 595 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
@@ -65,6 +65,26 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 | `mm::unlinked::UnlinkedTables::frames` | The frames a list holds, for smp/check.rs's check that an unmap's tables are still held; it reads the list's private links. |
 | `object::as_if_draining_elsewhere` | Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs. |
 | `object::process::Exit::for_check` | An end no process has, for object/pin/check.rs's check_quarantine; it needs Exit's private constructor. |
+| `sched::trip::answered` | A stamp point of the seam's depth-1 trace (block_ring/trip_check.rs). Unarmed it loads TRACING and returns; only hop_check arms it. It sits in block_ring's complete() under the disk's state lock, which is what keeps it in product code. |
+| `sched::trip::arm` | Raises the seam's depth-1 trace and zeroes its counts; its only caller is block_ring/hop_check.rs. |
+| `sched::trip::bell` | A stamp point of the seam's depth-1 trace, on the ring task's bell to the driver. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::count` | Counts switches, root writes, IPIs and device interrupts for the seam's trace, called on those product paths. Unarmed it loads TRACING and returns; only hop_check arms it, and only trip_check reads the counts. |
+| `sched::trip::counted` | Reads the trace's counts for block_ring/trip_check.rs, its only caller. |
+| `sched::trip::disarm` | Lowers the seam's depth-1 trace; its only caller is block_ring/hop_check.rs. |
+| `sched::trip::done` | Ends a traced trip and hands its stamps to block_ring/trip_check.rs, its only caller through hop_check. |
+| `sched::trip::interrupt_queued` | A stamp point of the seam's depth-1 trace, in Line::fire before the packet is queued. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::issued` | A stamp point of the seam's depth-1 trace: the check calls a read. Its only caller is block_ring/hop_check.rs. |
+| `sched::trip::name` | Records which wait queue a traced trip uses; reached only from stamp points while the trace is armed. |
+| `sched::trip::now_here` | Reads the counter and the processor for a stamp; reached only from stamp points while the trace is armed. |
+| `sched::trip::on_ring` | A stamp point of the seam's depth-1 trace, as the ring task puts a request on the ring. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::port_rung` | A stamp point of the seam's depth-1 trace, in port_queue on the ring's kernel port. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::port_taken` | A stamp point of the seam's depth-1 trace, in port_wait on the driver's port. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::queued` | A stamp point of the seam's depth-1 trace, as a read is queued. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::reader_running` | A stamp point of the seam's depth-1 trace, as the reader runs again. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::ring_running` | A stamp point of the seam's depth-1 trace, as the ring task runs. Unarmed it loads TRACING and returns; only hop_check arms it. |
+| `sched::trip::slept` | Counts sleeps on the traced queues ended by a wake or by the recheck, called from WaitQueue::wait_until_deadline. Unarmed it loads TRACING and returns; only hop_check arms it, and only trip_check reads the counts. |
+| `sched::trip::stamp` | Stores one stamp if the traced trip has reached it; reached only from stamp points while the trace is armed. |
+| `sched::trip::store` | Writes a stamp slot; reached only from stamp points while the trace is armed. |
 | `smp::next_job` | The work run_everywhere handed out that a secondary has not done yet. Only stage 4's checks hand work out (smp/check.rs); secondary_main, product code, calls this in its wait loop until the scheduler takes the processor over, so it stays beside that loop and the JOB state both read. |
 | `smp::run_everywhere` | Runs a function on every online processor at once and waits for each: how stage 4's checks run on every processor, and nothing else calls it. It writes the JOB state secondary_main's product loop reads through next_job, so moving it into smp/check.rs would leave the product loop reading a check file's state. |
 | `vmap::check_failed_device_map` | A check, called from mm/check.rs's check_vmap, that a device mapping failing part way leaves nothing mapped. It uses vmap.rs's private reserve, release and map_reserved; moved into a check file it verifies L.mm.52. |
