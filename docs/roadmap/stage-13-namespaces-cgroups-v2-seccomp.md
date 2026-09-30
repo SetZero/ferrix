@@ -230,6 +230,20 @@ in the namespace, procfs, catalog and kmem files; they go in one at a time,
 each rebased with `git rebase --onto` the landed N4. Not started: seccomp S6,
 and N6 and N7 (Steam as uid 1000, pressure-vessel).
 
+**Built -- the small namespaces and `setns` (2026-09-30, branch
+`stage13-smallns` on the N4 branch, not landed):** UTS, IPC and cgroup
+namespaces through `clone`, `clone3` and `unshare`; `sethostname`,
+`setdomainname`, `uname` and the two sysctls per UTS namespace; the
+System V semaphore table per IPC namespace; `/proc/<pid>/cgroup` told from
+the reader's cgroup namespace root and a `cgroup2` mount rooted there;
+`/proc/<pid>/ns/{uts,ipc,cgroup}`, all five `ns` links opening as nsfs files
+with `NS_GET_USERNS`, `NS_GET_PARENT`, `NS_GET_NSTYPE` and `NS_GET_OWNER_UID`;
+`setns` by namespace file or pidfd for mount, user, UTS, IPC and cgroup
+namespaces. Pid and network namespaces stay `EINVAL`. The `smallns` boot
+line (FX-0892) and its negative controls prove it; `docs/NAMESPACES.md` §12
+has the list and the differences from Linux (a namespace set per process,
+not per thread, among them).
+
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,
 `cpu.max` and `io`. `docs/CGROUPS.md` §7.1 says where each
