@@ -1,7 +1,12 @@
 //! `run-compositor --everything`: one boot with all of it -- the GPU, the
-//! clipboard, the network, Chrome on the desktop and `rustc`, `cargo` and,
-//! once `tools/common/fetch/fetch-steamcmd.sh` has run, Valve's `steamcmd` in the
-//! shell.
+//! clipboard, the network, Chrome and Steam on the desktop, and `rustc`,
+//! `cargo`, Valve's `steamcmd` and Claude Code in the shell.
+//!
+//! All of it, always: `--everything` is everything. A volume that has not
+//! been fetched yet is fetched by its script before the merge ([`fetched`]),
+//! and a fetch that fails stops the run. None is left out with a line saying
+//! how it could have been added, which is how a desktop came up without
+//! Steam or Claude Code and nothing looked wrong.
 //!
 //! The kernel mounts one data disk, at `/data`, and the two downloads that
 //! want it are two volumes: the one `tools/common/fetch/fetch-rustc-sysroot.sh` makes
@@ -18,21 +23,20 @@
 //! runs everything built against the older, where the newer is kept and the
 //! choice is said.
 //!
-//! steamcmd's tree, when it has been fetched, is merged in next. Its i386
-//! glibc is under paths neither of the other two uses, so it adds files and
-//! clashes with none. Claude Code's (`docs/CLAUDE-CODE.md`) follows when
-//! `tools/common/fetch/fetch-claude-code.sh` has made it: Chrome's glibc pin
-//! again, bash and ripgrep, and `claude-code/claude`, which the desktop's
-//! terminals run as `claude`. yserver's, the X server's (`docs/YSERVER.md`, Y7), comes
-//! last when `tools/common/fetch/fetch-yserver.sh` has made it: trixie's libraries
-//! again, with the server at `/yserver/yserver`. Where it holds libstdc++'s
-//! gdb pretty-printers of gcc 14 beside the rustc volume's of gcc 16, the ones
-//! of the newer libstdc++ the volume keeps are kept ([`pretty_printers`]).
+//! steamcmd's tree is merged in next. Its i386 glibc is under paths neither
+//! of the other two uses, so it adds files and clashes with none. Claude
+//! Code's (`docs/CLAUDE-CODE.md`) follows: Chrome's glibc pin again, bash and
+//! ripgrep, and `claude-code/claude`, which the desktop's terminals run as
+//! `claude`.
 //!
-//! The Steam window's tree (`docs/STEAM.md`), when
-//! `tools/common/fetch/fetch-steam-window.sh` has made it, comes last in yserver's
-//! place: it is yserver's tree with Valve's bootstrap, the client's i386 and
-//! amd64 libraries and `lsof` on top, and its own build of the server.
+//! The Steam window's tree (`docs/STEAM.md`) comes last. It is the X
+//! server's (`docs/YSERVER.md`, Y7) -- trixie's libraries again, with the
+//! server at `/yserver/yserver`, built by `fetch-steam-window.sh`'s own run of
+//! `fetch-yserver.sh` -- with Valve's bootstrap, the client's i386 and amd64
+//! libraries and `lsof` on top, so yserver's own volume is not merged beside
+//! it. Where it holds libstdc++'s gdb pretty-printers of gcc 14 beside the
+//! rustc volume's of gcc 16, the ones of the newer libstdc++ the volume keeps
+//! are kept ([`pretty_printers`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -66,8 +70,8 @@ const STEAM_SPARE_MIB: u64 = 4096;
 ///
 /// # Errors
 ///
-/// When either volume has not been fetched, the trees disagree about a
-/// file, or `mkfs.btrfs` cannot make the image.
+/// When a volume's fetch fails, the trees disagree about a file, or
+/// `mkfs.btrfs` cannot make the image.
 pub(crate) fn volume() -> Result<PathBuf> {
     if cfg!(windows) {
         return volume_in_wsl();
@@ -149,40 +153,82 @@ pub(crate) fn volume() -> Result<PathBuf> {
 /// Each volume merged, as its image and the tree beside it, in the order
 /// they are merged, and the MiB of room the volume leaves for what they
 /// write.
+///
+/// Every one is there: a volume not fetched yet is fetched here, and one
+/// that cannot be stops the run. `--everything` is everything, so none is
+/// left out with a line saying how it could have been added.
 fn sources() -> Result<(Vec<(PathBuf, PathBuf)>, u64)> {
-    let rustc = (crate::rustc::volume()?, crate::rustc::tree()?);
-    let chrome_image = crate::chrome::volume()?;
-    let chrome_tree = chrome_image
-        .parent()
-        .map(|directory| directory.join("tree"))
-        .filter(|tree| tree.is_dir())
-        .ok_or_else(|| {
-            Error::new(format!(
-                "no tree beside {}: tools/common/fetch/fetch-chrome.sh keeps one there",
-                chrome_image.display()
-            ))
-        })?;
-    let mut sources = vec![rustc, (chrome_image, chrome_tree)];
-    let mut spare = SPARE_MIB;
-    if let Some(steamcmd) = steamcmd()? {
-        sources.push(steamcmd);
-        spare += STEAMCMD_SPARE_MIB;
-    }
-    if let Some(claude_code) = claude_code()? {
-        sources.push(claude_code);
-        spare += CLAUDE_CODE_SPARE_MIB;
-    }
+    let rustc = (
+        fetched(crate::rustc::volume, "fetch-rustc-sysroot.sh")?,
+        crate::rustc::tree()?,
+    );
+    let chrome = fetched(crate::chrome::volume, "fetch-chrome.sh")?;
+    let chrome = beside(chrome, "fetch-chrome.sh", Path::is_dir)?;
+    let steamcmd = fetched(crate::steamcmd::volume, "fetch-steamcmd.sh")?;
+    let steamcmd = beside(steamcmd, "fetch-steamcmd.sh", Path::is_dir)?;
+    let claude_code = fetched(crate::claude_code::volume, "fetch-claude-code.sh")?;
+    let claude_code = beside(claude_code, "fetch-claude-code.sh", |tree| {
+        tree.join("claude-code/claude").is_file()
+    })?;
     // Steam's tree is yserver's with Valve's bootstrap and the client's
     // libraries on top, and its yserver was built by its own run of
-    // fetch-yserver.sh: two servers at one path would stop the merge.
-    if let Some(steam) = steam()? {
-        sources.push(steam);
-        spare += YSERVER_SPARE_MIB + STEAM_SPARE_MIB;
-    } else if let Some(yserver) = yserver()? {
-        sources.push(yserver);
-        spare += YSERVER_SPARE_MIB;
+    // fetch-yserver.sh, so it brings the X server and yserver's own volume
+    // is not merged: two servers at one path would stop the merge.
+    let steam = fetched(
+        crate::compositor::steam_window::volume,
+        "fetch-steam-window.sh",
+    )?;
+    let steam = beside(steam, "fetch-steam-window.sh", |tree| {
+        tree.join("steam/ubuntu12_32/steam").is_file() && tree.join("yserver/yserver").is_file()
+    })?;
+    let spare = SPARE_MIB
+        + STEAMCMD_SPARE_MIB
+        + CLAUDE_CODE_SPARE_MIB
+        + YSERVER_SPARE_MIB
+        + STEAM_SPARE_MIB;
+    Ok((vec![rustc, chrome, steamcmd, claude_code, steam], spare))
+}
+
+/// The image `volume` finds, after running `tools/common/fetch/<script>`
+/// when it finds none. The script writes where `volume` looks: both read the
+/// same `FERRIX_*_VOLUME`, and default to the same place under
+/// `~/.local/share/ferrix`. A script that fails, or that leaves no image,
+/// stops the run.
+fn fetched(volume: fn() -> Result<PathBuf>, script: &str) -> Result<PathBuf> {
+    if let Ok(image) = volume() {
+        return Ok(image);
     }
-    Ok((sources, spare))
+    let path = crate::paths::workspace_root()
+        .join("tools/common/fetch")
+        .join(script);
+    println!("  everything: fetching with {}", path.display());
+    let status = Command::new("bash")
+        .arg(&path)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(|error| Error::new(format!("running {}: {error}", path.display())))?;
+    if !status.success() {
+        return Err(Error::new(format!(
+            "{script}: {status}; --everything needs what it fetches"
+        )));
+    }
+    volume()
+}
+
+/// `image` and the tree its script keeps beside it, which `whole` says is
+/// the tree the script packed.
+fn beside(image: PathBuf, script: &str, whole: fn(&Path) -> bool) -> Result<(PathBuf, PathBuf)> {
+    let tree = image
+        .parent()
+        .map(|directory| directory.join("tree"))
+        .filter(|tree| whole(tree))
+        .ok_or_else(|| {
+            Error::new(format!(
+                "no tree beside {}: tools/common/fetch/{script} keeps one there",
+                image.display()
+            ))
+        })?;
+    Ok((image, tree))
 }
 
 /// [`volume`] on Windows, where the trees are WSL's, full of symbolic links,
@@ -222,98 +268,6 @@ fn volume_in_wsl() -> Result<PathBuf> {
         )));
     }
     Ok(image)
-}
-
-/// steamcmd's image and the tree beside it, or `None` when it has not been
-/// fetched: the desktop is whole without it, and says how to add it.
-fn steamcmd() -> Result<Option<(PathBuf, PathBuf)>> {
-    let Ok(image) = crate::steamcmd::volume() else {
-        println!(
-            "  everything: no steamcmd in the terminal; tools/common/fetch/fetch-steamcmd.sh adds it"
-        );
-        return Ok(None);
-    };
-    let tree = image
-        .parent()
-        .map(|directory| directory.join("tree"))
-        .filter(|tree| tree.is_dir())
-        .ok_or_else(|| {
-            Error::new(format!(
-                "no tree beside {}: tools/common/fetch/fetch-steamcmd.sh keeps one there",
-                image.display()
-            ))
-        })?;
-    Ok(Some((image, tree)))
-}
-
-/// Claude Code's image and the tree beside it, or `None` when it has not
-/// been fetched: the desktop is whole without it, and says how to add it.
-fn claude_code() -> Result<Option<(PathBuf, PathBuf)>> {
-    let Ok(image) = crate::claude_code::volume() else {
-        println!(
-            "  everything: no Claude Code in the terminal; tools/common/fetch/fetch-claude-code.sh adds it"
-        );
-        return Ok(None);
-    };
-    let tree = image
-        .parent()
-        .map(|directory| directory.join("tree"))
-        .filter(|tree| tree.join("claude-code/claude").is_file())
-        .ok_or_else(|| {
-            Error::new(format!(
-                "no tree with Claude Code beside {}: tools/common/fetch/fetch-claude-code.sh keeps one there",
-                image.display()
-            ))
-        })?;
-    Ok(Some((image, tree)))
-}
-
-/// yserver's image and the tree beside it, or `None` when it has not been
-/// made: the desktop is whole without an X server, and says how to add one.
-pub(crate) fn yserver() -> Result<Option<(PathBuf, PathBuf)>> {
-    let image = match crate::yserver::volume() {
-        Ok(image) => image,
-        Err(error) => {
-            println!("  everything: no X server: {error}");
-            return Ok(None);
-        }
-    };
-    let tree = image
-        .parent()
-        .map(|directory| directory.join("tree"))
-        .filter(|tree| tree.join("yserver/yserver").is_file())
-        .ok_or_else(|| {
-            Error::new(format!(
-                "no tree with yserver beside {}: tools/common/fetch/fetch-yserver.sh keeps one there",
-                image.display()
-            ))
-        })?;
-    Ok(Some((image, tree)))
-}
-
-/// The Steam window volume's image and the tree beside it
-/// (`tools/common/fetch/fetch-steam-window.sh`, `docs/STEAM.md`), or `None` when
-/// it has not been made: the desktop is whole without Steam, and says how to
-/// add it.
-pub(crate) fn steam() -> Result<Option<(PathBuf, PathBuf)>> {
-    let Ok(image) = crate::compositor::steam_window::volume() else {
-        println!(
-            "  everything: no Steam; tools/common/fetch/fetch-steam-window.sh adds the client"
-        );
-        return Ok(None);
-    };
-    let tree = image
-        .parent()
-        .map(|directory| directory.join("tree"))
-        .filter(|tree| tree.join("steam/ubuntu12_32/steam").is_file())
-        .ok_or_else(|| {
-            Error::new(format!(
-                "no tree with Steam's bootstrap beside {}: \
-                 tools/common/fetch/fetch-steam-window.sh keeps one there",
-                image.display()
-            ))
-        })?;
-    Ok(Some((image, tree)))
 }
 
 /// `~/.local/share/ferrix/everything`, or `FERRIX_EVERYTHING_VOLUME`.

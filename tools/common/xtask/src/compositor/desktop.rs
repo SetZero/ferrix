@@ -355,8 +355,9 @@ pub(super) fn with_yserver(config: String, args: &Args, arch: Arch) -> String {
 
 /// Whether `run-compositor --everything` merges the volume
 /// `tools/common/fetch/fetch-steam-window.sh` makes into its own
-/// (`crate::everything::steam`), and so starts Steam: x86-64 only, as the
-/// client is, and with Chrome, whose flag `--everything` sets.
+/// (`crate::everything`, which fetches it when it is missing), and so starts
+/// Steam: x86-64 only, as the client is, and with Chrome, whose flag
+/// `--everything` sets.
 pub(super) fn with_steam_volume(args: &Args, arch: Arch) -> bool {
     args.everything && args.chrome && arch == Arch::X86_64 && steam_window::volume().is_ok()
 }

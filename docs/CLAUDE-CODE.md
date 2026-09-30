@@ -261,8 +261,9 @@ the timeout.
 
 **`claude` in the desktop's terminals** (2026-09-30). `run-compositor
 --everything` merges this volume's tree into the one data volume that
-desktop mounts, beside rustc's, Chrome's, steamcmd's and yserver's
-(`everything.rs`), once `fetch-claude-code.sh` has made it; the only path
+desktop mounts, beside rustc's, Chrome's, steamcmd's and the Steam
+window's (`everything.rs`), and runs `fetch-claude-code.sh` first when the
+volume is missing, stopping if the fetch fails; the only path
 two of them share with different contents is `libgcc_s.so.1`, which the
 merge already settles for Chrome's copy of the same file. The image then
 carries `/bin/claude` (`claude_code::WRAPPER`), which runs
