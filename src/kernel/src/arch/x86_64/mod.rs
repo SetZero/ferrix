@@ -1262,12 +1262,10 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 
 /// Go back to translating nothing but the kernel's own tables.
 ///
-/// What a processor picking up a kernel thread does, so that no user address
-/// translates while one runs. The alternative — leaving the outgoing process's
-/// root installed, because a kernel thread has no user addresses to get wrong
-/// — is Linux's lazy TLB, and it is an optimisation that has to keep the
-/// address space alive underneath a thread that does not reference it. Stage 6
-/// takes the plain version.
+/// Not what a processor picking up a kernel thread does: that leaves the
+/// outgoing program's root loaded (lazy TLB, `crate::user::space`). This is
+/// for a space being dropped that a processor still has loaded, and for the
+/// checks that install spaces of their own and take them off again.
 ///
 /// # Safety
 ///

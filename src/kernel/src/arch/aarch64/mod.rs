@@ -1130,7 +1130,11 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 
 /// Stop translating the lower half at all.
 ///
-/// What a processor picking up a kernel thread does. `EPD0` makes a walk
+/// Not what a processor picking up a kernel thread does: that leaves the
+/// outgoing program's root loaded (lazy TLB, `crate::user::space`), and skips
+/// this function's invalidation along with it. This is for a space being
+/// dropped that a processor still has loaded, and for the checks that
+/// install spaces of their own. `EPD0` makes a walk
 /// through `TTBR0_EL1` fault rather than merely find nothing, so a stray user
 /// address in the kernel is a fault at the instruction that made it — but
 /// `EPD0` governs walks and not the `TLB`, so the cached entries have to go as

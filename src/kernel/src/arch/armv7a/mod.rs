@@ -1154,9 +1154,10 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 
 /// Stop translating the lower half at all.
 ///
-/// What a processor picking up a kernel thread does; see AArch64's, whose
-/// argument is the same one. `EPD0` governs walks and not the `TLB`, so the
-/// cached user entries have to be invalidated as well.
+/// Not what a processor picking up a kernel thread does, which leaves the
+/// outgoing program's root loaded; see AArch64's, whose argument is the same
+/// one. `EPD0` governs walks and not the `TLB`, so the cached user entries
+/// have to be invalidated as well.
 ///
 /// # Safety
 ///
