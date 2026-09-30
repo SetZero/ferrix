@@ -3,18 +3,14 @@
 use std::collections::BTreeMap;
 
 use compositor_protocol::core::{
-    self, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source,
-    wl_display, wl_output, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_subcompositor,
-    wl_subsurface, wl_surface,
+    self, wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source, wl_display,
+    wl_output, wl_registry, wl_seat, wl_shm,
 };
 use compositor_protocol::cursor_shape::{
     self, wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
 };
 use compositor_protocol::foreign_toplevel::{
     self, zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
-};
-use compositor_protocol::fractional_scale::{
-    self, wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
 };
 use compositor_protocol::input_method::{self, zwp_input_method_manager_v2, zwp_input_method_v2};
 use compositor_protocol::layer_shell::{self, zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -30,7 +26,6 @@ use compositor_protocol::text_input::{self, zwp_text_input_manager_v3, zwp_text_
 use compositor_protocol::toplevel_icon::{
     self, xdg_toplevel_icon_manager_v1, xdg_toplevel_icon_v1,
 };
-use compositor_protocol::viewporter::{self, wp_viewport, wp_viewporter};
 use compositor_protocol::xdg_activation::{self, xdg_activation_token_v1, xdg_activation_v1};
 use compositor_protocol::xdg_decoration::{
     self, zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
@@ -41,7 +36,9 @@ use compositor_wire::{
 };
 use compositor_xkb::Modifiers;
 
+mod buffers;
 mod capture;
+mod compositor;
 mod control;
 mod desktop;
 mod drag;
@@ -68,7 +65,7 @@ pub use workspaces::{Workspace, WorkspaceRequest};
 use crate::globals::Globals;
 use crate::layer::{Anchors, Layer, LayerSurface, Margin};
 use crate::role::Role;
-use crate::shm::{Buffer, FORMATS, Format, Pool, PoolKey};
+use crate::shm::{Buffer, FORMATS, Format, Pool};
 use crate::surface::{Output, Rect, Region, Subsurface, Surface};
 use crate::xdg::{Popup, Positioner, Toplevel, XdgRole, XdgSurface};
 
@@ -208,7 +205,7 @@ pub struct Client {
     surfaces: BTreeMap<ObjectId, Surface>,
     regions: BTreeMap<ObjectId, Region>,
     pools: BTreeMap<ObjectId, Pool>,
-    /// How many pools this connection has made: the last [`PoolKey`] given.
+    /// How many pools this connection has made: the last [`PoolKey`](crate::shm::PoolKey) given.
     pools_made: u64,
     buffers: BTreeMap<ObjectId, Buffer>,
     xdg_surfaces: BTreeMap<ObjectId, XdgSurface>,
@@ -657,12 +654,6 @@ impl Client {
     #[must_use]
     pub fn output_of(&self, object: ObjectId) -> Option<usize> {
         self.output_objects.get(&object).copied()
-    }
-
-    /// The subsurface `id` names, if it is one.
-    #[must_use]
-    pub fn subsurface(&self, id: ObjectId) -> Option<&Subsurface> {
-        self.subsurfaces.get(&id)
     }
 
     /// The `xdg_surface` `id` names, if it is one.
@@ -1153,86 +1144,6 @@ impl Client {
         );
     }
 
-    /// The surface `id` names, if it is one.
-    #[must_use]
-    pub fn surface(&self, id: ObjectId) -> Option<&Surface> {
-        self.surfaces.get(&id)
-    }
-
-    /// The surface `id` names, to be changed by the compositor above.
-    pub fn surface_mut(&mut self, id: ObjectId) -> Option<&mut Surface> {
-        self.surfaces.get_mut(&id)
-    }
-
-    /// Every surface, in id order.
-    pub fn surfaces(&self) -> impl Iterator<Item = (ObjectId, &Surface)> {
-        self.surfaces.iter().map(|(id, surface)| (*id, surface))
-    }
-
-    /// The region `id` names, if it is one.
-    #[must_use]
-    pub fn region(&self, id: ObjectId) -> Option<&Region> {
-        self.regions.get(&id)
-    }
-
-    /// The pool `id` names, if it is one.
-    #[must_use]
-    pub fn pool(&self, id: ObjectId) -> Option<&Pool> {
-        self.pools.get(&id)
-    }
-
-    /// The buffer `id` names, if it is one.
-    #[must_use]
-    pub fn buffer(&self, id: ObjectId) -> Option<&Buffer> {
-        self.buffers.get(&id)
-    }
-
-    /// Whether any `wl_buffer` this client still owns was made from `pool`.
-    ///
-    /// `wl_shm_pool.destroy` does not take the memory away: "the mmapped
-    /// memory will be released when all buffers that have been created from
-    /// this pool are gone". A client is entitled to make its buffers, throw
-    /// the pool away and go on drawing with them, and most toolkits do --
-    /// `grim` does it between asking for a screenshot and taking it. So the
-    /// compositor above keeps the mapping until this says no.
-    #[must_use]
-    pub fn pool_in_use(&self, pool: PoolKey) -> bool {
-        self.buffers.values().any(|buffer| buffer.pool == pool)
-    }
-
-    /// Tell the client a buffer is its own again.
-    ///
-    /// The compositor above calls this once it has finished reading a buffer
-    /// a commit replaced. Until it does, the client may not draw into that
-    /// memory, so a compositor that forgets is a client that stalls.
-    pub fn release_buffer(&mut self, buffer: ObjectId) {
-        if !self.buffers.contains_key(&buffer) {
-            return;
-        }
-        let _ = self
-            .out
-            .write(buffer, core::wl_buffer::event::RELEASE, &[], &[]);
-    }
-
-    /// Fire a surface's frame callbacks with `time`, and take them.
-    ///
-    /// `wl_callback.done`'s argument is milliseconds with an undefined base,
-    /// which is what every client treats it as.
-    pub fn fire_frame_callbacks(&mut self, surface: ObjectId, time: u32) {
-        let Some(state) = self.surfaces.get_mut(&surface) else {
-            return;
-        };
-        for callback in state.take_frame_callbacks() {
-            let _ = self.out.write(
-                callback,
-                core::wl_callback::event::DONE,
-                &[ArgType::Uint],
-                &[Arg::Uint(time)],
-            );
-            self.destroy(callback, Role::FrameCallback);
-        }
-    }
-
     /// Why the connection ended, once it has.
     #[must_use]
     pub const fn fatal(&self) -> Option<&Fatal> {
@@ -1692,396 +1603,6 @@ impl Client {
             role: global.role,
             version,
         });
-    }
-
-    /// `wl_compositor`: `create_surface` and `create_region`.
-    fn compositor(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
-        let Some(id) = args.first().and_then(Arg::as_object) else {
-            return;
-        };
-        match opcode {
-            wl_compositor::request::CREATE_SURFACE => {
-                // A surface inherits its `wl_compositor`'s version: the
-                // protocol's rule for every object made by another, and the
-                // reason a client bound at 4 is never sent
-                // `preferred_buffer_scale`, which arrived in 6.
-                if self.make(id, &core::WL_SURFACE, version, Role::Surface) {
-                    let _ = self.surfaces.insert(id, Surface::new());
-                }
-            }
-            // A wl_region is version 1 whatever its compositor was bound
-            // at, because the interface has only ever had one.
-            wl_compositor::request::CREATE_REGION
-                if self.make(id, &core::WL_REGION, 1, Role::Region) =>
-            {
-                let _ = self.regions.insert(id, Region::new());
-            }
-            _ => {}
-        }
-    }
-
-    /// `wl_surface`: everything a client says about what it is drawing.
-    fn surface_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        match opcode {
-            wl_surface::request::ATTACH => {
-                let Some(buffer) = args.first().and_then(Arg::as_object) else {
-                    return;
-                };
-                if !buffer.is_null() && !self.buffers.contains_key(&buffer) {
-                    self.fail(Fatal::WrongInterface {
-                        object: buffer,
-                        wanted: "wl_buffer",
-                    });
-                    return;
-                }
-                let (x, y) = (
-                    args.get(1).and_then(Arg::as_int).unwrap_or(0),
-                    args.get(2).and_then(Arg::as_int).unwrap_or(0),
-                );
-                let Some(surface) = self.surfaces.get_mut(&sender) else {
-                    return;
-                };
-                surface.pending.buffer = (!buffer.is_null()).then_some(buffer);
-                // Before version 5 `attach` carries the offset; from 5 it
-                // must be zero and `offset` carries it. A client bound below
-                // 5 that sends one is obeyed.
-                if x != 0 || y != 0 {
-                    surface.pending.offset = (x, y);
-                }
-            }
-            wl_surface::request::DAMAGE | wl_surface::request::DAMAGE_BUFFER => {
-                let rect = Rect::new(
-                    args.first().and_then(Arg::as_int).unwrap_or(0),
-                    args.get(1).and_then(Arg::as_int).unwrap_or(0),
-                    args.get(2).and_then(Arg::as_int).unwrap_or(0),
-                    args.get(3).and_then(Arg::as_int).unwrap_or(0),
-                );
-                let Some(surface) = self.surfaces.get_mut(&sender) else {
-                    return;
-                };
-                if let Some(rect) = rect {
-                    if opcode == wl_surface::request::DAMAGE {
-                        surface.pending.damage.push(rect);
-                    } else {
-                        surface.pending.buffer_damage.push(rect);
-                    }
-                }
-            }
-            wl_surface::request::FRAME => {
-                let Some(id) = args.first().and_then(Arg::as_object) else {
-                    return;
-                };
-                if !self.make(id, &core::WL_CALLBACK, 1, Role::FrameCallback) {
-                    return;
-                }
-                if let Some(surface) = self.surfaces.get_mut(&sender) {
-                    surface.frame_callbacks.push(id);
-                }
-            }
-            wl_surface::request::SET_OPAQUE_REGION | wl_surface::request::SET_INPUT_REGION => {
-                let Some(id) = args.first().and_then(Arg::as_object) else {
-                    return;
-                };
-                let region = if id.is_null() {
-                    None
-                } else {
-                    match self.regions.get(&id) {
-                        Some(region) => Some(region.clone()),
-                        None => {
-                            self.fail(Fatal::WrongInterface {
-                                object: id,
-                                wanted: "wl_region",
-                            });
-                            return;
-                        }
-                    }
-                };
-                let Some(surface) = self.surfaces.get_mut(&sender) else {
-                    return;
-                };
-                if opcode == wl_surface::request::SET_OPAQUE_REGION {
-                    surface.pending.opaque = region;
-                } else {
-                    surface.pending.input = region;
-                }
-            }
-            wl_surface::request::COMMIT => {
-                // A surface that has been given an `xdg_surface` may not
-                // carry a buffer until it has acked a configure. That is the
-                // rule that stops a client painting at a size the compositor
-                // never agreed to: `xdg_surface`'s description has the
-                // client commit once with nothing attached, take the
-                // configure, ack it, and only then attach.
-                let wants_buffer = self
-                    .surfaces
-                    .get(&sender)
-                    .is_some_and(|state| state.pending.buffer.is_some());
-                let unconfigured = self
-                    .xdg_surfaces
-                    .iter()
-                    .find(|(_, xdg)| xdg.surface == sender)
-                    .filter(|(_, xdg)| !xdg.configured)
-                    .map(|(id, _)| *id);
-                if let Some(xdg) = unconfigured
-                    && wants_buffer
-                {
-                    self.fail(Fatal::Interface {
-                        object: xdg,
-                        code: xdg_surface::error::UNCONFIGURED_BUFFER,
-                        text: "a buffer was attached before a configure was acked".to_owned(),
-                    });
-                    return;
-                }
-                let Some(surface) = self.surfaces.get_mut(&sender) else {
-                    return;
-                };
-                let change = surface.commit();
-                self.events.push(Event::SurfaceCommitted {
-                    surface: sender,
-                    change,
-                });
-            }
-            wl_surface::request::SET_BUFFER_TRANSFORM => {
-                let Some(transform) = args.first().and_then(Arg::as_int) else {
-                    return;
-                };
-                // wl_surface.error.invalid_transform is the protocol's answer
-                // to one that is not a wl_output.transform value.
-                let Ok(transform) = u32::try_from(transform) else {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: wl_surface::error::INVALID_TRANSFORM,
-                        text: "a buffer transform that is not one".to_owned(),
-                    });
-                    return;
-                };
-                if transform > wl_output::transform::FLIPPED_270 {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: wl_surface::error::INVALID_TRANSFORM,
-                        text: format!("{transform} is not a wl_output transform"),
-                    });
-                    return;
-                }
-                if let Some(surface) = self.surfaces.get_mut(&sender) {
-                    surface.pending.transform = transform;
-                }
-            }
-            wl_surface::request::SET_BUFFER_SCALE => {
-                let Some(scale) = args.first().and_then(Arg::as_int) else {
-                    return;
-                };
-                if scale < 1 {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: wl_surface::error::INVALID_SCALE,
-                        text: format!("a buffer scale of {scale}"),
-                    });
-                    return;
-                }
-                if let Some(surface) = self.surfaces.get_mut(&sender) {
-                    surface.pending.scale = scale;
-                }
-            }
-            wl_surface::request::OFFSET => {
-                let (Some(x), Some(y)) = (
-                    args.first().and_then(Arg::as_int),
-                    args.get(1).and_then(Arg::as_int),
-                ) else {
-                    return;
-                };
-                if let Some(surface) = self.surfaces.get_mut(&sender) {
-                    surface.pending.offset = (x, y);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// `wl_region`: `add` and `subtract`.
-    fn region_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        let rect = Rect::new(
-            args.first().and_then(Arg::as_int).unwrap_or(0),
-            args.get(1).and_then(Arg::as_int).unwrap_or(0),
-            args.get(2).and_then(Arg::as_int).unwrap_or(0),
-            args.get(3).and_then(Arg::as_int).unwrap_or(0),
-        );
-        let Some(region) = self.regions.get_mut(&sender) else {
-            return;
-        };
-        let Some(rect) = rect else {
-            return;
-        };
-        match opcode {
-            wl_region::request::ADD => region.add(rect),
-            wl_region::request::SUBTRACT => region.subtract(rect),
-            _ => {}
-        }
-    }
-
-    /// `wl_shm`: `create_pool`.
-    fn shm(&mut self, opcode: u16, args: &[Arg<'_>]) {
-        if opcode != wl_shm::request::CREATE_POOL {
-            return;
-        }
-        let (Some(id), Some(fd), Some(size)) = (
-            args.first().and_then(Arg::as_object),
-            args.get(1).and_then(Arg::as_fd),
-            args.get(2).and_then(Arg::as_int),
-        ) else {
-            return;
-        };
-        if size <= 0 {
-            // wl_shm has no error for it, and libwayland's mmap of a
-            // zero-length pool fails, which it answers with invalid_fd.
-            self.fail(Fatal::Interface {
-                object: id,
-                code: wl_shm::error::INVALID_FD,
-                text: format!("a pool of {size} bytes"),
-            });
-            return;
-        }
-        if !self.make(id, &core::WL_SHM_POOL, 1, Role::ShmPool) {
-            return;
-        }
-        self.pools_made += 1;
-        let memory = Pool::new(fd, size, PoolKey(self.pools_made));
-        let _ = self.pools.insert(id, memory);
-        self.events.push(Event::PoolCreated {
-            pool: memory.key,
-            memory,
-        });
-    }
-
-    /// `wl_shm_pool`: `create_buffer` and `resize`.
-    fn shm_pool(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        match opcode {
-            wl_shm_pool::request::CREATE_BUFFER => {
-                let Some(id) = args.first().and_then(Arg::as_object) else {
-                    return;
-                };
-                let numbers: Vec<i32> = (1..5)
-                    .filter_map(|index| args.get(index).and_then(Arg::as_int))
-                    .collect();
-                let (Some(pool), [offset, width, height, stride], Some(format)) = (
-                    self.pools.get(&sender),
-                    numbers.as_slice(),
-                    args.get(5).and_then(Arg::as_uint),
-                ) else {
-                    return;
-                };
-                match pool.buffer(pool.key, *offset, *width, *height, *stride, format) {
-                    Ok(buffer) => {
-                        if self.make(id, &core::WL_BUFFER, 1, Role::Buffer) {
-                            let _ = self.buffers.insert(id, buffer);
-                        }
-                    }
-                    Err(error) => self.fail(Fatal::Interface {
-                        object: sender,
-                        code: error.code(),
-                        text: error.message(),
-                    }),
-                }
-            }
-            wl_shm_pool::request::RESIZE => {
-                let Some(size) = args.first().and_then(Arg::as_int) else {
-                    return;
-                };
-                let Some(pool) = self.pools.get_mut(&sender) else {
-                    return;
-                };
-                if pool.resize(size) {
-                    let pool = pool.key;
-                    self.events.push(Event::PoolResized { pool, size });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// `wl_subcompositor`: `get_subsurface`.
-    ///
-    /// A subsurface is a surface placed relative to another and committed
-    /// with it. Every toolkit makes them -- for a title bar, a shadow, a
-    /// cursor -- so a compositor that advertises `wl_subcompositor` and does
-    /// not answer this refuses every such client at its first window.
-    fn subcompositor(&mut self, opcode: u16, args: &[Arg<'_>]) {
-        if opcode != wl_subcompositor::request::GET_SUBSURFACE {
-            return;
-        }
-        let (Some(id), Some(surface), Some(parent)) = (
-            args.first().and_then(Arg::as_object),
-            args.get(1).and_then(Arg::as_object),
-            args.get(2).and_then(Arg::as_object),
-        ) else {
-            return;
-        };
-        for (object, name) in [(surface, "wl_surface"), (parent, "wl_surface")] {
-            if !self.surfaces.contains_key(&object) {
-                self.fail(Fatal::WrongInterface {
-                    object,
-                    wanted: name,
-                });
-                return;
-            }
-        }
-        if surface == parent {
-            self.fail(Fatal::Interface {
-                object: id,
-                code: wl_subcompositor::error::BAD_SURFACE,
-                text: "a surface cannot be its own parent".to_owned(),
-            });
-            return;
-        }
-        // A surface that already has a role may not be given another, as for
-        // `xdg_surface`.
-        if self.subsurfaces.values().any(|sub| sub.surface == surface)
-            || self.xdg_surfaces.values().any(|xdg| xdg.surface == surface)
-        {
-            self.fail(Fatal::Interface {
-                object: id,
-                code: wl_subcompositor::error::BAD_SURFACE,
-                text: "that surface already has a role".to_owned(),
-            });
-            return;
-        }
-        if self.make(id, &core::WL_SUBSURFACE, 1, Role::Subsurface) {
-            let _ = self.subsurfaces.insert(
-                id,
-                Subsurface {
-                    surface,
-                    parent,
-                    position: (0, 0),
-                    synchronised: true,
-                },
-            );
-        }
-    }
-
-    /// `wl_subsurface`: where it sits and how it commits.
-    ///
-    /// The position is kept and the stacking is not: a subsurface is drawn
-    /// with its parent, and this compositor draws a window's own surface
-    /// only, so `place_above` and `place_below` change nothing yet. They are
-    /// taken rather than refused, since the protocol allows them.
-    fn subsurface_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        let Some(sub) = self.subsurfaces.get_mut(&sender) else {
-            return;
-        };
-        match opcode {
-            wl_subsurface::request::SET_POSITION => {
-                let (Some(x), Some(y)) = (
-                    args.first().and_then(Arg::as_int),
-                    args.get(1).and_then(Arg::as_int),
-                ) else {
-                    return;
-                };
-                sub.position = (x, y);
-            }
-            wl_subsurface::request::SET_SYNC => sub.synchronised = true,
-            wl_subsurface::request::SET_DESYNC => sub.synchronised = false,
-            _ => {}
-        }
     }
 
     /// `wl_seat`: the keyboard, the pointer and the touchscreen.
@@ -2654,126 +2175,6 @@ impl Client {
     #[must_use]
     pub fn takes_token(&mut self, token: &str) -> bool {
         self.tokens.remove(token)
-    }
-
-    /// `wp_viewporter`: `get_viewport`.
-    fn viewporter(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
-        if opcode != wp_viewporter::request::GET_VIEWPORT {
-            return;
-        }
-        let (Some(id), Some(surface)) = (
-            args.first().and_then(Arg::as_object),
-            args.get(1).and_then(Arg::as_object),
-        ) else {
-            return;
-        };
-        if !self.surfaces.contains_key(&surface) {
-            self.fail(Fatal::WrongInterface {
-                object: surface,
-                wanted: "wl_surface",
-            });
-            return;
-        }
-        if self.viewports.values().any(|held| *held == surface) {
-            self.fail(Fatal::Interface {
-                object: surface,
-                code: wp_viewporter::error::VIEWPORT_EXISTS,
-                text: "that surface already has a viewport".to_owned(),
-            });
-            return;
-        }
-        if self.make(id, &viewporter::WP_VIEWPORT, version, Role::Viewport) {
-            let _ = self.viewports.insert(id, surface);
-        }
-    }
-
-    /// `wp_viewport`: `set_source` and `set_destination`.
-    ///
-    /// The crop and the scale a surface's buffer is drawn with. Both are
-    /// recorded on the surface and applied where the surface's size is
-    /// worked out, which is the one place a buffer's size and a window's
-    /// stop being the same number.
-    fn viewport(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        let Some(surface) = self.viewports.get(&sender).copied() else {
-            return;
-        };
-        match opcode {
-            wp_viewport::request::SET_SOURCE => {
-                let numbers: Vec<Fixed> = args.iter().filter_map(Arg::as_fixed).collect();
-                let [x, y, width, height] = numbers.as_slice() else {
-                    return;
-                };
-                if let Some(state) = self.surfaces.get_mut(&surface) {
-                    state.pending.viewport_source = (width.to_f64() > 0.0)
-                        .then(|| (x.to_f64(), y.to_f64(), width.to_f64(), height.to_f64()));
-                }
-            }
-            wp_viewport::request::SET_DESTINATION => {
-                let numbers: Vec<i32> = args.iter().filter_map(Arg::as_int).collect();
-                let [width, height] = numbers.as_slice() else {
-                    return;
-                };
-                if *width <= 0 && *width != -1 {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: wp_viewport::error::BAD_VALUE,
-                        text: format!("a destination of {width}x{height}"),
-                    });
-                    return;
-                }
-                if let Some(state) = self.surfaces.get_mut(&surface) {
-                    state.pending.viewport_size = (*width > 0).then_some((*width, *height));
-                }
-            }
-            wp_viewport::request::DESTROY => {
-                let _ = self.viewports.remove(&sender);
-            }
-            _ => {}
-        }
-    }
-
-    /// `wp_fractional_scale_manager_v1`: `get_fractional_scale`.
-    ///
-    /// The scale is sent at once, as the protocol allows: this compositor's
-    /// monitor scales are whole numbers, so the preferred scale is that
-    /// number in the protocol's 120ths and a client that asked is told
-    /// rather than left waiting.
-    fn fractional_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
-        if opcode != wp_fractional_scale_manager_v1::request::GET_FRACTIONAL_SCALE {
-            return;
-        }
-        let (Some(id), Some(surface)) = (
-            args.first().and_then(Arg::as_object),
-            args.get(1).and_then(Arg::as_object),
-        ) else {
-            return;
-        };
-        if !self.surfaces.contains_key(&surface) {
-            self.fail(Fatal::WrongInterface {
-                object: surface,
-                wanted: "wl_surface",
-            });
-            return;
-        }
-        if !self.make(
-            id,
-            &fractional_scale::WP_FRACTIONAL_SCALE_V1,
-            version,
-            Role::FractionalScale,
-        ) {
-            return;
-        }
-        let _ = self.fractional.insert(id, surface);
-        let scale = self.outputs.first().map_or(1, |output| output.scale.max(1));
-        let _ = self.out.write(
-            id,
-            wp_fractional_scale_v1::event::PREFERRED_SCALE,
-            &[ArgType::Uint],
-            // 120ths, which is the protocol's own unit.
-            &[Arg::Uint(
-                u32::try_from(scale).unwrap_or(1).saturating_mul(120),
-            )],
-        );
     }
 
     /// `xdg_toplevel_icon_manager_v1`: `create_icon` and `set_icon`.
