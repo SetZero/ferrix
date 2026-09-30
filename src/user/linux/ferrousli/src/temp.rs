@@ -185,6 +185,28 @@ pub unsafe extern "C" fn mkostemp64(template: *mut c_char, flags: c_int) -> c_in
     unsafe { mkostemps(template, 0, flags) }
 }
 
+/// `mkstemps`, under glibc's large-file name; libva imports it.
+///
+/// # Safety
+///
+/// As `mkostemps`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn mkstemps64(template: *mut c_char, suffix: c_int) -> c_int {
+    // SAFETY: the caller's promises are `mkostemps`'s.
+    unsafe { mkostemps(template, suffix, 0) }
+}
+
+/// `mkostemps`, under glibc's large-file name.
+///
+/// # Safety
+///
+/// As `mkostemps`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn mkostemps64(template: *mut c_char, suffix: c_int, flags: c_int) -> c_int {
+    // SAFETY: the caller's promises are `mkostemps`'s.
+    unsafe { mkostemps(template, suffix, flags) }
+}
+
 /// Creates a directory named after `template`, which ends in six `X`s, and
 /// returns `template`, or null with `errno` set.
 ///
