@@ -228,6 +228,26 @@ impl<M> fmt::Debug for KernelSide<'_, M> {
     }
 }
 
+#[cfg(any(feature = "alloc", test))]
+impl<M: RingMemory> KernelSide<'static, M> {
+    /// [`KernelSide::attach`], with `storage` the side's own rather than
+    /// borrowed: for a kernel that keeps the side behind a lock the callers
+    /// it serves share, where no borrow of one task's stack could reach.
+    /// Dropping the side frees it.
+    ///
+    /// # Errors
+    ///
+    /// As [`KernelSide::attach`].
+    pub fn attach_owned(
+        memory: M,
+        ring_bytes: u64,
+        device: Device,
+        storage: alloc::boxed::Box<[Slot]>,
+    ) -> Result<Self, AttachError> {
+        Self::attach_in(memory, ring_bytes, device, Slots::Owned(storage))
+    }
+}
+
 impl<'s, M: RingMemory> KernelSide<'s, M> {
     /// Take up a ring the driver set up, for a `device` whose HELLO passed
     /// [`crate::Hello::validate`], in a ring VMO of `ring_bytes` bytes.
@@ -240,10 +260,20 @@ impl<'s, M: RingMemory> KernelSide<'s, M> {
     ///
     /// [`AttachError::Header`] for any setup check the header fails.
     pub fn attach(
-        mut memory: M,
+        memory: M,
         ring_bytes: u64,
         device: Device,
         storage: &'s mut [Slot],
+    ) -> Result<Self, AttachError> {
+        Self::attach_in(memory, ring_bytes, device, Slots::Borrowed(storage))
+    }
+
+    /// [`KernelSide::attach`] over either kind of storage.
+    fn attach_in(
+        mut memory: M,
+        ring_bytes: u64,
+        device: Device,
+        storage: Slots<'s>,
     ) -> Result<Self, AttachError> {
         if storage.is_empty() {
             return Err(AttachError::NoStorage);
@@ -522,10 +552,43 @@ impl Iterator for Drain<'_, '_> {
     }
 }
 
+/// Where a table's slots are: the caller's storage, or storage the side
+/// owns ([`KernelSide::attach_owned`]).
+#[derive(Debug)]
+pub(crate) enum Slots<'s> {
+    /// Borrowed from the caller for the side's life.
+    Borrowed(&'s mut [Slot]),
+    /// The side's own.
+    #[cfg(any(feature = "alloc", test))]
+    Owned(alloc::boxed::Box<[Slot]>),
+}
+
+impl core::ops::Deref for Slots<'_> {
+    type Target = [Slot];
+
+    fn deref(&self) -> &[Slot] {
+        match self {
+            Slots::Borrowed(slots) => slots,
+            #[cfg(any(feature = "alloc", test))]
+            Slots::Owned(slots) => slots,
+        }
+    }
+}
+
+impl core::ops::DerefMut for Slots<'_> {
+    fn deref_mut(&mut self) -> &mut [Slot] {
+        match self {
+            Slots::Borrowed(slots) => slots,
+            #[cfg(any(feature = "alloc", test))]
+            Slots::Owned(slots) => slots,
+        }
+    }
+}
+
 /// Outstanding submissions by id: open addressing over the caller's slots.
 #[derive(Debug)]
 pub(crate) struct Table<'s> {
-    slots: &'s mut [Slot],
+    slots: Slots<'s>,
     len: usize,
     limit: usize,
 }
@@ -533,7 +596,7 @@ pub(crate) struct Table<'s> {
 impl<'s> Table<'s> {
     /// A table over `slots`, cleared, holding at most `limit` entries — and
     /// never more than there are slots.
-    pub(crate) fn new(slots: &'s mut [Slot], limit: usize) -> Self {
+    pub(crate) fn new(mut slots: Slots<'s>, limit: usize) -> Self {
         for slot in slots.iter_mut() {
             *slot = Slot::EMPTY;
         }

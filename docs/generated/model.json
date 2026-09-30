@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "eef84feb1b271812d36ce5dedfb979f9da31cea2167d43b437af6bbb337d55dd",
+  "digest": "b6dfa699f50729614f8e931c90a52cf66abf31c34fa0ffe1229e2ad1460d82a8",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -97,7 +97,7 @@
   ],
   "summary": {
     "packages": 103,
-    "elements": 5291,
+    "elements": 5296,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -27097,6 +27097,63 @@
               ]
             },
             {
+              "name": "aServedPortOffersThePacketFirst",
+              "qualifiedName": "FerrixObjectRequirements::Ports::aServedPortOffersThePacketFirst",
+              "kind": "requirement",
+              "shortName": "L.object.106",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/14-object-requirements.sysml",
+                "line": 406
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::Ports::aServedPortOffersThePacketFirst",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Port::queue_from_program shall offer a program's packet to the port's server, if it was made with one that is still there, and shall queue it as Port::queue_user does, with the same bound, whenever the server does not take it; a port made with Port::new shall have no server.\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 411
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::Ports::aServedPortOffersThePacketFirst",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Through the block ring's completion port, completions of stage 10's seam run are taken in the driver's port_queue, and with that path declined none is; a port made with Port::new, and one whose server has gone, each queue a program's packet and give it back as queued.\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 416
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::Ports::aServedPortOffersThePacketFirst",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.OBJ.10\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 417
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::Ports::aServedPortOffersThePacketFirst",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"object::port::Port::queue_from_program\", \"object::port::Port::new_served\", \"object::port::Port::with_server\", \"object::port::Port::new\")",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 420
+                  }
+                }
+              ]
+            },
+            {
               "name": "aRegistrationFiresOnce",
               "qualifiedName": "FerrixObjectRequirements::Ports::aRegistrationFiresOnce",
               "kind": "requirement",
@@ -27104,7 +27161,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 406
+                "line": 422
               },
               "children": [
                 {
@@ -27115,7 +27172,7 @@
                   "value": "\"A registration shall not fire before a signal it asked for is asserted, and shall fire once when one is, reporting it with its key, and not again.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 409
+                    "line": 425
                   }
                 },
                 {
@@ -27126,7 +27183,7 @@
                   "value": "\"A registration does not fire before its signal, fires once on the message that asserts it with its key and READABLE, and a second write fires nothing.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 412
+                    "line": 428
                   }
                 },
                 {
@@ -27137,7 +27194,7 @@
                   "value": "\"H.OBJ.17\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 413
+                    "line": 429
                   }
                 },
                 {
@@ -27148,7 +27205,7 @@
                   "value": "(\"object::port::trigger\", \"object::port::deliver\", \"object::port::Observer::fire\", \"object::port::register\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 415
+                    "line": 431
                   }
                 }
               ]
@@ -27161,7 +27218,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 417
+                "line": 433
               },
               "children": [
                 {
@@ -27172,7 +27229,7 @@
                   "value": "\"trigger shall fire only the registrations whose signals the change asserts, leaving every other listed.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 419
+                    "line": 435
                   }
                 },
                 {
@@ -27183,7 +27240,7 @@
                   "value": "\"A message fires the registration waiting for READABLE and not the one waiting for PEER_CLOSED listed ahead of it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 422
+                    "line": 438
                   }
                 },
                 {
@@ -27194,7 +27251,7 @@
                   "value": "\"H.OBJ.17\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 423
+                    "line": 439
                   }
                 },
                 {
@@ -27205,7 +27262,7 @@
                   "value": "\"object::port::trigger\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 424
+                    "line": 440
                   }
                 }
               ]
@@ -27218,7 +27275,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 426
+                "line": 442
               },
               "children": [
                 {
@@ -27229,7 +27286,7 @@
                   "value": "\"register shall refuse a registration as full when the object already holds 64, counted after dropping those whose port has gone.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 429
+                    "line": 445
                   }
                 },
                 {
@@ -27240,7 +27297,7 @@
                   "value": "\"The 65th registration on one object is refused SHOULD_WAIT; after its ports are closed the object takes 64 again.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 432
+                    "line": 448
                   }
                 },
                 {
@@ -27251,7 +27308,7 @@
                   "value": "\"H.OBJ.10\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 433
+                    "line": 449
                   }
                 },
                 {
@@ -27262,7 +27319,7 @@
                   "value": "\"object::port::register\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 434
+                    "line": 450
                   }
                 }
               ]
@@ -27276,7 +27333,7 @@
           "doc": "src/kernel/src/object/interrupt.rs.",
           "source": {
             "file": "docs/sysml/14-object-requirements.sysml",
-            "line": 438
+            "line": 454
           },
           "children": [
             {
@@ -27287,7 +27344,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 441
+                "line": 457
               },
               "children": [
                 {
@@ -27298,7 +27355,7 @@
                   "value": "\"Interrupt::new shall claim a line for at most one Interrupt at a time, and a line whose claim failed for memory shall be left free for the next claim.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 444
+                    "line": 460
                   }
                 },
                 {
@@ -27309,7 +27366,7 @@
                   "value": "\"A second claim of a held line is refused ALREADY_BOUND; interrupt_create run once per allocation it makes, that one failing, claims the line or answers NO_MEMORY each time, and the next run claims it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 448
+                    "line": 464
                   }
                 },
                 {
@@ -27320,7 +27377,7 @@
                   "value": "(\"H.IRQ.1\", \"H.IRQ.2\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 449
+                    "line": 465
                   }
                 },
                 {
@@ -27331,7 +27388,7 @@
                   "value": "(\"object::interrupt::Interrupt::new\", \"object::interrupt::register_handler\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 451
+                    "line": 467
                   }
                 }
               ]
@@ -27344,7 +27401,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 453
+                "line": 469
               },
               "children": [
                 {
@@ -27355,7 +27412,7 @@
                   "value": "\"Dropping the Interrupt that claimed a line shall free the line before the close returns, even while another context drains disposed objects, and a delivery in flight for the old holder shall not reach a new one.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 457
+                    "line": 473
                   }
                 },
                 {
@@ -27366,7 +27423,7 @@
                   "value": "\"With a delivery taken and not yet fired, the holder's close lets the line be claimed again at once and the delivery then leaves the new holder quiet; a close made while another context drains lets it be claimed a third time.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 461
+                    "line": 477
                   }
                 },
                 {
@@ -27377,7 +27434,7 @@
                   "value": "\"H.IRQ.2\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 462
+                    "line": 478
                   }
                 },
                 {
@@ -27388,7 +27445,7 @@
                   "value": "(\"object::interrupt::Interrupt::drop\", \"object::interrupt::Delivery::fire\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 464
+                    "line": 480
                   }
                 }
               ]
@@ -27401,7 +27458,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 466
+                "line": 482
               },
               "children": [
                 {
@@ -27412,7 +27469,7 @@
                   "value": "\"A delivery shall mark the line pending, and Object::signals report the interrupt READABLE, until Interrupt::acknowledge clears it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 469
+                    "line": 485
                   }
                 },
                 {
@@ -27423,7 +27480,7 @@
                   "value": "\"Before a delivery a wait on the interrupt times out; after one it sees READABLE; after interrupt_ack it times out again.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 472
+                    "line": 488
                   }
                 },
                 {
@@ -27434,7 +27491,7 @@
                   "value": "\"H.IRQ.2\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 473
+                    "line": 489
                   }
                 },
                 {
@@ -27445,7 +27502,7 @@
                   "value": "(\"object::interrupt::take_delivery\", \"object::interrupt::on_interrupt\", \"object::interrupt::Line::fire\", \"object::interrupt::Interrupt::acknowledge\", \"object::interrupt::Delivery::fire\", \"object::Object::signals\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 478
+                    "line": 494
                   }
                 }
               ]
@@ -27458,7 +27515,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 480
+                "line": 496
               },
               "children": [
                 {
@@ -27469,7 +27526,7 @@
                   "value": "\"Line::fire shall wake the tasks waiting on the interrupt and on the port it is bound to, after letting go of the interrupt-safe locks it took.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 483
+                    "line": 499
                   }
                 },
                 {
@@ -27480,7 +27537,7 @@
                   "value": "\"In at least 5 of 8 rounds each way, a wait on the interrupt and a wait on its port are ended by the delivery's wake, not by the recheck timer.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 486
+                    "line": 502
                   }
                 },
                 {
@@ -27491,7 +27548,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 487
+                    "line": 503
                   }
                 },
                 {
@@ -27502,7 +27559,7 @@
                   "value": "(\"object::interrupt::Line::fire\", \"object::Object::waiters\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 489
+                    "line": 505
                   }
                 }
               ]
@@ -27515,7 +27572,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 491
+                "line": 507
               },
               "children": [
                 {
@@ -27526,7 +27583,7 @@
                   "value": "\"A bound interrupt shall queue one packet on its port, carrying its key, the interrupt kind and when it fired, each time it goes from quiet to pending, and Interrupt::bind shall refuse a second binding while the first port is held.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 495
+                    "line": 511
                   }
                 },
                 {
@@ -27537,7 +27594,7 @@
                   "value": "\"A second bind is refused; two deliveries before the acknowledgement queue 1 packet with its key, kind and time, and a delivery after it queues another.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 498
+                    "line": 514
                   }
                 },
                 {
@@ -27548,7 +27605,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 499
+                    "line": 515
                   }
                 },
                 {
@@ -27559,7 +27616,7 @@
                   "value": "(\"object::interrupt::Interrupt::bind\", \"object::interrupt::Line::fire\", \"object::port::Port::queue_interrupt\", \"object::port::Port::queue_from_interrupt\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 502
+                    "line": 518
                   }
                 }
               ]
@@ -27572,7 +27629,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 504
+                "line": 520
               },
               "children": [
                 {
@@ -27583,7 +27640,7 @@
                   "value": "\"Interrupt::bind shall queue a packet at once for an interrupt that is already pending.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 506
+                    "line": 522
                   }
                 },
                 {
@@ -27594,7 +27651,7 @@
                   "value": "\"An interrupt that fired while its port was gone queues its packet, with its new key and the interrupt kind, on a new port as it is bound.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 509
+                    "line": 525
                   }
                 },
                 {
@@ -27605,7 +27662,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 510
+                    "line": 526
                   }
                 },
                 {
@@ -27616,7 +27673,7 @@
                   "value": "(\"object::interrupt::Interrupt::bind\", \"object::port::Port::queue_interrupt\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 512
+                    "line": 528
                   }
                 }
               ]
@@ -27630,7 +27687,7 @@
               "doc": "Rationale: an edge MSI-X vector's extra deliveries fold into the packet its holder has not answered, so masking it per delivery only cost two exits to the hypervisor per interrupt. The bound keeps interrupt time bounded: at most STORM_BOUND (64) handler runs per scheduling of the holder, where it was 1, each charged to the task the interrupt cut, so a storm costs other partitions up to that bound, accounted in their share (docs/certification/MEMORY-AND-TIMING.md §2.2; AoU-4, ASR-8).",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 514
+                "line": 530
               },
               "children": [
                 {
@@ -27641,7 +27698,7 @@
                   "value": "\"A delivery shall mask a line the controller holds before it marks it pending, and acknowledge shall unmask it; a delivery shall leave an edge-triggered MSI-X vector unmasked unless more than STORM_BOUND (64) deliveries have reached it since the last acknowledgement, when it shall mask the vector's entry until the next acknowledgement; acknowledge shall clear pending before it unmasks, so a delivery after it queues a packet of its own; and a refused claim shall leave the holder's line unmasked.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 530
+                    "line": 546
                   }
                 },
                 {
@@ -27652,7 +27709,7 @@
                   "value": "\"On an edge-triggered MSI-X vector: read at its entry the claimed line is unmasked and stays unmasked after a delivery; a delivery after the acknowledgement and before the drain queues a packet; after 64 unacknowledged deliveries the entry is still unmasked, after the 65th it is masked with the line's storm count one higher and one packet queued, and after the acknowledgement it is unmasked (the `irq` line).\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 537
+                    "line": 553
                   }
                 },
                 {
@@ -27663,7 +27720,7 @@
                   "value": "\"H.IRQ.2\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 538
+                    "line": 554
                   }
                 },
                 {
@@ -27674,7 +27731,7 @@
                   "value": "(\"object::interrupt::take_delivery\", \"object::interrupt::Line::hold_back\", \"object::interrupt::Interrupt::acknowledge\", \"object::interrupt::Interrupt::new\", \"device::Vector::coalesces\", \"device::Vector::reads_masked\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 543
+                    "line": 559
                   }
                 }
               ]
@@ -27687,7 +27744,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 545
+                "line": 561
               },
               "children": [
                 {
@@ -27698,7 +27755,7 @@
                   "value": "\"take_delivery shall mask at the controller a line no Interrupt holds and deliver nothing for it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 547
+                    "line": 563
                   }
                 },
                 {
@@ -27709,7 +27766,7 @@
                   "value": "\"A delivery on a line whose holder has let go wakes nobody, queues no packet, and leaves the line masked.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 549
+                    "line": 565
                   }
                 },
                 {
@@ -27720,7 +27777,7 @@
                   "value": "\"H.IRQ.3\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 550
+                    "line": 566
                   }
                 },
                 {
@@ -27731,7 +27788,7 @@
                   "value": "\"object::interrupt::take_delivery\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 551
+                    "line": 567
                   }
                 }
               ]
@@ -27745,7 +27802,7 @@
           "doc": "src/kernel/src/object/io_mapping.rs.",
           "source": {
             "file": "docs/sysml/14-object-requirements.sysml",
-            "line": 555
+            "line": 571
           },
           "children": [
             {
@@ -27756,7 +27813,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 558
+                "line": 574
               },
               "children": [
                 {
@@ -27767,7 +27824,7 @@
                   "value": "\"IoMapping::new shall refuse an aperture that does not start on a page boundary or is not a whole number of pages.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 561
+                    "line": 577
                   }
                 },
                 {
@@ -27778,7 +27835,7 @@
                   "value": "\"Every sub-page aperture the machine has (the virtio-mmio transports on ARMv7-A) is refused; 0 are mapped.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 563
+                    "line": 579
                   }
                 },
                 {
@@ -27789,7 +27846,7 @@
                   "value": "\"H.DMA.5\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 564
+                    "line": 580
                   }
                 },
                 {
@@ -27800,7 +27857,7 @@
                   "value": "(\"object::io_mapping::IoMapping::new\", \"device::Aperture::whole_pages\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 566
+                    "line": 582
                   }
                 }
               ]
@@ -27813,7 +27870,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 568
+                "line": 584
               },
               "children": [
                 {
@@ -27824,7 +27881,7 @@
                   "value": "\"IoMapping::map_into shall map exactly the aperture's pages, readable and writable, onto the device's own physical addresses.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 571
+                    "line": 587
                   }
                 },
                 {
@@ -27835,7 +27892,7 @@
                   "value": "\"Each mapped page translates to the aperture's physical page at the same offset, and a forked child reaches the same device pages rather than copies.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 574
+                    "line": 590
                   }
                 },
                 {
@@ -27846,7 +27903,7 @@
                   "value": "\"H.DMA.5\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 575
+                    "line": 591
                   }
                 },
                 {
@@ -27857,7 +27914,7 @@
                   "value": "\"object::io_mapping::IoMapping::map_into\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 576
+                    "line": 592
                   }
                 }
               ]
@@ -27871,7 +27928,7 @@
           "doc": "src/kernel/src/object/pin.rs. The quarantine's own check, check_quarantine, is in object/pin/check.rs, a child module that may read what pin.rs keeps to itself, and verifies the three quarantine requirements. The domain side of a pin is iommu's (part 16).",
           "source": {
             "file": "docs/sysml/14-object-requirements.sysml",
-            "line": 580
+            "line": 596
           },
           "children": [
             {
@@ -27882,7 +27939,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 587
+                "line": 603
               },
               "children": [
                 {
@@ -27893,7 +27950,7 @@
                   "value": "\"A pin shall map exactly the held pages of the VMO into the device's domain and report each page's device address, in page order.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 590
+                    "line": 606
                   }
                 },
                 {
@@ -27904,7 +27961,7 @@
                   "value": "\"A pin of two pages reports 2 addresses, each of which the domain translates to the VMO's page holding what the VMO holds.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 593
+                    "line": 609
                   }
                 },
                 {
@@ -27915,7 +27972,7 @@
                   "value": "\"H.DMA.3\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 594
+                    "line": 610
                   }
                 },
                 {
@@ -27926,7 +27983,7 @@
                   "value": "(\"object::pin::Pin::with_cap\", \"object::pin::Pin::new\", \"object::pin::Pin::addresses\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 596
+                    "line": 612
                   }
                 }
               ]
@@ -27939,7 +27996,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 598
+                "line": 614
               },
               "children": [
                 {
@@ -27950,7 +28007,7 @@
                   "value": "\"Dropping a pin of a live owner shall take its pages out of the domain, the invalidation complete, before the hold on its frames is released; on an untranslated domain, or when the domain refuses, the frames shall be kept.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 602
+                    "line": 618
                   }
                 },
                 {
@@ -27961,7 +28018,7 @@
                   "value": "\"On a translated domain a closed pin's pages are no longer reachable through the domain.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 604
+                    "line": 620
                   }
                 },
                 {
@@ -27972,7 +28029,7 @@
                   "value": "\"H.DMA.3\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 605
+                    "line": 621
                   }
                 },
                 {
@@ -27983,7 +28040,7 @@
                   "value": "\"object::pin::Pin::drop\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 606
+                    "line": 622
                   }
                 }
               ]
@@ -27996,7 +28053,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 608
+                "line": 624
               },
               "children": [
                 {
@@ -28007,7 +28064,7 @@
                   "value": "\"Dropping a pin on a translated domain after its owner terminated shall keep its pages mapped and its frames held, charged to nobody, in the quarantine, and a pin closed by a live owner shall not be quarantined.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 612
+                    "line": 628
                   }
                 },
                 {
@@ -28018,7 +28075,7 @@
                   "value": "\"A pin closed by a dead process adds its 1 page to the domain's quarantine; one closed by a live process adds 0.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 615
+                    "line": 631
                   }
                 },
                 {
@@ -28029,7 +28086,7 @@
                   "value": "\"H.DMA.4\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 616
+                    "line": 632
                   }
                 },
                 {
@@ -28040,7 +28097,7 @@
                   "value": "(\"object::pin::Pin::drop\", \"object::pin::quarantine\", \"object::pin::fold\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 618
+                    "line": 634
                   }
                 }
               ]
@@ -28053,7 +28110,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 620
+                "line": 636
               },
               "children": [
                 {
@@ -28064,7 +28121,7 @@
                   "value": "\"A pin shall be refused while its device's quarantine holds the cap's worth of pages.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 622
+                    "line": 638
                   }
                 },
                 {
@@ -28075,7 +28132,7 @@
                   "value": "\"With a cap of one page and one page quarantined, the next pin is refused QuarantineFull.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 624
+                    "line": 640
                   }
                 },
                 {
@@ -28086,7 +28143,7 @@
                   "value": "\"H.DMA.4\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 625
+                    "line": 641
                   }
                 },
                 {
@@ -28097,7 +28154,7 @@
                   "value": "(\"object::pin::Pin::with_cap\", \"object::pin::quarantined_pages\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 627
+                    "line": 643
                   }
                 }
               ]
@@ -28110,7 +28167,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 629
+                "line": 645
               },
               "children": [
                 {
@@ -28121,7 +28178,7 @@
                   "value": "\"quarantine_release shall give back every quarantined pin of the device's domain, out of the domain first and then to the allocator, counting the pages written after their driver died.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 633
+                    "line": 649
                   }
                 },
                 {
@@ -28132,7 +28189,7 @@
                   "value": "\"A release gives back exactly the pages quarantined and leaves the domain's quarantine at 0 pages; a pin is taken again afterwards.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 636
+                    "line": 652
                   }
                 },
                 {
@@ -28143,7 +28200,7 @@
                   "value": "\"H.DMA.4\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 637
+                    "line": 653
                   }
                 },
                 {
@@ -28154,7 +28211,7 @@
                   "value": "(\"object::pin::quarantine_release\", \"object::pin::release\", \"object::pin::fold\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 639
+                    "line": 655
                   }
                 }
               ]
@@ -28168,7 +28225,7 @@
           "doc": "src/kernel/src/object/quota.rs: the counters behind FRU_RSA.1.",
           "source": {
             "file": "docs/sysml/14-object-requirements.sysml",
-            "line": 643
+            "line": 659
           },
           "children": [
             {
@@ -28179,7 +28236,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 646
+                "line": 662
               },
               "children": [
                 {
@@ -28190,7 +28247,7 @@
                   "value": "\"quota::charge shall add to the slot and to every slot above it only if every level stays within its limit, and a charge refused at any level shall leave no level charged and count one refusal at the level whose limit refused it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 650
+                    "line": 666
                   }
                 },
                 {
@@ -28201,7 +28258,7 @@
                   "value": "\"For each of the four resources, with a child limited to 5 under a parent limited to 3, the fourth unit is refused, child, parent and root each read 3, and one refusal is counted at the parent and none at the child; with the parent unlimited the child takes 5 and refuses the sixth.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 655
+                    "line": 671
                   }
                 },
                 {
@@ -28212,7 +28269,7 @@
                   "value": "(\"H.QUOTA.5\", \"H.QUOTA.3\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 656
+                    "line": 672
                   }
                 },
                 {
@@ -28223,7 +28280,7 @@
                   "value": "(\"object::quota::charge\", \"object::quota::uncharge_below\", \"object::quota::Resource::at\", \"object::quota::slot\", \"object::quota::record_refused\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 659
+                    "line": 675
                   }
                 }
               ]
@@ -28236,7 +28293,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 661
+                "line": 677
               },
               "children": [
                 {
@@ -28247,7 +28304,7 @@
                   "value": "\"quota::uncharge shall take back exactly the amount from the slot and every slot above it, never below zero.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 663
+                    "line": 679
                   }
                 },
                 {
@@ -28258,7 +28315,7 @@
                   "value": "\"A job charged and uncharged the same amount reads 0, and so does every level above it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 665
+                    "line": 681
                   }
                 },
                 {
@@ -28269,7 +28326,7 @@
                   "value": "\"H.QUOTA.4\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 666
+                    "line": 682
                   }
                 },
                 {
@@ -28280,7 +28337,7 @@
                   "value": "(\"object::quota::uncharge\", \"object::quota::uncharge_below\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 668
+                    "line": 684
                   }
                 }
               ]
@@ -28293,7 +28350,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 670
+                "line": 686
               },
               "children": [
                 {
@@ -28304,7 +28361,7 @@
                   "value": "\"Quota::set_limit shall set the limit the next charge is judged against, and Quota::usage shall report the use, the limit and the refusals.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 673
+                    "line": 689
                   }
                 },
                 {
@@ -28315,7 +28372,7 @@
                   "value": "\"pids.max and memory.max written through cgroupfs reach the job's quota and read back as written; an empty job reads 0 used and 0 refused.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 676
+                    "line": 692
                   }
                 },
                 {
@@ -28326,7 +28383,7 @@
                   "value": "\"H.QUOTA.5\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 677
+                    "line": 693
                   }
                 },
                 {
@@ -28337,7 +28394,7 @@
                   "value": "(\"object::quota::Quota::set_limit\", \"object::quota::Quota::usage\", \"object::job::Job::set_limit\", \"object::job::Job::usage\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 680
+                    "line": 696
                   }
                 }
               ]
@@ -28350,7 +28407,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 682
+                "line": 698
               },
               "children": [
                 {
@@ -28361,7 +28418,7 @@
                   "value": "\"A job's slot shall be held by its job, its child slots, each charge and each task that names it, and freed -- letting go of its parent -- when the last hold goes.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 685
+                    "line": 701
                   }
                 },
                 {
@@ -28372,7 +28429,7 @@
                   "value": "\"After the quota checks' jobs are gone the number of live slots is what it was before them: every slot given back.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 688
+                    "line": 704
                   }
                 },
                 {
@@ -28383,7 +28440,7 @@
                   "value": "\"H.QUOTA.4\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 689
+                    "line": 705
                   }
                 },
                 {
@@ -28394,7 +28451,7 @@
                   "value": "(\"object::quota::claim\", \"object::quota::find_free\", \"object::quota::grow\", \"object::quota::hold\", \"object::quota::release\", \"object::quota::Quota::new\", \"object::quota::Quota::drop\", \"object::quota::hold_group\", \"object::quota::release_group\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 693
+                    "line": 709
                   }
                 }
               ]
@@ -28407,7 +28464,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 695
+                "line": 711
               },
               "children": [
                 {
@@ -28418,7 +28475,7 @@
                   "value": "\"claim shall hand out a slot, reused or new, with every use and refusal count at zero, every limit unlimited and the default weight.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 698
+                    "line": 714
                   }
                 },
                 {
@@ -28429,7 +28486,7 @@
                   "value": "\"A job made on a slot another job freed after charging 5 of each resource under limits of 3 reads 0 used, 0 refused and no limit for each, and weight 100.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 701
+                    "line": 717
                   }
                 },
                 {
@@ -28440,7 +28497,7 @@
                   "value": "\"H.QUOTA.4\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 702
+                    "line": 718
                   }
                 },
                 {
@@ -28451,7 +28508,7 @@
                   "value": "(\"object::quota::claim\", \"object::quota::find_free\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 703
+                    "line": 719
                   }
                 }
               ]
@@ -28464,7 +28521,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 705
+                "line": 721
               },
               "children": [
                 {
@@ -28475,7 +28532,7 @@
                   "value": "\"charge_frame shall charge one page of memory to the slot and hold the slot, refusing when a limit would be passed, and uncharge_frame shall give back both.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 708
+                    "line": 724
                   }
                 },
                 {
@@ -28486,7 +28543,7 @@
                   "value": "\"Faults in a job limited to 48 pages' worth are refused when the next page would not fit, the refusal counted, while a sibling faults 48 pages in; with the spaces gone every level's memory reads 0.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 712
+                    "line": 728
                   }
                 },
                 {
@@ -28497,7 +28554,7 @@
                   "value": "(\"H.QUOTA.2\", \"H.QUOTA.4\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 713
+                    "line": 729
                   }
                 },
                 {
@@ -28508,7 +28565,7 @@
                   "value": "(\"object::quota::charge_frame\", \"object::quota::uncharge_frame\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 715
+                    "line": 731
                   }
                 }
               ]
@@ -28521,7 +28578,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 717
+                "line": 733
               },
               "children": [
                 {
@@ -28532,7 +28589,7 @@
                   "value": "\"charge_kernel shall charge kernel heap against the memory limit and count it again as kernel memory, both or neither, and uncharge_kernel shall give back both.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 720
+                    "line": 736
                   }
                 },
                 {
@@ -28543,7 +28600,7 @@
                   "value": "\"At a 32 KiB limit each kind of personality object is refused one past its count while a sibling makes one, and every byte charged comes back when they go.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 723
+                    "line": 739
                   }
                 },
                 {
@@ -28554,7 +28611,7 @@
                   "value": "\"H.QUOTA.7\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 724
+                    "line": 740
                   }
                 },
                 {
@@ -28565,7 +28622,7 @@
                   "value": "(\"object::quota::charge_kernel\", \"object::quota::uncharge_kernel\", \"object::quota::KernelHeap::charge\", \"object::quota::KernelHeap::uncharge\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 727
+                    "line": 743
                   }
                 }
               ]
@@ -28578,7 +28635,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 729
+                "line": 745
               },
               "children": [
                 {
@@ -28589,7 +28646,7 @@
                   "value": "\"charge_regardless shall add the amount to the slot and every slot above it whatever their limits say.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 731
+                    "line": 747
                   }
                 },
                 {
@@ -28600,7 +28657,7 @@
                   "value": "\"A process moved into a job at its task limit of 8 is moved: the job reads 9 tasks and the job it left 1 fewer.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 733
+                    "line": 749
                   }
                 },
                 {
@@ -28611,7 +28668,7 @@
                   "value": "\"H.QUOTA.1\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 734
+                    "line": 750
                   }
                 },
                 {
@@ -28622,7 +28679,7 @@
                   "value": "\"object::quota::charge_regardless\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 735
+                    "line": 751
                   }
                 }
               ]
@@ -28635,7 +28692,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 737
+                "line": 753
               },
               "children": [
                 {
@@ -28646,7 +28703,7 @@
                   "value": "\"charging_nobody shall run its work with no job charged for what it allocates, and restore the running task's job afterwards.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 740
+                    "line": 756
                   }
                 },
                 {
@@ -28657,7 +28714,7 @@
                   "value": "\"Work run under charging_nobody in a job at its memory limit completes, the job's use is unchanged, and an allocation after it is charged to the job again.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 743
+                    "line": 759
                   }
                 },
                 {
@@ -28668,7 +28725,7 @@
                   "value": "\"H.QUOTA.2\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 744
+                    "line": 760
                   }
                 },
                 {
@@ -28679,7 +28736,7 @@
                   "value": "\"object::quota::charging_nobody\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 745
+                    "line": 761
                   }
                 }
               ]
@@ -28692,7 +28749,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 747
+                "line": 763
               },
               "children": [
                 {
@@ -28703,7 +28760,7 @@
                   "value": "\"A Charge shall be taken from the job when the object it pays for is made, refusing the object when a limit would be passed, and given back when the object is dropped.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 750
+                    "line": 766
                   }
                 },
                 {
@@ -28714,7 +28771,7 @@
                   "value": "\"Objects in a job limited to 5 are refused at exactly 5, a channel's two ends together; with them dropped the job holds 0.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 753
+                    "line": 769
                   }
                 },
                 {
@@ -28725,7 +28782,7 @@
                   "value": "(\"H.QUOTA.3\", \"H.QUOTA.4\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 754
+                    "line": 770
                   }
                 },
                 {
@@ -28736,7 +28793,7 @@
                   "value": "(\"object::quota::Charge::to\", \"object::quota::Charge::drop\", \"object::quota::Charge::running\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 756
+                    "line": 772
                   }
                 }
               ]
@@ -28749,7 +28806,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 758
+                "line": 774
               },
               "children": [
                 {
@@ -28760,7 +28817,7 @@
                   "value": "\"effective shall scale a task's weight, at each level from its job up, by the job's weight over the job's load, and adjust shall keep each job's load the weight of its runnable tasks and busy children.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 762
+                    "line": 778
                   }
                 },
                 {
@@ -28771,7 +28828,7 @@
                   "value": "\"One spinning task alone in a job keeps about half a processor against eight in another job; with the tasks gone every job's load reads 0.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 765
+                    "line": 781
                   }
                 },
                 {
@@ -28782,7 +28839,7 @@
                   "value": "\"H.SCHED.3\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 766
+                    "line": 782
                   }
                 },
                 {
@@ -28793,7 +28850,7 @@
                   "value": "(\"object::quota::effective\", \"object::quota::adjust\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 767
+                    "line": 783
                   }
                 }
               ]
@@ -28806,7 +28863,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 769
+                "line": 785
               },
               "children": [
                 {
@@ -28817,7 +28874,7 @@
                   "value": "\"Job::set_cpu_weight shall make the job's weight the value written.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 771
+                    "line": 787
                   }
                 },
                 {
@@ -28828,7 +28885,7 @@
                   "value": "\"cpu.weight written 300 through cgroupfs reads back 300 from the job.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 773
+                    "line": 789
                   }
                 },
                 {
@@ -28839,7 +28896,7 @@
                   "value": "\"H.SCHED.3\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 774
+                    "line": 790
                   }
                 },
                 {
@@ -28850,7 +28907,7 @@
                   "value": "(\"object::quota::Quota::set_weight\", \"object::job::Job::set_cpu_weight\", \"object::job::Job::cpu_weight\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 776
+                    "line": 792
                   }
                 }
               ]
@@ -28863,7 +28920,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 778
+                "line": 794
               },
               "children": [
                 {
@@ -28874,7 +28931,7 @@
                   "value": "\"Quota::set_weight shall clamp the weight to 1 to 10000, and change a busy job's contribution to its parent's load at once.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 781
+                    "line": 797
                   }
                 },
                 {
@@ -28885,7 +28942,7 @@
                   "value": "\"A weight of 0 is stored as 1 and one of 20000 as 10000; setting a busy job's weight changes its parent's load by the difference of the scaled weights.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 784
+                    "line": 800
                   }
                 },
                 {
@@ -28896,7 +28953,7 @@
                   "value": "\"H.SCHED.3\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 785
+                    "line": 801
                   }
                 },
                 {
@@ -28907,7 +28964,7 @@
                   "value": "\"object::quota::Quota::set_weight\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 786
+                    "line": 802
                   }
                 }
               ]
@@ -28921,7 +28978,7 @@
           "doc": "src/kernel/src/object/job.rs.",
           "source": {
             "file": "docs/sysml/14-object-requirements.sysml",
-            "line": 790
+            "line": 806
           },
           "children": [
             {
@@ -28932,7 +28989,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 793
+                "line": 809
               },
               "children": [
                 {
@@ -28943,7 +29000,7 @@
                   "value": "\"root shall answer the one job at the top of the tree, in which every process starts unless it is forked from a process elsewhere or moved.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 796
+                    "line": 812
                   }
                 },
                 {
@@ -28954,7 +29011,7 @@
                   "value": "\"A new process is in the root job, and a fork's child in its parent's job.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 798
+                    "line": 814
                   }
                 },
                 {
@@ -28965,7 +29022,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 799
+                    "line": 815
                   }
                 },
                 {
@@ -28976,7 +29033,7 @@
                   "value": "(\"object::job::root\", \"object::job::Job::new_tree_root\", \"object::job::Job::bare\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 801
+                    "line": 817
                   }
                 }
               ]
@@ -28990,7 +29047,7 @@
               "doc": "The job's audit budget (docs/certification/AUDIT.md §3) is fixed here too, when the job is made: its own id, or its parent's where its maker says the job was its members' own to make (job::Budget), and written into its quota slot for the record of a refused charge. audit::check proves it.",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 803
+                "line": 819
               },
               "children": [
                 {
@@ -29001,7 +29058,7 @@
                   "value": "\"A child job shall be made inside its parent, with a quota slot inside the parent's.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 810
+                    "line": 826
                   }
                 },
                 {
@@ -29012,7 +29069,7 @@
                   "value": "\"A charge to a grandchild is counted in its parent and in the root of the check's tree too, and a limit on the parent refuses it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 813
+                    "line": 829
                   }
                 },
                 {
@@ -29023,7 +29080,7 @@
                   "value": "(\"H.OBJ.12\", \"H.QUOTA.5\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 814
+                    "line": 830
                   }
                 },
                 {
@@ -29034,7 +29091,7 @@
                   "value": "(\"object::job::Job::new_child\", \"object::job::Job::bare_child\", \"object::job::Job::new_root\", \"object::quota::Quota::identify\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 817
+                    "line": 833
                   }
                 }
               ]
@@ -29047,7 +29104,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 819
+                "line": 835
               },
               "children": [
                 {
@@ -29058,7 +29115,7 @@
                   "value": "\"A child job shall be charged as one object to the running task's job, and refused once its parent has been killed.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 822
+                    "line": 838
                   }
                 },
                 {
@@ -29069,7 +29126,7 @@
                   "value": "\"In a job limited to 5 objects and holding 5, job_create is refused and nothing is charged; job_create in a killed job is refused.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 825
+                    "line": 841
                   }
                 },
                 {
@@ -29080,7 +29137,7 @@
                   "value": "(\"H.QUOTA.9\", \"H.OBJ.9\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 826
+                    "line": 842
                   }
                 },
                 {
@@ -29091,7 +29148,7 @@
                   "value": "(\"object::job::Job::new_child\", \"object::job::Job::bare_child\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 828
+                    "line": 844
                   }
                 }
               ]
@@ -29104,7 +29161,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 830
+                "line": 846
               },
               "children": [
                 {
@@ -29115,7 +29172,7 @@
                   "value": "\"Job::new_named_child shall refuse a name a named child of the job already has.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 832
+                    "line": 848
                   }
                 },
                 {
@@ -29126,7 +29183,7 @@
                   "value": "\"A second child named a.slice beside the first is refused.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 834
+                    "line": 850
                   }
                 },
                 {
@@ -29137,7 +29194,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 835
+                    "line": 851
                   }
                 },
                 {
@@ -29148,7 +29205,7 @@
                   "value": "\"object::job::Job::new_named_child\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 836
+                    "line": 852
                   }
                 }
               ]
@@ -29161,7 +29218,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 838
+                "line": 854
               },
               "children": [
                 {
@@ -29172,7 +29229,7 @@
                   "value": "\"A new named child shall be refused when a job at or above its parent already holds as many descendants as its cgroup.max.descendants allows, or is more levels above it than its cgroup.max.depth allows.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 842
+                    "line": 858
                   }
                 },
                 {
@@ -29183,7 +29240,7 @@
                   "value": "\"Under a job with cgroup.max.depth 1, a child is made and a grandchild refused Limited; under one with cgroup.max.descendants 2, a third descendant is refused.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 845
+                    "line": 861
                   }
                 },
                 {
@@ -29194,7 +29251,7 @@
                   "value": "(\"H.OBJ.12\", \"H.QUOTA.3\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 846
+                    "line": 862
                   }
                 },
                 {
@@ -29205,7 +29262,7 @@
                   "value": "(\"object::job::Job::room_for_a_child\", \"object::job::Job::descendants\", \"object::job::Job::limits\", \"object::job::Job::walk\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 849
+                    "line": 865
                   }
                 }
               ]
@@ -29218,7 +29275,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 851
+                "line": 867
               },
               "children": [
                 {
@@ -29229,7 +29286,7 @@
                   "value": "\"Job::remove_named_child shall refuse to remove a named child that holds a live anonymous job.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 853
+                    "line": 869
                   }
                 },
                 {
@@ -29240,7 +29297,7 @@
                   "value": "\"rmdir of a cgroup holding a job native job_create made is refused EBUSY.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 855
+                    "line": 871
                   }
                 },
                 {
@@ -29251,7 +29308,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 856
+                    "line": 872
                   }
                 },
                 {
@@ -29262,7 +29319,7 @@
                   "value": "\"object::job::Job::remove_named_child\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 857
+                    "line": 873
                   }
                 }
               ]
@@ -29275,7 +29332,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 859
+                "line": 875
               },
               "children": [
                 {
@@ -29286,7 +29343,7 @@
                   "value": "\"A job remove_named_child has removed shall take no process and no child.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 861
+                    "line": 877
                   }
                 },
                 {
@@ -29297,7 +29354,7 @@
                   "value": "\"Through a directory looked up before the rmdir, a move into the removed cgroup and a mkdir in it are each refused ENODEV, and the refused process stays where it was.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 864
+                    "line": 880
                   }
                 },
                 {
@@ -29308,7 +29365,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 865
+                    "line": 881
                   }
                 },
                 {
@@ -29319,7 +29376,7 @@
                   "value": "(\"object::job::Job::remove_named_child\", \"object::job::Job::new_named_child\", \"object::job::Members::admits\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 867
+                    "line": 883
                   }
                 }
               ]
@@ -29332,7 +29389,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 869
+                "line": 885
               },
               "children": [
                 {
@@ -29343,7 +29400,7 @@
                   "value": "\"Job::remove_named_child shall refuse to remove a named child that has a member not yet released or a named child of its own, and remove nothing.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 872
+                    "line": 888
                   }
                 },
                 {
@@ -29354,7 +29411,7 @@
                   "value": "\"rmdir of a cgroup with one member is refused EBUSY and so is one with a child cgroup; after the member leaves and the child is removed, the rmdir succeeds.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 875
+                    "line": 891
                   }
                 },
                 {
@@ -29365,7 +29422,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 876
+                    "line": 892
                   }
                 },
                 {
@@ -29376,7 +29433,7 @@
                   "value": "\"object::job::Job::remove_named_child\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 877
+                    "line": 893
                   }
                 }
               ]
@@ -29389,7 +29446,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 879
+                "line": 895
               },
               "children": [
                 {
@@ -29400,7 +29457,7 @@
                   "value": "\"change_subtree_control shall enable only controllers offered and disable none a child still enables, and a job enabling a domain controller for its children shall admit no process.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 883
+                    "line": 899
                   }
                 },
                 {
@@ -29411,7 +29468,7 @@
                   "value": "\"A controller not offered is refused; one a child enables cannot be disabled above it; a move into a job enabling a domain controller is refused, for a process counted in its job and for one that has left the count.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 887
+                    "line": 903
                   }
                 },
                 {
@@ -29422,7 +29479,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 888
+                    "line": 904
                   }
                 },
                 {
@@ -29433,7 +29490,7 @@
                   "value": "(\"object::job::Job::change_subtree_control\", \"object::job::Members::admits\", \"object::job::Job::admits\", \"object::job::Job::subtree_control\", \"object::process::Process::move_charged\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 892
+                    "line": 908
                   }
                 }
               ]
@@ -29446,7 +29503,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 894
+                "line": 910
               },
               "children": [
                 {
@@ -29457,7 +29514,7 @@
                   "value": "\"A job shall keep the owner, group and mode set for each of its cgroupfs nodes, the last set winning, and shall name its path from the root's child down, an anonymous job as job-<id>.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 898
+                    "line": 914
                   }
                 },
                 {
@@ -29468,7 +29525,7 @@
                   "value": "\"A node's owner set twice reads as the second; a path names an anonymous job by number above its named child.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 900
+                    "line": 916
                   }
                 },
                 {
@@ -29479,7 +29536,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 901
+                    "line": 917
                   }
                 },
                 {
@@ -29490,7 +29547,7 @@
                   "value": "(\"object::job::Job::set_node\", \"object::job::Job::path_names\", \"object::job::Job::display_name\", \"object::job::Job::children\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 904
+                    "line": 920
                   }
                 }
               ]
@@ -29503,7 +29560,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 906
+                "line": 922
               },
               "children": [
                 {
@@ -29514,7 +29571,7 @@
                   "value": "\"A job shall count its own members not yet released and its populated children, so that it is populated exactly while it or a job beneath it has a member not yet released, and each job whose state flips shall wake its waiters and fire its EMPTY registrations once no lock is held.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 911
+                    "line": 927
                   }
                 },
                 {
@@ -29525,7 +29582,7 @@
                   "value": "\"A job with a member, and the job above it, are populated; each empties at its last member's release, not before, and wakes its event queue then and not while it stays populated.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 915
+                    "line": 931
                   }
                 },
                 {
@@ -29536,7 +29593,7 @@
                   "value": "(\"H.OBJ.12\", \"H.OBJ.11\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 916
+                    "line": 932
                   }
                 },
                 {
@@ -29547,7 +29604,7 @@
                   "value": "(\"object::job::Job::count\", \"object::job::Job::count_in\", \"object::job::Job::count_out\", \"object::job::Job::count_in_checked\", \"object::job::Flipped::add\", \"object::job::notify\", \"object::job::Members::populated\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 920
+                    "line": 936
                   }
                 }
               ]
@@ -29560,7 +29617,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 922
+                "line": 938
               },
               "children": [
                 {
@@ -29571,7 +29628,7 @@
                   "value": "\"A job shall assert EMPTY exactly while it is not populated, and Job::observe shall fire a registration for EMPTY at once if the job is empty and otherwise when it empties.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 925
+                    "line": 941
                   }
                 },
                 {
@@ -29582,7 +29639,7 @@
                   "value": "\"EMPTY is asserted while the job is empty and not while it has a member; a registration for EMPTY fires at the last release and not the first, and one made while the job is empty fires at once.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 929
+                    "line": 945
                   }
                 },
                 {
@@ -29593,7 +29650,7 @@
                   "value": "\"H.OBJ.11\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 930
+                    "line": 946
                   }
                 },
                 {
@@ -29604,7 +29661,7 @@
                   "value": "(\"object::job::Members::signals\", \"object::job::Job::observe\", \"object::job::Job::signals\", \"object::Object::signals\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 933
+                    "line": 949
                   }
                 }
               ]
@@ -29617,7 +29674,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 935
+                "line": 951
               },
               "children": [
                 {
@@ -29628,7 +29685,7 @@
                   "value": "\"Job::kill shall fire the job's registrations for TERMINATED, and the job shall report TERMINATED from then on.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 937
+                    "line": 953
                   }
                 },
                 {
@@ -29639,7 +29696,7 @@
                   "value": "\"A registration for TERMINATED on a job fires when the job is killed, its packet saying what fired it, and a wait then sees the job TERMINATED.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 940
+                    "line": 956
                   }
                 },
                 {
@@ -29650,7 +29707,7 @@
                   "value": "\"H.OBJ.17\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 941
+                    "line": 957
                   }
                 },
                 {
@@ -29661,7 +29718,7 @@
                   "value": "(\"object::job::Job::kill\", \"object::job::Members::signals\", \"object::job::Job::observe\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 943
+                    "line": 959
                   }
                 }
               ]
@@ -29674,7 +29731,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 945
+                "line": 961
               },
               "children": [
                 {
@@ -29685,7 +29742,7 @@
                   "value": "\"Job::kill shall mark the job and every job beneath it killed, fire their TERMINATED registrations, and end every process in them and none elsewhere; a job killed, or beneath one killed, shall refuse a new process or child from then on.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 949
+                    "line": 965
                   }
                 },
                 {
@@ -29696,7 +29753,7 @@
                   "value": "\"Of 4 programs in a tree of three jobs and none, killing the middle job ends the middle and leaf programs with the kill's status and not the root's; killing the root ends it; the bystander finishes with its own status; a job beneath a killed one takes no new process.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 954
+                    "line": 970
                   }
                 },
                 {
@@ -29707,7 +29764,7 @@
                   "value": "\"H.OBJ.9\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 955
+                    "line": 971
                   }
                 },
                 {
@@ -29718,7 +29775,7 @@
                   "value": "(\"object::job::Job::kill\", \"object::job::Job::walk\", \"object::job::Job::end_members\", \"object::job::Job::refuses\", \"object::job::Job::contains\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 958
+                    "line": 974
                   }
                 }
               ]
@@ -29731,7 +29788,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 960
+                "line": 976
               },
               "children": [
                 {
@@ -29742,7 +29799,7 @@
                   "value": "\"Job::kill_members shall end every process in the job and beneath it and leave every job as usable as it was.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 962
+                    "line": 978
                   }
                 },
                 {
@@ -29753,7 +29810,7 @@
                   "value": "\"cgroup.kill ends the job's 1 member and leaves the job neither populated, killed nor dying, and a new member is taken.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 965
+                    "line": 981
                   }
                 },
                 {
@@ -29764,7 +29821,7 @@
                   "value": "(\"H.OBJ.12\", \"H.OBJ.9\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 966
+                    "line": 982
                   }
                 },
                 {
@@ -29775,7 +29832,7 @@
                   "value": "(\"object::job::Job::kill_members\", \"object::job::Job::is_dying\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 968
+                    "line": 984
                   }
                 }
               ]
@@ -29788,7 +29845,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 970
+                "line": 986
               },
               "children": [
                 {
@@ -29799,7 +29856,7 @@
                   "value": "\"A process joining a job while a kill of either kind runs over it, or over a job above it, shall be ended, so that a loop of forks cannot outrun the kill.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 973
+                    "line": 989
                   }
                 },
                 {
@@ -29810,7 +29867,7 @@
                   "value": "\"A program forking in a loop inside a job is ended with every child by one job_kill and by one cgroup.kill: 0 processes of the job left running after either.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 976
+                    "line": 992
                   }
                 },
                 {
@@ -29821,7 +29878,7 @@
                   "value": "\"H.OBJ.9\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 977
+                    "line": 993
                   }
                 },
                 {
@@ -29832,7 +29889,7 @@
                   "value": "\"object::job::Job::is_dying\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 978
+                    "line": 994
                   }
                 }
               ]
@@ -29845,7 +29902,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 980
+                "line": 996
               },
               "children": [
                 {
@@ -29856,7 +29913,7 @@
                   "value": "\"Dropping the last reference to the deepest job of a chain shall free every job of it with one stack frame, not one per job.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 983
+                    "line": 999
                   }
                 },
                 {
@@ -29867,7 +29924,7 @@
                   "value": "\"A chain of 10,000 jobs each holding the one above, built one reference at a time as a job_create and handle_close loop builds it, is freed from the deepest end with no guard-page fault.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 987
+                    "line": 1003
                   }
                 },
                 {
@@ -29878,7 +29935,7 @@
                   "value": "(\"H.OBJ.8\", \"H.FAIL.2\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 988
+                    "line": 1004
                   }
                 },
                 {
@@ -29889,7 +29946,7 @@
                   "value": "\"object::job::Job::drop\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 989
+                    "line": 1005
                   }
                 }
               ]
@@ -29902,7 +29959,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 991
+                "line": 1007
               },
               "children": [
                 {
@@ -29913,7 +29970,7 @@
                   "value": "\"Job::count_oom shall count an OOM or an OOM kill in the job and in every job above it, and wake whatever polls their memory.events.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 994
+                    "line": 1010
                   }
                 },
                 {
@@ -29924,7 +29981,7 @@
                   "value": "\"After a scoped OOM kill, memory.events counts one OOM kill in the job and in its parent and none in a sibling, and an epoll on it is woken by the kill with EPOLLPRI.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 997
+                    "line": 1013
                   }
                 },
                 {
@@ -29935,7 +29992,7 @@
                   "value": "\"H.QUOTA.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 998
+                    "line": 1014
                   }
                 },
                 {
@@ -29946,7 +30003,7 @@
                   "value": "(\"object::job::Job::count_oom\", \"object::job::Job::oom_counts\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1000
+                    "line": 1016
                   }
                 }
               ]
@@ -29960,7 +30017,7 @@
           "doc": "src/kernel/src/object/process.rs: the core half of a process.",
           "source": {
             "file": "docs/sysml/14-object-requirements.sysml",
-            "line": 1004
+            "line": 1020
           },
           "children": [
             {
@@ -29971,7 +30028,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1007
+                "line": 1023
               },
               "children": [
                 {
@@ -29982,7 +30039,7 @@
                   "value": "\"Process::new shall make a process counted in its job and charged one task there; when the job's task limit refuses the charge it shall be marked over quota and charge nothing.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1011
+                    "line": 1027
                   }
                 },
                 {
@@ -29993,7 +30050,7 @@
                   "value": "\"A fork loop in a job limited to 8 tasks is refused at exactly 8, counting the forking process, the refusal counted as pids.events counts it, while a sibling job forks on.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1014
+                    "line": 1030
                   }
                 },
                 {
@@ -30004,7 +30061,7 @@
                   "value": "\"H.QUOTA.1\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1015
+                    "line": 1031
                   }
                 },
                 {
@@ -30015,7 +30072,7 @@
                   "value": "(\"object::process::Process::new\", \"object::process::Process::over_quota\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1017
+                    "line": 1033
                   }
                 }
               ]
@@ -30028,7 +30085,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1019
+                "line": 1035
               },
               "children": [
                 {
@@ -30039,7 +30096,7 @@
                   "value": "\"Process::new shall give the process a handle table that holds at most HANDLE_LIMIT, 4096, handles.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1021
+                    "line": 1037
                   }
                 },
                 {
@@ -30050,7 +30107,7 @@
                   "value": "\"Duplicating into one process's table until it is refused ends in NO_HANDLES with at most 4096 held.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1023
+                    "line": 1039
                   }
                 },
                 {
@@ -30061,7 +30118,7 @@
                   "value": "\"H.OBJ.7\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1024
+                    "line": 1040
                   }
                 },
                 {
@@ -30072,7 +30129,7 @@
                   "value": "\"object::process::Process::new\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1025
+                    "line": 1041
                   }
                 }
               ]
@@ -30085,7 +30142,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1027
+                "line": 1043
               },
               "children": [
                 {
@@ -30096,7 +30153,7 @@
                   "value": "\"A process shall give every task it charged back to its job once, when it is reaped or dropped.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1029
+                    "line": 1045
                   }
                 },
                 {
@@ -30107,7 +30164,7 @@
                   "value": "\"With the fork loop's processes and the process moved in gone, both jobs' task counts, and their parent's, read 0.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1032
+                    "line": 1048
                   }
                 },
                 {
@@ -30118,7 +30175,7 @@
                   "value": "(\"H.QUOTA.1\", \"H.QUOTA.4\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1033
+                    "line": 1049
                   }
                 },
                 {
@@ -30129,7 +30186,7 @@
                   "value": "(\"object::process::Process::uncharge_tasks\", \"object::process::Process::drop\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1035
+                    "line": 1051
                   }
                 }
               ]
@@ -30142,7 +30199,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1037
+                "line": 1053
               },
               "children": [
                 {
@@ -30153,7 +30210,7 @@
                   "value": "\"Process::charge_thread shall charge the job one task for each thread beside the first, refused at the task limit, and Process::uncharge_thread shall give it back once as the thread goes.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1041
+                    "line": 1057
                   }
                 },
                 {
@@ -30164,7 +30221,7 @@
                   "value": "\"In a job limited to 3 tasks, a process makes 2 threads and a third is refused EAGAIN; as the threads end the job's task count falls back to 1.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1044
+                    "line": 1060
                   }
                 },
                 {
@@ -30175,7 +30232,7 @@
                   "value": "(\"H.QUOTA.1\", \"H.QUOTA.4\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1045
+                    "line": 1061
                   }
                 },
                 {
@@ -30186,7 +30243,7 @@
                   "value": "(\"object::process::Process::charge_thread\", \"object::process::Process::uncharge_thread\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1047
+                    "line": 1063
                   }
                 }
               ]
@@ -30199,7 +30256,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1049
+                "line": 1065
               },
               "children": [
                 {
@@ -30210,7 +30267,7 @@
                   "value": "\"A move shall count the process in the new job and out of the old one, and carry its task charge with it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1051
+                    "line": 1067
                   }
                 },
                 {
@@ -30221,7 +30278,7 @@
                   "value": "\"A process of a job with 2 tasks moved into a job at its limit of 8 leaves 9 tasks there and 1 behind.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1053
+                    "line": 1069
                   }
                 },
                 {
@@ -30232,7 +30289,7 @@
                   "value": "(\"H.OBJ.12\", \"H.QUOTA.1\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1054
+                    "line": 1070
                   }
                 },
                 {
@@ -30243,7 +30300,7 @@
                   "value": "(\"object::process::Process::move_charged\", \"object::process::Process::move_to\", \"object::process::Process::move_new_to\", \"object::job::Job::adopt\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1057
+                    "line": 1073
                   }
                 }
               ]
@@ -30256,7 +30313,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1059
+                "line": 1075
               },
               "children": [
                 {
@@ -30267,7 +30324,7 @@
                   "value": "\"A move refused because the destination, or a job above it, has been killed shall leave the process in its job.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1061
+                    "line": 1077
                   }
                 },
                 {
@@ -30278,7 +30335,7 @@
                   "value": "\"A move into a job beneath a killed one is refused and the process is still in the root job.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1063
+                    "line": 1079
                   }
                 },
                 {
@@ -30289,7 +30346,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1064
+                    "line": 1080
                   }
                 },
                 {
@@ -30300,7 +30357,7 @@
                   "value": "(\"object::process::Process::move_charged\", \"object::job::Job::refuses\", \"object::job::Job::adopt\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1066
+                    "line": 1082
                   }
                 }
               ]
@@ -30313,7 +30370,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1068
+                "line": 1084
               },
               "children": [
                 {
@@ -30324,7 +30381,7 @@
                   "value": "\"Process::move_new_to shall refuse a process being made when the destination's task limit, or one above it, would be passed, leaving it where it was with nothing charged there.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1071
+                    "line": 1087
                   }
                 },
                 {
@@ -30335,7 +30392,7 @@
                   "value": "\"process_create into a job at its task limit is refused SHOULD_WAIT, the job's task count unchanged, and the refused process is not started.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1074
+                    "line": 1090
                   }
                 },
                 {
@@ -30346,7 +30403,7 @@
                   "value": "\"H.QUOTA.8\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1075
+                    "line": 1091
                   }
                 },
                 {
@@ -30357,7 +30414,7 @@
                   "value": "(\"object::process::Process::move_new_to\", \"object::process::Process::move_charged\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1077
+                    "line": 1093
                   }
                 }
               ]
@@ -30370,7 +30427,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1079
+                "line": 1095
               },
               "children": [
                 {
@@ -30381,7 +30438,7 @@
                   "value": "\"Process::leave_job shall count the process out of its job exactly once, however often it is called.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1081
+                    "line": 1097
                   }
                 },
                 {
@@ -30392,7 +30449,7 @@
                   "value": "\"A released member is counted out once: the job's live count falls by exactly 1 per member released.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1083
+                    "line": 1099
                   }
                 },
                 {
@@ -30403,7 +30460,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1084
+                    "line": 1100
                   }
                 },
                 {
@@ -30414,7 +30471,7 @@
                   "value": "\"object::process::Process::leave_job\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1085
+                    "line": 1101
                   }
                 }
               ]
@@ -30427,7 +30484,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1087
+                "line": 1103
               },
               "children": [
                 {
@@ -30438,7 +30495,7 @@
                   "value": "\"A process's bootstrap slot shall take one object and hand it over once, refusing a second give before the take and after it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1090
+                    "line": 1106
                   }
                 },
                 {
@@ -30449,7 +30506,7 @@
                   "value": "\"A second give to one child is refused ALREADY_BOUND; the child's first process_bootstrap answers the end given with its rights and its second answers zero; a give after the take is refused ALREADY_BOUND.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1094
+                    "line": 1110
                   }
                 },
                 {
@@ -30460,7 +30517,7 @@
                   "value": "\"H.OBJ.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1095
+                    "line": 1111
                   }
                 },
                 {
@@ -30471,7 +30528,7 @@
                   "value": "(\"object::process::Bootstrap::refusal\", \"object::process::Bootstrap::give\", \"object::process::Bootstrap::take\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1097
+                    "line": 1113
                   }
                 }
               ]
@@ -30484,7 +30541,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1099
+                "line": 1115
               },
               "children": [
                 {
@@ -30495,7 +30552,7 @@
                   "value": "\"A bootstrap never taken shall be closed as its process ends, and the slot of an ended process shall refuse a give.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1102
+                    "line": 1118
                   }
                 },
                 {
@@ -30506,7 +30563,7 @@
                   "value": "\"A bootstrap never taken is closed as its holder ends, and its peer hears it; a give to an ended child is refused.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1105
+                    "line": 1121
                   }
                 },
                 {
@@ -30517,7 +30574,7 @@
                   "value": "\"H.OBJ.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1106
+                    "line": 1122
                   }
                 },
                 {
@@ -30528,7 +30585,7 @@
                   "value": "\"object::process::Process::close_bootstrap\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1107
+                    "line": 1123
                   }
                 }
               ]
@@ -30541,7 +30598,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1109
+                "line": 1125
               },
               "children": [
                 {
@@ -30552,7 +30609,7 @@
                   "value": "\"Completing an execve shall seal a bootstrap slot nothing was given, and keep one given before it for the new program to take.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1112
+                    "line": 1128
                   }
                 },
                 {
@@ -30563,7 +30620,7 @@
                   "value": "\"After an execve with nothing given, a give is refused; one given before an execve is taken after it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1114
+                    "line": 1130
                   }
                 },
                 {
@@ -30574,7 +30631,7 @@
                   "value": "\"H.OBJ.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1115
+                    "line": 1131
                   }
                 },
                 {
@@ -30585,7 +30642,7 @@
                   "value": "\"object::process::Process::seal_bootstrap\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1116
+                    "line": 1132
                   }
                 }
               ]
@@ -30598,7 +30655,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1118
+                "line": 1134
               },
               "children": [
                 {
@@ -30609,7 +30666,7 @@
                   "value": "\"Bootstrap::put_back shall hold again a bootstrap that was taken and could not be placed in the table.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1120
+                    "line": 1136
                   }
                 },
                 {
@@ -30620,7 +30677,7 @@
                   "value": "\"process_bootstrap into a full table is refused NO_HANDLES and the next process_bootstrap, with room, answers the handle given.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1123
+                    "line": 1139
                   }
                 },
                 {
@@ -30631,7 +30688,7 @@
                   "value": "(\"H.OBJ.6\", \"H.OBJ.7\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1124
+                    "line": 1140
                   }
                 },
                 {
@@ -30642,7 +30699,7 @@
                   "value": "\"object::process::Bootstrap::put_back\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1125
+                    "line": 1141
                   }
                 }
               ]
@@ -30655,7 +30712,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1127
+                "line": 1143
               },
               "children": [
                 {
@@ -30666,7 +30723,7 @@
                   "value": "\"Bootstrap::put_back shall hand a bootstrap that could not be placed back to be closed when the process has ended since it was taken.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1130
+                    "line": 1146
                   }
                 },
                 {
@@ -30677,7 +30734,7 @@
                   "value": "\"A bootstrap taken and not placed while its process ends is closed, and its peer hears it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1132
+                    "line": 1148
                   }
                 },
                 {
@@ -30688,7 +30745,7 @@
                   "value": "(\"H.OBJ.6\", \"H.OBJ.7\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1133
+                    "line": 1149
                   }
                 },
                 {
@@ -30699,7 +30756,7 @@
                   "value": "\"object::process::Bootstrap::put_back\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1134
+                    "line": 1150
                   }
                 }
               ]
@@ -30712,7 +30769,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1136
+                "line": 1152
               },
               "children": [
                 {
@@ -30723,7 +30780,7 @@
                   "value": "\"Exit::close shall hand the registrations waiting for a process's end over to be fired, once, and a registration made afterwards shall fire at once.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1139
+                    "line": 1155
                   }
                 },
                 {
@@ -30734,7 +30791,7 @@
                   "value": "\"A watch registered while the process runs fires when it ends, and one registered afterwards fires at once, with its key.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1142
+                    "line": 1158
                   }
                 },
                 {
@@ -30745,7 +30802,7 @@
                   "value": "\"H.OBJ.17\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1143
+                    "line": 1159
                   }
                 },
                 {
@@ -30756,7 +30813,7 @@
                   "value": "(\"object::process::Exit::close\", \"object::process::Exit::observe\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1144
+                    "line": 1160
                   }
                 }
               ]
@@ -30769,7 +30826,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1146
+                "line": 1162
               },
               "children": [
                 {
@@ -30780,7 +30837,7 @@
                   "value": "\"A process's Exit shall report its status and the signal that ended it once it has terminated, and nothing before.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1149
+                    "line": 1165
                   }
                 },
                 {
@@ -30791,7 +30848,7 @@
                   "value": "\"process_status says running before the end, killed by SIGTERM for a process a signal ended, and exited with its code for one that exited.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1152
+                    "line": 1168
                   }
                 },
                 {
@@ -30802,7 +30859,7 @@
                   "value": "\"H.OBJ.11\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1153
+                    "line": 1169
                   }
                 },
                 {
@@ -30813,7 +30870,7 @@
                   "value": "(\"object::process::Exit::record\", \"object::process::Exit::status\", \"object::process::Exit::signal\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1155
+                    "line": 1171
                   }
                 }
               ]
@@ -30826,7 +30883,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1157
+                "line": 1173
               },
               "children": [
                 {
@@ -30837,7 +30894,7 @@
                   "value": "\"A process made through the native ABI and never started shall be ended, with the kill's status, when the last handle to it goes.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1160
+                    "line": 1176
                   }
                 },
                 {
@@ -30848,7 +30905,7 @@
                   "value": "\"Closing an unstarted process's only handle ends it and it is freed; one whose handle rode unread in a channel ends when the channel is closed.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1163
+                    "line": 1179
                   }
                 },
                 {
@@ -30859,7 +30916,7 @@
                   "value": "\"H.OBJ.8\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1164
+                    "line": 1180
                   }
                 },
                 {
@@ -30870,7 +30927,7 @@
                   "value": "(\"object::process::ProcessRef::created\", \"object::process::Control::drop\", \"object::process::Control::process\", \"object::process::downcast\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1167
+                    "line": 1183
                   }
                 }
               ]
@@ -30883,7 +30940,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1169
+                "line": 1185
               },
               "children": [
                 {
@@ -30894,7 +30951,7 @@
                   "value": "\"A handle ProcessRef::new makes shall hold only how the process ended, and not the process.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1171
+                    "line": 1187
                   }
                 },
                 {
@@ -30905,7 +30962,7 @@
                   "value": "\"With nothing but a handle to it left, an ended process is freed.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1173
+                    "line": 1189
                   }
                 },
                 {
@@ -30916,7 +30973,7 @@
                   "value": "\"H.OBJ.8\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1174
+                    "line": 1190
                   }
                 },
                 {
@@ -30927,7 +30984,7 @@
                   "value": "\"object::process::ProcessRef::new\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1175
+                    "line": 1191
                   }
                 }
               ]
@@ -30940,7 +30997,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1177
+                "line": 1193
               },
               "children": [
                 {
@@ -30951,7 +31008,7 @@
                   "value": "\"Control::started shall let go of the reference that held a process nobody had started, so that once started the process is held by its task and not by the handles process_create made.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1181
+                    "line": 1197
                   }
                 },
                 {
@@ -30962,7 +31019,7 @@
                   "value": "\"A process made by process_create and started, which then exits, is freed while its creator still holds its handle, and the handle reports its status.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1184
+                    "line": 1200
                   }
                 },
                 {
@@ -30973,7 +31030,7 @@
                   "value": "\"H.OBJ.8\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1185
+                    "line": 1201
                   }
                 },
                 {
@@ -30984,7 +31041,7 @@
                   "value": "(\"object::process::Control::started\", \"object::process::ProcessRef::created\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1186
+                    "line": 1202
                   }
                 }
               ]
@@ -30997,7 +31054,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1188
+                "line": 1204
               },
               "children": [
                 {
@@ -31008,7 +31065,7 @@
                   "value": "\"allocate shall hand out the number after the last one handed out, skipping every number in use and wrapping past 32767 to 300, and allocate_init shall hand out 1 only while no process holds it.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1192
+                    "line": 1208
                   }
                 },
                 {
@@ -31019,7 +31076,7 @@
                   "value": "\"Allocating through the range wraps to 300 and passes over a number still held; 0 numbers handed out twice.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1194
+                    "line": 1210
                   }
                 },
                 {
@@ -31030,7 +31087,7 @@
                   "value": "\"H.OBJ.13\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1195
+                    "line": 1211
                   }
                 },
                 {
@@ -31041,7 +31098,7 @@
                   "value": "(\"object::process::allocate\", \"object::process::allocate_init\", \"object::process::name\", \"object::process::release_naming\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1198
+                    "line": 1214
                   }
                 }
               ]
@@ -31054,7 +31111,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1200
+                "line": 1216
               },
               "children": [
                 {
@@ -31065,7 +31122,7 @@
                   "value": "\"live shall list every live process once, under its pid and not its threads' numbers, and drop its references with the table unlocked.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1203
+                    "line": 1219
                   }
                 },
                 {
@@ -31076,7 +31133,7 @@
                   "value": "\"A job kill, which finds its processes through live, reports exactly 1 process ended for a job with 1 member.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1205
+                    "line": 1221
                   }
                 },
                 {
@@ -31087,7 +31144,7 @@
                   "value": "(\"H.OBJ.13\", \"H.OBJ.9\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1206
+                    "line": 1222
                   }
                 },
                 {
@@ -31098,7 +31155,7 @@
                   "value": "\"object::process::live\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1207
+                    "line": 1223
                   }
                 }
               ]
@@ -31112,7 +31169,7 @@
           "doc": "src/kernel/src/object/oom.rs, and the quota reading it starts from.",
           "source": {
             "file": "docs/sysml/14-object-requirements.sysml",
-            "line": 1211
+            "line": 1227
           },
           "children": [
             {
@@ -31123,7 +31180,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1214
+                "line": 1230
               },
               "children": [
                 {
@@ -31134,7 +31191,7 @@
                   "value": "\"A user fault refused by a memory limit shall end, with the kill's status, a process of the job whose limit was full or beneath it and none outside it, count the kill there, and retry the fault.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1218
+                    "line": 1234
                   }
                 },
                 {
@@ -31145,7 +31202,7 @@
                   "value": "\"A program writing 8 MiB in a job limited to 1 MiB ends by SIGKILL, exactly 1 process killed, while a process with more resident memory in a sibling job lives.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1221
+                    "line": 1237
                   }
                 },
                 {
@@ -31156,7 +31213,7 @@
                   "value": "\"H.QUOTA.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1222
+                    "line": 1238
                   }
                 },
                 {
@@ -31167,7 +31224,7 @@
                   "value": "(\"object::oom::user_fault\", \"object::oom::out_of_memory\", \"object::oom::kill_within\", \"object::oom::at_or_above\", \"object::quota::at_limit\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1225
+                    "line": 1241
                   }
                 }
               ]
@@ -31180,7 +31237,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1227
+                "line": 1243
               },
               "children": [
                 {
@@ -31191,7 +31248,7 @@
                   "value": "\"Among the live processes of the full job and the jobs beneath it, kill_within shall choose the one with the most resident pages, and never pid 1.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1230
+                    "line": 1246
                   }
                 },
                 {
@@ -31202,7 +31259,7 @@
                   "value": "\"With three processes of 1, 4 and 2 MiB resident in the full job, the one of 4 MiB is killed; with pid 1 the largest, the next largest is.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1233
+                    "line": 1249
                   }
                 },
                 {
@@ -31213,7 +31270,7 @@
                   "value": "\"H.QUOTA.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1234
+                    "line": 1250
                   }
                 },
                 {
@@ -31224,7 +31281,7 @@
                   "value": "(\"object::oom::kill_within\", \"object::oom::at_or_above\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1235
+                    "line": 1251
                   }
                 }
               ]
@@ -31237,7 +31294,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1237
+                "line": 1253
               },
               "children": [
                 {
@@ -31248,7 +31305,7 @@
                   "value": "\"A fault that failed for want of memory with no limit full, or with nothing killable in the full job, shall fail as it would without the OOM kill and kill nothing.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1240
+                    "line": 1256
                   }
                 },
                 {
@@ -31259,7 +31316,7 @@
                   "value": "\"A fault refused with every limit unset kills 0 processes and ends its program with SIGSEGV; a system call's fault there answers EFAULT.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1243
+                    "line": 1259
                   }
                 },
                 {
@@ -31270,7 +31327,7 @@
                   "value": "\"H.QUOTA.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1244
+                    "line": 1260
                   }
                 },
                 {
@@ -31281,7 +31338,7 @@
                   "value": "(\"object::oom::out_of_memory\", \"object::oom::fault\", \"object::oom::kill_within\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1246
+                    "line": 1262
                   }
                 }
               ]
@@ -31294,7 +31351,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/14-object-requirements.sysml",
-                "line": 1248
+                "line": 1264
               },
               "children": [
                 {
@@ -31305,7 +31362,7 @@
                   "value": "\"A victim that has ended and closed everything, whose address space no live process shares, shall have that space emptied at once rather than at its parent's wait, and a fault that finds a victim still ending shall wait and retry, killing no second process.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1253
+                    "line": 1269
                   }
                 },
                 {
@@ -31316,7 +31373,7 @@
                   "value": "\"Two faults at one full limit while the first victim is ending kill 1 process, and the job's memory use falls by the victim's resident pages before its parent waits.\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1256
+                    "line": 1272
                   }
                 },
                 {
@@ -31327,7 +31384,7 @@
                   "value": "\"H.QUOTA.6\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1257
+                    "line": 1273
                   }
                 },
                 {
@@ -31338,7 +31395,7 @@
                   "value": "(\"object::oom::kill_within\", \"object::oom::shared_with_the_living\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
-                    "line": 1259
+                    "line": 1275
                   }
                 }
               ]

@@ -248,10 +248,21 @@ port the receiver created and the sender holds with `WRITE` only.
 Consequences:
 * A sender whose `port_queue` answers Full treats it as **"already rung"**,
   never as an error. Both sides do.
-* The kernel's completion receiver is a normal `Port`, and a kernel task blocks
-  on `Port::waiters()` and `take()`s packets. A user `port_queue` wakes it at
-  once. It drains every queued bell and then re-reads the ring once, so a
-  driver flooding bells only delays its own completions.
+* The kernel's completion receiver is a normal `Port`, made with a server
+  (`object::port::Server`, 2026-09-30): the driver's `port_queue` of
+  `BELL_COMPLETE` takes the completions off the ring there and then, in the
+  driver's own system call and time, answers each request and wakes its
+  caller, and queues nothing. It takes at most 64 per call and allocates
+  nothing; completions past that, a command a completion made dispatchable
+  (which the block queue allocates to dispatch), or a ring it finds corrupt
+  it leaves to the ring's kernel task, by queuing the bell after all. That
+  task blocks on `Port::waiters()` and `take()`s packets, drains every queued
+  bell and re-reads the ring once, so a driver flooding bells only delays its
+  own completions, and spends the time doing it.
+* On the kernel's side of the submission ring no task waits either: the
+  caller that queues a request puts it on the ring and rings the driver's
+  port itself, and one giving a read's region back dispatches what waited
+  for a region. A read is caller → driver → caller.
 
 The driver's port also receives its device interrupt packets
 (`interrupt_bind`, `PACKET_INTERRUPT`) and a signal packet for the control

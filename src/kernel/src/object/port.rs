@@ -92,6 +92,24 @@ pub(crate) struct Port {
         reason = "AUDIT: held for its drop, which uncharges the job"
     )]
     charge: Charge,
+    /// What takes a program's packet before it is queued, for a port the
+    /// kernel serves itself: see [`Port::new_served`].
+    server: Option<Weak<dyn Server>>,
+}
+
+/// A kernel subsystem that serves a port a program rings, and would rather
+/// act on the packet at once, in the ringing program's own `port_queue`, than
+/// have it queued for a kernel task to wake for.
+///
+/// The work is the ringing program's: it runs on that program's thread, in
+/// its system call, charged to it and its job as any system call's time is.
+/// So an implementation must bound what one call does, must not block, and
+/// must allocate nothing under a spin lock; what it leaves undone it leaves
+/// by declining the packet, which is then queued as any other.
+pub(crate) trait Server: Send + Sync {
+    /// A program queued `key` and `data`: `true` if the packet was acted on
+    /// and is not to be queued.
+    fn take_packet(&self, key: u64, data: [u64; 2]) -> bool;
 }
 
 /// A port's packets and the room reserved for them.
@@ -135,6 +153,22 @@ impl Port {
     ///
     /// [`AllocError`] when the port or its queue could not be allocated.
     pub(crate) fn new() -> Result<Arc<Port>, AllocError> {
+        Port::with_server(None)
+    }
+
+    /// An empty port whose programs' packets `server` is offered first
+    /// ([`Port::queue_from_program`]). Held weakly: a server that has gone
+    /// takes nothing, and the port is then an ordinary one.
+    ///
+    /// # Errors
+    ///
+    /// As [`Port::new`].
+    pub(crate) fn new_served(server: Weak<dyn Server>) -> Result<Arc<Port>, AllocError> {
+        Port::with_server(Some(server))
+    }
+
+    /// [`Port::new`] and [`Port::new_served`].
+    fn with_server(server: Option<Weak<dyn Server>>) -> Result<Arc<Port>, AllocError> {
         let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
         let packets = fallible::try_deque_with_capacity(PORT_CAPACITY)?;
         let waiters = fallible::try_arc(WaitQueue::new())?;
@@ -147,7 +181,24 @@ impl Port {
             }),
             waiters,
             charge,
+            server,
         })
+    }
+
+    /// A program's `port_queue`: offered to the port's server first, if it
+    /// has one that is still there, and queued as [`Port::queue_user`]
+    /// queues it unless the server took it. Called holding no lock, since a
+    /// server may take its own and wake tasks.
+    ///
+    /// # Errors
+    ///
+    /// As [`Port::queue_user`].
+    pub(crate) fn queue_from_program(&self, key: u64, data: [u64; 2]) -> Result<(), PortError> {
+        let server = self.server.as_ref().and_then(Weak::upgrade);
+        if server.is_some_and(|server| server.take_packet(key, data)) {
+            return Ok(());
+        }
+        self.queue_user(key, data)
     }
 
     /// Queue a program's own packet.

@@ -1100,42 +1100,42 @@
     },
     {
       "file": "object/port.rs",
-      "lines": "117",
+      "lines": "135",
       "category": "defensive",
       "match": "self.lost = self.lost.saturating_add(1);",
       "why": "A packet that found no room. The queue's capacity is kept at PORT_CAPACITY plus every registration's and binding's promised packet (`Promise::new` reserves before a registration is accepted), so a packet either kind of limit allows always fits; the count is what would show the accounting broken."
     },
     {
       "file": "object/port.rs",
-      "lines": "268",
+      "lines": "319",
       "category": "defensive",
       "match": "queue.lost = queue.lost.saturating_add(1);",
       "why": "A packet taken by a wait whose buffer faulted, put back when the queue is at capacity and cannot grow. Its slot is taken meanwhile only if a user packet was queued between the take and the put-back, and then the reserve must also fail; the object edge check puts packets back into a queue with room (`object/edge_check.rs`). The line after the loss is its return."
     },
     {
       "file": "object/port.rs",
-      "lines": "280",
+      "lines": "331",
       "category": "defensive",
       "match": "}",
       "why": "A packet taken by a wait whose buffer faulted, put back when the queue is at capacity and cannot grow. Its slot is taken meanwhile only if a user packet was queued between the take and the put-back, and then the reserve must also fail; the object edge check puts packets back into a queue with room (`object/edge_check.rs`). The line after the loss is its return."
     },
     {
       "file": "object/port.rs",
-      "lines": "485",
+      "lines": "536",
       "category": "defensive",
       "match": "Err((observer, _)) => {",
       "why": "A fired registration that did not fit on its object's firing list. `register` reserves room on `firing` for every listed registration as each is listed, so moving one there never allocates and cannot fail; the arm keeps the registration listed rather than lose it if that accounting ever broke. The arm's last rows are its jump back into the loop."
     },
     {
       "file": "object/port.rs",
-      "lines": "487-488",
+      "lines": "538-539",
       "category": "defensive",
       "match": "list.listed.insert(index, observer);",
       "why": "A fired registration that did not fit on its object's firing list. `register` reserves room on `firing` for every listed registration as each is listed, so moving one there never allocates and cannot fail; the arm keeps the registration listed rather than lose it if that accounting ever broke. The arm's last rows are its jump back into the loop."
     },
     {
       "file": "object/port.rs",
-      "lines": "490",
+      "lines": "541",
       "category": "defensive",
       "match": "}",
       "why": "A fired registration that did not fit on its object's firing list. `register` reserves room on `firing` for every listed registration as each is listed, so moving one there never allocates and cannot fail; the arm keeps the registration listed rather than lose it if that accounting ever broke. The arm's last rows are its jump back into the loop."

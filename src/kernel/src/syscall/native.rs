@@ -2186,14 +2186,16 @@ pub(crate) fn port_in(process: &Process, port: Handle, needed: Rights) -> Result
 }
 
 /// `port_queue`. The kind and signals the caller wrote are ignored: a program
-/// queues user packets, and may not forge a signal packet.
+/// queues user packets, and may not forge a signal packet. A port the kernel
+/// serves itself -- a block ring's completion port -- may act on the packet
+/// here, in the caller's time, instead of queuing it (`Port::new_served`).
 fn port_queue(process: &Process, port: Handle, packet: u64) -> Result<usize, Errno> {
     let port = port_in(process, port, Rights::WRITE)?;
     let key = read_u64(process, packet)?;
     let first = read_u64(process, packet.checked_add(16).ok_or(status::FAULT)?)?;
     let second = read_u64(process, packet.checked_add(24).ok_or(status::FAULT)?)?;
     crate::sched::trip::port_rung(port.waiters());
-    port.queue_user(key, [first, second])
+    port.queue_from_program(key, [first, second])
         .map_err(|_| status::SHOULD_WAIT)?;
     Ok(0)
 }

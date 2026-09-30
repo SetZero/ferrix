@@ -134,6 +134,7 @@ struct Counter {
 pub(crate) fn run() -> Result<Report, &'static str> {
     // No device needed: that ring is a page of the kernel's own.
     let rewrites = super::reread_check::run()?.rewrites;
+    super::budget_check::run()?;
     let Some(node) = device::devices()
         .iter()
         .find(|node| matches!(node.location(), device::Location::Pci(_)))
