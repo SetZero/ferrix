@@ -64,6 +64,7 @@ pub(crate) fn run() -> Result<Counts, &'static str> {
     let mut page = page_for(&user)?;
     let outcome = user_namespace(&mut page, &mut tally)
         .and_then(|()| chrooted(&mut tally))
+        .and_then(|()| root_made(&mut tally))
         .and_then(|()| credentials(&mut tally))
         .and_then(|()| read_only_sysctls(&mut tally));
     outcome.map(|()| counts)
@@ -293,6 +294,31 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         .map_err(|_| "a namespace's uid_map could not be read from outside")?;
     if seen != b"         0       1000          1\n" {
         return Err("a namespace's uid_map did not read the same from its parent");
+    }
+    Ok(())
+}
+
+/// U1 for the case that matters: kernel root, which really is uid 0, inside a
+/// namespace it made. Whatever its ids say there it is refused what only the
+/// first namespace's root may do, and is not privileged on `Credentials`.
+fn root_made(tally: &mut Tally<'_>) -> Result<(), &'static str> {
+    let root =
+        process::new_for_check().map_err(|_| "could not make the root-made namespace's process")?;
+    let mut page = page_for(&root)?;
+    tally.ok(
+        unshare(&root, CLONE_NEWUSER),
+        "unshare(CLONE_NEWUSER) was refused to root",
+    )?;
+    let name = page.put(b"ferrix")?;
+    tally.refused(
+        call(&root, Syscall::Sethostname, [name, 6, 0, 0, 0, 0]),
+        Errno::EPERM,
+        "kernel root inside a namespace it made set the host name",
+    )?;
+    if root.with_credentials(|held| held.privileged()) {
+        return Err(
+            "kernel root inside a child namespace was privileged in the whole system's sense",
+        );
     }
     Ok(())
 }
