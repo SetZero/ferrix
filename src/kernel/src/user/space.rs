@@ -560,7 +560,7 @@ unsafe fn unload(cpu: usize, record: &AtomicPtr<Presence>) {
 pub(crate) unsafe fn switch_here(next: Option<&AddressSpace>) {
     let (cpu, record) = loaded_record();
     let Some(next) = next else {
-        if !lazy_here() && !record.load(Ordering::SeqCst).is_null() {
+        if true && !record.load(Ordering::SeqCst).is_null() { // NEGATIVE CONTROL nc1
             // SAFETY: (TRANSLATE) the incoming task is a kernel thread, which wants no
             // user address, and the caller has interrupts masked.
             unsafe { unload(cpu, record) };
