@@ -656,9 +656,13 @@ fn tagged(lines: &[String], tag: &str) -> Vec<String> {
 
 /// The line that finds the drivers: every process whose `comm` is `comm`,
 /// then [`LISTED`].
+///
+/// A process that ends between the glob and the `read` is skipped: the
+/// failed `read` leaves `n` holding the previous process's name, so testing
+/// it would list a pid that was never a driver.
 fn find_line(comm: &str) -> Vec<u8> {
     format!(
-        "for p in /proc/[0-9]*; do read n < $p/comm; \
+        "for p in /proc/[0-9]*; do read n < $p/comm || continue; \
          [ \"$n\" = {comm} ] && echo restart-gate-'pid='${{p#/proc/}}; done; \
          echo restart-gate-'listed'\n"
     )
