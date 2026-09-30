@@ -183,7 +183,7 @@ which every client it starts inherits with its own `app.slice` scope.
 temporary directory, and the clients fall back to the same place.
 The four
 programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
-`/bin/hypridle` by one line each in `tools/common/xtask/src/compositor.rs`'s
+`/bin/hypridle` by one line each in `tools/common/xtask/src/compositor/desktop.rs`'s
 `DESKTOP_CLIENTS`. `--no-dotfiles` carries the file alone. On example the
 user's files are 35 and their fonts 20 files, 10.4 MiB: Ubuntu, GFS Didot,
 DejaVu Sans, and the host's `sans-serif` and `monospace`.

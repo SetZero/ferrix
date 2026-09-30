@@ -7,8 +7,9 @@
 
 use std::path::Path;
 
+use super::apps::VKGEARS_PATH;
 use super::run::{with_layout, with_network};
-use super::{CLIENT_PATH, Carried, VKGEARS_PATH, build, steam_window};
+use super::{CLIENT_PATH, Carried, build, steam_window};
 use crate::args::Args;
 use crate::paths::Arch;
 use crate::{Error, Result};

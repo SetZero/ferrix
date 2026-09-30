@@ -9,10 +9,11 @@
 use std::path::Path;
 
 use super::boot::{build_desktop_image, build_parts};
+use super::browser::chrome_libc;
 use super::desktop::{
     Backdrop, desktop, laid_out, with_chrome, with_steam, with_steam_volume, with_yserver,
 };
-use super::{Programs, chrome_libc, gates_busybox, steam_window};
+use super::{Programs, gates_busybox, steam_window};
 use crate::args::Args;
 use crate::paths::Arch;
 use crate::{Error, Result};
