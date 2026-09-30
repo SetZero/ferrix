@@ -52,9 +52,8 @@ version = "0.1.0"
 dependencies = [
  "ferrix-blkring",
  "ferrix-blkserve",
- "ferrix-native-abi",
+ "ferrix-driver",
  "ferrix-rt",
- "ferrix-virtio",
  "ferrix-virtio-blk",
 ]
 
@@ -180,10 +179,12 @@ name = "ferrix-driver"
 version = "0.1.0"
 dependencies = [
  "ferrix-blkring",
+ "ferrix-blkserve",
  "ferrix-inputctl",
  "ferrix-native-abi",
  "ferrix-rt",
  "ferrix-virtio",
+ "ferrix-virtio-blk",
  "ferrix-virtio-input",
 ]
 

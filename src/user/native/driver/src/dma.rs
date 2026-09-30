@@ -4,8 +4,10 @@ use core::mem::ManuallyDrop;
 use core::ptr;
 use core::sync::atomic::{Ordering, fence};
 
+use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_rt::Kernel;
 use ferrix_rt::native::device::Device;
+use ferrix_rt::native::handle::OwnedHandle;
 use ferrix_rt::native::pending::Protection;
 use ferrix_rt::native::pin::{Pin, PinAccess, device_address};
 use ferrix_rt::native::vmo::{self, Vmo};
@@ -16,8 +18,9 @@ use crate::{Step, Stopped};
 /// A page, on every architecture a driver runs on.
 pub const PAGE: usize = 4096;
 
-/// The most pages one [`Dma`] holds.
-pub const MAX_PAGES: usize = 16;
+/// The most pages one [`Dma`] holds: the block ring's data region is the
+/// largest, at 128.
+pub const MAX_PAGES: usize = 128;
 
 /// Memory this process made, pinned read-write for a device and mapped.
 ///
@@ -85,6 +88,19 @@ impl Dma {
     #[must_use]
     pub fn device_pages(&self) -> &[u64] {
         self.addresses.get(..self.pages).unwrap_or_default()
+    }
+
+    /// A handle to the memory with exactly `rights`, for the kernel to map
+    /// its side of it: the block ring's data region is one.
+    ///
+    /// # Errors
+    ///
+    /// [`Step::Memory`] if the handle cannot be duplicated.
+    pub fn share(&self, rights: Rights) -> Result<OwnedHandle<Kernel>, Step> {
+        self.vmo
+            .as_owned()
+            .duplicate(Requested::Exactly(rights))
+            .map_err(|_| Step::Memory)
     }
 
     /// Unpin and free the memory: the device was reset, so it can no longer
@@ -192,6 +208,24 @@ impl ferrix_virtio_input::DevicePages for Dma {
 
 #[cfg(feature = "input")]
 impl ferrix_virtio_input::EventArea for Dma {
+    fn read_u8(&self, offset: usize) -> u8 {
+        Dma::read_u8(self, offset)
+    }
+
+    fn write_u8(&mut self, offset: usize, value: u8) {
+        Dma::write_u8(self, offset, value);
+    }
+}
+
+#[cfg(feature = "block")]
+impl ferrix_virtio_blk::DevicePages for Dma {
+    fn device_pages(&self) -> &[u64] {
+        Dma::device_pages(self)
+    }
+}
+
+#[cfg(feature = "block")]
+impl ferrix_virtio_blk::RequestArea for Dma {
     fn read_u8(&self, offset: usize) -> u8 {
         Dma::read_u8(self, offset)
     }

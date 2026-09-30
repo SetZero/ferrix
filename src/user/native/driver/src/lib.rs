@@ -12,8 +12,9 @@
 //! * resources -- [`mmio::Block`], [`dma::Dma`];
 //! * a bus -- [`virtio`], whose [`virtio::Device`] is the transport every
 //!   virtio device logic crate drives;
-//! * a subsystem -- [`input`], which speaks `inputctl` to the kernel's input
-//!   core for any driver that implements [`input::Device`].
+//! * subsystems -- `input`, which speaks `inputctl` to the kernel's input
+//!   core for any driver that implements `input::Device`, and `block`, which
+//!   serves the block ring for any driver that implements `block::Device`.
 //!
 //! # Memory is freed only after a reset
 //!
@@ -32,6 +33,8 @@ pub mod mmio;
 pub mod start;
 pub mod virtio;
 
+#[cfg(feature = "block")]
+pub mod block;
 #[cfg(feature = "input")]
 pub mod input;
 

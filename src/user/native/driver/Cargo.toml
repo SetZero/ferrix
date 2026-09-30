@@ -11,13 +11,18 @@ publish.workspace = true
 # The input subsystem, and the virtio-input device logic it serves through the
 # virtio bus. A driver asks for what it is; the rest is not compiled.
 input = ["dep:ferrix-inputctl", "dep:ferrix-virtio-input"]
+# The block subsystem, and the virtio-blk device logic it serves through the
+# virtio bus.
+block = ["dep:ferrix-blkserve", "dep:ferrix-virtio-blk"]
 
 [dependencies]
 ferrix-blkring.workspace = true
 ferrix-native-abi.workspace = true
 ferrix-rt.workspace = true
 ferrix-virtio.workspace = true
+ferrix-blkserve = { workspace = true, optional = true }
 ferrix-inputctl = { workspace = true, optional = true }
+ferrix-virtio-blk = { workspace = true, optional = true }
 ferrix-virtio-input = { workspace = true, optional = true }
 
 [lints]

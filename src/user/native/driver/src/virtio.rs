@@ -19,7 +19,7 @@ use ferrix_virtio::input::ConfigSelect;
 use ferrix_virtio::pci::{CommonConfig, DEVICE_STATUS, NO_VECTOR};
 
 use crate::dma::Dma;
-use crate::mmio::Block;
+use crate::mmio;
 use crate::start::Bind;
 use crate::{Step, Stopped};
 
@@ -30,6 +30,13 @@ const ISR_QUEUE: u8 = 1;
 pub trait Kind {
     /// The modern (1.0) PCI device id, `0x1040` plus the virtio device id.
     const PCI_ID: u16;
+
+    /// Whether START's `pci_id` is this kind: the modern id, unless a kind
+    /// also takes its transitional one.
+    #[must_use]
+    fn matches(pci_id: u16) -> bool {
+        pci_id == Self::PCI_ID
+    }
 }
 
 /// virtio-input.
@@ -38,6 +45,19 @@ pub enum Input {}
 
 impl Kind for Input {
     const PCI_ID: u16 = 0x1052;
+}
+
+/// virtio-blk: the modern id, or the transitional one QEMU gives a disk on a
+/// legacy-capable bus.
+#[derive(Debug)]
+pub enum Block {}
+
+impl Kind for Block {
+    const PCI_ID: u16 = 0x1042;
+
+    fn matches(pci_id: u16) -> bool {
+        pci_id == Self::PCI_ID || pci_id == 0x1001
+    }
 }
 
 /// Where the device's reset stands, as its status register showed it.
@@ -54,10 +74,10 @@ enum Reset {
 /// A virtio device of kind `K`, over PCI.
 pub struct Device<K: Kind> {
     handle: DeviceHandle<Kernel>,
-    common: Block,
-    notify: Block,
-    isr: Block,
-    device: Block,
+    common: mmio::Block,
+    notify: mmio::Block,
+    isr: mmio::Block,
+    device: mmio::Block,
     notify_off_multiplier: u32,
     msix: bool,
     interrupt: Interrupt<Kernel>,
@@ -82,14 +102,14 @@ impl<K: Kind> Bind for Device<K> {
         port: &Port<Kernel>,
         key: u64,
     ) -> Result<Self, Step> {
-        if start.pci_device_id != K::PCI_ID {
+        if !K::matches(start.pci_device_id) {
             return Err(Step::Identity);
         }
         let interrupt = handle.interrupt(0).map_err(|_| Step::Registers)?;
-        let common = Block::map(&handle, &start.common)?;
-        let notify = Block::map(&handle, &start.notify)?;
-        let isr = Block::map(&handle, &start.isr)?;
-        let device = Block::map(&handle, &start.device)?;
+        let common = mmio::Block::map(&handle, &start.common)?;
+        let notify = mmio::Block::map(&handle, &start.notify)?;
+        let isr = mmio::Block::map(&handle, &start.isr)?;
+        let device = mmio::Block::map(&handle, &start.device)?;
         interrupt.bind(port, key).map_err(|_| Step::Events)?;
         Ok(Device {
             handle,
@@ -206,6 +226,19 @@ impl<K: Kind> ConfigSelect for Device<K> {
 
 #[cfg(feature = "input")]
 impl ferrix_virtio_input::Transport for Device<Input> {
+    fn notify(&mut self, queue: u16, notify_off: u16) {
+        Device::notify(self, queue, notify_off);
+    }
+    fn queue_vector(&self) -> u16 {
+        Device::queue_vector(self)
+    }
+    fn acknowledge_interrupt(&mut self) -> u8 {
+        Device::acknowledge_interrupt(self)
+    }
+}
+
+#[cfg(feature = "block")]
+impl ferrix_virtio_blk::Transport for Device<Block> {
     fn notify(&mut self, queue: u16, notify_off: u16) {
         Device::notify(self, queue, notify_off);
     }
