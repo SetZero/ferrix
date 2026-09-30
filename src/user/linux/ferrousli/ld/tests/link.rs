@@ -262,6 +262,72 @@ fn a_program_finds_a_library_through_its_runpath() {
     );
 }
 
+/// A `libc.so.6` with a `PT_INTERP` is glibc's, which needs glibc's loader,
+/// and is passed over for the next one on the search path.
+///
+/// A Debian volume carries glibc's `libc.so.6` in its multiarch directory,
+/// which programs put on `LD_LIBRARY_PATH` and the loader searches by
+/// default. The decoy here has an `.interp` section, as glibc's has, and
+/// defines nothing, so a program given it fails on an undefined symbol; the
+/// `libc.so.6` after it on the path is `greet.c`, and the program reaches its
+/// expected status only if the loader goes on to that one.
+#[test]
+fn glibcs_own_libc_on_the_path_is_passed_over() {
+    let loader = loader();
+    let dir = scratch().join("ld-glibc-decoy");
+    let decoy_dir = dir.join("glibc");
+    let real_dir = dir.join("ferrousli");
+    std::fs::create_dir_all(&decoy_dir).expect("make the decoy directory");
+    std::fs::create_dir_all(&real_dir).expect("make the library directory");
+
+    let decoy_source = dir.join("decoy.c");
+    std::fs::write(
+        &decoy_source,
+        "const char interp[] __attribute__((section(\".interp\"))) = \"/lib64/ld-linux-x86-64.so.2\";\n",
+    )
+    .expect("write the decoy");
+    compile(&[
+        "-shared",
+        "-Wl,-soname,libc.so.6",
+        "-o",
+        decoy_dir.join("libc.so.6").to_str().expect("a path"),
+        decoy_source.to_str().expect("a path"),
+    ]);
+    compile(&[
+        "-shared",
+        "-Wl,-soname,libc.so.6",
+        "-o",
+        real_dir.join("libc.so.6").to_str().expect("a path"),
+        manifest().join("tests/c/greet.c").to_str().expect("a path"),
+    ]);
+
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest().join("tests/c/prog.c").to_str().expect("a path"),
+        "-L",
+        real_dir.to_str().expect("a path"),
+        "-l:libc.so.6",
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+
+    let status = Command::new(&program)
+        .env(
+            "LD_LIBRARY_PATH",
+            format!("{}:{}", decoy_dir.display(), real_dir.display()),
+        )
+        .status()
+        .expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "the loader took glibc's libc.so.6, first on LD_LIBRARY_PATH, for its own"
+    );
+}
+
 /// `$ORIGIN` in a `DT_RUNPATH` is the directory of the program's file, links
 /// followed: the program is run through a link in another directory, as
 /// `rustc` is run through `/bin/rustc`, and finds its library only if the
