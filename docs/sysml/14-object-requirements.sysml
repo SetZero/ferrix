@@ -263,7 +263,9 @@ package FerrixObjectRequirements {
                 peer wrote before it closed before it answers PEER_CLOSED.";
             attribute :>> criterion = "A peer that writes 3 messages and closes
                 leaves 3 to be read, in order, and only the fourth read answers
-                PEER_CLOSED.";
+                PEER_CLOSED. A write and close between a read's look at the queue
+                and its answer is argued in F-54 (the peer's close is looked at, with
+                Acquire, before the queue), not shown by this check.";
             attribute :>> parent = "H.OBJ.16";
             attribute :>> unit = "object::channel::Endpoint::read";
         }

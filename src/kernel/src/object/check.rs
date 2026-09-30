@@ -35,7 +35,7 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::device::{self, DeviceNode};
 use crate::mm;
-use crate::object::channel::Endpoint;
+use crate::object::channel::{Endpoint, ReadError};
 use crate::object::interrupt;
 use crate::object::job::{self, Job, KILLED_STATUS};
 use crate::object::process::ProcessRef;
@@ -168,6 +168,12 @@ struct Counter {
 /// Run them. `Err` names the first thing that was not true.
 pub(crate) fn run() -> Result<Report, &'static str> {
     check_the_native_range_is_not_a_linux_one()?;
+    // First of the channel checks, so a read that stops answering from its
+    // queue fails here, on this rule, and not in a check built on it.
+    check_messages_before_the_close_are_read_first()?;
+    crate::console::println!(
+        "  lastmsg  3 messages a peer wrote before closing read in order, then its close"
+    );
 
     // Twice, measured on the second, for the reason `syscall::check::run`
     // gives: the heap keeps a page of each size class the first run touched.
@@ -1704,6 +1710,42 @@ static WAKER: SpinLock<Option<(Arc<Process>, Handle)>> = SpinLock::new(None);
 /// until it does. What a woken wait is judged against: it must come back
 /// after this, not merely some time after it began.
 static WRITTEN_AT: AtomicU64 = AtomicU64::new(0);
+
+/// A peer that writes three messages and closes has all three read, in
+/// order, before a read is told it closed: the fourth.
+///
+/// The rule the net ring's REFUSED was lost against under WHPX (FX-1151,
+/// F-54). The write and close landing inside a read, which is how it was
+/// lost, cannot be scheduled on demand; F-54 argues it closed, and this
+/// holds the rule the argument rests on.
+///
+/// Verifies: L.object.19
+fn check_messages_before_the_close_are_read_first() -> Result<(), &'static str> {
+    const SENT: [&[u8]; 3] = [b"one", b"two", b"three"];
+    let (reader, writer) =
+        Endpoint::pair().map_err(|_| "no memory for the last-message check's channel")?;
+    for bytes in SENT {
+        writer
+            .write(bytes.to_vec(), 0, || {
+                Ok::<Vec<object::Transfer>, core::convert::Infallible>(Vec::new())
+            })
+            .map_err(|_| "the last-message check's peer could not write")?;
+    }
+    drop(writer);
+    for bytes in SENT {
+        match reader.read(CHANNEL_MAX_BYTES, 0, false) {
+            Ok(message) if message.bytes == bytes => {}
+            Err(ReadError::PeerClosed) => {
+                return Err("a read told the peer closed with its messages still queued");
+            }
+            _ => return Err("a closed peer's messages were not read back in order"),
+        }
+    }
+    match reader.read(CHANNEL_MAX_BYTES, 0, false) {
+        Err(ReadError::PeerClosed) => Ok(()),
+        _ => Err("an empty channel whose peer closed did not say so"),
+    }
+}
 
 /// A kernel thread that writes one empty message after a delay, so a wait
 /// has something other than its deadline to end it.
