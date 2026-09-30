@@ -391,3 +391,28 @@ pub(crate) fn complete(acknowledgement: u32) {
 pub(crate) fn send_sgi_to_others() {
     cpu::write_icc_sgi1r(SGI1R_ALL_BUT_SELF | (u64::from(IPI_SGI) << SGI1R_INTID_SHIFT));
 }
+
+/// Interrupt the one core whose `MPIDR_EL1` affinity is `mpidr` on
+/// [`IPI_SGI`], by affinity routing: its Aff3, Aff2 and Aff1 in their fields
+/// of `ICC_SGI1R_EL1` and its Aff0 as a bit of the target list, with the
+/// interrupt routing mode clear.
+///
+/// # Errors
+///
+/// An Aff0 of 16 or more, which a target list reaches only through the range
+/// selector this driver does not use: the caller broadcasts.
+pub(crate) fn send_sgi_to(mpidr: u64) -> Result<(), &'static str> {
+    let field = |shift: u32| (mpidr >> shift) & 0xFF;
+    let aff0 = field(0);
+    if aff0 >= 16 {
+        return Err("the core's Aff0 is past a target list's sixteen");
+    }
+    cpu::write_icc_sgi1r(
+        (field(32) << 48)
+            | (field(16) << 32)
+            | (u64::from(IPI_SGI) << SGI1R_INTID_SHIFT)
+            | (field(8) << 16)
+            | (1 << aff0),
+    );
+    Ok(())
+}

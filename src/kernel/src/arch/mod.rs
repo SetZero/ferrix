@@ -72,12 +72,12 @@ pub(crate) use aarch64::{
     enable_interrupts, enter_user, flush_tlb, forbid_user_access, frame_pointer, halt, hardware_id,
     hardware_random, identity_map_live, identity_root, image_abi, init_console, init_interrupts,
     init_traps, install_user_root, interrupts_enabled, ipi_irq, kernel_write_protected,
-    mask_interrupt, msi_allocate, msi_doorbell, permit_user_access, prepare_stack,
-    prepare_user_root, read_console_byte, report_trap, reset, reset_user_state, restore_user_state,
-    resume_user, save_user_state, send_ipi_to_others, service_interrupts, set_cpu_local,
-    set_thread_area, shutdown, switch_to, system_call, take_console_byte, thread_area, timer_arm,
-    timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt, user_hwcaps, user_platform,
-    wait_for_interrupt, wait_for_work,
+    mask_interrupt, msi_allocate, msi_doorbell, permit_user_access, polls_before_halt,
+    prepare_stack, prepare_user_root, read_console_byte, report_trap, reset, reset_user_state,
+    restore_user_state, resume_user, save_user_state, send_ipi_to_others, service_interrupts,
+    set_cpu_local, set_thread_area, shutdown, switch_to, system_call, take_console_byte,
+    thread_area, timer_arm, timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt,
+    user_hwcaps, user_platform, wait_for_interrupt, wait_for_work,
 };
 #[cfg(target_arch = "arm")]
 pub(crate) use armv7a::{
@@ -92,12 +92,12 @@ pub(crate) use armv7a::{
     enable_interrupts, enter_user, flush_tlb, forbid_user_access, frame_pointer, halt, hardware_id,
     hardware_random, identity_map_live, identity_root, image_abi, init_console, init_interrupts,
     init_traps, install_user_root, interrupts_enabled, ipi_irq, kernel_write_protected,
-    mask_interrupt, msi_allocate, msi_doorbell, permit_user_access, prepare_stack,
-    prepare_user_root, read_console_byte, report_trap, reset, reset_user_state, restore_user_state,
-    resume_user, save_user_state, send_ipi_to_others, service_interrupts, set_cpu_local,
-    set_thread_area, shutdown, switch_to, system_call, take_console_byte, thread_area, timer_arm,
-    timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt, user_hwcaps, user_platform,
-    wait_for_interrupt, wait_for_work,
+    mask_interrupt, msi_allocate, msi_doorbell, permit_user_access, polls_before_halt,
+    prepare_stack, prepare_user_root, read_console_byte, report_trap, reset, reset_user_state,
+    restore_user_state, resume_user, save_user_state, send_ipi_to_others, service_interrupts,
+    set_cpu_local, set_thread_area, shutdown, switch_to, system_call, take_console_byte,
+    thread_area, timer_arm, timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt,
+    user_hwcaps, user_platform, wait_for_interrupt, wait_for_work,
 };
 // A signal return page, for an architecture without a vDSO its programs
 // could read: ARMv7-A's (`syscall::sigpage`, F-48).
@@ -226,12 +226,12 @@ pub(crate) use x86_64::{
     enable_interrupts, enter_user, flush_tlb, forbid_user_access, frame_pointer, halt, hardware_id,
     hardware_random, identity_map_live, identity_root, image_abi, init_console, init_interrupts,
     init_traps, install_user_root, interrupts_enabled, ipi_irq, kernel_write_protected,
-    mask_interrupt, msi_allocate, msi_doorbell, permit_user_access, prepare_stack,
-    prepare_user_root, read_console_byte, report_trap, reset, reset_user_state, restore_user_state,
-    resume_user, save_user_state, send_ipi_to_others, service_interrupts, set_cpu_local,
-    set_thread_area, shutdown, switch_to, system_call, take_console_byte, thread_area, timer_arm,
-    timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt, user_hwcaps, user_platform,
-    wait_for_interrupt, wait_for_work,
+    mask_interrupt, msi_allocate, msi_doorbell, permit_user_access, polls_before_halt,
+    prepare_stack, prepare_user_root, read_console_byte, report_trap, reset, reset_user_state,
+    restore_user_state, resume_user, save_user_state, send_ipi_to_others, service_interrupts,
+    set_cpu_local, set_thread_area, shutdown, switch_to, system_call, take_console_byte,
+    thread_area, timer_arm, timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt,
+    user_hwcaps, user_platform, wait_for_interrupt, wait_for_work,
 };
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{

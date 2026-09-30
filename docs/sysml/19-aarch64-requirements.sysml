@@ -337,17 +337,23 @@ package FerrixAarch64Requirements {
                 "arch::aarch64::cpu::read_icc_iar1", "arch::aarch64::cpu::write_icc_eoir1");
         }
         requirement <'L.aarch64.19'> processorInterruptsAreSent : ItemLowLevel {
-            attribute :>> statement = "send_ipi_to_others and send_ipi_to shall
-                interrupt the other processors on the IPI line after ordering the
-                sender's stores before the interrupt, by the distributor on a
-                GICv2 and ICC_SGI1R_EL1 on a GICv3.";
+            attribute :>> statement = "send_ipi_to_others shall interrupt the other
+                processors on the IPI line, and send_ipi_to the one processor whose
+                MPIDR affinity it is given and no other -- by GICD_SGIR's target
+                list on a GICv2, ICC_SGI1R_EL1's affinity fields and target list on a
+                GICv3 -- or answer an error where the controller cannot name it
+                alone; each after ordering the sender's stores before the
+                interrupt.";
             attribute :>> criterion = "The shootdown check's flushes reach every
-                processor (H.MEM.7, smp/check.rs); a check that an IPI arrives on
-                each other core and on none twice is not written.";
+                processor (H.MEM.7, smp/check.rs); with four processors each other
+                one kicked 8 times through interrupt_one takes all 8 and the rest
+                none (the `kick` line).";
             attribute :>> parent = "H.MEM.7";
             attribute :>> unit = ("arch::aarch64::send_ipi_to_others", "arch::aarch64::send_ipi_to",
                 "arch::aarch64::ipi_irq", "arch::aarch64::gic::send_sgi_to_others",
+                "arch::aarch64::gic::send_sgi_to",
                 "arch::aarch64::gic::gicv3::send_sgi_to_others",
+                "arch::aarch64::gic::gicv3::send_sgi_to",
                 "arch::aarch64::cpu::write_icc_sgi1r", "arch::aarch64::cpu::dsb_ishst");
         }
         requirement <'L.aarch64.20'> itsTranslatesMessages : ItemLowLevel {

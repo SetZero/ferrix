@@ -335,6 +335,20 @@ pub(crate) fn send_sgi_to_others() {
     }
 }
 
+/// Interrupt the one core whose `MPIDR_EL1` affinity is `mpidr` on
+/// [`IPI_SGI`].
+///
+/// # Errors
+///
+/// When the controller cannot name that core alone: the caller broadcasts.
+pub(crate) fn send_sgi_to(mpidr: u64) -> Result<(), &'static str> {
+    if is_v3() {
+        gicv3::send_sgi_to(mpidr)
+    } else {
+        gicv2::send_sgi_to(mpidr)
+    }
+}
+
 /// Take an interrupt the device whose writes carry requester ID `device` can
 /// raise by message: an LPI through a GICv3's ITS, which translates by the
 /// device, or an SPI through a `GICv2m` frame, which does not.

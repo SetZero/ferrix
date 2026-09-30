@@ -924,6 +924,13 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
         smp.counter_round,
         smp.lost,
     );
+    if smp.kicked > 0 {
+        println!(
+            "  kick     {} processors kicked alone, 8 times each: each took every kick and the \
+             others none",
+            smp.kicked,
+        );
+    }
     println!(
         "  stage 4  {} processors online, a contended counter came to {} of {}",
         cpus.online(),
@@ -1007,6 +1014,13 @@ fn start_scheduler(cpus: &'static smp::Topology) {
             report.sync.ran_on,
             report.sync.moved,
             report.sync.rechecked,
+        );
+    }
+    if let Some(poll) = report.sync.poll {
+        println!(
+            "  poll     an idle processor polls before it halts: seen polling in {} of 16 \
+             rounds, {} kicks found one polling and sent no interrupt, and every task kicked ran",
+            poll.seen, poll.absorbed,
         );
     }
     println!(

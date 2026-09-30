@@ -46,6 +46,9 @@ pub(crate) struct Report {
     pub(crate) counter_round: u64,
     /// Updates the same count lost without the lock.
     pub(crate) lost: u64,
+    /// Processors kicked alone, every kick taken by them and none by the
+    /// others: zero on a machine of fewer than three.
+    pub(crate) kicked: u64,
 }
 
 /// Run the checks.
@@ -61,6 +64,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     shootdown(&mut report)?;
     grace(topology, &mut report)?;
     contended(topology, &mut report)?;
+    a_kick_reaches_its_target_alone(topology, &mut report)?;
     Ok(report)
 }
 
@@ -633,6 +637,66 @@ fn everywhere(topology: &Topology, report: &mut Report) -> Result<(), &'static s
 
     report.rounds = ROUNDS;
     report.ipis = topology.cpus().iter().map(PerCpu::ipis_taken).sum::<u64>() - ipis_before;
+    Ok(())
+}
+
+/// Kicks sent to each processor by [`a_kick_reaches_its_target_alone`].
+const KICKS: u64 = 8;
+
+/// How long a kicked processor is given to take its interrupt.
+const KICK_PATIENCE_NANOS: u64 = 2_000_000_000;
+
+/// A kick interrupts the one processor it names and no other.
+///
+/// Each other processor is kicked [`KICKS`] times through
+/// [`super::interrupt_one`], each time once the last was taken, while every
+/// secondary waits for work: the kicked one must take every kick, and the
+/// rest none. So a kick that is a broadcast in disguise fails here, which
+/// `send_ipi_to` on both Arm architectures was until it named its target in
+/// the GIC's target list. Needs three processors, since with two a broadcast
+/// from one reaches only the other; with fewer it checks nothing and says so.
+///
+/// Verifies: L.smp.32, L.aarch64.19
+fn a_kick_reaches_its_target_alone(
+    topology: &Topology,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    let me = super::this_cpu().map(|record| record.logical);
+    let online: Vec<&PerCpu> = topology
+        .cpus()
+        .iter()
+        .filter(|cpu| cpu.is_online())
+        .collect();
+    if online.len() < 3 {
+        return Ok(());
+    }
+    for target in online.iter().filter(|cpu| Some(cpu.logical) != me) {
+        let before: Vec<u64> = online.iter().map(|cpu| cpu.ipis_taken()).collect();
+        for _ in 0..KICKS {
+            let taken = target.ipis_taken();
+            super::interrupt_one(target.logical);
+            spin_until(
+                KICK_PATIENCE_NANOS,
+                || target.ipis_taken() > taken,
+                "a kicked processor never took its interrupt",
+            )?;
+        }
+        let strays: u64 = online
+            .iter()
+            .zip(&before)
+            .filter(|(cpu, _)| cpu.logical != target.logical && Some(cpu.logical) != me)
+            .map(|(cpu, was)| cpu.ipis_taken().saturating_sub(*was))
+            .sum();
+        if strays != 0 {
+            crate::console::println!(
+                "  kick     {KICKS} kicks to processor {} interrupted the other secondaries {strays} \
+                 times",
+                target.logical,
+            );
+            return Err("a kick to one processor interrupted others");
+        }
+        report.kicked += 1;
+    }
     Ok(())
 }
 

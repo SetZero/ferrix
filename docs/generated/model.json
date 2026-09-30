@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "47e4d6f5f9dccfa7c784be9f08a99581bfc2418a4a4ad0284d5142814677016a",
+  "digest": "de9e77295beffb6fa1b8dd45cbdeaeef3facbfa3689b000150a386b28389148f",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -96,8 +96,8 @@
     }
   ],
   "summary": {
-    "packages": 104,
-    "elements": 5292,
+    "packages": 105,
+    "elements": 5298,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -31606,6 +31606,75 @@
               ]
             }
           ]
+        },
+        {
+          "name": "Idle",
+          "qualifiedName": "FerrixSchedRequirements::Idle",
+          "kind": "package",
+          "doc": "src/kernel/src/sched/mod.rs: what an idle processor does before it halts, and how a kick reaches it meanwhile.",
+          "source": {
+            "file": "docs/sysml/15-sched-requirements.sysml",
+            "line": 84
+          },
+          "children": [
+            {
+              "name": "aPollingProcessorIsKickedByItsFlag",
+              "qualifiedName": "FerrixSchedRequirements::Idle::aPollingProcessorIsKickedByItsFlag",
+              "kind": "requirement",
+              "shortName": "L.sched.5",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 88
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Idle::aPollingProcessorIsKickedByItsFlag",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Where arch::polls_before_halt says so, an idle processor shall poll its reschedule flag for at most HALT_POLL_NANOS (50 us) of its idle task's time before it halts, advertising that it polls; kick shall then set the flag and send no interrupt; and the poll shall end, and its processor look for work again rather than halt, when an interrupt is taken during it.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 94
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Idle::aPollingProcessorIsKickedByItsFlag",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A task confined to processor 1, woken 8 times from processor 0 each once it is asleep and processor 1 is seen polling, runs every time, and at least one of the kicks found the processor polling and sent no interrupt (the `poll` line).\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 98
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Idle::aPollingProcessorIsKickedByItsFlag",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 99
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Idle::aPollingProcessorIsKickedByItsFlag",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::halt_poll\", \"sched::kick\", \"sched::preempt_on_irq_exit\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 101
+                  }
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -52626,10 +52695,10 @@
                   "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
                   "kind": "attribute",
                   "redefines": "statement",
-                  "value": "\"send_ipi_to_others and send_ipi_to shall interrupt the other processors on the IPI line after ordering the sender's stores before the interrupt, by the distributor on a GICv2 and ICC_SGI1R_EL1 on a GICv3.\"",
+                  "value": "\"send_ipi_to_others shall interrupt the other processors on the IPI line, and send_ipi_to the one processor whose MPIDR affinity it is given and no other -- by GICD_SGIR's target list on a GICv2, ICC_SGI1R_EL1's affinity fields and target list on a GICv3 -- or answer an error where the controller cannot name it alone; each after ordering the sender's stores before the interrupt.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 343
+                    "line": 346
                   }
                 },
                 {
@@ -52637,10 +52706,10 @@
                   "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
                   "kind": "attribute",
                   "redefines": "criterion",
-                  "value": "\"The shootdown check's flushes reach every processor (H.MEM.7, smp/check.rs); a check that an IPI arrives on each other core and on none twice is not written.\"",
+                  "value": "\"The shootdown check's flushes reach every processor (H.MEM.7, smp/check.rs); with four processors each other one kicked 8 times through interrupt_one takes all 8 and the rest none (the `kick` line).\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 346
+                    "line": 350
                   }
                 },
                 {
@@ -52651,7 +52720,7 @@
                   "value": "\"H.MEM.7\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 347
+                    "line": 351
                   }
                 },
                 {
@@ -52659,10 +52728,10 @@
                   "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
                   "kind": "attribute",
                   "redefines": "unit",
-                  "value": "(\"arch::aarch64::send_ipi_to_others\", \"arch::aarch64::send_ipi_to\", \"arch::aarch64::ipi_irq\", \"arch::aarch64::gic::send_sgi_to_others\", \"arch::aarch64::gic::gicv3::send_sgi_to_others\", \"arch::aarch64::cpu::write_icc_sgi1r\", \"arch::aarch64::cpu::dsb_ishst\")",
+                  "value": "(\"arch::aarch64::send_ipi_to_others\", \"arch::aarch64::send_ipi_to\", \"arch::aarch64::ipi_irq\", \"arch::aarch64::gic::send_sgi_to_others\", \"arch::aarch64::gic::send_sgi_to\", \"arch::aarch64::gic::gicv3::send_sgi_to_others\", \"arch::aarch64::gic::gicv3::send_sgi_to\", \"arch::aarch64::cpu::write_icc_sgi1r\", \"arch::aarch64::cpu::dsb_ishst\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 351
+                    "line": 357
                   }
                 }
               ]
@@ -52675,7 +52744,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 353
+                "line": 359
               },
               "children": [
                 {
@@ -52686,7 +52755,7 @@
                   "value": "\"The ITS driver shall quiesce an ITS firmware left on, give it zeroed device and collection tables, a command queue and each core's LPI property and pending tables, and map a device's next event to a free LPI collected on the boot core, waiting for each command to be consumed.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 358
+                    "line": 364
                   }
                 },
                 {
@@ -52697,7 +52766,7 @@
                   "value": "\"Under boot-gicv3 the virtio devices' message interrupts arrive through the ITS; a check that a mapped event raises its LPI and only it is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 361
+                    "line": 367
                   }
                 },
                 {
@@ -52708,7 +52777,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 362
+                    "line": 368
                   }
                 },
                 {
@@ -52719,7 +52788,7 @@
                   "value": "(\"arch::aarch64::gic::gicv3_its::init\", \"arch::aarch64::gic::gicv3_its::bring_up\", \"arch::aarch64::gic::gicv3_its::enable_lpis\", \"arch::aarch64::gic::gicv3_its::pending_table\", \"arch::aarch64::gic::gicv3_its::set_attributes\", \"arch::aarch64::gic::gicv3_its::quiesce\", \"arch::aarch64::gic::gicv3_its::command_queue\", \"arch::aarch64::gic::gicv3_its::program_tables\", \"arch::aarch64::gic::gicv3_its::program_table\", \"arch::aarch64::gic::gicv3_its::allocate\", \"arch::aarch64::gic::gicv3_its::number\", \"arch::aarch64::gic::gicv3_its::Its::free_event\", \"arch::aarch64::gic::gicv3_its::Its::take\", \"arch::aarch64::gic::gicv3_its::Its::map_device\", \"arch::aarch64::gic::gicv3_its::Its::enable_property\", \"arch::aarch64::gic::gicv3_its::Its::submit\", \"arch::aarch64::gic::gicv3_its::zeroed\", \"arch::aarch64::gic::gicv3_its::order_for\", \"arch::aarch64::gic::gicv3_its::read64\", \"arch::aarch64::gic::gicv3_its::write64\", \"arch::aarch64::gic::msi_allocate\", \"arch::aarch64::msi_allocate\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 383
+                    "line": 389
                   }
                 }
               ]
@@ -52732,7 +52801,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 385
+                "line": 391
               },
               "children": [
                 {
@@ -52743,7 +52812,7 @@
                   "value": "\"gicv3_its::allocate shall refuse a device ID past the device table the ITS was given, rather than map it.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 387
+                    "line": 393
                   }
                 },
                 {
@@ -52754,7 +52823,7 @@
                   "value": "\"On the GICv3 boot with an ITS, asking for a vector for device ID u32::MAX is refused.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 389
+                    "line": 395
                   }
                 },
                 {
@@ -52765,7 +52834,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 390
+                    "line": 396
                   }
                 },
                 {
@@ -52776,7 +52845,7 @@
                   "value": "\"arch::aarch64::gic::gicv3_its::allocate\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 391
+                    "line": 397
                   }
                 }
               ]
@@ -52789,7 +52858,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 393
+                "line": 399
               },
               "children": [
                 {
@@ -52800,7 +52869,7 @@
                   "value": "\"msi_doorbell shall name the page a device's message writes land in -- the ITS's translater or the GICv2m frame -- so that an IOMMU domain maps it, and none on a machine with neither.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 397
+                    "line": 403
                   }
                 },
                 {
@@ -52811,7 +52880,7 @@
                   "value": "\"The iommu domain check's device writes its message through its domain (L.iommu); a check that the page named is the one the controller decodes is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 400
+                    "line": 406
                   }
                 },
                 {
@@ -52822,7 +52891,7 @@
                   "value": "\"H.DMA.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 401
+                    "line": 407
                   }
                 },
                 {
@@ -52833,7 +52902,7 @@
                   "value": "(\"arch::aarch64::msi_doorbell\", \"arch::aarch64::gic::msi_doorbell\", \"arch::aarch64::gic::gicv3_its::doorbell\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 403
+                    "line": 409
                   }
                 }
               ]
@@ -52846,7 +52915,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 405
+                "line": 411
               },
               "children": [
                 {
@@ -52857,7 +52926,7 @@
                   "value": "\"disable_interrupts shall mask debug, SError, IRQ and FIQ, enable_interrupts shall unmask IRQ alone, a saved DAIF shall be put back exactly by Irq::restore, and wait_for_work shall wait with IRQ masked and then unmask it, so that an interrupt pending before the wait ends it.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 410
+                    "line": 416
                   }
                 },
                 {
@@ -52868,7 +52937,7 @@
                   "value": "\"Every lock that masks interrupts restores the state it found; a check that a nested save and restore leaves DAIF as it was is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 413
+                    "line": 419
                   }
                 },
                 {
@@ -52879,7 +52948,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 414
+                    "line": 420
                   }
                 },
                 {
@@ -52890,7 +52959,7 @@
                   "value": "(\"arch::aarch64::enable_interrupts\", \"arch::aarch64::disable_interrupts\", \"arch::aarch64::wait_for_work\", \"arch::aarch64::wait_for_interrupt\", \"arch::aarch64::interrupts_enabled\", \"arch::aarch64::Irq::disable\", \"arch::aarch64::Irq::restore\", \"arch::aarch64::cpu::wfi\", \"arch::aarch64::cpu::wait_then_enable_interrupts\", \"arch::aarch64::cpu::disable_interrupts\", \"arch::aarch64::cpu::enable_interrupts\", \"arch::aarch64::cpu::read_daif\", \"arch::aarch64::cpu::write_daif\", \"arch::aarch64::halt\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 422
+                    "line": 428
                   }
                 }
               ]
@@ -52904,7 +52973,7 @@
           "doc": "src/kernel/src/arch/aarch64/timer.rs and its wrappers in mod.rs: the generic timer's virtual counter and comparator.",
           "source": {
             "file": "docs/sysml/19-aarch64-requirements.sysml",
-            "line": 426
+            "line": 432
           },
           "children": [
             {
@@ -52915,7 +52984,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 430
+                "line": 436
               },
               "children": [
                 {
@@ -52926,7 +52995,7 @@
                   "value": "\"timer::arm shall make the virtual timer fire once, nanos from now, by setting its comparator to the counter plus nanos in counter ticks and enabling it, and disarm shall mask it.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 434
+                    "line": 440
                   }
                 },
                 {
@@ -52937,7 +53006,7 @@
                   "value": "\"Stage 3's timer check: a one-shot armed for a millisecond fires, and has not fired again ten intervals later; then 250 ticks at a requested 1,000 Hz take a time the counter measures as within 25 per cent of that rate, every tick an interrupt a handler took.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 439
+                    "line": 445
                   }
                 },
                 {
@@ -52948,7 +53017,7 @@
                   "value": "\"H.SCHED.5\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 440
+                    "line": 446
                   }
                 },
                 {
@@ -52959,7 +53028,7 @@
                   "value": "(\"arch::aarch64::timer::arm\", \"arch::aarch64::timer::disarm\", \"arch::aarch64::timer_arm\", \"arch::aarch64::timer_disarm\", \"arch::aarch64::cpu::write_cntv_cval\", \"arch::aarch64::cpu::write_cntv_ctl\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 443
+                    "line": 449
                   }
                 }
               ]
@@ -52972,7 +53041,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 445
+                "line": 451
               },
               "children": [
                 {
@@ -52983,7 +53052,7 @@
                   "value": "\"timer::init and init_from_tree shall take the timer's interrupt as firmware describes it, a private one, and shall refuse a counter whose CNTFRQ_EL0 reads zero or that does not advance; counter_now shall read the counter after an isb.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 449
+                    "line": 455
                   }
                 },
                 {
@@ -52994,7 +53063,7 @@
                   "value": "\"Every boot reports the counter's frequency and ticks; a check that a zero frequency is refused is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 452
+                    "line": 458
                   }
                 },
                 {
@@ -53005,7 +53074,7 @@
                   "value": "\"H.SCHED.5\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 453
+                    "line": 459
                   }
                 },
                 {
@@ -53016,7 +53085,7 @@
                   "value": "(\"arch::aarch64::timer::init\", \"arch::aarch64::timer::init_from_tree\", \"arch::aarch64::timer::finish\", \"arch::aarch64::timer::irq\", \"arch::aarch64::timer::counter_now\", \"arch::aarch64::timer::counter_hz\", \"arch::aarch64::timer_irq\", \"arch::aarch64::counter_now\", \"arch::aarch64::counter_hz\", \"arch::aarch64::cpu::read_cntfrq\", \"arch::aarch64::cpu::read_cntvct\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 459
+                    "line": 465
                   }
                 }
               ]
@@ -53029,7 +53098,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 461
+                "line": 467
               },
               "children": [
                 {
@@ -53040,7 +53109,7 @@
                   "value": "\"allow_user_counter shall let EL0 read the virtual counter and CNTFRQ_EL0, as Linux does, and nothing else of the timer.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 464
+                    "line": 470
                   }
                 },
                 {
@@ -53051,7 +53120,7 @@
                   "value": "\"A program's clock_gettime through musl reads the counter; a check that EL0 can read CNTVCT_EL0 and cannot write the comparator is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 467
+                    "line": 473
                   }
                 },
                 {
@@ -53062,7 +53131,7 @@
                   "value": "\"H.MEM.2\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 468
+                    "line": 474
                   }
                 },
                 {
@@ -53073,7 +53142,7 @@
                   "value": "(\"arch::aarch64::cpu::allow_user_counter\", \"arch::aarch64::vdso_spec\", \"arch::aarch64::vdso_can_read_counter\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 470
+                    "line": 476
                   }
                 }
               ]
@@ -53087,7 +53156,7 @@
           "doc": "src/kernel/src/arch/aarch64/console.rs and its wrappers in mod.rs: which console the command line names -- the PL011 (arch/arm_common), a 16550 at an MMIO address, or a ramoops record -- and bytes to and from it.",
           "source": {
             "file": "docs/sysml/19-aarch64-requirements.sysml",
-            "line": 474
+            "line": 480
           },
           "children": [
             {
@@ -53098,7 +53167,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 480
+                "line": 486
               },
               "children": [
                 {
@@ -53109,7 +53178,7 @@
                   "value": "\"ns16550_port shall read `uart8250,mmio,<address>` as a 16550 at that address only when the address is hexadecimal with a 0x prefix, and shall refuse a port in I/O space and any other console's value. The ramoops zone's value is console's (L.console.40).\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 485
+                    "line": 491
                   }
                 },
                 {
@@ -53120,7 +53189,7 @@
                   "value": "\"`uart8250,mmio,0x3f8` is read as the port at 0x3f8; `uart8250,mmio,3f8`, `uart8250,mmio,0x`, `uart8250,io,0x3f8` and a ramoops value are each refused.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 488
+                    "line": 494
                   }
                 },
                 {
@@ -53131,7 +53200,7 @@
                   "value": "\"H.BOOT.8\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 489
+                    "line": 495
                   }
                 },
                 {
@@ -53142,7 +53211,7 @@
                   "value": "\"arch::aarch64::console::ns16550_port\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 490
+                    "line": 496
                   }
                 }
               ]
@@ -53155,7 +53224,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 492
+                "line": 498
               },
               "children": [
                 {
@@ -53166,7 +53235,7 @@
                   "value": "\"console::init shall map the console the command line names as device memory before the first byte: a 16550's page at its address, a ramoops zone whole, continuing the loader's record where its signature is, or else the PL011.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 496
+                    "line": 502
                   }
                 },
                 {
@@ -53177,7 +53246,7 @@
                   "value": "\"QEMU's boots print through the PL011; the crosvm guest's log (~/.local/share/ferrix/pixel7/vm-20260926-140648) through its 16550; the Pixel 7's boot log through its ramoops zone after the watchdog reset. None of the three is a check.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 500
+                    "line": 506
                   }
                 },
                 {
@@ -53188,7 +53257,7 @@
                   "value": "(\"H.BOOT.8\", \"H.FAIL.1\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 501
+                    "line": 507
                   }
                 },
                 {
@@ -53199,7 +53268,7 @@
                   "value": "(\"arch::aarch64::console::init\", \"arch::aarch64::init_console\", \"arch::aarch64::console::is_ns16550\", \"arch::aarch64::console::is_ramoops\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 503
+                    "line": 509
                   }
                 }
               ]
@@ -53212,7 +53281,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 505
+                "line": 511
               },
               "children": [
                 {
@@ -53223,7 +53292,7 @@
                   "value": "\"write_byte and put shall hand a byte to the console the command line named -- the PL011, the 16550 once its holding register has room within a bounded wait, or the ramoops record, dropping it once the zone is full -- and drain shall wait, bounded, until the port has sent everything.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 510
+                    "line": 516
                   }
                 },
                 {
@@ -53234,7 +53303,7 @@
                   "value": "\"Every gate reads the boot's log from the serial port, FERRIX-BOOT-OK among it; the 16550 and ramoops arms run only on the crosvm guest and the Pixel 7.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 513
+                    "line": 519
                   }
                 },
                 {
@@ -53245,7 +53314,7 @@
                   "value": "(\"H.BOOT.8\", \"H.FAIL.1\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 514
+                    "line": 520
                   }
                 },
                 {
@@ -53256,7 +53325,7 @@
                   "value": "(\"arch::aarch64::console::write_byte\", \"arch::aarch64::console::put\", \"arch::aarch64::console::drain\", \"arch::aarch64::console::transmit_room\", \"arch::aarch64::console::transmit_interrupt\", \"arch::aarch64::console::transmit_buffer\", \"arch::aarch64::console::ramoops_append\", \"arch::aarch64::console::ramoops_read\", \"arch::aarch64::console::ramoops_write\", \"arch::aarch64::console::read_u8\", \"arch::aarch64::console::write_u8\", \"arch::aarch64::drain_console\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 521
+                    "line": 527
                   }
                 }
               ]
@@ -53269,7 +53338,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 523
+                "line": 529
               },
               "children": [
                 {
@@ -53280,7 +53349,7 @@
                   "value": "\"read_byte shall give a byte the port received, none from a ramoops record, and the receive interrupt shall be enabled at the controller and in the port only for the PL011, whose bytes read_console_byte then takes from the receive ring.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 528
+                    "line": 534
                   }
                 },
                 {
@@ -53291,7 +53360,7 @@
                   "value": "\"The console input check runs the ring (console/input.rs); a check that a byte the host sends reaches a reader on this architecture is test-shell's typing, not a check.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 532
+                    "line": 538
                   }
                 },
                 {
@@ -53302,7 +53371,7 @@
                   "value": "\"H.BOOT.8\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 533
+                    "line": 539
                   }
                 },
                 {
@@ -53313,7 +53382,7 @@
                   "value": "(\"arch::aarch64::console::read_byte\", \"arch::aarch64::console::enable_receive_interrupt\", \"arch::aarch64::read_console_byte\", \"arch::aarch64::take_console_byte\", \"arch::aarch64::console_receive_irq\", \"arch::aarch64::enable_console_receive\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 537
+                    "line": 543
                   }
                 }
               ]
@@ -53327,7 +53396,7 @@
           "doc": "The translation half of mod.rs and cpu.rs: the loader's identity map dropped, a program's tables installed in TTBR0_EL1 beside the kernel's in TTBR1_EL1, the TLB invalidated, and the cache maintenance code and shared memory need.",
           "source": {
             "file": "docs/sysml/19-aarch64-requirements.sysml",
-            "line": 541
+            "line": 547
           },
           "children": [
             {
@@ -53338,7 +53407,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 547
+                "line": 553
               },
               "children": [
                 {
@@ -53349,7 +53418,7 @@
                   "value": "\"install_user_root shall translate the lower half through a program's root in TTBR0_EL1 and drop this processor's cached user translations, and uninstall_user_root shall stop translating the lower half, so that a kernel thread reaches no program's memory.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 552
+                    "line": 558
                   }
                 },
                 {
@@ -53360,7 +53429,7 @@
                   "value": "\"Two programs mapping one address reach their own frames (H.MEM.1, checked generically); a check that a kernel thread's lower-half access faults is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 555
+                    "line": 561
                   }
                 },
                 {
@@ -53371,7 +53440,7 @@
                   "value": "\"H.MEM.1\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 556
+                    "line": 562
                   }
                 },
                 {
@@ -53382,7 +53451,7 @@
                   "value": "(\"arch::aarch64::install_user_root\", \"arch::aarch64::uninstall_user_root\", \"arch::aarch64::prepare_user_root\", \"arch::aarch64::cpu::write_ttbr0\", \"arch::aarch64::cpu::disable_ttbr0\", \"arch::aarch64::cpu::flush_user_tlb\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 560
+                    "line": 566
                   }
                 }
               ]
@@ -53395,7 +53464,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 562
+                "line": 568
               },
               "children": [
                 {
@@ -53406,7 +53475,7 @@
                   "value": "\"drop_identity_map shall stop the lower half translating through the loader's identity map, and identity_map_live shall read from TCR_EL1 and TTBR0_EL1 whether it still does.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 566
+                    "line": 572
                   }
                 },
                 {
@@ -53417,7 +53486,7 @@
                   "value": "\"Stage 1 requires identity_map_live false after the drop; it is in main.rs, product code.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 568
+                    "line": 574
                   }
                 },
                 {
@@ -53428,7 +53497,7 @@
                   "value": "\"H.BOOT.1\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 569
+                    "line": 575
                   }
                 },
                 {
@@ -53439,7 +53508,7 @@
                   "value": "(\"arch::aarch64::drop_identity_map\", \"arch::aarch64::identity_map_live\", \"arch::aarch64::identity_root\", \"arch::aarch64::kernel_write_protected\", \"arch::aarch64::cpu::read_tcr\", \"arch::aarch64::cpu::read_ttbr0\", \"arch::aarch64::cpu::read_mair\", \"arch::aarch64::cpu::read_sctlr\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 574
+                    "line": 580
                   }
                 }
               ]
@@ -53452,7 +53521,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 576
+                "line": 582
               },
               "children": [
                 {
@@ -53463,7 +53532,7 @@
                   "value": "\"flush_tlb and flush_tlb_page shall make every table write before them visible to the walker (dsb ishst) and then invalidate the whole TLB, or the page's entries for every ASID, inner-shareable, so that every core drops them.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 580
+                    "line": 586
                   }
                 },
                 {
@@ -53474,7 +53543,7 @@
                   "value": "\"The shootdown checks (smp/check.rs) assert that a table waits for its shootdown and that a flushed translation is gone on every processor, across architectures; this architecture's instructions are not asserted apart.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 584
+                    "line": 590
                   }
                 },
                 {
@@ -53485,7 +53554,7 @@
                   "value": "\"H.MEM.7\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 585
+                    "line": 591
                   }
                 },
                 {
@@ -53496,7 +53565,7 @@
                   "value": "(\"arch::aarch64::flush_tlb\", \"arch::aarch64::flush_tlb_page\", \"arch::aarch64::cpu::flush_tlb\", \"arch::aarch64::cpu::flush_tlb_page\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 587
+                    "line": 593
                   }
                 }
               ]
@@ -53509,7 +53578,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 589
+                "line": 595
               },
               "children": [
                 {
@@ -53520,7 +53589,7 @@
                   "value": "\"clean_to_poc and clean_invalidate_to_poc shall write back, and drop, every data cache line covering a range by the smallest line CTR_EL0 gives, and sync_instructions shall make instructions written through the data side the ones every core fetches.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 594
+                    "line": 600
                   }
                 },
                 {
@@ -53531,7 +53600,7 @@
                   "value": "\"A secondary that starts with its caches off reads the start block the boot core wrote, and a program's page of code runs as written; on QEMU, which models no caches, neither can fail, and a real core's evidence is the board's boot.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 598
+                    "line": 604
                   }
                 },
                 {
@@ -53542,7 +53611,7 @@
                   "value": "\"H.MEM.6\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 599
+                    "line": 605
                   }
                 },
                 {
@@ -53553,7 +53622,7 @@
                   "value": "(\"arch::aarch64::cpu::clean_to_poc\", \"arch::aarch64::cpu::clean_invalidate_to_poc\", \"arch::aarch64::cpu::sync_instructions\", \"arch::aarch64::cpu::data_line\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 602
+                    "line": 608
                   }
                 }
               ]
@@ -53566,7 +53635,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 604
+                "line": 610
               },
               "children": [
                 {
@@ -53577,7 +53646,7 @@
                   "value": "\"enable_user_access_protection shall turn on PAN where the core implements it, and permit_user_access and forbid_user_access shall clear and set PSTATE.PAN around a user copy alone.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 608
+                    "line": 614
                   }
                 },
                 {
@@ -53588,7 +53657,7 @@
                   "value": "\"The boot line says PAN on under QEMU's max CPU; a check that a kernel read of a user page outside a copy faults is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 611
+                    "line": 617
                   }
                 },
                 {
@@ -53599,7 +53668,7 @@
                   "value": "\"H.MEM.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 612
+                    "line": 618
                   }
                 },
                 {
@@ -53610,7 +53679,7 @@
                   "value": "(\"arch::aarch64::cpu::enable_user_access_protection\", \"arch::aarch64::cpu::permit_user_access\", \"arch::aarch64::cpu::forbid_user_access\", \"arch::aarch64::permit_user_access\", \"arch::aarch64::forbid_user_access\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 615
+                    "line": 621
                   }
                 }
               ]
@@ -53623,7 +53692,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 617
+                "line": 623
               },
               "children": [
                 {
@@ -53634,7 +53703,7 @@
                   "value": "\"dma_barrier shall order every memory access before it against every one after it as a DMA master observes them, both ways -- dmb osh, the outer-shareable domain a device sits in -- so that the item's virtqueue publishes a descriptor before the index that counts it, reads a used entry only after the index that counts it, and rings the doorbell only after the index is published.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 623
+                    "line": 629
                   }
                 },
                 {
@@ -53645,7 +53714,7 @@
                   "value": "\"No check can fail without it on the machines the suite boots: QEMU's TCG makes a core's accesses in program order. The instruction is argued (F-44). A real core's evidence is the Pixel 7's crosvm guest running stage 10's virtio check, when the hardware may be used (F-44's BACKLOG row): the DK1 has no PCI and no virtio. H.DMA.2 is its parent because the item's virtqueue exists only to drive that requirement's out-of-domain probe.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 630
+                    "line": 636
                   }
                 },
                 {
@@ -53656,7 +53725,7 @@
                   "value": "\"H.DMA.2\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 631
+                    "line": 637
                   }
                 },
                 {
@@ -53667,7 +53736,7 @@
                   "value": "\"arch::aarch64::cpu::dma_barrier\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 632
+                    "line": 638
                   }
                 }
               ]
@@ -53681,7 +53750,7 @@
           "doc": "src/kernel/src/arch/aarch64/smp.rs and the processor half of cpu.rs: which processors firmware says can be started, starting them through PSCI, and what each core says it has.",
           "source": {
             "file": "docs/sysml/19-aarch64-requirements.sysml",
-            "line": 636
+            "line": 642
           },
           "children": [
             {
@@ -53692,7 +53761,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 641
+                "line": 647
               },
               "children": [
                 {
@@ -53703,7 +53772,7 @@
                   "value": "\"describe_cpus shall name every processor the MADT's enabled GIC CPU interfaces, or the device tree's /cpus with PSCI as its enable method, describe, by affinity, with this one as the boot processor, and the boot processor alone under nosmp.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 646
+                    "line": 652
                   }
                 },
                 {
@@ -53714,7 +53783,7 @@
                   "value": "\"The boot line counts the cores QEMU was given (4, and 1 under boot-nosmp); it is judged by test-boot's lines, not a check.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 649
+                    "line": 655
                   }
                 },
                 {
@@ -53725,7 +53794,7 @@
                   "value": "\"H.BOOT.5\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 650
+                    "line": 656
                   }
                 },
                 {
@@ -53736,7 +53805,7 @@
                   "value": "(\"arch::aarch64::smp::describe_cpus\", \"arch::aarch64::smp::cpus_from_madt\", \"arch::aarch64::smp::cpus_from_tree\", \"arch::aarch64::smp::hardware_id\", \"arch::aarch64::cpu::read_mpidr\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 653
+                    "line": 659
                   }
                 }
               ]
@@ -53749,7 +53818,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 655
+                "line": 661
               },
               "children": [
                 {
@@ -53760,7 +53829,7 @@
                   "value": "\"CpuStarter shall start a processor through PSCI CPU_ON on its own stack with an identity map and a start block whose registers are the boot core's, secondary_start shall bring it into the kernel, and finish shall take the identity map down only after every started core has reported in.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 660
+                    "line": 666
                   }
                 },
                 {
@@ -53771,7 +53840,7 @@
                   "value": "\"Every core described reports in; the count is judged by stage 4's line in main.rs, product code.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 662
+                    "line": 668
                   }
                 },
                 {
@@ -53782,7 +53851,7 @@
                   "value": "\"H.BOOT.5\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 663
+                    "line": 669
                   }
                 },
                 {
@@ -53793,7 +53862,7 @@
                   "value": "(\"arch::aarch64::smp::CpuStarter::new\", \"arch::aarch64::smp::CpuStarter::start\", \"arch::aarch64::smp::CpuStarter::finish\", \"arch::aarch64::smp::secondary_start\", \"arch::aarch64::smp::psci\", \"arch::aarch64::smp::psci_conduit\", \"arch::aarch64::cpu::hvc_call\", \"arch::aarch64::cpu::smc_call\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 668
+                    "line": 674
                   }
                 }
               ]
@@ -53806,7 +53875,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 670
+                "line": 676
               },
               "children": [
                 {
@@ -53817,7 +53886,7 @@
                   "value": "\"user_hwcaps shall give a program the AT_HWCAP and AT_HWCAP2 bits arch/arm64 gives for what ID_AA64PFR0_EL1, ID_AA64ISAR0_EL1 and ID_AA64ISAR1_EL1 say the core has, and user_platform none.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 674
+                    "line": 680
                   }
                 },
                 {
@@ -53828,7 +53897,7 @@
                   "value": "\"The mapping is ferrix-linux-abi's hwcap, host-tested against Linux's bits; that the registers read here reach it is not checked on the machine.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 677
+                    "line": 683
                   }
                 },
                 {
@@ -53839,7 +53908,7 @@
                   "value": "\"H.TRAP.4\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 678
+                    "line": 684
                   }
                 },
                 {
@@ -53850,7 +53919,7 @@
                   "value": "(\"arch::aarch64::user_hwcaps\", \"arch::aarch64::user_platform\", \"arch::aarch64::cpu::read_id_aa64pfr0\", \"arch::aarch64::cpu::read_id_aa64isar0\", \"arch::aarch64::cpu::read_id_aa64isar1\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 681
+                    "line": 687
                   }
                 }
               ]
@@ -53864,7 +53933,7 @@
           "doc": "src/kernel/src/arch/aarch64/speculation.rs: what each core needs against Spectre v2, Spectre-BHB, Meltdown and speculative store bypass, from its own identification registers and Arm's lists, what firmware is asked, what is applied and read back, and the index clamp at the system call boundary.",
           "source": {
             "file": "docs/sysml/19-aarch64-requirements.sysml",
-            "line": 685
+            "line": 691
           },
           "children": [
             {
@@ -53875,7 +53944,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 692
+                "line": 698
               },
               "children": [
                 {
@@ -53886,7 +53955,7 @@
                   "value": "\"A core shall be given the Spectre-BHB loop count, the Spectre v2 safe listing, the Meltdown safe listing and the in-order classification Linux's proton-pack.c and cpufeature.c give its part, none of Arm's listings to a core another company designed, and no loop to a core whose branch history is not shared.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 698
+                    "line": 704
                   }
                 },
                 {
@@ -53897,7 +53966,7 @@
                   "value": "\"Each of the check's 12 cores -- ten of Arm's parts, one with ECBHB, one of Qualcomm's -- is given the figures listed for it, and the ECBHB core is reported unaffected by Spectre-BHB.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 702
+                    "line": 708
                   }
                 },
                 {
@@ -53908,7 +53977,7 @@
                   "value": "\"H.TRAP.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 703
+                    "line": 709
                   }
                 },
                 {
@@ -53919,7 +53988,7 @@
                   "value": "(\"arch::aarch64::speculation::Core::read\", \"arch::aarch64::speculation::Core::arm_part\", \"arch::aarch64::speculation::Core::v2_listed_safe\", \"arch::aarch64::speculation::Core::v2_unaffected\", \"arch::aarch64::speculation::Core::bhb_loops\", \"arch::aarch64::speculation::Core::meltdown_safe\", \"arch::aarch64::speculation::Core::in_order\", \"arch::aarch64::speculation::Exposure::v2\", \"arch::aarch64::speculation::Exposure::bypass\", \"arch::aarch64::speculation::Exposure::fmt\", \"arch::aarch64::speculation::CoreName::fmt\", \"arch::aarch64::speculation::read_midr\", \"arch::aarch64::speculation::read_id_aa64pfr1\", \"arch::aarch64::speculation::read_id_aa64mmfr1\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 717
+                    "line": 723
                   }
                 }
               ]
@@ -53932,7 +54001,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 719
+                "line": 725
               },
               "children": [
                 {
@@ -53943,7 +54012,7 @@
                   "value": "\"An SMCCC_ARCH_FEATURES status shall be read as ARM DEN 0028D defines it -- 0 required, 1 not required, -2 always on, anything else not supported -- and shall survive the record it is packed into.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 723
+                    "line": 729
                   }
                 },
                 {
@@ -53954,7 +54023,7 @@
                   "value": "\"Each of the five statuses the check tries is read as listed and comes back from its bits unchanged.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 725
+                    "line": 731
                   }
                 },
                 {
@@ -53965,7 +54034,7 @@
                   "value": "\"H.TRAP.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 726
+                    "line": 732
                   }
                 },
                 {
@@ -53976,7 +54045,7 @@
                   "value": "(\"arch::aarch64::speculation::Answer::from_status\", \"arch::aarch64::speculation::Answer::bits\", \"arch::aarch64::speculation::Answer::from_bits\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 729
+                    "line": 735
                   }
                 }
               ]
@@ -53989,7 +54058,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 731
+                "line": 737
               },
               "children": [
                 {
@@ -54000,7 +54069,7 @@
                   "value": "\"Each processor shall decide its defences from its core and firmware's answers, apply them, record what it saw and applied, and the vector entry's branch history loop shall run exactly when some processor recorded that it needs it.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 735
+                    "line": 741
                   }
                 },
                 {
@@ -54011,7 +54080,7 @@
                   "value": "\"After every processor has started, the loop's count is non-zero exactly when a processor's record holds the loop.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 738
+                    "line": 744
                   }
                 },
                 {
@@ -54022,7 +54091,7 @@
                   "value": "\"H.TRAP.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 739
+                    "line": 745
                   }
                 },
                 {
@@ -54033,7 +54102,7 @@
                   "value": "(\"arch::aarch64::speculation::init\", \"arch::aarch64::speculation::apply_this_cpu\", \"arch::aarch64::speculation::decide_and_apply\", \"arch::aarch64::speculation::plan_for\", \"arch::aarch64::speculation::Seen::pack\", \"arch::aarch64::speculation::Seen::unpack\", \"arch::aarch64::speculation::kind_of\", \"arch::aarch64::init_speculation\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 746
+                    "line": 752
                   }
                 }
               ]
@@ -54046,7 +54115,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 748
+                "line": 754
               },
               "children": [
                 {
@@ -54057,7 +54126,7 @@
                   "value": "\"apply shall clear SCTLR_EL1.DSSBS and PSTATE.SSBS on a core that needs the store bypass defence and has them, read back what can be read, and say what took; firmware's workaround 1 shall be asked on each switch only by a core whose plan holds it.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 753
+                    "line": 759
                   }
                 },
                 {
@@ -54068,7 +54137,7 @@
                   "value": "\"The speculation report names each kind of core and what was applied; QEMU's max CPU needs none of them, and a check that a cleared DSSBS reads back cleared on a core that has it is not written.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 757
+                    "line": 763
                   }
                 },
                 {
@@ -54079,7 +54148,7 @@
                   "value": "\"H.TRAP.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 758
+                    "line": 764
                   }
                 },
                 {
@@ -54090,7 +54159,7 @@
                   "value": "(\"arch::aarch64::speculation::apply\", \"arch::aarch64::speculation::write_sctlr\", \"arch::aarch64::speculation::clear_ssbs\", \"arch::aarch64::speculation::switch_barrier\", \"arch::aarch64::speculation::answers_arch_features\", \"arch::aarch64::speculation::ask_about_this_core\", \"arch::aarch64::speculation::firmware_call\", \"arch::aarch64::speculation::report_once_started\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 766
+                    "line": 772
                   }
                 }
               ]
@@ -54103,7 +54172,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 768
+                "line": 774
               },
               "children": [
                 {
@@ -54114,7 +54183,7 @@
                   "value": "\"clamp_index and clamp_below shall answer an index below its bound unchanged and any other as zero, with a csel and a csdb so that no later instruction uses a predicted result.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 772
+                    "line": 778
                   }
                 },
                 {
@@ -54125,7 +54194,7 @@
                   "value": "\"The generic speculation check requires the clamp on every architecture (arch/speculation_check.rs), whose criterion is the clamp's result, not this instruction sequence.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 775
+                    "line": 781
                   }
                 },
                 {
@@ -54136,7 +54205,7 @@
                   "value": "\"H.TRAP.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 776
+                    "line": 782
                   }
                 },
                 {
@@ -54147,7 +54216,7 @@
                   "value": "(\"arch::aarch64::speculation::clamp_index\", \"arch::aarch64::speculation::clamp_below\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 778
+                    "line": 784
                   }
                 }
               ]
@@ -54161,7 +54230,7 @@
           "doc": "What firmware is asked for: power off and reset through PSCI, the Pixel 7's watchdogs fed, and entropy from its TRNG through SMCCC (trng.rs) or the core's RNDR.",
           "source": {
             "file": "docs/sysml/19-aarch64-requirements.sysml",
-            "line": 782
+            "line": 788
           },
           "children": [
             {
@@ -54172,7 +54241,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 787
+                "line": 793
               },
               "children": [
                 {
@@ -54183,7 +54252,7 @@
                   "value": "\"fill_from shall fill its buffer from TRNG_RND64 192 bits at a time, each call's x3 then x2 then x1 as little-endian bytes, asking again at most ATTEMPTS times while firmware reports none ready, and shall stop at the bytes already taken when a call fails.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 792
+                    "line": 798
                   }
                 },
                 {
@@ -54194,7 +54263,7 @@
                   "value": "\"Against scripted firmware: 40 bytes are taken over three calls, the first finding nothing ready, in that order; a failure on the second call leaves 24 bytes taken and the rest untouched; a firmware never ready is asked 8 times and gives 0 bytes.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 797
+                    "line": 803
                   }
                 },
                 {
@@ -54205,7 +54274,7 @@
                   "value": "\"H.BOOT.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 798
+                    "line": 804
                   }
                 },
                 {
@@ -54216,7 +54285,7 @@
                   "value": "(\"arch::aarch64::trng::fill_from\", \"arch::aarch64::trng::rnd64\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 799
+                    "line": 805
                   }
                 }
               ]
@@ -54229,7 +54298,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 801
+                "line": 807
               },
               "children": [
                 {
@@ -54240,7 +54309,7 @@
                   "value": "\"offers_rnd64 shall ask TRNG_RND64 only of firmware that reports PSCI 1.0 or later, answers SMCCC_VERSION through PSCI_FEATURES, reports SMCCC 1.1 or later and TRNG 1.0 or later, and offers TRNG_RND64 through TRNG_FEATURES.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 805
+                    "line": 811
                   }
                 },
                 {
@@ -54251,7 +54320,7 @@
                   "value": "\"Five scripted firmwares -- PSCI 0.2, no SMCCC, SMCCC 1.0, no TRNG, no TRNG_RND64 -- each give 0 bytes and are asked no TRNG_RND64.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 808
+                    "line": 814
                   }
                 },
                 {
@@ -54262,7 +54331,7 @@
                   "value": "\"H.BOOT.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 809
+                    "line": 815
                   }
                 },
                 {
@@ -54273,7 +54342,7 @@
                   "value": "\"arch::aarch64::trng::offers_rnd64\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 810
+                    "line": 816
                   }
                 }
               ]
@@ -54286,7 +54355,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 812
+                "line": 818
               },
               "children": [
                 {
@@ -54297,7 +54366,7 @@
                   "value": "\"firmware_entropy shall ask the TRNG through the conduit the machine describes PSCI on, and give 0 bytes where it describes none; hardware_random shall give a word only from a core ID_AA64ISAR0_EL1 says has RNDR, and only one RNDR reports valid within ten tries.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 817
+                    "line": 823
                   }
                 },
                 {
@@ -54308,7 +54377,7 @@
                   "value": "\"The crosvm guest's boot seeds 48 bytes from its TRNG (~/.local/share/ferrix/pixel7/vm-20260926-140648) and QEMU's 0; neither is a check, and RNDR is not asserted.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 820
+                    "line": 826
                   }
                 },
                 {
@@ -54319,7 +54388,7 @@
                   "value": "\"H.BOOT.3\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 821
+                    "line": 827
                   }
                 },
                 {
@@ -54330,7 +54399,7 @@
                   "value": "(\"arch::aarch64::firmware_entropy\", \"arch::aarch64::trng::fill\", \"arch::aarch64::trng::call\", \"arch::aarch64::cpu::hvc_call_x0_x3\", \"arch::aarch64::cpu::smc_call_x0_x3\", \"arch::aarch64::cpu::hardware_random\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 824
+                    "line": 830
                   }
                 }
               ]
@@ -54343,7 +54412,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 826
+                "line": 832
               },
               "children": [
                 {
@@ -54354,7 +54423,7 @@
                   "value": "\"shutdown and reset shall drain the console and then ask PSCI for SYSTEM_OFF or SYSTEM_RESET, powering off where reset returns and halting where power-off returns.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 829
+                    "line": 835
                   }
                 },
                 {
@@ -54365,7 +54434,7 @@
                   "value": "\"Every gate's QEMU exits when the boot powers off, and boot-reset's ferrix.onexit=reset is x86-64's; a reset on this architecture is not asserted.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 832
+                    "line": 838
                   }
                 },
                 {
@@ -54376,7 +54445,7 @@
                   "value": "(\"H.BOOT.6\", \"H.BOOT.7\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 833
+                    "line": 839
                   }
                 },
                 {
@@ -54387,7 +54456,7 @@
                   "value": "(\"arch::aarch64::shutdown\", \"arch::aarch64::reset\", \"arch::aarch64::cpu::psci_system_off\", \"arch::aarch64::cpu::psci_system_reset\", \"arch::aarch64::cpu::psci_system\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 836
+                    "line": 842
                   }
                 }
               ]
@@ -54400,7 +54469,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 838
+                "line": 844
               },
               "children": [
                 {
@@ -54411,7 +54480,7 @@
                   "value": "\"init_watchdogs shall feed once every watchdog the device tree lists that firmware left running, and start_watchdogs shall start the task that keeps feeding them, and nothing where the tree lists none.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 842
+                    "line": 848
                   }
                 },
                 {
@@ -54422,7 +54491,7 @@
                   "value": "\"The Pixel 7 runs past its watchdogs' timeout; QEMU's tree lists none. Not a check.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 844
+                    "line": 850
                   }
                 },
                 {
@@ -54433,7 +54502,7 @@
                   "value": "\"H.FAIL.1\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 845
+                    "line": 851
                   }
                 },
                 {
@@ -54444,7 +54513,7 @@
                   "value": "(\"arch::aarch64::init_watchdogs\", \"arch::aarch64::start_watchdogs\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 846
+                    "line": 852
                   }
                 }
               ]
@@ -54457,7 +54526,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/19-aarch64-requirements.sysml",
-                "line": 848
+                "line": 854
               },
               "children": [
                 {
@@ -54468,7 +54537,7 @@
                   "value": "\"mmio's read8, read16 and read32 shall each be one ldrb, ldrh or ldr, and write8, write16 and write32 one strb, strh or str, with a bare base register and no writeback, so that a hypervisor can emulate the access from its fault's syndrome.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 852
+                    "line": 858
                   }
                 },
                 {
@@ -54479,7 +54548,7 @@
                   "value": "\"No check can fail without it on the machines the suite boots: QEMU's TCG emulates any load or store. The Pixel 7's crosvm guest is the evidence: with read_volatile, LLVM made stage 10's DMA switch check a pre-indexed ldrh, KVM_RUN failed with ENOSYS and the guest stopped with neither boot marker; with these, it boots to init.\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 858
+                    "line": 864
                   }
                 },
                 {
@@ -54490,7 +54559,7 @@
                   "value": "\"H.BOOT.2\"",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 859
+                    "line": 865
                   }
                 },
                 {
@@ -54501,7 +54570,7 @@
                   "value": "(\"arch::aarch64::mmio::read8\", \"arch::aarch64::mmio::write8\", \"arch::aarch64::mmio::read16\", \"arch::aarch64::mmio::write16\", \"arch::aarch64::mmio::read32\", \"arch::aarch64::mmio::write32\")",
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
-                    "line": 862
+                    "line": 868
                   }
                 }
               ]
@@ -58494,10 +58563,10 @@
                   "qualifiedName": "FerrixSmpRequirements::Kick::aKickReachesItsTarget",
                   "kind": "attribute",
                   "redefines": "criterion",
-                  "value": "\"On x86-64 a kick to processor 2 raises its inter-processor interrupt count by 1 and the others' by 0; a kick to a processor that is not online raises every other online processor's.\"",
+                  "value": "\"With three processors or more, on every architecture, each processor but the kicker's, kicked 8 times, raises its inter-processor interrupt count by 8 and the other secondaries' by 0 (the `kick` line). The broadcast for a processor that is not online is not checked.\"",
                   "source": {
                     "file": "docs/sysml/22-smp-requirements.sysml",
-                    "line": 458
+                    "line": 459
                   }
                 },
                 {
@@ -58508,7 +58577,7 @@
                   "value": "\"H.SCHED.1\"",
                   "source": {
                     "file": "docs/sysml/22-smp-requirements.sysml",
-                    "line": 459
+                    "line": 460
                   }
                 },
                 {
@@ -58519,7 +58588,7 @@
                   "value": "\"smp::interrupt_one\"",
                   "source": {
                     "file": "docs/sysml/22-smp-requirements.sysml",
-                    "line": 460
+                    "line": 461
                   }
                 }
               ]

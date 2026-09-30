@@ -94,9 +94,11 @@ pub(crate) struct SyncReport {
     pub(crate) ran_on: u64,
     /// Hand-overs a party found at its recheck rather than by a wake.
     pub(crate) rechecked: u64,
+    /// What the polling check saw; `None` where processors do not poll.
+    pub(crate) poll: Option<PollReport>,
 }
 
-/// Run both. `Ok` with nothing measured on a machine of one processor.
+/// Run them. `Ok` with nothing measured on a machine of one processor.
 ///
 /// # Errors
 ///
@@ -105,9 +107,104 @@ pub(super) fn run(online: usize) -> Result<SyncReport, &'static str> {
     if online < 2 {
         return Ok(SyncReport::default());
     }
-    let report = relay(online)?;
+    let mut report = relay(online)?;
     a_sync_wake_keeps_a_task_inside_its_affinity()?;
+    report.poll = a_polling_processor_needs_no_interrupt()?;
     Ok(report)
+}
+
+/// Rounds of the polling check.
+const POLL_ROUNDS: u64 = 16;
+
+/// How long the polling check watches for processor 1 to poll, each round:
+/// half the longest poll, so that a round that misses it wakes a halt short
+/// enough to grow processor 1's window rather than shrink it.
+const POLL_WATCH_NANOS: u64 = super::HALT_POLL_NANOS / 2;
+
+/// What the polling check saw.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PollReport {
+    /// Rounds in which processor 1 was seen polling before its kick.
+    pub(crate) seen: u64,
+    /// Kicks that found a processor polling and sent no interrupt.
+    pub(crate) absorbed: u64,
+}
+
+/// A kick that finds its processor polling sends no interrupt, and the task
+/// it was for still runs.
+///
+/// A task confined to processor 1 waits [`POLL_ROUNDS`] times. Each round,
+/// once it is all the way asleep, the checker on processor 0 watches up to
+/// [`POLL_WATCH_NANOS`] for processor 1's idle task to poll
+/// (`sched::halt_poll`), then wakes it with a plain wake. Every round must end
+/// in the task running. If processor 1 was seen polling in any round, some
+/// kick must have found it so and sent nothing: the one sent the moment it
+/// was seen finds the mark up unless the poll ran out in between. A host can
+/// hold the checker past every poll, and processor 1's window starts each
+/// round where the last left it, so a machine where it was never seen checks
+/// only that every task ran, and the boot log says so.
+///
+/// Verifies: L.sched.5
+fn a_polling_processor_needs_no_interrupt() -> Result<Option<PollReport>, &'static str> {
+    if !crate::arch::polls_before_halt() {
+        return Ok(None);
+    }
+    let allocations = crate::vmap::usage().allocations;
+    GO.store(0, Ordering::Release);
+    ROUNDS_DONE.store(0, Ordering::Release);
+    SLEEPER_ROUNDS.store(POLL_ROUNDS, Ordering::Release);
+    let absorbed_before = super::poll_counts().2;
+    let task = super::spawn_on(
+        "poll sleeper",
+        sleeper,
+        0,
+        NICE_0_WEIGHT,
+        PINNED_CPU,
+        CpuSet::of(PINNED_CPU),
+    )?;
+    let polling = || {
+        super::POLLING
+            .get()
+            .and_then(|marks| marks.get(PINNED_CPU))
+            .is_some_and(|mark| mark.load(Ordering::Acquire))
+    };
+    let mut report = PollReport::default();
+    for round in 1..=POLL_ROUNDS {
+        let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+        while !(task.is_blocked() && !task.is_queued() && SLEEPER_WAITS.listed() == 1) {
+            if crate::timer::now_nanos() >= deadline {
+                return Err("the polling check's sleeper never went to sleep");
+            }
+            core::hint::spin_loop();
+        }
+        let watch = crate::timer::now_nanos().saturating_add(POLL_WATCH_NANOS);
+        let mut seen = polling();
+        while !seen && crate::timer::now_nanos() < watch {
+            core::hint::spin_loop();
+            seen = polling();
+        }
+        report.seen += u64::from(seen);
+        GO.store(round, Ordering::Release);
+        SLEEPER_WAITS.wake_all();
+        let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+        if !CHECKER.wait_until_deadline(|| ROUNDS_DONE.load(Ordering::Acquire) >= round, deadline) {
+            return Err("a task kicked on a polling processor never ran");
+        }
+    }
+    super::wait_until_gone(&task, PATIENCE_NANOS)?;
+    SLEEPER_ROUNDS.store(PINNED_ROUNDS, Ordering::Release);
+    drop(task);
+    report.absorbed = super::poll_counts().2.saturating_sub(absorbed_before);
+    if report.seen > 0 && report.absorbed == 0 {
+        crate::console::println!(
+            "  poll     processor {PINNED_CPU} was seen polling in {} of {POLL_ROUNDS} rounds, and \
+             every kick sent it an interrupt anyway",
+            report.seen,
+        );
+        return Err("kicks to a processor seen polling all sent an interrupt");
+    }
+    super::check::reap_to(allocations, "the polling check's sleeper")?;
+    Ok(Some(report))
 }
 
 /// The relay: see the module documentation.
@@ -387,9 +484,13 @@ fn a_sync_wake_keeps_a_task_inside_its_affinity() -> Result<(), &'static str> {
     super::check::reap_to(allocations, "the affinity check's sleepers")
 }
 
-/// The affinity check's sleeper: waits for each round, and says it ran.
+/// Rounds the next sleeper waits for.
+static SLEEPER_ROUNDS: AtomicU64 = AtomicU64::new(PINNED_ROUNDS);
+
+/// The affinity and polling checks' sleeper: waits for each round, and says
+/// it ran.
 fn sleeper(_argument: usize) {
-    for round in 1..=PINNED_ROUNDS {
+    for round in 1..=SLEEPER_ROUNDS.load(Ordering::Acquire) {
         let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
         let _ = WaitQueue::wait_on_any(
             &[&SLEEPER_WAITS],

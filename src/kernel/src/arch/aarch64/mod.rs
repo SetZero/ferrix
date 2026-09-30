@@ -172,15 +172,23 @@ pub(crate) fn flush_tlb_page(address: u64) {
     cpu::flush_tlb_page(address);
 }
 
-/// Interrupt one processor.
+/// Interrupt one processor: the core whose `MPIDR_EL1` affinity is
+/// `hardware_id`, and no other.
 ///
-/// Sent as the broadcast [`send_ipi_to_others`] is: nothing on this
-/// architecture needs one core alone yet, since its TLB shootdown is done in
-/// hardware, and every reason an interrupt is sent is answered by whoever
-/// takes it. A processor that did not need it looks, finds nothing, and goes
-/// back to what it was doing.
-pub(crate) fn send_ipi_to(_hardware_id: u64) -> Result<(), &'static str> {
-    send_ipi_to_others()
+/// This was the broadcast [`send_ipi_to_others`], on the reasoning that every
+/// interrupt is answered by whoever takes it. So it is; but a scheduler's kick
+/// of one processor then woke every other out of its `wfi` to find nothing,
+/// and under a hypervisor each of those is a trap and a host thread woken.
+///
+/// # Errors
+///
+/// When the controller cannot name that core alone ([`gic::send_sgi_to`]):
+/// `smp::interrupt_one` then broadcasts, which always reaches it.
+pub(crate) fn send_ipi_to(hardware_id: u64) -> Result<(), &'static str> {
+    cpu::dsb_ishst();
+    gic::send_sgi_to(hardware_id)?;
+    crate::sched::trip::count(crate::sched::trip::Count::Ipi);
+    Ok(())
 }
 
 /// The reverse map check's program, as x86-64's `USER_RMAP_PROGRAM` describes
@@ -1290,6 +1298,13 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     // And the inter-processor interrupt, whose enable bit is this core's
     // own: every secondary turns on its copy in `gic::init_this_cpu`.
     gic::enable(gic::IPI_SGI);
+    // PSCI reached by a hypervisor call: a hypervisor is there, or at least
+    // emulates one, and a `wfi` is a trap to it. The only cheap sign an EL1
+    // kernel has; a board whose PSCI is its secure firmware's says `smc`.
+    HALT_IS_DEAR.store(
+        matches!(smp::psci_conduit(view), Ok(smp::Conduit::Hvc)),
+        Ordering::Relaxed,
+    );
 
     Ok(Report {
         counter: "generic timer",
@@ -1319,6 +1334,16 @@ pub(crate) fn disable_interrupts() {
 /// Returns with `IRQ` unmasked.
 pub(crate) fn wait_for_work() {
     cpu::wait_then_enable_interrupts();
+}
+
+/// Whether a `wfi` is dear here: PSCI is a hypervisor call, so there is a
+/// hypervisor to trap to. Recorded by [`init_interrupts`].
+static HALT_IS_DEAR: AtomicBool = AtomicBool::new(false);
+
+/// Whether an idle processor should poll a while before it waits for an
+/// interrupt: under a hypervisor (`sched::halt_poll`).
+pub(crate) fn polls_before_halt() -> bool {
+    HALT_IS_DEAR.load(Ordering::Relaxed)
 }
 
 /// Whether this processor is taking interrupts right now.

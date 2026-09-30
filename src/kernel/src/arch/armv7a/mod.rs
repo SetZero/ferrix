@@ -157,12 +157,19 @@ pub(crate) fn flush_tlb_page(address: u64) {
     }
 }
 
-/// Interrupt one processor.
+/// Interrupt one processor: the core whose `MPIDR` affinity is
+/// `hardware_id`, through its CPU interface bit in the GIC's target list, as
+/// AArch64 does on a GICv2.
 ///
-/// Sent as the broadcast [`send_ipi_to_others`] is, for AArch64's reason:
-/// nothing on this architecture needs one core alone yet.
-pub(crate) fn send_ipi_to(_hardware_id: u64) -> Result<(), &'static str> {
-    send_ipi_to_others()
+/// # Errors
+///
+/// When that core has recorded no interface bit: `smp::interrupt_one` then
+/// broadcasts.
+pub(crate) fn send_ipi_to(hardware_id: u64) -> Result<(), &'static str> {
+    cpu::dsb_ishst();
+    gicv2::send_sgi_to(hardware_id)?;
+    crate::sched::trip::count(crate::sched::trip::Count::Ipi);
+    Ok(())
 }
 
 /// The reverse map check's program, as x86-64's `USER_RMAP_PROGRAM` describes
@@ -1367,6 +1374,14 @@ pub(crate) fn disable_interrupts() {
 /// it. Returns with IRQs unmasked.
 pub(crate) fn wait_for_work() {
     cpu::wait_then_enable_interrupts();
+}
+
+/// Whether an idle processor should poll a while before it waits for an
+/// interrupt (`sched::halt_poll`): where PSCI is a hypervisor call, so a
+/// hypervisor is there to trap a `wfi` to. The STM32MP157's PSCI is its
+/// secure firmware's, `smc`, and a board does not poll.
+pub(crate) fn polls_before_halt() -> bool {
+    PSCI.load(Ordering::Relaxed) == 1
 }
 
 /// Whether this processor is taking interrupts right now.

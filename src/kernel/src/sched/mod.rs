@@ -77,6 +77,57 @@ static NEED_RESCHED: Once<Vec<AtomicBool>> = Once::new();
 /// yet taken. See [`kick`].
 static KICK_PENDING: Once<Vec<AtomicBool>> = Once::new();
 
+/// Per processor: its idle task is polling its reschedule flag before it
+/// halts ([`halt_poll`]), so a kick need only set the flag. See [`kick`].
+/// Read by `sync_check`, which waits to see a processor polling.
+static POLLING: Once<Vec<AtomicBool>> = Once::new();
+
+/// How long an idle processor polls for work before it halts, where
+/// [`arch::polls_before_halt`] says a halt is expensive: under a hypervisor,
+/// where a halt is an exit and the interrupt that ends it a host thread woken,
+/// tens of microseconds each way. A kick that arrives while the processor
+/// polls is a flag it sees, with no interrupt sent at all.
+///
+/// Fifty microseconds at most: a block read's device time under KVM (the
+/// driver's bell to its interrupt, 30 to 60 us), so that a processor that
+/// went idle waiting for the device is still polling when the device answers.
+/// Each processor's own window adapts below it, as Linux's `cpuidle-haltpoll`
+/// does (which allows 200 us): a halt that ended within this long says a
+/// longer poll would have caught its wake, and doubles the window; one that
+/// lasted longer halves it. So a processor idle for good -- woken every few
+/// milliseconds by a recheck, if at all -- stops polling after three halts,
+/// and one serving a request that bounces between processors polls the whole
+/// fifty. The time is the idle task's, so it is idle time, and nobody's job is
+/// charged for it.
+const HALT_POLL_NANOS: u64 = 50_000;
+
+/// The window a processor's first short halt after it stopped polling gives
+/// it; halved below this, it is zero.
+const POLL_GROW_FROM: u64 = 10_000;
+
+/// Each processor's poll window, in nanoseconds: see [`HALT_POLL_NANOS`].
+static POLL_WINDOW: Once<Vec<AtomicU64>> = Once::new();
+
+/// When each processor last halted, or zero while it is not halted: what
+/// [`halt_ended`] measures the halt by.
+static HALTED_AT: Once<Vec<AtomicU64>> = Once::new();
+
+/// Polls made, polls that found a reschedule asked for, and kicks that found
+/// their target polling and so sent no interrupt.
+static POLLS: AtomicU64 = AtomicU64::new(0);
+static POLLS_FOUND: AtomicU64 = AtomicU64::new(0);
+static KICKS_ABSORBED: AtomicU64 = AtomicU64::new(0);
+
+/// Polls made, those that found work, and kicks a poll made unnecessary, for
+/// the boot log.
+pub(crate) fn poll_counts() -> (u64, u64, u64) {
+    (
+        POLLS.load(Ordering::Relaxed),
+        POLLS_FOUND.load(Ordering::Relaxed),
+        KICKS_ABSORBED.load(Ordering::Relaxed),
+    )
+}
+
 /// One flag per processor, set while its idle task holds an exited task's
 /// stack it is about to free. Read by the checks that count frames, which
 /// must not measure while a free is in flight: see [`reaping_anywhere`].
@@ -662,9 +713,12 @@ fn this_cpu() -> Option<usize> {
 }
 
 /// Say that `cpu` should pick again on the way out of the interrupt it is in.
+///
+/// Sequentially consistent, for [`kick`]'s look at [`POLLING`] after it: see
+/// [`halt_poll`].
 fn mark_resched(cpu: usize) {
     if let Some(flag) = NEED_RESCHED.get().and_then(|flags| flags.get(cpu)) {
-        flag.store(true, Ordering::Release);
+        flag.store(true, Ordering::SeqCst);
     }
 }
 
@@ -707,6 +761,18 @@ fn kick(cpu: usize) {
     // scheduler hook in the IPI handler, and why a processor woken by
     // somebody else's shootdown finds this flag and acts on it just as well.
     mark_resched(cpu);
+    // A processor polling its flag sees it without an interrupt. The flag is
+    // set before this look and the poll clears its mark before its last look
+    // at the flag, all four sequentially consistent: a kick that finds the
+    // mark up has set a flag that last look will see. See `halt_poll`.
+    if POLLING
+        .get()
+        .and_then(|marks| marks.get(cpu))
+        .is_some_and(|mark| mark.load(Ordering::SeqCst))
+    {
+        let _ = KICKS_ABSORBED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     let pending = KICK_PENDING.get().and_then(|marks| marks.get(cpu));
     if pending.is_some_and(|mark| mark.swap(true, Ordering::AcqRel)) {
         return;
@@ -714,13 +780,121 @@ fn kick(cpu: usize) {
     crate::smp::interrupt_one(cpu);
 }
 
-/// Each processor's reschedule flag, and its mark that a kick's interrupt is
-/// on its way: the two [`kick`] raises, made together.
+/// Each processor's reschedule flag, its mark that a kick's interrupt is on
+/// its way, and its mark that it polls: the three [`kick`] reads and raises,
+/// made together.
 fn init_resched_flags(online: usize) {
     // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = KICK_PENDING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
+    let _ = POLLING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
+    let _ = POLL_WINDOW.call_once(|| {
+        (0..online)
+            .map(|_| AtomicU64::new(HALT_POLL_NANOS))
+            .collect()
+    });
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
+    let _ = HALTED_AT.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
+}
+
+/// This processor is about to halt: note when, for [`halt_ended`].
+fn halting(cpu: usize) {
+    if let Some(at) = HALTED_AT.get().and_then(|times| times.get(cpu)) {
+        at.store(crate::timer::now_nanos().max(1), Ordering::Relaxed);
+    }
+}
+
+/// This processor's halt, if it was halted, is over: adapt its poll window to
+/// how long it lasted (see [`HALT_POLL_NANOS`]). From the interrupt that ended
+/// it, before that interrupt's exit may switch to a task and leave the idle
+/// task, and so the halt's end, unmeasured for as long as the task runs; and
+/// from the idle loop for a wait that ended without one.
+fn halt_ended(cpu: usize) {
+    let Some(at) = HALTED_AT.get().and_then(|times| times.get(cpu)) else {
+        return;
+    };
+    let halted = at.swap(0, Ordering::Relaxed);
+    let Some(window) = POLL_WINDOW.get().and_then(|windows| windows.get(cpu)) else {
+        return;
+    };
+    if halted == 0 {
+        return;
+    }
+    let lasted = crate::timer::now_nanos().saturating_sub(halted);
+    let now = window.load(Ordering::Relaxed);
+    let next = if lasted <= HALT_POLL_NANOS {
+        now.saturating_mul(2).clamp(POLL_GROW_FROM, HALT_POLL_NANOS)
+    } else if now / 2 < POLL_GROW_FROM {
+        0
+    } else {
+        now / 2
+    };
+    window.store(next, Ordering::Relaxed);
+}
+
+/// What [`halt_poll`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Poll {
+    /// A reschedule is due: something was queued here.
+    Work,
+    /// An interrupt was taken while polling, which may have been the one an
+    /// idle processor halts to be woken by: look for work again rather than
+    /// halt.
+    LookAgain,
+    /// Nothing happened for the whole poll: halt.
+    Halt,
+}
+
+/// Poll this processor's reschedule flag for up to [`HALT_POLL_NANOS`] before
+/// it halts, with interrupts on, advertising in [`POLLING`] that a kick need
+/// send nothing.
+///
+/// **No kick is lost.** A kick sets the flag, then reads the mark; this
+/// clears the mark, then reads the flag; all four sequentially consistent. So
+/// either the kick reads the mark down and sends its interrupt, which the halt
+/// after this is woken by, or this reads the flag up. An interrupt exit also
+/// takes the mark down (`preempt_on_irq_exit`), before it may switch this
+/// task out, so a processor that stopped polling for an interrupt never reads
+/// as polling; and the poll, seeing it down, stops and says to look again,
+/// since that interrupt may have been a spawn's (`wake_idle_processors`), sent
+/// to wake a halt this poll stands in for.
+///
+/// Bounded by the deadline, the only way it ends with nothing seen: this
+/// processor's window, [`HALT_POLL_NANOS`] at most, and no poll at all while
+/// that is zero.
+fn halt_poll(cpu: usize) -> Poll {
+    let (Some(polling), Some(flag), Some(window)) = (
+        POLLING.get().and_then(|marks| marks.get(cpu)),
+        NEED_RESCHED.get().and_then(|flags| flags.get(cpu)),
+        POLL_WINDOW.get().and_then(|windows| windows.get(cpu)),
+    ) else {
+        return Poll::Halt;
+    };
+    let window = window.load(Ordering::Relaxed).min(HALT_POLL_NANOS);
+    if window == 0 || !arch::polls_before_halt() {
+        return Poll::Halt;
+    }
+    let _ = POLLS.fetch_add(1, Ordering::Relaxed);
+    polling.store(true, Ordering::SeqCst);
+    let deadline = crate::timer::now_nanos().saturating_add(window);
+    while !flag.load(Ordering::Acquire)
+        && polling.load(Ordering::Acquire)
+        && crate::timer::now_nanos() < deadline
+    {
+        core::hint::spin_loop();
+    }
+    let undisturbed = polling.swap(false, Ordering::SeqCst);
+    if flag.load(Ordering::SeqCst) {
+        let _ = POLLS_FOUND.fetch_add(1, Ordering::Relaxed);
+        Poll::Work
+    } else if undisturbed {
+        Poll::Halt
+    } else {
+        Poll::LookAgain
+    }
 }
 
 /// Bring up the scheduler, and make the context calling it a task.
@@ -962,6 +1136,22 @@ fn idle_loop() -> ! {
             continue;
         }
 
+        // A short poll before the halt, where a halt is dear: see
+        // `halt_poll`. After the look for work to steal, as the halt is, so
+        // that an interrupt the poll takes in the halt's place sends this loop
+        // back to look again, as it would have woken the halt.
+        match cpu.map_or(Poll::Halt, halt_poll) {
+            Poll::Work => {
+                set_idle(cpu, false);
+                if cpu.is_some_and(take_resched) {
+                    schedule();
+                }
+                continue;
+            }
+            Poll::LookAgain => continue,
+            Poll::Halt => {}
+        }
+
         // Masked while looking, so that an interrupt arriving after the look
         // wakes the wait rather than being taken just before it.
         arch::disable_interrupts();
@@ -989,7 +1179,14 @@ fn idle_loop() -> ! {
             arch::enable_interrupts();
             let _ = reap_batch(true);
         } else {
+            // Timed from here, for the next poll's window: see `halt_ended`.
+            if let Some(cpu) = cpu {
+                halting(cpu);
+            }
             arch::wait_for_work();
+            if let Some(cpu) = cpu {
+                halt_ended(cpu);
+            }
             set_idle(cpu, false);
         }
     }
@@ -1926,6 +2123,13 @@ pub(crate) fn preempt_on_irq_exit(from_user: bool) {
     if let Some(mark) = KICK_PENDING.get().and_then(|marks| marks.get(cpu)) {
         let _ = mark.swap(false, Ordering::AcqRel);
     }
+    // No longer polling, if the idle task was: this exit may switch it out,
+    // and a kick from here on sends its interrupt. See `halt_poll`. Nor
+    // halted, if it was: measured now, before the switch.
+    if let Some(mark) = POLLING.get().and_then(|marks| marks.get(cpu)) {
+        mark.store(false, Ordering::SeqCst);
+    }
+    halt_ended(cpu);
 
     // Before the switch, not after: `schedule` may not come back to this
     // context for a while, and a balance that runs on the way out of every

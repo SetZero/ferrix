@@ -452,10 +452,11 @@ package FerrixSmpRequirements {
                 processor it names, and every other processor where the architecture
                 cannot address it alone, where that processor is not online, or
                 before the processors are known.";
-            attribute :>> criterion = "On x86-64 a kick to processor 2 raises its
-                inter-processor interrupt count by 1 and the others' by 0; a kick to
-                a processor that is not online raises every other online
-                processor's.";
+            attribute :>> criterion = "With three processors or more, on every
+                architecture, each processor but the kicker's, kicked 8 times, raises
+                its inter-processor interrupt count by 8 and the other secondaries'
+                by 0 (the `kick` line). The broadcast for a processor that is not
+                online is not checked.";
             attribute :>> parent = "H.SCHED.1";
             attribute :>> unit = "smp::interrupt_one";
         }

@@ -80,4 +80,25 @@ package FerrixSchedRequirements {
             attribute :>> unit = "sched::may_place";
         }
     }
+
+    package Idle {
+        doc /* src/kernel/src/sched/mod.rs: what an idle processor does before it
+             * halts, and how a kick reaches it meanwhile. */
+
+        requirement <'L.sched.5'> aPollingProcessorIsKickedByItsFlag : ItemLowLevel {
+            attribute :>> statement = "Where arch::polls_before_halt says so, an idle
+                processor shall poll its reschedule flag for at most HALT_POLL_NANOS
+                (50 us) of its idle task's time before it halts, advertising that it
+                polls; kick shall then set the flag and send no interrupt; and the
+                poll shall end, and its processor look for work again rather than
+                halt, when an interrupt is taken during it.";
+            attribute :>> criterion = "A task confined to processor 1, woken 8 times
+                from processor 0 each once it is asleep and processor 1 is seen
+                polling, runs every time, and at least one of the kicks found the
+                processor polling and sent no interrupt (the `poll` line).";
+            attribute :>> parent = "H.SCHED.1";
+            attribute :>> unit = ("sched::halt_poll", "sched::kick",
+                "sched::preempt_on_irq_exit");
+        }
+    }
 }

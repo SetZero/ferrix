@@ -15,16 +15,16 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 611 | 344 | 267 |
+| Low (`L.*`) | 612 | 347 | 265 |
 
-1187 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1192 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1187 |
-| Accessors, covered by the requirement they serve | 566 |
+| Named by a low-level requirement | 1192 |
+| Accessors, covered by the requirement they serve | 569 |
 | Check code in a product file | 55 |
-| Named by none | 594 |
+| Named by none | 598 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
@@ -380,7 +380,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.aarch64.16` | mask_interrupt and unmask_interrupt shall stop and let through a line at the controller, in the distributor for a shared line and this core's redistributor for a private one, so that the register reads back what was asked. | An idle private line and an idle shared line, unmasked and masked again, each read back enabled and then disabled at the controller, on the GICv2 boot and the GICv3 one. | H.IRQ.2 | `arch::aarch64::mask_interrupt`, `arch::aarch64::unmask_interrupt`, `arch::aarch64::gic::enable`, `arch::aarch64::gic::disable`, `arch::aarch64::gic::gicv3::enable`, `arch::aarch64::gic::gicv3::disable`, `arch::aarch64::gic::gicv3::registers_for` | `src/kernel/src/arch/aarch64/check.rs::check_masking` | not built | reached | not built |
 | `L.aarch64.17` | mask_interrupt and unmask_interrupt shall refuse the identifiers 1020 to 1023, which are the controller's answers and not lines. | Masking 1020 and unmasking 1023 are both refused. | H.IRQ.2 | `arch::aarch64::mask_interrupt`, `arch::aarch64::unmask_interrupt` | `src/kernel/src/arch/aarch64/check.rs::check_refusals` | not built | reached | not built |
 | `L.aarch64.18` | service_interrupts shall claim every pending interrupt, dispatch it and retire it with exactly the value its claim returned, until the controller answers spurious. | Every boot's timer ticks and device interrupts arrive; the generic interrupt checks assert delivery to the holder (H.IRQ.1), not the claim and retire order, and a check of that order is not written. | H.IRQ.1, H.IRQ.3 | `arch::aarch64::service_interrupts`, `arch::aarch64::gic::claim`, `arch::aarch64::gic::complete`, `arch::aarch64::gic::gicv3::claim`, `arch::aarch64::gic::gicv3::complete`, `arch::aarch64::cpu::read_icc_iar1`, `arch::aarch64::cpu::write_icc_eoir1` | *baselined* | — | — | — |
-| `L.aarch64.19` | send_ipi_to_others and send_ipi_to shall interrupt the other processors on the IPI line after ordering the sender's stores before the interrupt, by the distributor on a GICv2 and ICC_SGI1R_EL1 on a GICv3. | The shootdown check's flushes reach every processor (H.MEM.7, smp/check.rs); a check that an IPI arrives on each other core and on none twice is not written. | H.MEM.7 | `arch::aarch64::send_ipi_to_others`, `arch::aarch64::send_ipi_to`, `arch::aarch64::ipi_irq`, `arch::aarch64::gic::send_sgi_to_others`, `arch::aarch64::gic::gicv3::send_sgi_to_others`, `arch::aarch64::cpu::write_icc_sgi1r`, `arch::aarch64::cpu::dsb_ishst` | *baselined* | — | — | — |
+| `L.aarch64.19` | send_ipi_to_others shall interrupt the other processors on the IPI line, and send_ipi_to the one processor whose MPIDR affinity it is given and no other -- by GICD_SGIR's target list on a GICv2, ICC_SGI1R_EL1's affinity fields and target list on a GICv3 -- or answer an error where the controller cannot name it alone; each after ordering the sender's stores before the interrupt. | The shootdown check's flushes reach every processor (H.MEM.7, smp/check.rs); with four processors each other one kicked 8 times through interrupt_one takes all 8 and the rest none (the `kick` line). | H.MEM.7 | `arch::aarch64::send_ipi_to_others`, `arch::aarch64::send_ipi_to`, `arch::aarch64::ipi_irq`, `arch::aarch64::gic::send_sgi_to_others`, `arch::aarch64::gic::send_sgi_to`, `arch::aarch64::gic::gicv3::send_sgi_to_others`, `arch::aarch64::gic::gicv3::send_sgi_to`, `arch::aarch64::cpu::write_icc_sgi1r`, `arch::aarch64::cpu::dsb_ishst` | `src/kernel/src/smp/check.rs::a_kick_reaches_its_target_alone` | not reached | not reached | not reached |
 | `L.aarch64.20` | The ITS driver shall quiesce an ITS firmware left on, give it zeroed device and collection tables, a command queue and each core's LPI property and pending tables, and map a device's next event to a free LPI collected on the boot core, waiting for each command to be consumed. | Under boot-gicv3 the virtio devices' message interrupts arrive through the ITS; a check that a mapped event raises its LPI and only it is not written. | H.IRQ.1 | `arch::aarch64::gic::gicv3_its::init`, `arch::aarch64::gic::gicv3_its::bring_up`, `arch::aarch64::gic::gicv3_its::enable_lpis`, `arch::aarch64::gic::gicv3_its::pending_table`, `arch::aarch64::gic::gicv3_its::set_attributes`, `arch::aarch64::gic::gicv3_its::quiesce`, `arch::aarch64::gic::gicv3_its::command_queue`, `arch::aarch64::gic::gicv3_its::program_tables`, `arch::aarch64::gic::gicv3_its::program_table`, `arch::aarch64::gic::gicv3_its::allocate`, `arch::aarch64::gic::gicv3_its::number`, `arch::aarch64::gic::gicv3_its::Its::free_event`, `arch::aarch64::gic::gicv3_its::Its::take`, `arch::aarch64::gic::gicv3_its::Its::map_device`, `arch::aarch64::gic::gicv3_its::Its::enable_property`, `arch::aarch64::gic::gicv3_its::Its::submit`, `arch::aarch64::gic::gicv3_its::zeroed`, `arch::aarch64::gic::gicv3_its::order_for`, `arch::aarch64::gic::gicv3_its::read64`, `arch::aarch64::gic::gicv3_its::write64`, `arch::aarch64::gic::msi_allocate`, `arch::aarch64::msi_allocate` | *baselined* | — | — | — |
 | `L.aarch64.21` | gicv3_its::allocate shall refuse a device ID past the device table the ITS was given, rather than map it. | On the GICv3 boot with an ITS, asking for a vector for device ID u32::MAX is refused. | H.IRQ.1 | `arch::aarch64::gic::gicv3_its::allocate` | `src/kernel/src/arch/aarch64/check.rs::check_refusals` | not built | reached | not built |
 | `L.aarch64.22` | msi_doorbell shall name the page a device's message writes land in -- the ITS's translater or the GICv2m frame -- so that an IOMMU domain maps it, and none on a machine with neither. | The iommu domain check's device writes its message through its domain (L.iommu); a check that the page named is the one the controller decodes is not written. | H.DMA.3 | `arch::aarch64::msi_doorbell`, `arch::aarch64::gic::msi_doorbell`, `arch::aarch64::gic::gicv3_its::doorbell` | *baselined* | — | — | — |
@@ -502,6 +502,12 @@ Each system-level requirement, and the high-level requirements that name it as t
 |---|---|---|---|---|---|---|---|---|
 | `L.sched.3` | wake_with shall move a blocked task onto the waker's processor only when, under both processors' queue locks, it is neither its home's running task nor queued, its home's sleeper set has given it up and it holds both its slots, and nothing is queued on the waker's processor behind the waker; and otherwise shall make it runnable where it is. Every task so woken shall run. | One traveller per processor (at most four), each relayed by sync wakes between anchors pinned one per processor, makes 1000 hops and its anchors 1000 between them, exactly, within 30 seconds; at least one wake moved a task and the travellers ran on at least two processors. Hand-overs found by the 5 ms recheck rather than a wake are counted, not failed (the `sync` line). | H.SCHED.1 | `sched::wake_with`, `sched::wake_onto`, `sched::asleep_at_home`, `sched::has_room`, `sched::wait::WaitQueue::wake_all_with` | `src/kernel/src/sched/sync_check.rs::relay` | not built | not built | not built |
 | `L.sched.4` | wake_with shall never move a task onto a processor outside its affinity or its scheduling domain. | A task confined to processor 1, woken by 4 sync wakes from processor 0 each once it is all the way asleep, is moved by none of them and runs on processor 1 alone; a task free to run anywhere, woken the same way, is moved by at least one. | H.SCHED.1 | `sched::may_place` | `src/kernel/src/sched/sync_check.rs::a_sync_wake_keeps_a_task_inside_its_affinity` | not built | not built | not built |
+
+### Idle
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.sched.5` | Where arch::polls_before_halt says so, an idle processor shall poll its reschedule flag for at most HALT_POLL_NANOS (50 us) of its idle task's time before it halts, advertising that it polls; kick shall then set the flag and send no interrupt; and the poll shall end, and its processor look for work again rather than halt, when an interrupt is taken during it. | A task confined to processor 1, woken 8 times from processor 0 each once it is asleep and processor 1 is seen polling, runs every time, and at least one of the kicks found the processor polling and sent no interrupt (the `poll` line). | H.SCHED.1 | `sched::halt_poll`, `sched::kick`, `sched::preempt_on_irq_exit` | `src/kernel/src/sched/sync_check.rs::a_polling_processor_needs_no_interrupt` | not built | not built | not built |
 
 ### Discovery
 
@@ -1143,7 +1149,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 
 | Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
 |---|---|---|---|---|---|---|---|---|
-| `L.smp.32` | interrupt_one shall interrupt the online processor it names, and every other processor where the architecture cannot address it alone, where that processor is not online, or before the processors are known. | On x86-64 a kick to processor 2 raises its inter-processor interrupt count by 1 and the others' by 0; a kick to a processor that is not online raises every other online processor's. | H.SCHED.1 | `smp::interrupt_one` | *baselined* | — | — | — |
+| `L.smp.32` | interrupt_one shall interrupt the online processor it names, and every other processor where the architecture cannot address it alone, where that processor is not online, or before the processors are known. | With three processors or more, on every architecture, each processor but the kicker's, kicked 8 times, raises its inter-processor interrupt count by 8 and the other secondaries' by 0 (the `kick` line). The broadcast for a processor that is not online is not checked. | H.SCHED.1 | `smp::interrupt_one` | `src/kernel/src/smp/check.rs::a_kick_reaches_its_target_alone` | not reached | not reached | not reached |
 
 ### Lines
 
@@ -1352,6 +1358,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
 | `src/kernel/src/sched/check.rs::many_tasks` | kernel | L.x86_64.17 |
 | `src/kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
+| `src/kernel/src/sched/sync_check.rs::a_polling_processor_needs_no_interrupt` | kernel | L.sched.5 |
 | `src/kernel/src/sched/sync_check.rs::a_sync_wake_keeps_a_task_inside_its_affinity` | kernel | L.sched.4 |
 | `src/kernel/src/sched/sync_check.rs::relay` | kernel | L.sched.3 |
 | `src/kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | kernel | L.claim.1, L.claim.5 |
@@ -1364,6 +1371,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/service_check.rs::faults_and_domains_read_as_recorded` | kernel | L.iommu.13, L.iommu.34 |
 | `src/kernel/src/service_check.rs::run` | kernel | H.DEV.1 |
 | `src/kernel/src/service_check.rs::the_last_line_is_kept_for_a_failure_report` | kernel | L.console.17 |
+| `src/kernel/src/smp/check.rs::a_kick_reaches_its_target_alone` | kernel | L.smp.32, L.aarch64.19 |
 | `src/kernel/src/smp/check.rs::everywhere` | kernel | H.SCHED.6, L.smp.3, L.smp.11 |
 | `src/kernel/src/smp/check.rs::everywhere` | kernel | L.x86_64.18, L.x86_64.19, L.x86_64.86, L.x86_64.102 |
 | `src/kernel/src/smp/check.rs::grace` | kernel | H.MEM.19, L.smp.29 |

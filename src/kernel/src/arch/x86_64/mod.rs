@@ -19,6 +19,8 @@ mod trap;
 pub(crate) use cpu::hardware_random;
 pub(crate) use signal::{SIGNAL_RED_ZONE, UserContext, restore_signal_frame, setup_signal_frame};
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use ferrix_bootinfo::{Arch, BootView};
 use ferrix_linux_abi::nr::{self, Syscall};
 use ferrix_linux_abi::types::{self, OpenFlagBits};
@@ -1484,6 +1486,12 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     // SAFETY: (DEVICE) called once from `kmain`, on the boot CPU, after `init_traps`
     // filled the IDT and with interrupts masked.
     unsafe { apic::init(&acpi)? };
+    // `CPUID.1:ECX[31]`, which a hypervisor sets and a processor leaves
+    // clear. Asked once: under a hypervisor `CPUID` is itself an exit.
+    HALT_IS_DEAR.store(
+        core::arch::x86_64::__cpuid(1).ecx & (1 << 31) != 0,
+        Ordering::Relaxed,
+    );
 
     Ok(Report {
         counter,
@@ -1509,6 +1517,17 @@ pub(crate) fn disable_interrupts() {
 /// being taken just before it. Returns with interrupts unmasked.
 pub(crate) fn wait_for_work() {
     cpu::enable_interrupts_and_halt();
+}
+
+/// Whether a halt is dear here: the machine runs under a hypervisor, so a
+/// halt is an exit and the interrupt that ends it a host thread woken.
+/// Recorded by [`init_interrupts`].
+static HALT_IS_DEAR: AtomicBool = AtomicBool::new(false);
+
+/// Whether an idle processor should poll a while before it halts: under a
+/// hypervisor (`sched::halt_poll`).
+pub(crate) fn polls_before_halt() -> bool {
+    HALT_IS_DEAR.load(Ordering::Relaxed)
 }
 
 /// Whether this processor is taking interrupts right now.

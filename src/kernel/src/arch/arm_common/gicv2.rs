@@ -139,6 +139,7 @@ pub(crate) unsafe fn init(distributor: u64, cpu_interface: u64) -> Result<(), &'
     CPU_INTERFACE.store(gicc, Ordering::Relaxed);
 
     configure(Mmio::at(gicd), Mmio::at(gicc));
+    record_target(Mmio::at(gicd));
     Ok(())
 }
 
@@ -357,6 +358,54 @@ pub(crate) fn init_this_cpu() {
     if enabled != 0 {
         gicd.write32(GICD_ISENABLER, enabled);
     }
+    record_target(gicd);
+}
+
+/// Most CPU interfaces a GICv2 has: its target lists are a byte wide.
+const MAX_INTERFACES: usize = 8;
+
+/// A [`TARGETS`] slot that holds something.
+const TARGET_RECORDED: u64 = 1 << 63;
+
+/// Each core's CPU interface bit, by its hardware identifier: what an SGI's
+/// target list names it by. A slot is `TARGET_RECORDED`, the identifier
+/// shifted up eight, and the bit in the low byte; each core records its own as
+/// it comes up ([`init_this_cpu`], and the boot core in [`init`]), and nothing
+/// is ever taken out.
+static TARGETS: [AtomicU64; MAX_INTERFACES] = [const { AtomicU64::new(0) }; MAX_INTERFACES];
+
+/// Record this core's CPU interface bit under its hardware identifier.
+///
+/// Read from the banked target registers ([`this_cpu_target`]), which is the
+/// one place a GICv2 says which interface a core is: a core's number and its
+/// interface's need not agree. A slot is claimed with a compare-exchange, so
+/// two cores coming up at once take two.
+fn record_target(gicd: Mmio) {
+    let id = crate::arch::hardware_id();
+    let entry = TARGET_RECORDED | (id << 8) | u64::from(this_cpu_target(gicd));
+    for slot in &TARGETS {
+        let held = slot.load(Ordering::Acquire);
+        if held == entry {
+            return;
+        }
+        if held == 0
+            && slot
+                .compare_exchange(0, entry, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            return;
+        }
+    }
+}
+
+/// The CPU interface bit of the core whose hardware identifier is `id`, if
+/// it has recorded one.
+fn target_of(id: u64) -> Option<u8> {
+    TARGETS.iter().find_map(|slot| {
+        let entry = slot.load(Ordering::Acquire);
+        (entry & TARGET_RECORDED != 0 && (entry & !TARGET_RECORDED) >> 8 == id)
+            .then(|| (entry & 0xFF) as u8)
+    })
 }
 
 /// Interrupt every core but this one on [`IPI_SGI`].
@@ -368,6 +417,24 @@ pub(crate) fn init_this_cpu() {
 /// that each spell it for themselves.
 pub(crate) fn send_sgi_to_others() {
     window(&DISTRIBUTOR).write32(GICD_SGIR, SGIR_ALL_BUT_SELF | IPI_SGI);
+}
+
+/// Interrupt the one core whose hardware identifier is `id` on [`IPI_SGI`],
+/// through its CPU interface bit in `GICD_SGIR`'s target list (filter zero:
+/// the list as given).
+///
+/// A whole-word store, like [`send_sgi_to_others`]: the SGI register is
+/// write-only and holds no other line's state, so it needs none of
+/// [`DISTRIBUTOR_RMW`]'s protection, which is for the words shared between
+/// lines (F-50). The caller orders its stores first, as for the broadcast.
+///
+/// # Errors
+///
+/// When that core has recorded no interface bit: the caller broadcasts.
+pub(crate) fn send_sgi_to(id: u64) -> Result<(), &'static str> {
+    let target = target_of(id).ok_or("that core's CPU interface is not recorded")?;
+    window(&DISTRIBUTOR).write32(GICD_SGIR, (u32::from(target) << 16) | IPI_SGI);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
