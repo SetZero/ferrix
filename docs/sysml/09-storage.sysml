@@ -20,7 +20,7 @@ package FerrixStorage {
              * read into a page-cache page fills the VMO the cache already
              * holds. The queue itself (merging, flush and FUA barriers,
              * deadline scheduling) is src/lib/fs/block, in front of every block
-             * ring (src/kernel/src/block_ring, src/lib/proto/blkring): one kernel task
+             * ring (src/kernel/src/interfaces/block_ring, src/lib/proto/blkring): one kernel task
              * per ring moves requests onto it and copies payloads through
              * the ring's data VMO, and publishes the disk in devfs's
              * registry as a BlockDevice (src/kernel/src/fs/block.rs) that

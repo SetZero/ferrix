@@ -205,7 +205,7 @@ struct OpenState {
     /// given. Holding one keeps the renderer's object alive for as long as
     /// this open can show it, whatever the program does with the handle it
     /// drew through.
-    imports: Vec<(u32, Arc<crate::render::node::Object>)>,
+    imports: Vec<(u32, Arc<crate::interfaces::render::node::Object>)>,
     framebuffers: Vec<Framebuffer>,
     next_handle: u32,
     next_framebuffer: u32,
@@ -1052,7 +1052,8 @@ fn prime_fd_to_handle(process: &Process, file: &CardFile, arg: u64) -> Result<us
     let mut prime: PrimeHandle = read_arg(process, arg)?;
     let descriptor = crate::syscall::fd::file(process, crate::syscall::fd::arg(prime.fd as u64))
         .map_err(|_| Errno::EBADF)?;
-    let exported = crate::render::node::exported(descriptor.io()).ok_or(Errno::EINVAL)?;
+    let exported =
+        crate::interfaces::render::node::exported(descriptor.io()).ok_or(Errno::EINVAL)?;
     let object = exported.object();
     let (id, width, height, stride) = object.shown();
     // One handle an object, as Linux gives one: a second import of the same

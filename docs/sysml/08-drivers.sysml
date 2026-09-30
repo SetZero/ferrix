@@ -166,8 +166,8 @@ package FerrixDrivers {
              * virtqueue (driver and device halves, over abstract shared
              * memory) is the first of these. Between kernel and driver:
              * src/lib/proto/blkring (docs/BLOCK-RING.md) and src/lib/proto/netring
-             * (docs/NET-RING.md), with src/kernel/src/block_ring and
-             * src/kernel/src/net_ring as the kernel's ends and doorbells as port
+             * (docs/NET-RING.md), with src/kernel/src/interfaces/block_ring and
+             * src/kernel/src/interfaces/net_ring as the kernel's ends and doorbells as port
              * packets. The display and input drivers need none: frames do
              * not move, and their control channels carry the rest. */
         ref part memory : Vmo;

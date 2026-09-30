@@ -90,7 +90,7 @@ Each fact below was read from the tree at `1a8bea54`.
 | `ptrace` | Not in the call tables: no process can read another's memory, except through a VMO both hold. | `src/lib/proto/linux-abi` has no `Ptrace`; `SECURITY-TARGET.md` FDP_IFC.1 |
 | Memory | No swap and no core dumps: a secret's page never leaves RAM. Frames are zeroed when handed to a new owner, not when freed. The kernel heap is not zeroed. `mlock` is `ENOSYS`. | `src/kernel/src/syscall/memory.rs:383-390`; `SECURITY-TARGET.md:144`, `:261`; `docs/BACKLOG.md` |
 | Randomness | ChaCha20 seeded from firmware, the CPU's instruction and jitter. A machine with neither of the first two says at boot that it is not seeded. | `src/kernel/src/random.rs:1-33` |
-| Device nodes | `/dev/console` is `0600` root. Cards and `event*` are `0660` root:root, and there is no `input` or `video` group. | `src/kernel/src/fs/devfs.rs:229`; `src/kernel/src/display/mod.rs:447-450`; `src/kernel/src/input/evdev.rs:237-241` |
+| Device nodes | `/dev/console` is `0600` root. Cards and `event*` are `0660` root:root, and there is no `input` or `video` group. | `src/kernel/src/fs/devfs.rs:229`; `src/kernel/src/interfaces/display/mod.rs:447-450`; `src/kernel/src/interfaces/input/evdev.rs:237-241` |
 | DMA | Contained by an IOMMU on x86-64 and AArch64. On ARMv7-A `virt` and the DK1, any ring-3 driver can read all memory, and the boot says so. | `docs/ARCHITECTURE.md:326-357` |
 | Accounts | Busybox images carry `root:x:0:0` and `ferrix:x:1000:1000` with a home. `test-init` carries the same two. The foot compositor image carries only root. No image has `/etc/shadow`. | `tools/common/xtask/src/initramfs.rs:536-546`; `tools/common/xtask/src/init.rs:311-314`; `tools/common/xtask/src/compositor.rs:4360` |
 | The btrfs root | The first boot unpacks the initramfs onto the volume. Later boots re-unpack only a changed archive. **A file the archive carries is replaced; a file it does not carry is kept.** | `src/kernel/src/fs/root_disk.rs:25-31` |
@@ -755,7 +755,7 @@ be opened by any method.
 hyprix is linked into the kernel as its init (`tools/common/xtask/src/compositor.rs:1239`),
 so it and every program it starts are uid 0. It opens the card and the
 `event*` nodes itself, and it can because they are `0660 root`
-(`src/kernel/src/display/mod.rs:447-450`, `src/kernel/src/input/evdev.rs:237-241`).
+(`src/kernel/src/interfaces/display/mod.rs:447-450`, `src/kernel/src/interfaces/input/evdev.rs:237-241`).
 `docs/INIT.md` L10 (6 points, not started) moves hyprix under init as
 `hyprix.service`, with a scope per client (`docs/INIT.md` §5.6). L10 is
 necessary. It is not enough on its own, because hyprix under init still runs

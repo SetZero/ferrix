@@ -1968,8 +1968,9 @@ nothing here; a request on the ring is the ring-3 driver's check.
 6. The second round did not give every frame back: the ring's VMO holds, its
    task's stack or the registry leak.
 
-See: src/kernel/src/block_ring/mod.rs; src/kernel/src/block_ring/check.rs;
-docs/BLOCK-RING.md; docs/ROADMAP.md stage 10.
+See: src/kernel/src/interfaces/block_ring/mod.rs;
+src/kernel/src/interfaces/block_ring/check.rs; docs/BLOCK-RING.md;
+docs/ROADMAP.md stage 10.
 
 <a id="fx-1005"></a>
 
@@ -1999,7 +2000,7 @@ running.
 4. The initramfs carries no `/sbin/blk`: `tools/common/xtask/src/native.rs` no
    longer lists it.
 
-See: src/kernel/src/block_ring/driver_check.rs;
+See: src/kernel/src/interfaces/block_ring/driver_check.rs;
 src/user/native/drivers/block/virtio-blk/src/main.rs; docs/BLOCK-RING.md;
 docs/ROADMAP.md stage 10.
 
@@ -2093,8 +2094,8 @@ driver after it went.
 3. The claim is not let go when the task ends, so `CLAIMED` stays set and every
    later `log_control_create` answers `ALREADY_BOUND`.
 
-See: src/kernel/src/logctl/check.rs; src/kernel/src/logctl/mod.rs;
-src/lib/proto/logctl.
+See: src/kernel/src/interfaces/logctl/check.rs;
+src/kernel/src/interfaces/logctl/mod.rs; src/lib/proto/logctl.
 
 <a id="fx-1009"></a>
 
@@ -2239,8 +2240,9 @@ driver does.
 5. The ring's task did not stop when the control channel closed, which a frame
    count taken after the check would then see as a leak.
 
-See: src/kernel/src/net_ring/check.rs; src/kernel/src/net_ring/mod.rs;
-src/lib/proto/netring; docs/NET-RING.md.
+See: src/kernel/src/interfaces/net_ring/check.rs;
+src/kernel/src/interfaces/net_ring/mod.rs; src/lib/proto/netring;
+docs/NET-RING.md.
 
 <a id="fx-1152"></a>
 

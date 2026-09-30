@@ -521,28 +521,28 @@ pub(crate) fn sys_ioctl(
         return tty::ioctl(process, &file, request, arg);
     }
     // An open card (`docs/DISPLAY.md` §2.3), by its per-open object.
-    if let Some(card) = crate::display::drm::of(file.io()) {
-        return crate::display::drm::ioctl(process, &card, request, arg);
+    if let Some(card) = crate::interfaces::display::drm::of(file.io()) {
+        return crate::interfaces::display::drm::ioctl(process, &card, request, arg);
     }
     // An open render node (`docs/GPU.md` §3.3), by its per-open object. A
     // card and a render node are different files with different ioctls, so
     // neither answers the other's.
-    if let Some(node) = crate::render::node::of(file.io()) {
-        return crate::render::node::ioctl(process, &node, request, arg);
+    if let Some(node) = crate::interfaces::render::node::of(file.io()) {
+        return crate::interfaces::render::node::ioctl(process, &node, request, arg);
     }
     // An open input device (`docs/INPUT.md` §3.3), by its per-open object.
-    if let Some(device) = crate::input::evdev::of(file.io()) {
-        return crate::input::evdev::ioctl(process, &device, request, arg);
+    if let Some(device) = crate::interfaces::input::evdev::of(file.io()) {
+        return crate::interfaces::input::evdev::ioctl(process, &device, request, arg);
     }
     // A sound card's playback and control nodes (`docs/AUDIO.md` §3.4). A
     // drain and a write wait unless the descriptor is non-blocking, which
     // an ioctl knows only from the file's status.
-    if let Some(pcm) = crate::audio::pcm::pcm_of(file.io()) {
+    if let Some(pcm) = crate::interfaces::audio::pcm::pcm_of(file.io()) {
         let nonblock = file.status().nonblock;
-        return crate::audio::pcm::pcm_ioctl(process, &pcm, request, arg, nonblock);
+        return crate::interfaces::audio::pcm::pcm_ioctl(process, &pcm, request, arg, nonblock);
     }
-    if let Some(control) = crate::audio::pcm::control_of(file.io()) {
-        return crate::audio::pcm::control_ioctl(process, &control, request, arg);
+    if let Some(control) = crate::interfaces::audio::pcm::control_of(file.io()) {
+        return crate::interfaces::audio::pcm::control_ioctl(process, &control, request, arg);
     }
     // An open disk (`docs/INSTALLER.md` §5.1): its geometry and a flush.
     if let Some(disk) = fs::disk_file::of(file.io()) {

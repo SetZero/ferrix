@@ -984,7 +984,7 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let location = match node.location() {
         device::Location::Tree(_) => Some(TREE_LOCATION),
-        _ => crate::block_ring::location_of(node),
+        _ => crate::interfaces::block_ring::location_of(node),
     };
     STARTING.lock().push(Start {
         id,

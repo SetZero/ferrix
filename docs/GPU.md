@@ -340,7 +340,7 @@ The pieces, each landable on its own:
    by the core (like the card's one big VMO but per resource), attached to
    the device with `ResourceAttachBacking` (the driver already pins for the
    display's `attach`). The node's `MAP` returns an mmap offset into that
-   VMO exactly as `map_dumb` does (`src/kernel/src/display/drm.rs:789`, and
+   VMO exactly as `map_dumb` does (`src/kernel/src/interfaces/display/drm.rs:789`, and
    `devfs::mapping` at `src/kernel/src/fs/devfs.rs:938` is the hook — the render
    inode needs its own `mapping()` returning the object's VMO). Testable:
    a program creates a resource, maps it, writes a byte, reads it back.
@@ -814,7 +814,7 @@ before a flush is in its channel by the time the flush can be read, so the
 device draws before it shows.
 
 **An upload and a stream return when they are sent**, as they do on Linux
-(`src/kernel/src/render`). `VIRTGPU_TRANSFER_TO_HOST` and `VIRTGPU_EXECBUFFER`
+(`src/kernel/src/interfaces/render`). `VIRTGPU_TRANSFER_TO_HOST` and `VIRTGPU_EXECBUFFER`
 send their request and return; the reply is taken by the renderer's task,
 which gives the stream's slot back, and `VIRTGPU_WAIT` -- which answered at
 once, since nothing was ever outstanding -- now waits until everything its

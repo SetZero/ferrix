@@ -317,7 +317,7 @@ fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
         id,
         control: kernel_end,
         device: Arc::clone(node),
-        location: crate::block_ring::location_of(node),
+        location: crate::interfaces::block_ring::location_of(node),
     });
     if sched::spawn("audio", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);

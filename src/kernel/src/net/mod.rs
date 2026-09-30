@@ -260,7 +260,7 @@ impl NetCore {
 
     /// Keep an interface whose driver has gone for the next one: its carrier
     /// down, no ring told of its frames and none left waiting for it, but its
-    /// index, addresses and routes as they were (`crate::net_ring`).
+    /// index, addresses and routes as they were (`crate::interfaces::net_ring`).
     pub(crate) fn park_interface(&self, index: u32) {
         self.set_carrier(index, false);
         self.transmit_wakers

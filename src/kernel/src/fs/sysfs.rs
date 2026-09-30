@@ -69,7 +69,8 @@ use crate::device::{self, Location};
 use crate::devmgr::{self, Bus, Request};
 use crate::fs::devfs::{self, DiskInfo};
 use crate::fs::{self, procfs};
-use crate::{display, input, net, net_ring, render, smp};
+use crate::interfaces::{display, input, net_ring, render};
+use crate::{net, smp};
 
 /// `SYSFS_MAGIC`, from `include/uapi/linux/magic.h`: how a program tells a
 /// real sysfs from a directory somebody made.

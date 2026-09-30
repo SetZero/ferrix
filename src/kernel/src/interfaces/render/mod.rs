@@ -11,7 +11,7 @@
 //! called. A command buffer's bytes go through a VMO neither side reads on
 //! the way past.
 //!
-//! The shape is `crate::display`'s, because the problems are the same: one
+//! The shape is `crate::interfaces::display`'s, because the problems are the same: one
 //! control channel per device made by a native call, a task per device, a
 //! HELLO within its patience or the driver is refused, and `src/lib/proto/renderctl`'s
 //! [`Session`] judging every reply so that a driver which answers a question
@@ -549,7 +549,7 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
         id,
         control: kernel_end,
         device: Arc::clone(node),
-        location: crate::block_ring::location_of(node),
+        location: crate::interfaces::block_ring::location_of(node),
     });
     if sched::spawn("render", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);
@@ -825,7 +825,7 @@ impl Renderer {
             uid: 0,
             gid: 0,
             size: 0,
-            rdev: ferrix_vfs::initramfs::makedev(crate::display::DRM_MAJOR, self.index),
+            rdev: ferrix_vfs::initramfs::makedev(crate::interfaces::display::DRM_MAJOR, self.index),
             blocks: 0,
             block_size: 4096,
             atime: Timespec::default(),
@@ -1378,7 +1378,7 @@ impl Renderer {
     /// Let go of `objects`, and then of `context`, without waiting for the
     /// device to answer.
     ///
-    /// The same bargain [`crate::display::Card::release`] makes when a card's
+    /// The same bargain [`crate::interfaces::display::Card::release`] makes when a card's
     /// open closes: a close does not wait on a device, so the replies go to
     /// [`serve`], which drops them. An object the device would not let go of
     /// stays tracked and its id is never handed out again. What the driver's

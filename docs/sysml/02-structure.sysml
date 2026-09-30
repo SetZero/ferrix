@@ -1330,7 +1330,7 @@ package FerrixStructure {
             @stage { number = 11; }
             doc /* The block core's request queue: merging, flush and FUA
                  * barriers no request crosses, deadline scheduling. In front
-                 * of every block ring in the kernel (src/kernel/src/block_ring).
+                 * of every block ring in the kernel (src/kernel/src/interfaces/block_ring).
                  * Checked against a model by the block_queue fuzz target. */
         }
         #implemented part blkRing : LibraryCrate {

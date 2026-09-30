@@ -677,7 +677,7 @@ pub(crate) static LOG_CONTROL: Explanation = Explanation {
         "The claim is not let go when the task ends, so `CLAIMED` stays set and every later \
          `log_control_create` answers `ALREADY_BOUND`.",
     ],
-    see: "src/kernel/src/logctl/check.rs; src/kernel/src/logctl/mod.rs; src/lib/proto/logctl",
+    see: "src/kernel/src/interfaces/logctl/check.rs; src/kernel/src/interfaces/logctl/mod.rs; src/lib/proto/logctl",
 };
 
 /// For `kmain` in `main.rs`, when `console::log_check::run` fails.
@@ -1381,7 +1381,7 @@ pub(crate) static NET_RING: Explanation = Explanation {
         "The ring's task did not stop when the control channel closed, which a frame count \
          taken after the check would then see as a leak.",
     ],
-    see: "src/kernel/src/net_ring/check.rs; src/kernel/src/net_ring/mod.rs; src/lib/proto/netring; \
+    see: "src/kernel/src/interfaces/net_ring/check.rs; src/kernel/src/interfaces/net_ring/mod.rs; src/lib/proto/netring; \
           docs/NET-RING.md",
 };
 
@@ -1508,7 +1508,7 @@ pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
          addresses, the IOMMU domain, or the ring's data copy disagree with the device.",
         "The initramfs carries no `/sbin/blk`: `tools/common/xtask/src/native.rs` no longer lists it.",
     ],
-    see: "src/kernel/src/block_ring/driver_check.rs; src/user/native/drivers/block/virtio-blk/src/main.rs; docs/BLOCK-RING.md; \
+    see: "src/kernel/src/interfaces/block_ring/driver_check.rs; src/user/native/drivers/block/virtio-blk/src/main.rs; docs/BLOCK-RING.md; \
           docs/ROADMAP.md stage 10",
 };
 
@@ -1542,7 +1542,7 @@ pub(crate) static STAGE10_RING: Explanation = Explanation {
         "The second round did not give every frame back: the ring's VMO holds, its task's \
          stack or the registry leak.",
     ],
-    see: "src/kernel/src/block_ring/mod.rs; src/kernel/src/block_ring/check.rs; docs/BLOCK-RING.md; \
+    see: "src/kernel/src/interfaces/block_ring/mod.rs; src/kernel/src/interfaces/block_ring/check.rs; docs/BLOCK-RING.md; \
           docs/ROADMAP.md stage 10",
 };
 

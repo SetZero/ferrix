@@ -4,7 +4,7 @@ Version 1. Written by ferrix-61 (stage 11, formerly ferrix-4d), the ring's first
 consumer; reviewed and approved with changes by ferrix-d9 (stage 10, formerly
 ferrix-8b), who owns the ring, `devmgr` and the driver; identity and naming
 decided by the product owner, ferrix-32. `src/lib/proto/blkring` (`ferrix-blkring`)
-implements it, host-tested, under Miri and fuzzed. `src/kernel/src/block_ring`
+implements it, host-tested, under Miri and fuzzed. `src/kernel/src/interfaces/block_ring`
 is the kernel glue; the driver process is not built yet.
 
 ## 1. What this is, and what it is not

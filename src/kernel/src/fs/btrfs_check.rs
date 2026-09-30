@@ -24,8 +24,8 @@ use ferrix_btrfs::crc32c;
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{Errno, FileType};
 
-use crate::block_ring::VIRTIO_BLK_MAJOR;
 use crate::fs;
+use crate::interfaces::block_ring::VIRTIO_BLK_MAJOR;
 
 /// The fixture's manifest: `kind hex(path) size crc32c` per line.
 const MANIFEST: &str = include_str!("../../../lib/fs/btrfs/testdata/manifest.txt");

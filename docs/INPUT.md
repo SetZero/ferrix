@@ -247,7 +247,7 @@ lands without further change.
 
 ### 3.1 Who owns the events: the core, per device, with a queue per open
 
-**The input core** (`src/kernel/src/input`) has one task per input device, as the
+**The input core** (`src/kernel/src/interfaces/input`) has one task per input device, as the
 display core has one per card. It holds what the driver said the device is,
 the device's current state (keys down, axis values, LEDs, switches), and the
 opens of its node, each with a queue of `input_event`s.
@@ -655,7 +655,7 @@ wrong answer rather than a failing test:
   every temporary up. The frame was larger than the stack and the first push
   double-faulted. `Hello::decode_into` now decodes onto the heap, and each
   large value has a frame of its own held apart by `#[inline(never)]`
-  (`src/kernel/src/input/mod.rs`, `judge`).
+  (`src/kernel/src/interfaces/input/mod.rs`, `judge`).
 * **`EVIOCGBIT` of a type with no bitmap is `EINVAL`.**
   `evdev_handle_get_bits` switches on the type, and `EV_REP`, `EV_PWR` and
   `EV_FF_STATUS` are not in the switch. A consumer that asked for every type

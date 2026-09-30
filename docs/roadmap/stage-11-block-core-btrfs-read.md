@@ -123,7 +123,7 @@ manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 **The seam measured, 1 (2026-09-27): what one crossing costs.** After the
 driver check, the kernel reads the pattern disk 1,024 times, 4 KiB at a time,
 one request at a time and then from 32 tasks at once, and times each read
-from the call to its answer (`src/kernel/src/block_ring/hop_check.rs`, the `seam`
+from the call to its answer (`src/kernel/src/interfaces/block_ring/hop_check.rs`, the `seam`
 boot line). The driver times its own submit-to-drain in each completion's
 `device_ticks` where ring 3 can read the kernel's counter: x86-64 today. That
 share holds the device and the interrupt's way up to the driver, so the rest

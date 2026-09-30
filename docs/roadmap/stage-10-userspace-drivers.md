@@ -489,7 +489,7 @@ under KVM, the completion after the fault and no further fault, since VT-d
 keeps one record; ARMv7-A unprobed at four processors and at two.
 
 **Done — the block ring's kernel side, up to a published disk.**
-`src/kernel/src/block_ring` is the glue `docs/BLOCK-RING.md` §8 leaves to the
+`src/kernel/src/interfaces/block_ring` is the glue `docs/BLOCK-RING.md` §8 leaves to the
 kernel. A process holding a device with `MANAGE` asks for a ring with
 `block_ring_create` (0x1048) and is answered the driver's end of the ring's
 control channel; the kernel's end goes to a task of its own per ring, which

@@ -34,7 +34,7 @@ through the Linux ABI so that Rust's existing compositor crates run unchanged.
   to whoever opened the card; a panic after that still writes text over it.
 
 **Done — iteration 1, a colour on the screen (2026-09-16).** `docs/DISPLAY.md`
-is the design. The display core (`src/kernel/src/display`) takes a ring-3
+is the design. The display core (`src/kernel/src/interfaces/display`) takes a ring-3
 driver's HELLO on a control channel `DISPLAY_CONTROL_CREATE` (0x104C) makes,
 checks it through `ferrix-displayctl`'s session, refuses it when the firmware
 framebuffer is memory the allocator owns, and publishes `/dev/dri/card0`: a
@@ -106,7 +106,7 @@ a report boundary unless it is full. It ran 10,523,605 inputs in ten minutes
 without a failure. No kernel code uses it yet: L5 is the process.
 
 **Done — L5, L6 and L7 of the input iteration: events, end to end
-(2026-09-17).** The input core (`src/kernel/src/input`) takes a ring-3 driver's
+(2026-09-17).** The input core (`src/kernel/src/interfaces/input`) takes a ring-3 driver's
 HELLO on a control channel `INPUT_CONTROL_CREATE` (0x104D) makes, judges it
 through `ferrix-inputctl`'s session, and publishes `/dev/input/eventN` with a
 boot line naming the device and what it publishes -- `input    event0 QEMU

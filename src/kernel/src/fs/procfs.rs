@@ -91,7 +91,7 @@ pub(crate) fn remember_command_line(line: &str) {
 
 /// The command line [`remember_command_line`] kept, or nothing before it:
 /// `/proc/cmdline`'s, and what the display core reads `drm.edid_firmware`
-/// from (`crate::display::edid`).
+/// from (`crate::interfaces::display::edid`).
 pub(crate) fn command_line() -> &'static [u8] {
     COMMAND_LINE.get().map_or(&[][..], Vec::as_slice)
 }

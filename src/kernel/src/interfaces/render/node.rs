@@ -10,7 +10,7 @@
 //!
 //! # Many opens, unlike a card
 //!
-//! [`crate::display::drm::CardFile`] allows one open at a time, a written
+//! [`crate::interfaces::display::drm::CardFile`] allows one open at a time, a written
 //! deviation from Linux. A render node does not: Linux's render nodes exist
 //! precisely so that every GL client opens one of its own without being the
 //! display's master, and §3.3 puts the handle table at the open for that
@@ -360,7 +360,7 @@ impl Inode for RenderFile {
     }
 
     /// `pread64` is a `read`, and `lseek` `ESPIPE`, as on a card: see
-    /// `crate::display::drm`'s documentation on offsets, which measured
+    /// `crate::interfaces::display::drm`'s documentation on offsets, which measured
     /// both kinds of node.
     fn ignores_position(&self) -> bool {
         true

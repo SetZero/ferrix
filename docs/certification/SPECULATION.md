@@ -420,7 +420,7 @@ back to link-time ones. The attacker in [SECURITY-TARGET.md](SECURITY-TARGET.md)
 is a program. Since 2026-09-26 the kernel keeps a log of what the console
 sends (`src/kernel/src/console/log.rs`), which `syslog(2)` reads and a ring-3
 driver may stream off the machine (the Pixel 7's USB serial port,
-`src/kernel/src/logctl`). The lines that print the layout are kept out of it
+`src/kernel/src/interfaces/logctl`). The lines that print the layout are kept out of it
 (`console::write_unlogged`): the panic's slide and backtrace, a fatal trap's
 headline and registers, stage 2's image, direct-map and page-array addresses,
 and the W^X and sealed-image sweeps' failure lines. They still go to the

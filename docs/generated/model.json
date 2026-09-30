@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "9f0e296311731d7613755b084b156fa3c4ce4ffe098d61a1d611bbfd0a1d1bf8",
+  "digest": "82e8c0f20b433d02a7c257b5fe700b15f3cf9d2486fc69b8efdf83fe36a230b1",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -5558,7 +5558,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 11,
-              "doc": "The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. In front of every block ring in the kernel (src/kernel/src/block_ring). Checked against a model by the block_queue fuzz target.",
+              "doc": "The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. In front of every block ring in the kernel (src/kernel/src/interfaces/block_ring). Checked against a model by the block_queue fuzz target.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1326
@@ -15464,7 +15464,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "The data path is not per-request IPC: driver and kernel share a descriptor ring in a VMO and ring a doorbell; requests batch. The same shape virtio and NVMe already use. src/lib/drivers/virtio's split virtqueue (driver and device halves, over abstract shared memory) is the first of these. Between kernel and driver: src/lib/proto/blkring (docs/BLOCK-RING.md) and src/lib/proto/netring (docs/NET-RING.md), with src/kernel/src/block_ring and src/kernel/src/net_ring as the kernel's ends and doorbells as port packets. The display and input drivers need none: frames do not move, and their control channels carry the rest.",
+          "doc": "The data path is not per-request IPC: driver and kernel share a descriptor ring in a VMO and ring a doorbell; requests batch. The same shape virtio and NVMe already use. src/lib/drivers/virtio's split virtqueue (driver and device halves, over abstract shared memory) is the first of these. Between kernel and driver: src/lib/proto/blkring (docs/BLOCK-RING.md) and src/lib/proto/netring (docs/NET-RING.md), with src/kernel/src/interfaces/block_ring and src/kernel/src/interfaces/net_ring as the kernel's ends and doorbells as port packets. The display and input drivers need none: frames do not move, and their control channels carry the rest.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 161
@@ -15802,7 +15802,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 11,
-          "doc": "Request queues, merging, an I/O scheduler with per-cgroup bandwidth, and the ring protocol to userspace block drivers. A read into a page-cache page fills the VMO the cache already holds. The queue itself (merging, flush and FUA barriers, deadline scheduling) is src/lib/fs/block, in front of every block ring (src/kernel/src/block_ring, src/lib/proto/blkring): one kernel task per ring moves requests onto it and copies payloads through the ring's data VMO, and publishes the disk in devfs's registry as a BlockDevice (src/kernel/src/fs/block.rs) that reads, writes and flushes whole sectors. No per-cgroup bandwidth: cgroups are stage 13's.",
+          "doc": "Request queues, merging, an I/O scheduler with per-cgroup bandwidth, and the ring protocol to userspace block drivers. A read into a page-cache page fills the VMO the cache already holds. The queue itself (merging, flush and FUA barriers, deadline scheduling) is src/lib/fs/block, in front of every block ring (src/kernel/src/interfaces/block_ring, src/lib/proto/blkring): one kernel task per ring moves requests onto it and copies payloads through the ring's data VMO, and publishes the disk in devfs's registry as a BlockDevice (src/kernel/src/fs/block.rs) that reads, writes and flushes whole sectors. No per-cgroup bandwidth: cgroups are stage 13's.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 16

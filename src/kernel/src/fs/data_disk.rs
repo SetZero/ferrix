@@ -20,10 +20,10 @@ use ferrix_sync::Once;
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{Errno, FileSystem};
 
-use crate::block_ring::VIRTIO_BLK_MAJOR;
 use crate::console::println;
 use crate::fs;
 use crate::fs::root_disk;
+use crate::interfaces::block_ring::VIRTIO_BLK_MAJOR;
 
 /// Where it is mounted, in the `/` processes see.
 const MOUNT_POINT: &[u8] = b"/data";

@@ -308,7 +308,7 @@ fn map_window(
     offset: u64,
 ) -> Result<usize, Errno> {
     let window = object
-        .downcast::<crate::render::node::Window>()
+        .downcast::<crate::interfaces::render::node::Window>()
         .map_err(|_| Errno::ENODEV)?;
     let (phys, bytes, cached) = window.place().ok_or(Errno::ENODEV)?;
     if !vma.shared {

@@ -124,7 +124,7 @@ where it closes.
 
 ### 3.1 Who owns the stream: the core, with a buffer it allocates
 
-**The audio core** (`src/kernel/src/audio`) has one task per card, as the input
+**The audio core** (`src/kernel/src/interfaces/audio`) has one task per card, as the input
 core has one per device. It holds what the driver said the device offers,
 and for each playback stream it publishes: the state, the buffer, and the
 pointers.
@@ -673,14 +673,14 @@ and AArch64:
 
 * **L5.** `src/user/native/drivers/sound/virtio-snd` is the driver process. devmgr starts it for PCI
   0x1059 (`Kind::Sound`), and `sound_control_create` (native call 0x1050)
-  gives it its channel. `src/kernel/src/audio` is the core: a task per card
+  gives it its channel. `src/kernel/src/interfaces/audio` is the core: a task per card
   that judges HELLO, allocates the stream's buffer as a VMO (four pages
   then, fifteen now),
   publishes the card and answers READY with it. The boot line is
   `audio    card0 virtio-snd: playback 48000 Hz, 2 channels, S16_LE, 1
   stream left out`.
 * **L6.** devfs has `/dev/snd/controlC0` (116:0) and `pcmC0D0p` (116:16)
-  while a card is published. `src/kernel/src/audio/pcm.rs` answers §3.4's
+  while a card is published. `src/kernel/src/interfaces/audio/pcm.rs` answers §3.4's
   subset over `ferrix-sndctl`'s stream. `WRITEI_FRAMES` copies from the
   program with no lock held and then submits, and a non-blocking descriptor
   gets a short count or `EAGAIN`. Every message the stream asks the driver

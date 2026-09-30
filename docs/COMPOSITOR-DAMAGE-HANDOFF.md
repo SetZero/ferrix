@@ -216,7 +216,7 @@ been pacing of a kind; at 0.06 ms the loop drew one for every report the
 mouse sent, and a frame is not only drawing. On a card it ends in a page
 flip, and Ferrix's virtio-gpu answers a flip by setting the scanout and
 sending the **whole** framebuffer to the host, waited for (`show` in
-`src/kernel/src/display/drm.rs`). A guest with one processor spent it doing
+`src/kernel/src/interfaces/display/drm.rs`). A guest with one processor spent it doing
 that.
 
 * `hyprix::pace`: a change is owed a frame, and the frame is the next one

@@ -119,7 +119,7 @@
 //!   `pts` slaves -- are `ESPIPE`, as they are on Linux.
 //! - The DRM nodes, `dri/card<N>` and `dri/renderD<N>`, are `ESPIPE` to
 //!   `lseek` but take `pread64` as a `read`, as Linux's do on this host:
-//!   what their open files answer, and why, is in `crate::display::drm`.
+//!   what their open files answer, and why, is in `crate::interfaces::display::drm`.
 
 pub(crate) mod check;
 
@@ -821,12 +821,12 @@ impl Inode for Node {
                 atime: self.made,
                 mtime: self.made,
                 ctime: self.made,
-                ..crate::input::evdev::metadata(index)
+                ..crate::interfaces::input::evdev::metadata(index)
             },
-            (Place::Card(index), _) => crate::display::card(index).map_or(
+            (Place::Card(index), _) => crate::interfaces::display::card(index).map_or(
                 Metadata {
                     kind: FileType::CharDevice,
-                    rdev: makedev(crate::display::DRM_MAJOR, index),
+                    rdev: makedev(crate::interfaces::display::DRM_MAJOR, index),
                     ..directory
                 },
                 |card| Metadata {
@@ -838,10 +838,10 @@ impl Inode for Node {
             ),
             // The same major as a card, with the node's own number for its
             // minor, as Linux numbers `renderD128` 226:128.
-            (Place::Render(index), _) => crate::render::renderer(index).map_or(
+            (Place::Render(index), _) => crate::interfaces::render::renderer(index).map_or(
                 Metadata {
                     kind: FileType::CharDevice,
-                    rdev: makedev(crate::display::DRM_MAJOR, index),
+                    rdev: makedev(crate::interfaces::display::DRM_MAJOR, index),
                     ..directory
                 },
                 |renderer| Metadata {
@@ -926,36 +926,36 @@ impl Inode for Node {
             return Ok(None);
         }
         if let Place::Card(index) = self.place {
-            let card = crate::display::card(index).ok_or(Errno::ENXIO)?;
-            let file: Arc<dyn Inode> = crate::display::drm::CardFile::open(card)?;
+            let card = crate::interfaces::display::card(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::interfaces::display::drm::CardFile::open(card)?;
             return Ok(Some(file));
         }
         // Every open of a render node is its own, and there may be any
         // number: a render node is not the display's master, which is what
         // Linux has them for and what `docs/GPU.md` §3.3 keeps.
         if let Place::Render(index) = self.place {
-            let renderer = crate::render::renderer(index).ok_or(Errno::ENXIO)?;
-            let file: Arc<dyn Inode> = crate::render::node::RenderFile::open(renderer)?;
+            let renderer = crate::interfaces::render::renderer(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::interfaces::render::node::RenderFile::open(renderer)?;
             return Ok(Some(file));
         }
         // Every open of an input device gets its own object, with its own
         // queue, clock and grab: `docs/INPUT.md` §3.3 allows any number,
         // as Linux does.
         if let Place::Event(index) = self.place {
-            let device = crate::input::device(index).ok_or(Errno::ENXIO)?;
-            let file: Arc<dyn Inode> = crate::input::evdev::EventFile::open(device)?;
+            let device = crate::interfaces::input::device(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::interfaces::input::evdev::EventFile::open(device)?;
             return Ok(Some(file));
         }
         // A sound card's nodes: the playback node one open at a time, the
         // control node any number (`docs/AUDIO.md` §3.1).
         if let Place::SoundPcm(index) = self.place {
-            let card = crate::audio::card(index).ok_or(Errno::ENXIO)?;
-            let file: Arc<dyn Inode> = crate::audio::pcm::PcmFile::open(card)?;
+            let card = crate::interfaces::audio::card(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::interfaces::audio::pcm::PcmFile::open(card)?;
             return Ok(Some(file));
         }
         if let Place::SoundControl(index) = self.place {
-            let card = crate::audio::card(index).ok_or(Errno::ENXIO)?;
-            let file: Arc<dyn Inode> = crate::audio::pcm::ControlFile::open(card)?;
+            let card = crate::interfaces::audio::card(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::interfaces::audio::pcm::ControlFile::open(card)?;
             return Ok(Some(file));
         }
         // A slave is one object a pair, shared by every open of it, as a
@@ -1035,23 +1035,23 @@ impl Inode for Node {
         if self.place == Place::Dri {
             // `renderD<N>` first: a card's name cannot be mistaken for one,
             // and a render node is not a card with another name.
-            if let Some(index) = crate::render::node::render_number(name) {
-                let _renderer = crate::render::renderer(index).ok_or(Errno::ENOENT)?;
+            if let Some(index) = crate::interfaces::render::node::render_number(name) {
+                let _renderer = crate::interfaces::render::renderer(index).ok_or(Errno::ENOENT)?;
                 return Ok(Arc::new(Node {
                     place: Place::Render(index),
                     made: self.made,
                 }));
             }
             let index = card_number(name).ok_or(Errno::ENOENT)?;
-            let _card = crate::display::card(index).ok_or(Errno::ENOENT)?;
+            let _card = crate::interfaces::display::card(index).ok_or(Errno::ENOENT)?;
             return Ok(Arc::new(Node {
                 place: Place::Card(index),
                 made: self.made,
             }));
         }
         if self.place == Place::Input {
-            let index = crate::input::evdev::event_number(name).ok_or(Errno::ENOENT)?;
-            let _device = crate::input::device(index).ok_or(Errno::ENOENT)?;
+            let index = crate::interfaces::input::evdev::event_number(name).ok_or(Errno::ENOENT)?;
+            let _device = crate::interfaces::input::device(index).ok_or(Errno::ENOENT)?;
             return Ok(Arc::new(Node {
                 place: Place::Event(index),
                 made: self.made,
@@ -1059,7 +1059,7 @@ impl Inode for Node {
         }
         if self.place == Place::Snd {
             let (index, pcm) = sound_node(name).ok_or(Errno::ENOENT)?;
-            let _card = crate::audio::card(index).ok_or(Errno::ENOENT)?;
+            let _card = crate::interfaces::audio::card(index).ok_or(Errno::ENOENT)?;
             return Ok(Arc::new(Node {
                 place: if pcm {
                     Place::SoundPcm(index)
@@ -1083,21 +1083,21 @@ impl Inode for Node {
             return Err(Errno::ENOTDIR);
         }
         if name == DRI
-            && !(crate::display::card_indices().is_empty()
-                && crate::render::renderer_indices().is_empty())
+            && !(crate::interfaces::display::card_indices().is_empty()
+                && crate::interfaces::render::renderer_indices().is_empty())
         {
             return Ok(Arc::new(Node {
                 place: Place::Dri,
                 made: self.made,
             }));
         }
-        if name == INPUT && !crate::input::device_indices().is_empty() {
+        if name == INPUT && !crate::interfaces::input::device_indices().is_empty() {
             return Ok(Arc::new(Node {
                 place: Place::Input,
                 made: self.made,
             }));
         }
-        if name == SND && !crate::audio::card_indices().is_empty() {
+        if name == SND && !crate::interfaces::audio::card_indices().is_empty() {
             return Ok(Arc::new(Node {
                 place: Place::Snd,
                 made: self.made,
@@ -1141,7 +1141,7 @@ impl Inode for Node {
             return read_dri(cursor, emit);
         }
         if self.place == Place::Input {
-            return crate::input::evdev::read_dir(cursor, emit);
+            return crate::interfaces::input::evdev::read_dir(cursor, emit);
         }
         if self.place == Place::Snd {
             return read_snd(cursor, emit);
@@ -1192,7 +1192,7 @@ impl Inode for Node {
                 return Ok(());
             }
         }
-        if cursor <= DRI_CURSOR && !crate::display::card_indices().is_empty() {
+        if cursor <= DRI_CURSOR && !crate::interfaces::display::card_indices().is_empty() {
             let kept = emit(DirEntry {
                 ino: DRI_INO,
                 kind: FileType::Directory,
@@ -1203,7 +1203,7 @@ impl Inode for Node {
                 return Ok(());
             }
         }
-        if cursor <= INPUT_CURSOR && !crate::input::device_indices().is_empty() {
+        if cursor <= INPUT_CURSOR && !crate::interfaces::input::device_indices().is_empty() {
             let kept = emit(DirEntry {
                 ino: INPUT_INO,
                 kind: FileType::Directory,
@@ -1260,7 +1260,7 @@ impl Inode for Node {
         let Place::Card(index) = self.place else {
             return None;
         };
-        let card = crate::display::card(index)?;
+        let card = crate::interfaces::display::card(index)?;
         let vmo: Arc<dyn Any + Send + Sync> = Arc::clone(&card.vmo) as Arc<dyn Any + Send + Sync>;
         Some(vmo)
     }
@@ -1310,7 +1310,7 @@ fn card_number(name: &[u8]) -> Option<u32> {
 /// `/dev/dri`'s listing: every published card, by number.
 fn read_dri(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
     let first = cursor.saturating_sub(FIRST_CURSOR);
-    for index in crate::display::card_indices() {
+    for index in crate::interfaces::display::card_indices() {
         if u64::from(index) < first {
             continue;
         }
@@ -1327,7 +1327,7 @@ fn read_dri(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<(
     }
     // Then the render nodes, which are numbered from 128 upwards where a
     // card's number is small, so one cursor counts through both in order.
-    for index in crate::render::renderer_indices() {
+    for index in crate::interfaces::render::renderer_indices() {
         if u64::from(index) < first {
             continue;
         }
@@ -1446,15 +1446,15 @@ fn sound_node(name: &[u8]) -> Option<(u32, bool)> {
 /// `/dev/snd`'s entries: each card's control node, then its playback node.
 fn read_snd(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
     let mut next = FIRST_CURSOR;
-    for index in crate::audio::card_indices() {
+    for index in crate::interfaces::audio::card_indices() {
         let names = [
             (
                 alloc::format!("controlC{index}"),
-                crate::audio::pcm::control_metadata(index).ino,
+                crate::interfaces::audio::pcm::control_metadata(index).ino,
             ),
             (
                 alloc::format!("pcmC{index}D0p"),
-                crate::audio::pcm::pcm_metadata(index).ino,
+                crate::interfaces::audio::pcm::pcm_metadata(index).ino,
             ),
         ];
         for (name, ino) in &names {
@@ -1480,8 +1480,8 @@ fn read_snd(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<(
 /// `/dev/snd`'s metadata, and its nodes'.
 fn sound_metadata(place: Place, made: Timespec, directory: Metadata) -> Metadata {
     let node = match place {
-        Place::SoundControl(index) => crate::audio::pcm::control_metadata(index),
-        Place::SoundPcm(index) => crate::audio::pcm::pcm_metadata(index),
+        Place::SoundControl(index) => crate::interfaces::audio::pcm::control_metadata(index),
+        Place::SoundPcm(index) => crate::interfaces::audio::pcm::pcm_metadata(index),
         _ => {
             return Metadata {
                 ino: SND_INO,
@@ -1530,7 +1530,7 @@ fn emit_links(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) {
 /// The root's entry for `/dev/snd`, while a card is published; whether the
 /// listing may go on.
 fn emit_snd(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> bool {
-    if cursor <= SND_CURSOR && !crate::audio::card_indices().is_empty() {
+    if cursor <= SND_CURSOR && !crate::interfaces::audio::card_indices().is_empty() {
         return emit(DirEntry {
             ino: SND_INO,
             kind: FileType::Directory,

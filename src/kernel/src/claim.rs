@@ -34,7 +34,7 @@ use crate::timer;
 
 /// Why a device node cannot be quiesced.
 ///
-/// Defined here rather than in `crate::block_ring` because the claim is the
+/// Defined here rather than in `crate::interfaces::block_ring` because the claim is the
 /// core's: a quiesce asks whether anything still serves a node, and the answer
 /// must not depend on which uncertified subsystem happens to be serving it.
 /// `block_ring`, `render` and `display` each answer with this.

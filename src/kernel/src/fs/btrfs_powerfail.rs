@@ -35,9 +35,9 @@ use ferrix_btrfs::crc32c::crc32c_update;
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{Errno, NewNode};
 
-use crate::block_ring::VIRTIO_BLK_MAJOR;
 use crate::console::println;
 use crate::fs;
+use crate::interfaces::block_ring::VIRTIO_BLK_MAJOR;
 
 /// Where the writable disk is mounted.
 const MOUNT_POINT: &[u8] = b"/mnt-pf";

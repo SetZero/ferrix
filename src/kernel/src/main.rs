@@ -20,30 +20,25 @@ extern crate alloc;
 )]
 mod acpi;
 mod arch;
-mod audio;
 mod audit;
 mod backtrace;
-mod block_ring;
 mod checks;
 mod claim;
 mod console;
 mod device;
 mod devmgr;
-mod display;
 mod early;
 mod fallible;
 mod fdt;
 mod fs;
 mod hooks;
 mod init;
-mod input;
+mod interfaces;
 mod iommu;
 mod irq;
-mod logctl;
 mod mm;
 mod mmio;
 mod net;
-mod net_ring;
 mod object;
 mod panic;
 mod pci;
@@ -66,7 +61,6 @@ mod platform {
 }
 mod power;
 mod random;
-mod render;
 mod sched;
 mod service_check;
 mod signal_frame;
@@ -86,6 +80,7 @@ use ferrix_paging::MapError;
 
 use console::{println, println_unlogged};
 use early::EarlyMemory;
+use interfaces::{audio, block_ring, display, input, logctl, net_ring, render};
 use panic::{catalog, fatal};
 
 /// What the boot test waits for. Changing it means changing

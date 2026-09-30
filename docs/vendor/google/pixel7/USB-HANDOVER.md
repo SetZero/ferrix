@@ -300,7 +300,7 @@ What each part is, now on `main`:
   ferrix-55): `src/kernel/src/console/log.rs`, a static 128 KiB ring of every
   console byte less the kernel's layout (the KASLR slide, trace frames,
   trap registers); `syslog(2)` reads it, privileged for every action, so
-  `dmesg` works; `src/kernel/src/logctl` serves it over `LOG_CONTROL_CREATE`,
+  `dmesg` works; `src/kernel/src/interfaces/logctl` serves it over `LOG_CONTROL_CREATE`,
   which only this controller's node may call, one reader at a time
   (`src/lib/proto/logctl`). Its coverage arguments are staged for ferrix-55's
   next evidence run, not committed.
@@ -371,7 +371,7 @@ and every worktree, branch and target directory of its own removed.
   `src/kernel/src/platform/google/gs201/usb.rs` (binding), `src/lib/drivers/usb/dwc3` and
   `src/lib/drivers/usb/usb-device` (host-tested, `cargo test -p ferrix-dwc3
   -p ferrix-usb-device`), `src/user/native/drivers/usb/usbdev` (driver),
-  `src/kernel/src/console/log.rs` and `src/kernel/src/logctl` (the log and its
+  `src/kernel/src/console/log.rs` and `src/kernel/src/interfaces/logctl` (the log and its
   reader, in the certified item: ask the certification session before
   changing either), `tools/vendor/google/pixel7/monitor/src/usb.rs` (watcher).
 * **Still in someone else's hands:** the log's coverage arguments, in
