@@ -344,7 +344,7 @@ pub(crate) fn show_gid(kernel: u32) -> u32 {
 }
 
 fn show(kind: userns::Kind, kernel: u32) -> u32 {
-    match crate::syscall::process::current() {
+    match userns::acting() {
         Some(reader) => {
             reader.with_credentials(|held| userns::from_kid_munged(&held.user_ns, kind, kernel))
         }

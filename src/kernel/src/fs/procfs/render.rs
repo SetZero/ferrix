@@ -223,7 +223,7 @@ pub(super) fn user_namespace(process: &Process) -> Result<Vec<u8>> {
 /// The user namespace the reading process is in: the first, for the kernel's
 /// own reads.
 fn reader_namespace() -> Arc<UserNamespace> {
-    process::current().map_or_else(
+    userns::acting().map_or_else(
         || Arc::clone(userns::first()),
         |reader| reader.with_credentials(|held| Arc::clone(&held.user_ns)),
     )
@@ -250,7 +250,7 @@ pub(super) fn write_id_map(
     data: &[u8],
 ) -> Result<usize> {
     let opener = opener.ok_or(Errno::EPERM)?;
-    let writer = process::current()
+    let writer = userns::acting()
         .ok_or(Errno::EPERM)?
         .with_credentials(|held| held.clone());
     let namespace = process.with_credentials(|held| Arc::clone(&held.user_ns));
