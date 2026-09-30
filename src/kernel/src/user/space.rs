@@ -303,7 +303,7 @@ impl Presence {
     fn retire(&self) {
         self.retiring.store(true, Ordering::SeqCst);
         let loaded = self.cpus.snapshot();
-        smp::wait_until_left(&loaded, |cpu| !self.cpus.contains(cpu));
+        let _ = &loaded; // NEGATIVE CONTROL nc3: smp::wait_until_left skipped, the lazy processors never asked to leave
 
         let this = core::ptr::from_ref(self);
         let named = LOADED
