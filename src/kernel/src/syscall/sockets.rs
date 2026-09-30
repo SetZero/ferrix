@@ -68,6 +68,7 @@ use crate::net::netlink::{self as netlink, NetlinkSocket};
 use crate::net::packet::PacketSocket;
 use crate::net::socket::{self as inet, InetKind, InetSocket};
 use crate::syscall::attributes::int;
+use crate::syscall::credentials;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
@@ -1089,14 +1090,16 @@ fn named_credentials(process: &Process, data: &[u8]) -> Result<Ucred, Errno> {
             .map(u32::from_le_bytes)
             .ok_or(Errno::EINVAL)
     };
+    // The ids are as the sender's namespace names them; the stamp holds
+    // kernel ids, and an id the namespace does not map is refused.
     let named = Ucred {
         pid: field(0)?.cast_signed(),
-        uid: field(4)?,
-        gid: field(8)?,
+        uid: credentials::kernel_uid(process, field(4)?)?,
+        gid: credentials::kernel_gid(process, field(8)?)?,
     };
     let allowed = process.with_credentials(|credentials| {
         let (user, group) = (&credentials.user, &credentials.group);
-        user.effective == 0
+        credentials.privileged()
             || (u32::try_from(named.pid).is_ok_and(|pid| pid == process.pid())
                 && [user.real, user.effective, user.saved].contains(&named.uid)
                 && [group.real, group.effective, group.saved].contains(&named.gid))
@@ -1227,7 +1230,7 @@ fn unix_control(
         let stamp = inet::Control {
             level: SOL_SOCKET,
             kind: SCM_CREDENTIALS,
-            data: sender.to_bytes().to_vec(),
+            data: fs::socket::as_seen(sender).to_bytes().to_vec(),
         };
         write_control(process, (control, capacity), &[stamp], width)?
     } else {

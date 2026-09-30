@@ -49,6 +49,7 @@ use crate::syscall::fd;
 use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
+use crate::syscall::userns;
 use crate::trap::Abi;
 
 /// The encoding half of [`arch::StatLayout`], whose variants are declared in
@@ -103,6 +104,19 @@ pub(crate) fn sys_fstatat(
     write_stat(process, buf, &target.stat()?, abi)
 }
 
+/// `stat` with its owner and group as `process`'s user namespace names them,
+/// or the overflow id for ones it does not (rule U9).
+fn seen_by(process: &Process, stat: &Stat) -> Stat {
+    let mut seen = *stat;
+    process.with_credentials(|held| {
+        seen.metadata.uid =
+            userns::from_kid_munged(&held.user_ns, userns::Kind::User, stat.metadata.uid);
+        seen.metadata.gid =
+            userns::from_kid_munged(&held.user_ns, userns::Kind::Group, stat.metadata.gid);
+    });
+    seen
+}
+
 /// `fstat` and `fstat64`.
 pub(crate) fn sys_fstat(process: &Process, fd: i32, buf: u64, abi: Abi) -> Result<usize, Errno> {
     let target = Target::Open(fd::file(process, fd)?);
@@ -113,6 +127,7 @@ pub(crate) fn sys_fstat(process: &Process, fd: i32, buf: u64, abi: Abi) -> Resul
 /// in i386's `struct stat64` for an i386 program, which is not one of the
 /// architecture's own and so is chosen here rather than in the facade.
 fn write_stat(process: &Process, buf: u64, stat: &Stat, abi: Abi) -> Result<usize, Errno> {
+    let stat = &seen_by(process, stat);
     let record = match abi {
         Abi::Compat => i386_stat64(stat),
         Abi::Native => arch::STAT_LAYOUT.encode(stat),
@@ -143,7 +158,10 @@ pub(crate) fn sys_statx(
         return Err(Errno::EINVAL);
     }
     let target = path::target(process, dirfd, path, flags)?;
-    let record = statx_record(&target.stat()?, target.location().mount.id());
+    let record = statx_record(
+        &seen_by(process, &target.stat()?),
+        target.location().mount.id(),
+    );
     uaccess::copy_to_user(process.space(), buf, &record).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }

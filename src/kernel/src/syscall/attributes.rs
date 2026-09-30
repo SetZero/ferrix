@@ -263,6 +263,8 @@ mod option {
     pub(super) const PR_GET_NAME: i32 = 16;
     /// Whether a capability is in the bounding set.
     pub(super) const PR_CAPBSET_READ: i32 = 23;
+    /// Take a capability out of the bounding set, for good.
+    pub(super) const PR_CAPBSET_DROP: i32 = 24;
     /// Mark the process as a reaper of orphaned descendants.
     pub(super) const PR_SET_CHILD_SUBREAPER: i32 = 36;
     /// Read that mark, through a pointer to an `int`.
@@ -318,8 +320,25 @@ pub(crate) fn sys_prctl(process: &Process, option: i32, args: [u64; 4]) -> Resul
             uaccess::copy_to_user(space, arg2, &name).map_err(|_| Errno::EFAULT)?;
             Ok(0)
         }
-        option::PR_CAPBSET_READ if arg2 <= u64::from(CAP_LAST_CAP) => Ok(1),
+        option::PR_CAPBSET_READ if arg2 <= u64::from(CAP_LAST_CAP) => {
+            Ok(usize::from(process.with_credentials(|held| {
+                held.caps.bounding >> arg2 & 1 != 0
+            })))
+        }
         option::PR_CAPBSET_READ => Err(Errno::EINVAL),
+        // Linux's `cap_task_prctl`: `EINVAL` past the last capability, `EPERM`
+        // without `CAP_SETPCAP` in the caller's namespace. In the first
+        // namespace it is recorded and reported, not enforced.
+        option::PR_CAPBSET_DROP if arg2 <= u64::from(CAP_LAST_CAP) => {
+            process.with_credentials(|held| {
+                if !held.holds(crate::syscall::userns::CAP_SETPCAP) {
+                    return Err(Errno::EPERM);
+                }
+                held.caps.bounding &= !(1_u64 << arg2);
+                Ok(0)
+            })
+        }
+        option::PR_CAPBSET_DROP => Err(Errno::EINVAL),
         option::PR_SET_CHILD_SUBREAPER => {
             update(process, |a| a.child_subreaper = arg2 != 0);
             Ok(0)
@@ -511,9 +530,14 @@ fn named_by(process: &Process, which: i32, who: i32) -> Result<Vec<Subject<'_>>,
         // A user's processes: those whose real uid it is, and the caller's
         // own real uid for zero.
         PRIO_USER => {
+            // `who` is a user id as the caller's namespace names it; one it does
+            // not map names no one.
             let uid = match u32::try_from(who) {
                 Ok(0) => process.with_credentials(|ids| ids.user.real),
-                Ok(uid) => uid,
+                Ok(uid) => match credentials::kernel_uid(process, uid) {
+                    Ok(uid) => uid,
+                    Err(_) => return Ok(Vec::new()),
+                },
                 Err(_) => return Ok(Vec::new()),
             };
             Ok(registry::live()?

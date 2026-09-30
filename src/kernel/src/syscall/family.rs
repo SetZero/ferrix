@@ -45,7 +45,7 @@ use crate::fs::cgroupfs;
 use crate::object::job::{self, Job};
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::{self, Thread};
-use crate::syscall::{credentials, fd, namespace, registry, thread_area, uaccess};
+use crate::syscall::{fd, namespace, registry, thread_area, uaccess, userns};
 use crate::trap::Abi;
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
@@ -107,8 +107,8 @@ const CLONE_NEWUSER: u64 = 0x1000_0000;
 const CLONE_NEWPID: u64 = 0x2000_0000;
 /// ... a network namespace.
 const CLONE_NEWNET: u64 = 0x4000_0000;
-/// Every namespace a child could be asked to be given, and none of which
-/// exists. `CLONE_NEWTIME` is not among them because it is not reachable:
+/// Every namespace a child could be asked to be given. A mount and a user
+/// namespace exist; the rest do not. `CLONE_NEWTIME` is not among them because it is not reachable:
 /// its bit is inside `CSIGNAL`, so `clone` reads it as an exit signal, as
 /// Linux does, and [`clone3_request`] refuses `CSIGNAL` outright.
 const CLONE_NAMESPACES: u64 = CLONE_NEWNS
@@ -401,14 +401,29 @@ fn give_thread_pointer(state: &mut arch::UserState, tls: u64, thread_area: Optio
 /// refuses a namespace a shared fs context would leave; `EPERM` for
 /// `CLONE_NEWNS` without privilege.
 fn namespaces_asked(parent: &Process, flags: u64) -> Result<(), Errno> {
-    if flags & (CLONE_NAMESPACES & !CLONE_NEWNS) != 0 {
+    if flags & (CLONE_NAMESPACES & !(CLONE_NEWNS | CLONE_NEWUSER)) != 0 {
+        return Err(Errno::EINVAL);
+    }
+    // CVE-2013-1858 (U5): a root shared with a process outside, then `chroot`
+    // inside. And a thread cannot have a user namespace of its own.
+    if flags & CLONE_NEWUSER != 0 && flags & (CLONE_FS | CLONE_THREAD) != 0 {
         return Err(Errno::EINVAL);
     }
     if flags & CLONE_NEWNS != 0 {
         if flags & CLONE_FS != 0 {
             return Err(Errno::EINVAL);
         }
-        credentials::require_privilege(parent)?;
+        // With a user namespace the child holds the capability in it.
+        if flags & CLONE_NEWUSER == 0
+            && !parent.with_credentials(|held| held.holds(userns::CAP_SYS_ADMIN))
+        {
+            return Err(Errno::EPERM);
+        }
+    }
+    if flags & CLONE_NEWUSER != 0 {
+        // Refused here, before anything is made, what `unshare` refuses the
+        // same way; the namespace itself is made with the child.
+        namespace::make_user_namespace(parent).map(drop)?;
     }
     Ok(())
 }
@@ -478,6 +493,10 @@ fn clone_with(
     }
     // Its own copy of the namespace, before anything can see it: a refusal
     // goes with the child, unstarted.
+    if flags & CLONE_NEWUSER != 0 {
+        let fresh = namespace::make_user_namespace(parent)?;
+        namespace::enter_user_namespace(&child, fresh);
+    }
     if flags & CLONE_NEWNS != 0 {
         namespace::copy_namespace(child.fs_context())?;
     }

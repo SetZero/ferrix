@@ -110,7 +110,7 @@ use ferrix_vfs::{
 
 use crate::fs;
 use crate::panic::{catalog, fatal};
-use crate::syscall::process::Process;
+use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
 
 /// What an entry's functions are handed at the top level: nothing, because a
@@ -143,6 +143,11 @@ pub(crate) enum Content<T: 'static> {
     },
     /// A symbolic link, whose target is rendered each time it is read.
     Link(fn(&T) -> Result<Vec<u8>>),
+    /// `/proc/<pid>/uid_map`, `gid_map` or `setgroups`: read as the reader's
+    /// namespace shows it, written once by the rules of
+    /// `docs/NAMESPACES.md` §2.2 (U2 to U4), judged against who opened the
+    /// file and who writes it.
+    IdMap(MapFile),
     /// `/proc/<pid>/fd`: a link per open descriptor.
     Descriptors,
     /// `/proc/<pid>/ns`: a link per namespace the process is in, of which
@@ -162,6 +167,34 @@ pub(crate) enum Content<T: 'static> {
     },
 }
 
+/// Which of a user namespace's three files an [`Content::IdMap`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MapFile {
+    /// `uid_map`.
+    Uid,
+    /// `gid_map`.
+    Gid,
+    /// `setgroups`.
+    Setgroups,
+}
+
+/// The namespaces under `/proc/<pid>/ns`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamespaceKind {
+    /// `mnt`.
+    Mount = 0,
+    /// `user`.
+    User = 1,
+}
+
+impl NamespaceKind {
+    /// Every one, in the order `ns` lists them, with its name.
+    const ALL: [(NamespaceKind, &'static [u8]); 2] = [
+        (NamespaceKind::Mount, b"mnt"),
+        (NamespaceKind::User, b"user"),
+    ];
+}
+
 /// One name in a table.
 pub(crate) struct Entry<T: 'static> {
     /// The name.
@@ -175,13 +208,16 @@ pub(crate) struct Entry<T: 'static> {
 impl<T> Entry<T> {
     /// Whether this entry is a file that takes writes.
     const fn takes_writes(&self) -> bool {
-        matches!(self.content, Content::File { write: Some(_), .. })
+        matches!(
+            self.content,
+            Content::File { write: Some(_), .. } | Content::IdMap(_)
+        )
     }
 
     /// The kind of object this entry is.
     const fn kind(&self) -> FileType {
         match self.content {
-            Content::File { .. } => FileType::Regular,
+            Content::File { .. } | Content::IdMap(_) => FileType::Regular,
             Content::Link(_) => FileType::Symlink,
             Content::Descriptors
             | Content::Namespaces
@@ -353,7 +389,7 @@ static SYS_KERNEL: [Entry<Kernel>; 8] = [
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 15] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 18] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -377,6 +413,21 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 15] = [
         content: Content::Namespaces,
     },
     file(b"cgroup", render::cgroup),
+    Entry {
+        name: b"uid_map",
+        permissions: 0o644,
+        content: Content::IdMap(MapFile::Uid),
+    },
+    Entry {
+        name: b"gid_map",
+        permissions: 0o644,
+        content: Content::IdMap(MapFile::Gid),
+    },
+    Entry {
+        name: b"setgroups",
+        permissions: 0o644,
+        content: Content::IdMap(MapFile::Setgroups),
+    },
     Entry {
         name: b"oom_score_adj",
         permissions: 0o644,
@@ -639,8 +690,8 @@ enum Place {
     Entry(u32, usize),
     /// `/proc/<pid>/fd/<fd>`.
     Descriptor(u32, i32),
-    /// `/proc/<pid>/ns/mnt`.
-    MountNamespace(u32),
+    /// `/proc/<pid>/ns/<kind>`.
+    Namespace(u32, NamespaceKind),
     /// `/proc/<pid>/task/<tid>`.
     Thread(u32, u32),
     /// `PER_THREAD[index]` of the thread: `/proc/<pid>/task/<tid>/<name>`.
@@ -717,7 +768,7 @@ impl Place {
             Place::Descriptor(id, fd) => {
                 block(id) + DESCRIPTOR_INODES + u64::from(fd.unsigned_abs()) % DESCRIPTOR_SPAN
             }
-            Place::MountNamespace(id) => block(id) + NAMESPACE_INODES,
+            Place::Namespace(id, kind) => block(id) + NAMESPACE_INODES + kind as u64,
             Place::Thread(_, tid) => block(tid) + THREAD_INODES,
             Place::ThreadEntry(_, tid, index) => block(tid) + THREAD_INODES + 1 + index as u64,
         }
@@ -745,7 +796,7 @@ impl Place {
                     of(entry.kind(), entry.permissions)
                 }),
             Place::Descriptor(..) => of(FileType::Symlink, 0o700),
-            Place::MountNamespace(_) => of(FileType::Symlink, 0o777),
+            Place::Namespace(..) => of(FileType::Symlink, 0o777),
             Place::ThreadEntry(_, _, index) => PER_THREAD
                 .get(index)
                 .map_or(of(FileType::Regular, 0), |entry| {
@@ -791,6 +842,20 @@ impl Node {
                 _ => Ok(None),
             },
             Place::Entry(pid, index) => match PER_PROCESS.get(index).map(|entry| &entry.content) {
+                Some(Content::IdMap(file)) => {
+                    let process = alive(pid)?;
+                    let bytes = render::id_map(&process, *file);
+                    // Who opened it is judged at each write, beside who
+                    // writes (rule U3).
+                    let opener = process::current()
+                        .map(|opener| opener.with_credentials(|held| held.clone()));
+                    let file = *file;
+                    let writer: Writer = Box::new(move |data| {
+                        render::write_id_map(&process, file, opener.as_ref(), data)
+                    });
+                    Snapshot::new(metadata, bytes, Some(writer), refusal, splices)
+                        .map(|snapshot| Some(snapshot.only_at_start()))
+                }
                 Some(Content::File { render, write }) => {
                     let process = alive(pid)?;
                     let bytes = render(&process)?;
@@ -965,7 +1030,7 @@ impl Inode for Node {
             Place::Process(pid)
             | Place::Entry(pid, _)
             | Place::Descriptor(pid, _)
-            | Place::MountNamespace(pid)
+            | Place::Namespace(pid, _)
             | Place::Thread(pid, _)
             | Place::ThreadEntry(pid, ..) => registry::find(pid).map_or((0, 0), |process| {
                 process.with_credentials(|ids| (ids.user.effective, ids.group.effective))
@@ -1099,10 +1164,11 @@ impl Inode for Node {
             _ if self.namespaces_of().is_some() => {
                 let pid = self.namespaces_of().ok_or(Errno::ENOTDIR)?;
                 let _ = alive(pid)?;
-                if name != b"mnt" {
-                    return Err(Errno::ENOENT);
-                }
-                Ok(self.at(Place::MountNamespace(pid)))
+                let (kind, _) = NamespaceKind::ALL
+                    .iter()
+                    .find(|(_, known)| *known == name)
+                    .ok_or(Errno::ENOENT)?;
+                Ok(self.at(Place::Namespace(pid, *kind)))
             }
             _ if self.threads_of().is_some() => {
                 let pid = self.threads_of().ok_or(Errno::ENOTDIR)?;
@@ -1146,13 +1212,18 @@ impl Inode for Node {
             _ if self.namespaces_of().is_some() => {
                 let pid = self.namespaces_of().ok_or(Errno::ENOTDIR)?;
                 let _ = alive(pid)?;
-                if cursor <= FIRST_CURSOR {
-                    let _ = emit(DirEntry {
-                        ino: Place::MountNamespace(pid).ino(),
-                        kind: FileType::Symlink,
-                        name: b"mnt",
-                        next: FIRST_CURSOR.saturating_add(1),
-                    });
+                for (index, (kind, name)) in NamespaceKind::ALL.iter().enumerate() {
+                    let position = FIRST_CURSOR.saturating_add(index as u64);
+                    if cursor <= position
+                        && !emit(DirEntry {
+                            ino: Place::Namespace(pid, *kind).ino(),
+                            kind: FileType::Symlink,
+                            name,
+                            next: position.saturating_add(1),
+                        })
+                    {
+                        break;
+                    }
                 }
                 Ok(())
             }
@@ -1178,7 +1249,8 @@ impl Inode for Node {
                 _ => Err(Errno::EINVAL),
             },
             Place::Descriptor(pid, fd) => render::descriptor(&*alive(pid)?, fd),
-            Place::MountNamespace(pid) => render::mount_namespace(&*alive(pid)?),
+            Place::Namespace(pid, NamespaceKind::Mount) => render::mount_namespace(&*alive(pid)?),
+            Place::Namespace(pid, NamespaceKind::User) => render::user_namespace(&*alive(pid)?),
             _ => Err(Errno::EINVAL),
         }
     }
@@ -1396,6 +1468,9 @@ struct Snapshot {
     refusal: Errno,
     /// Whether `sendfile` and `splice` may read it, as `Node::splices` says.
     splices: bool,
+    /// Whether a write not at the start is refused `EINVAL`, as Linux refuses
+    /// one to a map file.
+    at_start_only: bool,
     /// Its heap, the contents included, charged to the job that opened it
     /// (F-37): a process's `maps` grows with its regions, and every open
     /// holds a copy.
@@ -1425,8 +1500,15 @@ impl Snapshot {
             write,
             refusal,
             splices,
+            at_start_only: false,
             _charge: charge,
         })
+    }
+
+    /// This snapshot, taking writes at its start only.
+    fn only_at_start(mut self) -> Snapshot {
+        self.at_start_only = true;
+        self
     }
 }
 
@@ -1467,6 +1549,9 @@ impl Inode for Snapshot {
 
     fn write_at(&self, offset: u64, data: &[u8], _append: bool) -> Result<(usize, u64)> {
         let write = self.write.as_ref().ok_or(self.refusal)?;
+        if self.at_start_only && offset != 0 {
+            return Err(Errno::EINVAL);
+        }
         let count = write(data)?;
         Ok((count, offset.saturating_add(count as u64)))
     }
