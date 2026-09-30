@@ -64,13 +64,12 @@ mod trap;
 mod user;
 mod vmap;
 
-use alloc::vec::Vec;
-
 use ferrix_bootinfo::{BootInfo, BootView, KASLR_FIXED_IMAGE, KASLR_MOVED, MemKind, PAGE_SIZE};
 use ferrix_paging::MapError;
 
 use console::{println, println_unlogged};
-use discovery::{devmgr, fdt, pci};
+use discovery::finder::Finder;
+use discovery::{board, devmgr, fdt, pci, tree};
 use early::EarlyMemory;
 use interfaces::{audio, block_ring, display, input, logctl, net_ring, render};
 use panic::{catalog, fatal};
@@ -246,13 +245,12 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     if let Some(why) = iommu.why {
         println!("  iommu    a unit was left alone: {why}");
     }
-    let (pci, reserved) = check_pci(view);
 
     // Stage 10's device nodes: every PCI function above and every virtio,mmio
     // node in the device tree, with the rule a driver's memory and interrupts
     // rest on — nothing outside what the device has — required of each.
     // Straight after enumeration, which builds the PCI half.
-    check_devices(view, pci, &reserved);
+    check_devices(view);
     iommu::report(view, device::devices());
     iommu::check_iommu();
 
@@ -707,91 +705,47 @@ fn check_btrfs_write() {
     fs::data_disk::mount();
 }
 
-/// Stage 10: find every PCI function, size its BARs and walk its
-/// capabilities.
+/// Stage 10's discovery: run every finder in precedence order, reserving the
+/// ranges they read, and publish what they found.
 ///
-/// Halts rather than returning, as every other stage's check does. A machine
-/// that describes no ECAM host passes: the board has no PCI at all.
-fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved) {
-    let (report, nodes, reserved) = match pci::check(view) {
-        Ok(found) => found,
-        Err(problem) => fatal!(
-            catalog::STAGE10_PCI,
+/// Halts rather than returning, as every other stage's check does: a failed
+/// PCI walk under its own catalogue entry, anything else under the devices'.
+fn publish_devices(view: &BootView<'_>) -> (device::Report, device::Reserved) {
+    // The PCI walk first, then the device tree's nodes, then the boards': an
+    // earlier finder's node keeps an aperture a later one also claims.
+    let mut pci = pci::Enumeration::new(view);
+    let mut tree = tree::VirtioMmio::new(view);
+    let mut boards = board::Boards::new(view);
+    let reserved = device::Reserved::of(view, &[pci.reads(), tree.reads(), boards.reads()]);
+    let mut finders: [&mut dyn Finder; 3] = [&mut pci, &mut tree, &mut boards];
+    let report = match device::publish(&mut finders, &reserved) {
+        Ok(report) => report,
+        // A failed walk halts the boot under its own entry, as it always has.
+        Err(device::Stopped::Finder { name: "pci", why }) => {
+            fatal!(catalog::STAGE10_PCI, "stage 10 self-check failed: {why}")
+        }
+        Err(device::Stopped::Finder { name, why }) => fatal!(
+            catalog::STAGE10_DEVICES,
+            "stage 10 self-check failed: the {name} finder: {why}"
+        ),
+        Err(device::Stopped::Again) => fatal!(
+            catalog::STAGE10_DEVICES,
+            "stage 10 self-check failed: device nodes were published twice"
+        ),
+        Err(device::Stopped::Node(problem)) => fatal!(
+            catalog::STAGE10_DEVICES,
             "stage 10 self-check failed: {problem}"
         ),
     };
-
-    if report.hosts == 0 {
-        println!(
-            "  pci      no ECAM host described, {} descriptions refused",
-            report.refused
-        );
-        return (nodes, reserved);
-    }
-    println!(
-        "  pci      {} functions from {} {} hosts ({} descriptions refused), {} host bridges, \
-         {} unfollowed bridges; {} BARs sized ({} KiB), {} capabilities, {} virtio transports, \
-         {} entropy bytes read by DMA, {} completions by MSI-X, {} out-of-domain writes faulted",
-        report.functions,
-        report.hosts,
-        report.source,
-        report.refused,
-        report.host_bridges,
-        report.unfollowed,
-        report.bars,
-        report.aperture_bytes / 1024,
-        report.capabilities,
-        report.virtio,
-        report.entropy_bytes,
-        report.entropy_by_interrupt,
-        report.out_of_domain_faulted,
-    );
-    if report.intx > 0 {
-        println!(
-            "  pci      {} functions interrupt by INTx lines: the machine has no MSI controller",
-            report.intx
-        );
-    }
-    if let Some(why) = report.out_of_domain_skip {
-        println!("  pci      an out-of-domain write was not shown to fault: {why}");
-    }
-    if let Some(completed) = report.out_of_domain_completed {
-        println!(
-            "  pci      the device completed the faulted write anyway: {} bytes that never \
-             reached the page, seen {} the fault, {} further faults recorded for it",
-            completed.written,
-            if completed.before_fault {
-                "before"
-            } else {
-                "after"
-            },
-            completed.further_faults,
-        );
-    }
-    if let Some(why) = report.entropy_polled {
-        println!("  pci      an entropy request was polled, not interrupted: {why}");
-    }
-    if let Some(why) = report.entropy_skip {
-        println!(
-            "  pci      {} entropy checks skipped: {why}",
-            report.entropy_skipped
-        );
-    }
-    (nodes, reserved)
+    (report, reserved)
 }
 
 /// Stage 10: publish the device nodes, requiring each to hand out exactly the
 /// apertures and vectors it has.
 ///
 /// Halts rather than returning, as every other stage's check does.
-fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &device::Reserved) {
-    let report = match device::publish(view, pci, reserved) {
-        Ok(report) => report,
-        Err(problem) => fatal!(
-            catalog::STAGE10_DEVICES,
-            "stage 10 self-check failed: {problem}"
-        ),
-    };
+fn check_devices(view: &BootView<'_>) {
+    let (report, reserved) = publish_devices(view);
     println!(
         "  devices  {} nodes ({} from the device tree, {} with decoding off), {} apertures \
          ({} not whole pages, {} withheld, {} MSI-X ranges withheld), {} vectors ({} edge, \
@@ -814,7 +768,7 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
     );
     let (published, order) = device::check::order(device::devices());
     println!("  nodes    {published} published, digest of their order {order:#018x}");
-    let (map, others, digest) = device::check::reserved(reserved);
+    let (map, others, digest) = device::check::reserved(&reserved);
     println!(
         "  reserved {map} memory-map ranges and {others} others no aperture may overlap, \
          digest of the others {digest:#018x}"
@@ -1231,7 +1185,7 @@ fn register_load(view: &BootView<'_>) {
         );
     }
     let flushes = power::flushes();
-    let boards = device::board_bindings();
+    let boards = board::board_bindings();
     let missing = if flushes == 0 {
         Some("no filesystem registered a flush, so a power-off would commit nothing")
     } else if !init::has_launcher() {

@@ -1116,11 +1116,12 @@ pub(crate) static STAGE6_REVERSE_MAP: Explanation = Explanation {
           docs/ROADMAP.md stage 6",
 };
 
-/// For `check_pci` in `main.rs`, when `pci::check` fails.
+/// For `check_devices` in `main.rs`, when the PCI finder, `pci::Enumeration`,
+/// fails.
 pub(crate) static STAGE10_PCI: Explanation = Explanation {
     code: "FX-1001",
     title: "PCI enumeration failed its self-check",
-    meaning: "`pci::check` reads where firmware put PCI Express configuration space — the MCFG \
+    meaning: "`pci::Enumeration` reads where firmware put PCI Express configuration space — the MCFG \
               table, or a `pci-host-ecam-generic` device tree node — maps it a bus at a time, and \
               walks every function reachable from each root bus, sizing and restoring every BAR \
               and walking every capability list to its end. Stage 10 hands user-mode drivers \
@@ -1618,7 +1619,8 @@ pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
           docs/certification/VULNERABILITY-ANALYSIS.md T.DMA",
 };
 
-/// For `check_devices` in `main.rs`, when `device::publish` fails.
+/// For `check_devices` in `main.rs`, when `device::publish` finds a node that
+/// breaks the rule, or a finder other than the PCI walk fails.
 pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
     code: "FX-1002",
     title: "a device node handed out memory or an interrupt it does not have",

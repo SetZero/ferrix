@@ -59,14 +59,13 @@
 //! is. It takes no lock: an interrupt handler calls it.
 
 use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
-use ferrix_fdt::{Fdt, GicInterrupt, Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
+use ferrix_fdt::{GicInterrupt, Trigger as TreeTrigger};
 use ferrix_native_abi::types::{
     DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo,
     TREE_GS201_DWC3, TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
@@ -83,8 +82,8 @@ use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::discovery::description::{self, Description};
+use crate::discovery::finder::{Context, Finder, OutOfMemory};
 use crate::fallible::{self, AllocError};
-use crate::hooks::{Full, Hooks};
 use crate::mmio::Mmio;
 use crate::sync::SpinLock;
 use crate::{arch, iommu, irq, vmap};
@@ -269,14 +268,14 @@ pub(crate) struct Reserved {
 }
 
 impl Reserved {
-    /// Everything the kernel owns on this machine, given the ECAM windows
-    /// enumeration is about to read.
+    /// Everything the kernel owns on this machine, given the ranges the
+    /// finders are about to read: the PCI walk's ECAM windows.
     ///
     /// Taken before enumeration maps anything, so the device windows it
     /// records are the controllers the kernel drives — the local and I/O
     /// APICs, the HPET, the GIC — and not the buses about to be walked, which
-    /// `ecam` names whole.
-    pub(crate) fn of(view: &BootView<'_>, ecam: &[(u64, u64)]) -> Self {
+    /// `reads` names whole.
+    pub(crate) fn of(view: &BootView<'_>, reads: &[&[(u64, u64)]]) -> Self {
         let mut reserved = Reserved::default();
         let framebuffer = view.raw().framebuffer;
         if framebuffer.is_present() {
@@ -291,8 +290,10 @@ impl Reserved {
             }
         }
         reserved.map = (first, reserved.ranges.len());
-        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
-        reserved.ranges.extend_from_slice(ecam);
+        for read in reads {
+            // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
+            reserved.ranges.extend_from_slice(read);
+        }
         // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
         reserved.ranges.extend(vmap::device_windows());
         // An IOMMU is programmed by the kernel alone: a driver that could map
@@ -679,7 +680,7 @@ pub(crate) struct DeviceNode {
 
 impl DeviceNode {
     /// A node with nothing in it yet.
-    const fn empty(location: Location) -> Self {
+    pub(crate) const fn empty(location: Location) -> Self {
         DeviceNode {
             location,
             pci: None,
@@ -793,7 +794,7 @@ impl DeviceNode {
 
     /// Add an aperture of `len` bytes at `phys`, unless it is empty, runs off
     /// the address space, or overlaps reserved memory.
-    fn mint(&mut self, phys: u64, len: u64, cacheable: bool, reserved: &Reserved) {
+    pub(crate) fn mint(&mut self, phys: u64, len: u64, cacheable: bool, reserved: &Reserved) {
         if phys == 0 || len == 0 || phys.checked_add(len).is_none() {
             return;
         }
@@ -856,6 +857,37 @@ impl DeviceNode {
     /// How the device reaches memory.
     pub(crate) const fn dma_shape(&self) -> DmaShape {
         self.dma
+    }
+
+    /// How many apertures `mint` has added.
+    pub(crate) fn apertures_minted(&self) -> usize {
+        self.apertures.len()
+    }
+
+    /// Add a device tree interrupt as the node's next vector, masked at the
+    /// interrupt controller, edge or level as the tree says.
+    pub(crate) fn add_line(&mut self, interrupt: &GicInterrupt) {
+        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
+        self.vectors.push(Vector {
+            number: interrupt.id,
+            trigger: interrupt.trigger.map(|trigger| match trigger {
+                TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
+                TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
+            }),
+            masking: Masking::Controller,
+        });
+    }
+
+    /// Count `lines` interrupts the tree names that the node was not given.
+    pub(crate) fn withhold_lines(&mut self, lines: usize) {
+        self.withheld_vectors += lines;
+    }
+
+    /// Make the node a board's peripheral: `binding` names it, and `dma` is
+    /// the memory it may reach.
+    pub(crate) fn bind_board(&mut self, binding: u16, dma: DmaShape) {
+        self.binding = binding;
+        self.dma = dma;
     }
 
     /// The binding of a device tree node the kernel knows, `None` for any
@@ -1164,29 +1196,79 @@ impl fmt::Display for Failure {
     }
 }
 
-/// Publish every device node — the PCI ones enumeration built, and the device
-/// tree's — after requiring each to hand out exactly what it has, and no two
-/// to hand out the same memory or the same interrupt.
+/// What stopped [`publish`].
+pub(crate) enum Stopped<'f> {
+    /// A finder failed; nothing was published.
+    Finder {
+        /// Which: `pci`, `tree`, `board`.
+        name: &'static str,
+        /// Why, as the finder says it.
+        why: &'f dyn fmt::Display,
+    },
+    /// A node broke the rule every node is held to.
+    Node(Failure),
+    /// `publish` was called again; it ran once, and nothing was touched.
+    Again,
+}
+
+/// Whether [`publish`] has been called: it runs once, at boot.
+static PUBLISHING: AtomicBool = AtomicBool::new(false);
+
+impl From<Failure> for Stopped<'_> {
+    fn from(failure: Failure) -> Self {
+        Stopped::Node(failure)
+    }
+}
+
+/// Run `finders` in order, printing each one's lines after it, then publish
+/// every node they found after requiring each to hand out exactly what it
+/// has, and no two to hand out the same memory or the same interrupt.
+///
+/// What a finder hands back is checked here like any other node: see
+/// [`Finder`] for the contract.
+///
+/// It runs once. A second call is refused before any finder runs, so
+/// nothing a finder would touch -- configuration space, device memory -- is
+/// touched again, and no node can be published after boot.
 ///
 /// # Errors
 ///
-/// The first node that mints an aperture or vector it should refuse, refuses
-/// one it should mint, holds an aperture overlapping reserved memory, shares
-/// an aperture or vector with another node, or mints an MSI-X vector that does
-/// not behave as one.
-pub(crate) fn publish(
-    view: &BootView<'_>,
-    pci: Vec<DeviceNode>,
+/// A finder that failed, before anything is published; or the first node
+/// that mints an aperture or vector it should refuse, refuses one it should
+/// mint, holds an aperture overlapping reserved memory, shares an aperture
+/// or vector with another node, or mints an MSI-X vector that does not
+/// behave as one.
+pub(crate) fn publish<'f>(
+    finders: &'f mut [&mut dyn Finder],
     reserved: &Reserved,
-) -> Result<Report, Failure> {
-    let mut nodes = pci;
-    let tree = tree_nodes(view, reserved);
+) -> Result<Report, Stopped<'f>> {
+    if PUBLISHING.swap(true, Ordering::AcqRel) {
+        return Err(Stopped::Again);
+    }
+    let mut nodes = Vec::new();
+    let mut cx = Context::new(reserved);
+    let mut failed = None;
+    for (index, finder) in finders.iter_mut().enumerate() {
+        if finder.find(&mut cx, &mut nodes).is_err() {
+            failed = Some(index);
+            break;
+        }
+        finder.report();
+    }
+    let finders: &'f [&mut dyn Finder] = finders;
+    if let Some(finder) = failed.and_then(|index| finders.get(index)) {
+        return Err(Stopped::Finder {
+            name: finder.name(),
+            why: finder.failure().unwrap_or(&OutOfMemory),
+        });
+    }
     let mut report = Report {
-        tree: tree.len(),
+        tree: nodes
+            .iter()
+            .filter(|node| matches!(node.location, Location::VirtioMmio(_) | Location::Tree(_)))
+            .count(),
         ..Report::default()
     };
-    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
-    nodes.extend(tree);
 
     // Two nodes with overlapping apertures are two drivers for one set of
     // registers, so a later node loses what an earlier one already holds.

@@ -1,3 +1,26 @@
+//! The boards' device-tree bindings: the registry board support fills at
+//! bring-up, and the [`Finder`] that publishes a node for each binding the
+//! tree has.
+//!
+//! How the list is filled: board support -- `platform/`, which is load, not
+//! core -- calls [`register_board`] at bring-up with a static
+//! [`BoardBinding`], before discovery runs. The registry holds only those
+//! statics and calls only the functions in them; it names no board.
+
+use alloc::collections::BTreeSet;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
+
+use ferrix_bootinfo::BootView;
+use ferrix_fdt::{Fdt, GicInterrupt};
+
+use crate::device::{DeviceNode, DmaShape, Location, Reserved};
+use crate::discovery::description::{self, Description};
+use crate::discovery::finder::{Context, Failed, Finder, OutOfMemory};
+use crate::fallible;
+use crate::hooks::{Full, Hooks};
+
 /// A peripheral a board's support found in the device tree and made ready
 /// for a driver: what a [`BoardBinding`]'s `prepare` hands back.
 #[derive(Debug)]
@@ -53,7 +76,8 @@ static BOARD: Hooks<BoardBinding, 8> = Hooks::new();
 /// Publish a node for `binding`'s peripheral whenever the tree has it,
 /// after every binding registered before it.
 ///
-/// Registered before [`publish`] runs, which `main.rs`'s bring-up order
+/// Registered before [`crate::device::publish`] runs, which `main.rs`'s bring-up
+/// order
 /// makes so; a binding registered after it is never asked.
 ///
 /// # Errors
@@ -103,38 +127,76 @@ fn board_node(
     };
     let first = prepared.registers.first()?;
     let mut node = DeviceNode::empty(Location::Tree(first.0));
-    node.binding = board.binding;
-    node.dma = prepared.dma;
+    node.bind_board(board.binding, prepared.dma);
     for &(phys, len) in &prepared.registers {
         node.mint(phys, len, false, reserved);
     }
-    if node.apertures.len() != prepared.registers.len() {
+    if node.apertures_minted() != prepared.registers.len() {
         crate::console::println!(
             "  {label:<8} {device} is left alone: its registers overlap memory the kernel uses"
         );
         return None;
     }
     let interrupt = prepared.interrupt;
-    let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
-        && !irq::is_registered(interrupt.id)
-        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
-        && held.insert(interrupt.id);
-    if !usable {
+    if !crate::device::claim_line(interrupt.id, held) {
         crate::console::println!(
             "  {label:<8} {device} is left alone: interrupt {} is taken",
             interrupt.id
         );
         return None;
     }
-    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
-    node.vectors.push(Vector {
-        number: interrupt.id,
-        trigger: interrupt.trigger.map(|trigger| match trigger {
-            TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
-            TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
-        }),
-        masking: Masking::Controller,
-    });
+    node.add_line(&interrupt);
     crate::console::println!("  {label:<8} {}", prepared.summary);
     Some(node)
+}
+
+/// A node for every registered binding whose peripheral the tree has, in
+/// the order they registered.
+#[derive(Debug)]
+pub(crate) struct Boards {
+    /// The tree, on a machine it describes.
+    tree: Option<Fdt<'static>>,
+    /// Whether `find` ran out of memory adding a node.
+    out_of_memory: bool,
+}
+
+impl Boards {
+    /// The finder for `view`'s machine: none to find without a device tree
+    /// it is read by.
+    pub(crate) fn new(view: &BootView<'_>) -> Self {
+        let tree = match description::of(view) {
+            Description::Tree(tree) => Some(tree),
+            _ => None,
+        };
+        Boards {
+            tree,
+            out_of_memory: false,
+        }
+    }
+}
+
+impl Finder for Boards {
+    fn name(&self) -> &'static str {
+        "board"
+    }
+
+    fn find(&mut self, cx: &mut Context<'_>, nodes: &mut Vec<DeviceNode>) -> Result<(), Failed> {
+        let Some(tree) = &self.tree else {
+            return Ok(());
+        };
+        for board in BOARD.iter() {
+            if let Some(node) = board_node(tree, board, cx.reserved, &mut cx.held) {
+                fallible::try_push(nodes, node).map_err(|_| {
+                    self.out_of_memory = true;
+                    Failed
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn failure(&self) -> Option<&dyn fmt::Display> {
+        self.out_of_memory
+            .then_some(&OutOfMemory as &dyn fmt::Display)
+    }
 }

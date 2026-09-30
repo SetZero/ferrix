@@ -65,7 +65,8 @@ use ferrix_fdt::{Fdt, GicInterrupt, Node};
 use ferrix_native_abi::types::TREE_STM32_HDMI;
 use ferrix_sync::Once;
 
-use crate::device::{self, BoardBinding, BoardDevice, DmaShape};
+use crate::device::DmaShape;
+use crate::discovery::board::{self, BoardBinding, BoardDevice};
 use crate::hooks::Full;
 use crate::mmio::Mmio;
 use crate::{power, timer, vmap};
@@ -85,9 +86,9 @@ use crate::{power, timer, vmap};
 ///
 /// [`Full`] when the device registry has no room for another binding.
 pub(crate) fn install(view: &BootView<'_>) -> Result<(), Full> {
-    device::register_board(&DISPLAY)?;
-    device::register_board(&usb::BINDING)?;
-    device::register_board(&gpu::BINDING)?;
+    board::register_board(&DISPLAY)?;
+    board::register_board(&usb::BINDING)?;
+    board::register_board(&gpu::BINDING)?;
     if let Ok(tree) = crate::discovery::fdt::open(view) {
         note_boot_context(&tree);
     }

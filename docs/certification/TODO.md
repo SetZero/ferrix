@@ -44,6 +44,26 @@ unrelated feature, so re-measure before citing:
 python3 tools/common/check/check-item-boundary.py --report
 ```
 
+#### Arguments to re-apply at the next re-measure
+
+The discovery Finder landing (2026-09-30) moved lines that five coverage
+arguments stood on, and `carry-coverage.py` dropped them: an argument may only
+stand on a line the last measurement found uncovered, and these lines have not
+been measured since they moved. Their reasons did not change. Until the next
+re-measure (F-13's) the new lines count as **unmeasured, not as needing a
+test**; after it, re-create each argument on the line the re-measure reports,
+with the text below, and delete this list.
+
+| Kind | Architectures | Was | Is now | Reason, verbatim |
+|---|---|---|---|---|
+| failure-path | x86_64, aarch64, armv7a | `main.rs:718`, `check_pci`'s `Err(problem) => fatal!(` | `main.rs:723-724`, `check_devices`' `Err(device::Stopped::Finder { name: "pci", why })` arm | The failure arm in `check_pci`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE10_PCI` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
+| failure-path | x86_64, aarch64, armv7a | the same, reached through the walk | `discovery/pci.rs:544`, `self.failure = Some(failure);` in `pci::Enumeration::find` | As above: the PCI walk's failure, which `check_devices` halts on under `STAGE10_PCI`. |
+| failure-path | x86_64, aarch64, armv7a | `main.rs:790`, `check_devices`' `Err(problem) => fatal!(` | `main.rs:734`, `check_devices`' `Err(device::Stopped::Node(problem)) => fatal!(` | The failure arm in `check_devices`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE10_DEVICES` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
+| absent-hardware | armv7a | `main.rs:763`, `if completed.before_fault {` | `discovery/pci.rs:598`, the same line in `pci::Enumeration::report` | When the device completed the out-of-domain write the unit faulted: the probe runs only through a translated domain, which ARMv7-A, leaving virt's SMMUv3 alone, never gives. |
+
+Line numbers are the tree's at the landing; the re-measure's report is what
+decides where each one goes.
+
 ---
 
 ## 1. Boundary — the cheapest real wins

@@ -340,7 +340,7 @@ fn a_clock_asked_for_badly_is_refused(
     let Some(node) = crate::device::devices().first() else {
         return Ok(());
     };
-    if crate::device::board_clock(node, 1, false).is_some() {
+    if crate::discovery::board::board_clock(node, 1, false).is_some() {
         // A board that keeps this device's clock: not the refusal checked here.
         return Ok(());
     }

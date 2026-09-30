@@ -1949,7 +1949,7 @@ fn quiesce_while(node: &Arc<DeviceNode>, cancelled: &dyn Fn() -> bool) -> Result
 /// output in the RCC. The kernel does the rounding and the setting, and
 /// refuses while anything else runs from that output; the driver says only
 /// the rate it wants. Which device has such a clock is the board's to say,
-/// when it registers the device's binding (`device::board_clock`). Any
+/// when it registers the device's binding (`discovery::board::board_clock`). Any
 /// other device has no clock here: `WRONG_TYPE`.
 fn device_clock(process: &Process, device: Handle, hz: u64, options: u64) -> Result<usize, Errno> {
     use ferrix_native_abi::types::CLOCK_SET;
@@ -1957,7 +1957,7 @@ fn device_clock(process: &Process, device: Handle, hz: u64, options: u64) -> Res
         return Err(status::INVALID_ARGS);
     }
     let node = device_in(process, device, Rights::MANAGE)?;
-    let rate = crate::device::board_clock(&node, hz, options & CLOCK_SET != 0)
+    let rate = crate::discovery::board::board_clock(&node, hz, options & CLOCK_SET != 0)
         .ok_or(status::WRONG_TYPE)?
         .map_err(|_| status::BAD_STATE)?;
     usize::try_from(rate).map_err(|_| status::BAD_STATE)

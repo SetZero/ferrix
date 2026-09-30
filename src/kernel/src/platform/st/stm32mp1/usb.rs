@@ -34,7 +34,8 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_fdt::{Fdt, GicInterrupt, Node};
 use ferrix_native_abi::types::TREE_STM32_USBH;
 
-use crate::device::{BoardBinding, BoardDevice, DmaShape};
+use crate::device::DmaShape;
+use crate::discovery::board::{BoardBinding, BoardDevice};
 use crate::mmio::Mmio;
 use crate::{timer, vmap};
 

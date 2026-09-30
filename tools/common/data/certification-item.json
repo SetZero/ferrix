@@ -104,6 +104,7 @@
       ],
       "members": [
         "discovery/acpi.rs",
+        "discovery/board.rs",
         "discovery/description.rs",
         "arch/**",
         "audit.rs",
@@ -117,6 +118,8 @@
         "early.rs",
         "fallible.rs",
         "discovery/fdt.rs",
+        "discovery/finder.rs",
+        "discovery/tree.rs",
         "hooks.rs",
         "iommu.rs",
         "iommu/**",

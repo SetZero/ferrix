@@ -27,7 +27,8 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_fdt::{Fdt, Node};
 use ferrix_native_abi::types::TREE_GS201_DWC3;
 
-use crate::device::{self, BoardBinding, BoardDevice, DmaShape};
+use crate::device::DmaShape;
+use crate::discovery::board::{self, BoardBinding, BoardDevice};
 use crate::hooks::Full;
 use crate::mmio::Mmio;
 use crate::vmap;
@@ -47,7 +48,7 @@ static BINDING: BoardBinding = BoardBinding {
 ///
 /// [`Full`] when the registry's list of board bindings is.
 pub(crate) fn install() -> Result<(), Full> {
-    device::register_board(&BINDING)
+    board::register_board(&BINDING)
 }
 
 /// The wrapper's `compatible`, whose window and interrupt the DWC3 core

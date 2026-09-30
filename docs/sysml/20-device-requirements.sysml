@@ -257,7 +257,7 @@ package FerrixDeviceRequirements {
             attribute :>> criterion = "A clock asked of a published node whose
                 board keeps none is refused.";
             attribute :>> parent = "H.OBJ.2";
-            attribute :>> unit = ("device::board_clock", "device::DeviceNode::tree_binding");
+            attribute :>> unit = ("discovery::board::board_clock", "device::DeviceNode::tree_binding");
         }
         requirement <'L.device.14'> reservedIsWhatTheKernelUses : ItemLowLevel {
             attribute :>> statement = "Reserved::of shall reserve the framebuffer,
@@ -299,15 +299,18 @@ package FerrixDeviceRequirements {
             attribute :>> unit = ("device::claim_line", "device::trigger_of");
         }
         requirement <'L.device.18'> treeAndBoardNodes : ItemLowLevel {
-            attribute :>> statement = "tree_nodes and board_node shall publish a
-                device tree node only with registers clear of reserved memory and
-                an interrupt no other node or handler holds, and leave it alone,
-                saying why, otherwise.";
+            attribute :>> statement = "The device tree's and the boards' finders
+                shall publish a device tree node only with registers clear of
+                reserved memory and an interrupt no other node or handler holds,
+                and leave it alone, saying why, otherwise.";
             attribute :>> criterion = "A board node whose registers overlap reserved
                 memory, or whose interrupt is taken, is left alone and named on the
                 console; one clear of both is published.";
             attribute :>> parent = ("H.DMA.5", "H.IRQ.1");
-            attribute :>> unit = ("device::tree_nodes", "device::board_node");
+            attribute :>> unit = ("discovery::tree::VirtioMmio::find",
+                "discovery::tree::add_lines", "discovery::board::Boards::find",
+                "discovery::board::board_node",
+                "device::DeviceNode::add_line", "device::DeviceNode::bind_board");
         }
         requirement <'L.device.19'> aTreeNodeDescribed : ItemLowLevel {
             attribute :>> statement = "DeviceNode::describe shall report a device

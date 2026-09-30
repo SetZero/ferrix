@@ -68,6 +68,7 @@ mod virtio;
 use crate::device::{self, DeviceNode, Reserved, Seen};
 use crate::discovery::description::{self, Description};
 use crate::discovery::fdt;
+use crate::discovery::finder::{Context, Failed, Finder};
 use crate::mmio::Mmio;
 use crate::vmap;
 
@@ -453,46 +454,165 @@ impl From<ferrix_virtio::QueueError> for Failure {
     }
 }
 
-/// Find every function, size its BARs, walk its capabilities, and build a
-/// device node for each from what its BARs decode.
+/// PCI enumeration, as a [`Finder`]: find every function behind the ECAM
+/// hosts firmware describes, size its BARs, walk its capabilities, and build
+/// a device node for each from what its BARs decode.
 ///
-/// Returns what apertures may not overlap too, which publishing the device
-/// tree's nodes needs as well.
-pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Reserved), Failure> {
-    let (hosts, refused, source) = hosts(description::of(view));
-    let ecam: Vec<(u64, u64)> = hosts
-        .iter()
-        .map(|host| (host.phys, host.phys.saturating_add(host.window.len())))
-        // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
-        .collect();
-    let reserved = Reserved::of(view, &ecam);
-    let mut report = Report {
-        hosts: hosts.len(),
-        refused,
-        source,
-        functions: 0,
-        host_bridges: 0,
-        unfollowed: 0,
-        bars: 0,
-        aperture_bytes: 0,
-        capabilities: 0,
-        virtio: 0,
-        intx: 0,
-        entropy_bytes: 0,
-        entropy_skipped: 0,
-        entropy_skip: None,
-        entropy_by_interrupt: 0,
-        entropy_polled: None,
-        out_of_domain_faulted: 0,
-        out_of_domain_completed: None,
-        out_of_domain_skip: None,
-    };
-    let mut nodes = Vec::new();
-    let mut lines = Lines::of(view, source);
-    for host in hosts {
-        check_host(host, &reserved, &mut report, &mut nodes, lines.as_mut())?;
+/// A failure halts the boot, as it did before there were finders: the walk
+/// is where a broken configuration space or DMA path shows first.
+pub(crate) struct Enumeration {
+    /// The hosts still to walk.
+    hosts: Vec<Host>,
+    /// Their ECAM windows, which no aperture may overlap.
+    ecam: Vec<(u64, u64)>,
+    /// What the walk found.
+    report: Report,
+    /// Where `INTx` lines go, on a machine that needs them.
+    lines: Option<Lines>,
+    /// Why the walk failed, once it has.
+    failure: Option<Failure>,
+}
+
+impl Enumeration {
+    /// The hosts `view`'s machine describes, ready to walk.
+    pub(crate) fn new(view: &BootView<'_>) -> Self {
+        let (hosts, refused, source) = hosts(description::of(view));
+        let ecam: Vec<(u64, u64)> = hosts
+            .iter()
+            .map(|host| (host.phys, host.phys.saturating_add(host.window.len())))
+            // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
+            .collect();
+        let report = Report {
+            hosts: hosts.len(),
+            refused,
+            source,
+            functions: 0,
+            host_bridges: 0,
+            unfollowed: 0,
+            bars: 0,
+            aperture_bytes: 0,
+            capabilities: 0,
+            virtio: 0,
+            intx: 0,
+            entropy_bytes: 0,
+            entropy_skipped: 0,
+            entropy_skip: None,
+            entropy_by_interrupt: 0,
+            entropy_polled: None,
+            out_of_domain_faulted: 0,
+            out_of_domain_completed: None,
+            out_of_domain_skip: None,
+        };
+        let lines = Lines::of(view, source);
+        Enumeration {
+            hosts,
+            ecam,
+            report,
+            lines,
+            failure: None,
+        }
     }
-    Ok((report, nodes, reserved))
+}
+
+impl fmt::Debug for Enumeration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Enumeration")
+            .field("hosts", &self.hosts.len())
+            .field("ecam", &self.ecam)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Finder for Enumeration {
+    fn name(&self) -> &'static str {
+        "pci"
+    }
+
+    fn reads(&self) -> &[(u64, u64)] {
+        &self.ecam
+    }
+
+    fn find(&mut self, cx: &mut Context<'_>, nodes: &mut Vec<DeviceNode>) -> Result<(), Failed> {
+        for host in core::mem::take(&mut self.hosts) {
+            if let Err(failure) = check_host(
+                host,
+                cx.reserved,
+                &mut self.report,
+                nodes,
+                self.lines.as_mut(),
+            ) {
+                self.failure = Some(failure);
+                return Err(Failed);
+            }
+        }
+        Ok(())
+    }
+
+    fn failure(&self) -> Option<&dyn fmt::Display> {
+        self.failure
+            .as_ref()
+            .map(|failure| failure as &dyn fmt::Display)
+    }
+
+    fn report(&self) {
+        let report = &self.report;
+        if report.hosts == 0 {
+            crate::println!(
+                "  pci      no ECAM host described, {} descriptions refused",
+                report.refused
+            );
+            return;
+        }
+        crate::println!(
+            "  pci      {} functions from {} {} hosts ({} descriptions refused), {} host bridges, \
+             {} unfollowed bridges; {} BARs sized ({} KiB), {} capabilities, {} virtio transports, \
+             {} entropy bytes read by DMA, {} completions by MSI-X, {} out-of-domain writes faulted",
+            report.functions,
+            report.hosts,
+            report.source,
+            report.refused,
+            report.host_bridges,
+            report.unfollowed,
+            report.bars,
+            report.aperture_bytes / 1024,
+            report.capabilities,
+            report.virtio,
+            report.entropy_bytes,
+            report.entropy_by_interrupt,
+            report.out_of_domain_faulted,
+        );
+        if report.intx > 0 {
+            crate::println!(
+                "  pci      {} functions interrupt by INTx lines: the machine has no MSI controller",
+                report.intx
+            );
+        }
+        if let Some(why) = &report.out_of_domain_skip {
+            crate::println!("  pci      an out-of-domain write was not shown to fault: {why}");
+        }
+        if let Some(completed) = &report.out_of_domain_completed {
+            crate::println!(
+                "  pci      the device completed the faulted write anyway: {} bytes that never \
+                 reached the page, seen {} the fault, {} further faults recorded for it",
+                completed.written,
+                if completed.before_fault {
+                    "before"
+                } else {
+                    "after"
+                },
+                completed.further_faults,
+            );
+        }
+        if let Some(why) = &report.entropy_polled {
+            crate::println!("  pci      an entropy request was polled, not interrupted: {why}");
+        }
+        if let Some(why) = &report.entropy_skip {
+            crate::println!(
+                "  pci      {} entropy checks skipped: {why}",
+                report.entropy_skipped
+            );
+        }
+    }
 }
 
 /// Walk one host and examine everything it reaches.
