@@ -631,6 +631,18 @@ pub unsafe fn init_main() {
     if unsafe { arch::set_thread_pointer(pointer_of(tp)) } != 0 {
         syscall::trap();
     }
+
+    // The loader copies a module `dlopen` brings into every thread from here
+    // on, the first one caught up on those opened before, so that they may be
+    // reached by initial-exec as well as through `__tls_get_addr`.
+    if let Some(loader) = crate::loader::threads() {
+        // SAFETY: this is the only thread, and `build` put the loader's static
+        // TLS beside its pointer.
+        unsafe { (loader.catch_up_thread)(with_exposed_provenance_mut(pointer_of(tp))) };
+        // SAFETY: the walk locks the thread list, which now holds this
+        // thread, before it visits.
+        unsafe { (loader.set_thread_walk)(Some(crate::pthread::walk_threads)) };
+    }
 }
 
 /// The calling thread's copy of the program's TLS block, or `None` when the

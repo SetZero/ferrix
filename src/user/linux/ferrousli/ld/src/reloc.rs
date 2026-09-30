@@ -280,8 +280,9 @@ unsafe fn tls_place(
     const NO_TLS: Error = Error::MalformedObject("a TLS symbol has no PT_TLS");
     // An initial-exec or descriptor access does not pass through
     // `__tls_get_addr`, where a thread catches up on a module `dlopen`
-    // brought; such a module's block is right in a thread that has not only
-    // if its image is zeros, which the surplus already holds.
+    // brought. Unless the C library lets `dlopen` copy its image into every
+    // thread, such a module's block is right in a thread that has not caught
+    // up only if its image is zeros, which the surplus already holds.
     const NOT_CAUGHT_UP: Error = Error::MalformedObject(
         "initial-exec or descriptor access to a dlopened library's initialised TLS",
     );

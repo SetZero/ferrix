@@ -747,6 +747,67 @@ fn dlopen_dlsym_dladdr_and_dl_iterate_phdr_work_through_the_loader() {
     );
 }
 
+/// A library `dlopen` brings whose TLS is read by initial-exec, as
+/// libglvnd's `libGL.so.1` reads its dispatch table, from the opening thread
+/// and from one that was running before it was loaded: with a thread walk
+/// registered, the loader copies its image into both.
+#[test]
+fn dlopen_gives_initial_exec_tls_to_every_running_thread() {
+    let loader = loader();
+    let dir = scratch().join("ld-tls-ie");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+
+    let library = dir.join("libtlsie.so");
+    compile(&[
+        "-shared",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/tls_ie.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let loader_name = loader
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("the loader has a file name");
+    let stub = dir.join("libdlstub.so");
+    compile(&[
+        "-shared",
+        &format!("-Wl,-soname,{loader_name}"),
+        "-o",
+        stub.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/dlstub.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        &format!("-DIE_LIBRARY=\"{}\"", library.display()),
+        "-o",
+        program.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/tls_ie_prog.c")
+            .to_str()
+            .expect("a path"),
+        stub.to_str().expect("a path"),
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+
+    let status = Command::new(&program).status().expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "initial-exec TLS of a dlopened library: 91 no thread walk in the \
+         loader's interface, 92 the second thread did not start, 93 the \
+         library refused, 94 the opening thread's block, 95 the running \
+         thread's block, and a signal a fault"
+    );
+}
+
 /// The C runtime receives and registers the loader's `rtld_fini` callback.
 ///
 /// The shared library's destructor writes after `main` returns. That is only

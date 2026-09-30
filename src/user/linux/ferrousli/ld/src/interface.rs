@@ -45,8 +45,10 @@ use crate::dl;
 /// The revision of [`Interface`] this loader fills in. A library built
 /// against a later one reads `version` before anything past it. Revision 2
 /// added the `dlfcn.h` calls, revision 3 the auxiliary vector, revision 4
-/// `dlsym` with its caller's address, revision 5 `dlvsym` with it.
-const VERSION: usize = 5;
+/// `dlsym` with its caller's address, revision 5 `dlvsym` with it, revision 6
+/// the thread walk that gives a `dlopen`ed module's TLS image to every
+/// thread.
+const VERSION: usize = 6;
 
 /// What the loader exports to the C library.
 #[repr(C)]
@@ -95,6 +97,16 @@ pub(crate) struct Interface {
         *const c_char,
         *const c_void,
     ) -> *mut c_void,
+    /// Revision 6: bring the TLS blocks of the thread at the pointer given up
+    /// to date with every module `dlopen` brought. The C library calls it for
+    /// a thread it starts, with its thread list locked, before the thread
+    /// runs, and for its first thread.
+    pub(crate) catch_up_thread: unsafe extern "C" fn(tp: *mut u8),
+    /// Revision 6: register the C library's walk over its threads, which
+    /// calls the function it is given with each one's pointer, its thread
+    /// list locked. `dlopen` then copies a new module's image into every
+    /// thread, and initial-exec access to it is allowed.
+    pub(crate) set_thread_walk: unsafe extern "C" fn(Option<crate::tls::Walk>),
 }
 
 /// The interface, filled in once the scope is complete.
@@ -118,6 +130,8 @@ pub(crate) static mut __ferrousli_loader: Interface = Interface {
     auxv: core::ptr::null(),
     dlsym_from: dl::dlsym_from,
     dlvsym_from: dl::dlvsym_from,
+    catch_up_thread: crate::tls::catch_up_thread,
+    set_thread_walk: crate::tls::set_thread_walk,
 };
 
 /// Publish the static TLS layout the scope settled on, and the auxiliary

@@ -20,3 +20,7 @@ int dladdr1(const void *address, void *info, void **extra, int flags) {
 int dlinfo(void *handle, int request, void *arg) {
 	(void)handle; (void)request; (void)arg; return -1;
 }
+
+/* The loader's interface to the C library, which tls_ie_prog.c plays: a
+   name with room behind it, bound to the loader's own. */
+long __ferrousli_loader[16];

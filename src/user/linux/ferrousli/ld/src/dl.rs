@@ -289,6 +289,9 @@ pub(crate) unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mu
             // SAFETY: every object in the scope is mapped, and those from
             // `before` on are new and not yet relocated.
             unsafe { crate::relocate(scope, before, page_size)? };
+            // SAFETY: the lock is held, the new objects are relocated, and
+            // none has run an initialiser.
+            unsafe { crate::tls::make_ready() };
             Ok(index)
         });
         match result {
@@ -299,6 +302,8 @@ pub(crate) unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mu
             }
             Err(error) => {
                 scope.truncate(before);
+                // SAFETY: the lock is held.
+                unsafe { crate::tls::abandon() };
                 Err(error)
             }
         }
