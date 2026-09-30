@@ -230,6 +230,7 @@ pub(super) fn boot_and_dump_carrying(
                 // is: a keybind that did not fire, a client that died, a
                 // program that could not start.
                 let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+                say_where_processors_are(&mut qmp, watching, arch);
                 return Err(with_the_transcript(
                     &unexpected(arch, what, &screen, found, count),
                     watching,
@@ -318,6 +319,50 @@ pub(super) fn boot_and_dump_carrying(
     // fourth stopped early enough to spoil its picture.
     judge_still_running(arch, &said)?;
     Ok((taken, said))
+}
+
+/// When the kernel panicked during a boot whose picture then never came:
+/// where every virtual processor is, from QEMU, since the panic's own
+/// report names only the processor that gave up. FX-0001's is waiting on a
+/// processor that stopped answering, and that one is still running
+/// wherever it stuck. The whole dump is kept beside the screen's, and each
+/// processor's instruction pointer is printed, for the kernel's symbols to
+/// name (subtract the report's `kaslr slide`).
+fn say_where_processors_are(qmp: &mut Qmp, watching: &Watching<'_>, arch: Arch) {
+    let panicked = watching
+        .lines()
+        .iter()
+        .chain(watching.after())
+        .any(|line| line.contains(crate::qemu::PANIC_MARKER));
+    if !panicked {
+        return;
+    }
+    let dump = match qmp.registers() {
+        Ok(dump) => dump,
+        Err(error) => {
+            println!(
+                "  {arch}: the kernel panicked, and QEMU would not say where the processors \
+                 are: {error}"
+            );
+            return;
+        }
+    };
+    let path = paths::build_dir(arch).join("panic-registers.txt");
+    let _ = std::fs::write(&path, &dump);
+    for (cpu, line) in dump
+        .lines()
+        .filter(|line| line.contains("RIP=") || line.contains(" PC="))
+        .enumerate()
+    {
+        println!(
+            "  {arch}: after the panic, processor {cpu}: {}",
+            line.trim()
+        );
+    }
+    println!(
+        "  {arch}: every register of every processor is in {}",
+        path.display()
+    );
 }
 
 /// That neither the kernel nor the compositor stopped during a boot whose

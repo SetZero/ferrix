@@ -142,6 +142,16 @@ impl Compositor<'_> {
         self.commits.taken();
         self.tally.least = self.tally.least.min(drew.redrew);
         self.tally.drawn = self.tally.drawn.saturating_add(1);
+        // A window this frame set moving -- one whose place the tiling
+        // changed since the last frame, which `follow` has only now taken
+        // up -- was not moving when `animating` was read before it. So the
+        // loop is owed the frames after this one too, or it sleeps with the
+        // window drawn where it started until some other input wakes it: a
+        // `hyprctl dispatch movewindow` with nothing else happening left
+        // the swap undrawn for good.
+        if self.animations.busy(u64::from(now)) {
+            self.settling = true;
+        }
         // Every surface that went into the frame is owed two things: a
         // `wl_callback.done` for the `wl_surface.frame` it asked for,
         // and a `wp_presentation_feedback.presented` if it asked for

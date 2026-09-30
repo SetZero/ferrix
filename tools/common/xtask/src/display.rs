@@ -188,6 +188,21 @@ impl Qmp {
         }
     }
 
+    /// Every virtual processor's registers, as the human monitor's `info
+    /// registers -a` prints them: where each one is, for a kernel that
+    /// panicked because another processor stopped answering it. The one that
+    /// stopped answering is still running where it stuck, and only this
+    /// sees it from outside, since a processor spinning with interrupts
+    /// masked takes no request to say where it is.
+    pub(crate) fn registers(&mut self) -> Result<String> {
+        let reply = self.execute(
+            "human-monitor-command",
+            Some("{\"command-line\":\"info registers -a\"}"),
+        )?;
+        // The reply is one JSON string; its escaped newlines are the lines.
+        Ok(reply.replace("\\r\\n", "\n").replace("\\n", "\n"))
+    }
+
     /// Ask for a screendump of `device`'s first head, or of QEMU's first
     /// console when `device` is `None`, into `file`.
     pub(crate) fn screendump(&mut self, device: Option<&str>, file: &Path) -> Result<()> {
