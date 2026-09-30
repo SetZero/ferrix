@@ -79,6 +79,8 @@ pub(crate) struct Report {
     pub(crate) veth_pairs: usize,
     /// Routes added to a network namespace by netlink.
     pub(crate) routes: usize,
+    /// Time namespaces, each made as `unshare(CLONE_NEWTIME)` makes one.
+    pub(crate) time_namespaces: usize,
 }
 
 /// How many mounts the namespace the mount namespaces are copied from
@@ -121,6 +123,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         report.network_namespaces = network_namespaces(&tree)?;
         report.veth_pairs = veth_pairs(&tree)?;
         report.routes = routes(&tree)?;
+        report.time_namespaces = time_namespaces(&tree)?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))
@@ -366,6 +369,16 @@ fn routes(tree: &Arc<Job>) -> Result<usize, &'static str> {
         }
         added?;
         Ok(socket)
+    })
+}
+
+/// Time namespaces, made as `unshare(CLONE_NEWTIME)` makes them: each is
+/// charged to the job asking, refused `ENOMEM` at its limit, and gives its
+/// heap back when it ends (`docs/NAMESPACES.md` §12.1).
+fn time_namespaces(tree: &Arc<Job>) -> Result<usize, &'static str> {
+    let creator = crate::syscall::credentials::Credentials::root();
+    kind(tree, "time namespaces", |_| {
+        crate::syscall::timens::create(&creator, None)
     })
 }
 
