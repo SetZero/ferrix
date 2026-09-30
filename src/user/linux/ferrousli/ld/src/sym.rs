@@ -27,7 +27,7 @@
 
 use core::ffi::c_char;
 
-use crate::elf::{SHN_UNDEF, STB_GLOBAL, STB_WEAK, Sym, st_bind};
+use crate::elf::{SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK, Sym, st_bind};
 use crate::object::{Defined, Object};
 
 /// The GNU hash of a symbol name: djb2 with a multiplier of 33.
@@ -205,7 +205,7 @@ fn defines(object: &Object, symbol: &Sym, name: *const c_char) -> Option<Found> 
         return None;
     }
     let bind = st_bind(symbol.st_info);
-    if bind != STB_GLOBAL && bind != STB_WEAK {
+    if bind != STB_GLOBAL && bind != STB_WEAK && bind != STB_GNU_UNIQUE {
         return None;
     }
     let candidate = object.name(symbol.st_name)?;

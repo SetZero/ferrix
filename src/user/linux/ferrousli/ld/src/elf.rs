@@ -289,6 +289,12 @@ pub(crate) const SHN_UNDEF: u16 = 0;
 pub(crate) const STB_GLOBAL: u8 = 1;
 /// A symbol another definition overrides.
 pub(crate) const STB_WEAK: u8 = 2;
+/// A global symbol of which the process keeps one definition, whichever
+/// object brought it first: GCC gives C++'s inline static data and template
+/// statics this binding, `std::numpunct<char>::id` in `libstdc++.so.6` among
+/// them. A lookup that searches the scope in load order finds that first
+/// definition, as glibc's unique-symbol table would.
+pub(crate) const STB_GNU_UNIQUE: u8 = 10;
 /// A symbol resolved by calling a function in the defining object.
 pub(crate) const STT_GNU_IFUNC: u8 = 10;
 
