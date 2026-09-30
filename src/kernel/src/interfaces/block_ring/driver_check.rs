@@ -158,7 +158,10 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
         let disk = first.ok_or("no disk was published")?;
         let read = if checks::run() {
             let read = read_back(disk.as_ref())?;
+            no_nudge_lost()?;
             super::hop_check::run(&disk)?;
+            no_nudge_lost()?;
+            print_nudges();
             read
         } else {
             0
@@ -207,7 +210,10 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
     let disk = first.ok_or("no disk was published")?;
     let read = if checks::run() {
         let read = read_back(disk.as_ref())?;
+        no_nudge_lost()?;
         super::hop_check::run(&disk)?;
+        no_nudge_lost()?;
+        print_nudges();
         read
     } else {
         0
@@ -454,4 +460,32 @@ fn names_str(count: usize) -> &'static str {
         3 => "vda vdb vdc",
         _ => "vda ...",
     }
+}
+
+/// Require that no caller's nudge to a ring's task was lost: the task, waking
+/// for any reason, never found something it could have dispatched that was
+/// queued while it slept without a nudge on its way (`block_ring`'s
+/// `Serving::wake_up`). A lost nudge does not fail a read -- the task's
+/// recheck finds the request 50 ms later -- so only this count shows it.
+fn no_nudge_lost() -> Result<(), &'static str> {
+    if super::NUDGES_LOST.load(core::sync::atomic::Ordering::Relaxed) != 0 {
+        print_nudges();
+        return Err(
+            "a request waited for the ring task's recheck: the nudge that should have woken it was lost",
+        );
+    }
+    Ok(())
+}
+
+/// The nudge counts, for the boot log.
+fn print_nudges() {
+    let load =
+        |count: &core::sync::atomic::AtomicU64| count.load(core::sync::atomic::Ordering::Relaxed);
+    crate::console::println!(
+        "  nudge    {} requests found the ring's task asleep and nudged it, {} found it awake \
+         or nudged already, {} nudges lost",
+        load(&super::NUDGES_SENT),
+        load(&super::NUDGES_SPARED),
+        load(&super::NUDGES_LOST),
+    );
 }

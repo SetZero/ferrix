@@ -215,9 +215,21 @@ Kernel, per completion:
 * `bytes_done ≤` the submission's payload length. A WRITE or FLUSH completing
   with status OK but `bytes_done` short of its length is treated as IOERR.
 
-The kernel copies read data out of the data VMO **once, at completion**. It
-never validates payload contents — btrfs checksums them — so a driver changing
-bytes after completion changes nothing the kernel already copied.
+The kernel copies read data out of the data VMO **once, after completion,
+straight into the caller's buffer**, and keeps the region out of use until
+that copy is made. It never validates payload contents — btrfs checksums
+them, in the caller's buffer — so a driver changing bytes after the copy
+changes nothing the kernel acts on, and one changing them before it only
+changes what the checksum is run over. The copy is volatile loads, a machine
+word at a time (§3.1's shared fields are the same: every index and want-bell
+flag is one whole `u32` access, never bytes).
+
+The kernel reads every field of a completion once, into its own memory,
+checks that copy and acts on it; it never reads a field again after checking
+it. Stage 10's `reread` boot line (`block_ring::reread_check`) holds that
+against a driver that rewrites each field of a posted completion — tail, id,
+`bytes_done`, status — the instant after the kernel first reads it, each to a
+value that would also have passed the checks.
 
 ## 5. Doorbells
 

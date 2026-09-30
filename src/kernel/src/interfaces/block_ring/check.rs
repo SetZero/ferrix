@@ -108,6 +108,9 @@ pub(crate) struct Report {
     pub(crate) published: u32,
     /// Frames the second round did not give back.
     pub(crate) leaked: i64,
+    /// Fields of a posted completion a cheating driver rewrote after the
+    /// kernel read them, none of which it acted on ([`super::reread_check`]).
+    pub(crate) rewrites: u32,
     /// Why nothing was checked, on a machine with no PCI function.
     pub(crate) skipped: Option<&'static str>,
 }
@@ -129,6 +132,8 @@ struct Counter {
 ///
 /// Verifies: L.quiesce.3
 pub(crate) fn run() -> Result<Report, &'static str> {
+    // No device needed: that ring is a page of the kernel's own.
+    let rewrites = super::reread_check::run()?.rewrites;
     let Some(node) = device::devices()
         .iter()
         .find(|node| matches!(node.location(), device::Location::Pci(_)))
@@ -138,6 +143,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
             refusals: 0,
             published: 0,
             leaked: 0,
+            rewrites,
             skipped: Some("no PCI function to make a ring for"),
         });
     };
@@ -178,6 +184,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         refusals: counter.refusals,
         published: counter.published,
         leaked,
+        rewrites,
         skipped: None,
     })
 }
