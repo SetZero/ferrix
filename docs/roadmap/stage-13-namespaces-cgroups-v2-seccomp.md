@@ -132,6 +132,10 @@ certification consultant. Landings N1 to N6 and NP, 39 points, end with
 `test-steam-bootstrap` passing the check as uid 1000; pid, network, IPC,
 UTS and cgroup namespaces, `setns` and seccomp stay out of it.
 
+**Designed -- seccomp-bpf (2026-09-30), for review:** `docs/SECCOMP.md`,
+S1 to S6 (20 points); this stage's "a seccomp filter that blocks a
+syscall" is met at S3.
+
 **Done -- N1, per-mount flags (2026-09-28, 5 points).** `ro`, `nosuid`,
 `nodev` and `noexec` are a mount's own and enforced -- `EROFS` for every
 change through a read-only mount, `EACCES` for a device on a `nodev` one and

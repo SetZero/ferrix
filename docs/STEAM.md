@@ -72,7 +72,8 @@ does not offer; it renders in software instead.
 
 | Workaround | Why | Real fix | Owner |
 |---|---|---|---|
-| `_v2-entry-point` stand-in, and `-no-cef-sandbox` | Valve's steamrt64 entry point starts pressure-vessel, which needs user and mount namespaces for bubblewrap; Chromium's sandbox needs them too | namespaces | N2–N6 (`docs/NAMESPACES.md`) |
+| `_v2-entry-point` stand-in | Valve's steamrt64 entry point starts pressure-vessel, which needs user and mount namespaces for bubblewrap | namespaces | N2–N6 (`docs/NAMESPACES.md`) |
+| `-no-cef-sandbox` | Chromium's sandbox is two layers: user and pid namespaces (network ones optional), and a seccomp-bpf filter in every child. Measured on the host (`docs/SECCOMP.md` §1.2): with `CLONE_NEWPID` refused, Chrome with its sandbox on does not start at all | user namespaces, pid namespaces and seccomp together | N4 (`docs/NAMESPACES.md`); pid namespaces, unowned and unsized; S1–S8 (`docs/SECCOMP.md`) |
 | `logger-0.bash` stand-in | The Steam Runtime's logger failed on Ferrix under `steamwebhelper.sh`; this one logs nothing | whatever the logger meets: `/dev/fd` through process substitution, and the `/proc` gaps below | steam-proc-gaps |
 | (not worked around) `lsof` warns "unsupported format" for `/proc/net/tcp6` and `udp6`, and cannot identify Unix sockets | the IPv6 tables' columns differ from Linux's, and `/proc/net/unix` names no inodes | Linux's formats | steam-proc-gaps |
 | 16 GiB guest | At 8 GiB several processes died of `SIGBUS` on execute faults of mapped library pages while Chromium started | find and fix the refault | steam-sigbus |
