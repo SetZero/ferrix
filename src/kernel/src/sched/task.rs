@@ -373,6 +373,14 @@ impl Task {
         *self.sleep_slot.lock() = Some(slot);
     }
 
+    /// Whether it holds both its slots: no run queue holds it, and no sleeper
+    /// set or reaper's list does. What a task [`crate::sched::wake_with`] may
+    /// move must be, since a set elsewhere still holding it would run it
+    /// there too.
+    pub(crate) fn holds_slots(&self) -> bool {
+        self.run_slot.lock().is_some() && self.sleep_slot.lock().is_some()
+    }
+
     /// What it runs, if it has not started yet.
     pub(crate) const fn entry(&self) -> Option<(fn(usize), usize)> {
         self.entry

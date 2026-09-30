@@ -52,7 +52,7 @@ use ferrix_sync::IrqSpinLock;
 use crate::arch;
 use crate::fallible::{self, AllocError};
 use crate::object::quota::{Charge, Resource};
-use crate::sched::WaitQueue;
+use crate::sched::{WaitQueue, Wake};
 
 /// The most user packets a port holds unread.
 pub(crate) const PORT_CAPACITY: usize = 1024;
@@ -150,12 +150,14 @@ impl Port {
         })
     }
 
-    /// Queue a program's own packet.
+    /// Queue a program's own packet, and wake a waiter as `wake` allows:
+    /// [`Wake::Sync`] from a caller that waits next, which may then hand its
+    /// processor to the waiter (`sched::wake_with`).
     ///
     /// # Errors
     ///
     /// [`PortError::Full`] at [`PORT_CAPACITY`].
-    pub(crate) fn queue_user(&self, key: u64, data: [u64; 2]) -> Result<(), PortError> {
+    pub(crate) fn queue_user(&self, key: u64, data: [u64; 2], wake: Wake) -> Result<(), PortError> {
         {
             let mut queue = self.queue.lock();
             if queue.users >= PORT_CAPACITY {
@@ -172,7 +174,7 @@ impl Port {
             }
             queue.users += 1;
         }
-        self.waiters.wake_all();
+        self.waiters.wake_all_with(wake);
         Ok(())
     }
 

@@ -89,7 +89,7 @@ use crate::arch;
 use crate::device::Vector;
 use crate::fallible;
 use crate::irq;
-use crate::sched::WaitQueue;
+use crate::sched::{WaitQueue, Wake};
 
 /// Each claimed line, by vector number: there exactly as long as the
 /// [`Interrupt`] that claimed it.
@@ -210,9 +210,12 @@ impl Line {
                 Some(port)
             })
         };
-        self.waiters.wake_all();
+        // On this processor if it has nothing else to run: the interrupt
+        // woke it already, and waking the driver's own would be a second
+        // processor out of its halt for one delivery (`sched::Wake::Idle`).
+        self.waiters.wake_all_with(Wake::Idle);
         if let Some(port) = port {
-            port.waiters().wake_all();
+            port.waiters().wake_all_with(Wake::Idle);
         }
     }
 

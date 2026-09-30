@@ -45,6 +45,13 @@ pub const PACKET_INTERRUPT: u32 = 2;
 /// makes one.
 pub const PORT_FD_CLOEXEC: u64 = 1;
 
+/// `port_queue`'s option, its third argument: the caller waits next, so a
+/// thread the packet wakes may be run on the caller's processor rather than
+/// have another one woken for it -- Linux's `WF_SYNC`. A hint: a caller that
+/// then does not wait delays the woken thread by one slice at most. Zero is
+/// no option, and any other bit is refused.
+pub const PORT_QUEUE_SYNC: u64 = 1;
+
 /// `vmo_map`'s protection: the mapping may be read. Every mapping asks for it.
 pub const MAP_READ: u32 = 1 << 0;
 /// `vmo_map`'s protection: the mapping may also be written.

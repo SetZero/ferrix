@@ -41,6 +41,7 @@
 
 mod check;
 mod queue;
+mod sync_check;
 mod task;
 pub(crate) mod trip;
 mod wait;
@@ -57,7 +58,7 @@ use crate::fallible;
 use crate::object::quota;
 use crate::smp::Topology;
 use queue::CpuQueue;
-use task::{DEAD, RUNNABLE};
+use task::{BLOCKED, DEAD, RUNNABLE};
 
 pub(crate) use check::before_start as check_before_start;
 pub(crate) use check::run as run_checks;
@@ -1569,26 +1570,114 @@ fn block() {
     schedule();
 }
 
+/// Where a wake may put the task it wakes.
+///
+/// A wake onto another processor is an interrupt to it, and under a
+/// hypervisor a processor with nothing to do is a halted virtual processor:
+/// the interrupt is an exit, a host thread woken, and a halt left, every time.
+/// A request that goes kernel, driver, kernel pays that at every hop. Where
+/// the waker's own processor is about to have nothing better to do, the woken
+/// task can run there instead, and the hop is a switch. See [`wake_with`] for
+/// when a task may be moved at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Wake {
+    /// On the processor that owns it, whatever that costs: every wake before
+    /// the other two existed, and still every wake nobody says more about.
+    Home,
+    /// On the waker's processor, if nothing is queued there behind the waker:
+    /// for a waker that blocks next, which then hands its processor to the
+    /// task it woke. Linux's `WF_SYNC`. A waker that does not block after all
+    /// keeps its processor to the end of its slice at most, when the timer
+    /// armed for the woken task makes a decision; so a caller that is wrong
+    /// costs the woken task one slice's latency, never its turn.
+    Sync,
+    /// On this processor, if it is running its idle task with nothing
+    /// queued: for an interrupt's handler, which woke the processor it runs on
+    /// already and would otherwise interrupt a second one.
+    Idle,
+}
+
+/// Wakes that moved a task onto the waker's processor: see [`wake_with`].
+static WOKEN_HERE: AtomicU64 = AtomicU64::new(0);
+
+/// How many wakes have moved a task onto the waker's processor.
+pub(crate) fn woken_here() -> u64 {
+    WOKEN_HERE.load(Ordering::Relaxed)
+}
+
 /// Make `task` runnable, wherever it is.
 pub(crate) fn wake(task: &Arc<Task>) {
-    // **Not re-placed here, and not detached from its sleeper set here
-    // either.** Both were tried and both were withdrawn.
-    //
-    // Choosing a new processor at wake-up is what Linux does and is the
-    // better policy. Taking a woken task out of its processor's sleeper set
-    // looks like plain hygiene. Each was reverted after making an
-    // already-flaky machine reliably worse — the second one wedged every one
-    // of five runs, where the first had wedged three.
-    //
-    // The reason both are harder than they look is the same: a blocked task
-    // is not an unattached one, and "blocked" covers several states this code
-    // does not currently distinguish. A task can be on a wait queue, in a
-    // sleeper set, part-way into `block` and in neither yet, or on both. A
-    // waker that reasons about only one of them moves or unfiles a task that
-    // something else still believes it owns, and the task is lost rather than
-    // run. Getting it right means giving those states names and an order,
-    // which is a change of its own and not a corollary of five others.
+    wake_with(task, Wake::Home);
+}
+
+/// What [`wake_onto`] did.
+enum Placed {
+    /// Moved to the waker's processor, runnable there.
+    Moved,
+    /// Not blocked: running, queued, or dead. Nothing to do, as for a wake
+    /// that finds it so at home.
+    NotBlocked,
+    /// Left where it is, for the wake at home to make runnable.
+    Declined,
+}
+
+/// Make `task` runnable, on the waker's processor where `how` allows and it is
+/// safe, and otherwise where it is.
+///
+/// # Moving a blocked task, and the states that makes it name
+///
+/// Re-placing a task at wake-up was tried twice before and withdrawn both
+/// times: once choosing a processor for every woken task, once detaching a
+/// woken task from its sleeper set. Each made an already-flaky machine reliably
+/// worse, the second wedging every run. The reason was the same: "blocked"
+/// covered several states the code did not tell apart, and a waker that
+/// reasoned about one of them moved or unfiled a task something else still
+/// believed it owned. The second half has since landed on its own: every wake
+/// takes the task out of its home's sleeper set, under that queue's lock.
+///
+/// The states, for a task whose state word says [`task::BLOCKED`]:
+///
+/// 1. **Part-way into `block`.** It marked itself blocked and still runs:
+///    it is its home's `current`, and the fair class holds it as the running
+///    entity, so it counts as queued. Only its home's `choose_next` may take
+///    it off the processor, and a wake here must only mark it runnable, which
+///    cancels the block. Never moved.
+/// 2. **Asleep at home.** Switched out and detached from the fair class by
+///    `choose_next`, filed in its home's sleeper set if it has a deadline.
+///    Its registers are saved: the switch that saved them released the home
+///    queue's lock only afterwards, in `finish_switch`, and a waker holding
+///    that lock is ordered after it. It holds its run slot, and its sleep
+///    slot once taken out of the sleeper set. The one state it is moved from.
+/// 3. **Filed elsewhere.** Its sleep slot is still out after its home's set
+///    has given it back: a set on another processor holds it, which the
+///    kernel no longer produces and which would run it there too. Never
+///    moved.
+///
+/// On a wait queue is none of these: a queue holds a task, not a processor,
+/// and a second wake of a task already runnable changes nothing wherever it
+/// is. Dead is not blocked.
+///
+/// So a task is moved only in state 2, decided under both queues' locks,
+/// taken lower processor first as `steal_from` takes them: its home's, so
+/// nothing can switch it in or out meanwhile, and the waker's, which it joins.
+/// The move is `steal_from`'s own for a task on no queue -- a new owner and an
+/// insert -- after the sleeper set has given it up. And only onto a processor
+/// its affinity allows ([`may_place`]), where nothing else is queued, so that
+/// it runs as soon as the waker stops. Anything else is the wake at home,
+/// exactly as before.
+pub(crate) fn wake_with(task: &Arc<Task>, how: Wake) {
     let saved = <arch::Irq as IrqControl>::disable();
+    if how != Wake::Home
+        && let Some(here) = this_cpu()
+    {
+        match wake_onto(task, here, how) {
+            Placed::Moved | Placed::NotBlocked => {
+                <arch::Irq as IrqControl>::restore(saved);
+                return;
+            }
+            Placed::Declined => {}
+        }
+    }
     let mut kick_cpu = None;
     loop {
         let cpu = task.cpu();
@@ -1644,6 +1733,104 @@ pub(crate) fn wake(task: &Arc<Task>) {
 
     if let Some(cpu) = remote {
         kick(cpu);
+    }
+}
+
+/// Whether anything but its own placement may put `task` on `cpu`: a processor
+/// its affinity allows, in the domain.
+///
+/// A job confines no task to processors of its own: cgroupfs offers no
+/// `cpuset` controller, and a job's share is a weight, which follows the task
+/// to any processor (`CpuQueue::insert` joins it to its group there). The day
+/// a job, or a real-time domain, restricts processors, its set is asked here,
+/// and every wake that moves a task asks it.
+fn may_place(task: &Task, cpu: usize) -> bool {
+    task.may_run_on(cpu) && domain_cpus().is_some_and(|cpus| cpus.contains(cpu))
+}
+
+/// Whether `queue`, the waker's, has room for a task woken as `how` says:
+/// nothing queued behind the waker for [`Wake::Sync`], nothing at all for
+/// [`Wake::Idle`].
+fn has_room(queue: &CpuQueue, how: Wake) -> bool {
+    match how {
+        Wake::Home => false,
+        Wake::Sync => queue.waiting() == 0,
+        Wake::Idle => queue.is_running_idle() && !queue.has_work(),
+    }
+}
+
+/// Whether `task`, blocked, is asleep at `home`, the queue that owns it, and
+/// in nothing else: state 2 of [`wake_with`]. Takes it out of `home`'s
+/// sleeper set on the way, which the wake at home would do in any case.
+///
+/// Under `home`'s lock.
+fn asleep_at_home(task: &Arc<Task>, home: &mut CpuQueue) -> bool {
+    let running = home
+        .current
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, task));
+    if running || task.is_queued() {
+        return false;
+    }
+    let _ = home.remove_sleeper(task.id);
+    task.holds_slots()
+}
+
+/// Move `task` onto `here`, this processor, if [`wake_with`]'s conditions
+/// hold, and make it runnable there. With interrupts masked.
+fn wake_onto(task: &Arc<Task>, here: usize, how: Wake) -> Placed {
+    let Some(mine) = queue_of(here).filter(|_| may_place(task, here)) else {
+        return Placed::Declined;
+    };
+    loop {
+        let home = task.cpu();
+        if home == here {
+            return Placed::Declined;
+        }
+        let Some(theirs) = queue_of(home) else {
+            return Placed::Declined;
+        };
+        // Lower processor first, as `steal_from` takes them.
+        let (first, second) = if here < home {
+            (mine, theirs)
+        } else {
+            (theirs, mine)
+        };
+        let mut first_queue = first.lock();
+        let mut second_queue = second.lock();
+        // It may have moved between the read and the locks.
+        if task.cpu() != home {
+            continue;
+        }
+        let (here_queue, home_queue) = if here < home {
+            (&mut *first_queue, &mut *second_queue)
+        } else {
+            (&mut *second_queue, &mut *first_queue)
+        };
+        if task.state() != BLOCKED {
+            return Placed::NotBlocked;
+        }
+        if !has_room(here_queue, how) || !asleep_at_home(task, home_queue) {
+            return Placed::Declined;
+        }
+        // Whatever sleep it meant is over, as the wake at home ends it.
+        let _ = task.take_sleep_deadline();
+        task.set_state(RUNNABLE);
+        task.set_cpu(here);
+        // NOALLOC: `CpuQueue::insert` queues the task in its own run slot,
+        // which `asleep_at_home` saw it hold.
+        here_queue.insert(task);
+        // Idle here: switch to it on the way out of this interrupt, or at the
+        // next chance. Behind a waker: a decision when the waker blocks, or at
+        // the latest when this queue's timer says -- one slice, now that
+        // something waits (`CpuQueue::arm_timer`).
+        if here_queue.is_running_idle() {
+            resched_here(here);
+        } else {
+            here_queue.arm_timer(crate::timer::now_nanos());
+        }
+        let _ = WOKEN_HERE.fetch_add(1, Ordering::Relaxed);
+        return Placed::Moved;
     }
 }
 

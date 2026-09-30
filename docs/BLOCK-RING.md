@@ -240,6 +240,13 @@ Consequences:
   on `Port::waiters()` and `take()`s packets. A user `port_queue` wakes it at
   once. It drains every queued bell and then re-reads the ring once, so a
   driver flooding bells only delays its own completions.
+* **Every bell is rung as a sync wake.** Whoever rings goes back to waiting
+  next: the driver to its `port_wait` (it queues with `PORT_QUEUE_SYNC`, the
+  option in `port_queue`'s third argument), the ring's task to its port, a
+  reader to its answer. So the woken side may run on the ringer's processor
+  once the ringer blocks, instead of having a halted processor woken for it
+  (`sched::Wake::Sync`). The hint is safe to be wrong: a ringer that keeps
+  running holds the woken side back one slice at most.
 
 The driver's port also receives its device interrupt packets
 (`interrupt_bind`, `PACKET_INTERRUPT`) and a signal packet for the control

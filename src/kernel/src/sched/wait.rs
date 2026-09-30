@@ -313,10 +313,17 @@ impl WaitQueue {
 
     /// Wake everything waiting.
     pub(crate) fn wake_all(&self) {
+        self.wake_all_with(super::Wake::Home);
+    }
+
+    /// Wake everything waiting, each as `how` allows: see
+    /// [`super::wake_with`]. At most the first can find room on the waker's
+    /// processor; the rest are woken where they are.
+    pub(crate) fn wake_all_with(&self, how: super::Wake) {
         let _ = self.wakes.fetch_add(1, Ordering::Relaxed);
         let waiters = core::mem::take(&mut *self.waiters.lock());
         for task in &waiters {
-            super::wake(task);
+            super::wake_with(task, how);
         }
     }
 }

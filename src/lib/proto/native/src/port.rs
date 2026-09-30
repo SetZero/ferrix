@@ -1,7 +1,7 @@
 //! Ports: the event queue one thread waits on for many sources.
 
 use ferrix_native_abi::nr;
-use ferrix_native_abi::types::{PACKET_USER, PORT_FD_CLOEXEC, PortPacket};
+use ferrix_native_abi::types::{PACKET_USER, PORT_FD_CLOEXEC, PORT_QUEUE_SYNC, PortPacket};
 
 use crate::call::{Call, Syscall};
 use crate::error::{Error, decode, decode_handle, decode_unit};
@@ -33,6 +33,22 @@ impl<S: Syscall> Port<S> {
     /// [`Error::ShouldWait`] when the queue is full; [`Error::AccessDenied`]
     /// without `WRITE`.
     pub fn queue(&self, key: u64, data: [u64; 2]) -> Result<(), Error> {
+        self.queue_with(key, data, 0)
+    }
+
+    /// `port_queue` with `PORT_QUEUE_SYNC`: as [`Port::queue`], from a
+    /// caller that waits next, so the thread the packet wakes may run on the
+    /// caller's processor instead of waking another.
+    ///
+    /// # Errors
+    ///
+    /// As [`Port::queue`].
+    pub fn queue_sync(&self, key: u64, data: [u64; 2]) -> Result<(), Error> {
+        self.queue_with(key, data, PORT_QUEUE_SYNC)
+    }
+
+    /// `port_queue` with `options`.
+    fn queue_with(&self, key: u64, data: [u64; 2], options: u64) -> Result<(), Error> {
         let packet = packet_bytes(&PortPacket {
             key,
             kind: PACKET_USER,
@@ -42,6 +58,7 @@ impl<S: Syscall> Port<S> {
         let value = Call::new(nr::PORT_QUEUE)
             .value(register(self.handle()))
             .input(&packet)
+            .value(options as usize)
             .make(self.syscall());
         decode_unit(value)
     }

@@ -24,7 +24,7 @@ use ferrix_native_abi::status;
 use ferrix_native_abi::types;
 use ferrix_native_abi::types::{
     DEVICE_INFO_BYTES, DEVICE_VIRTIO_PCI, DeviceBlock, IoMappingSpec, PACKET_SIGNAL, PACKET_USER,
-    PIN_READ_ONLY, PortPacket,
+    PIN_READ_ONLY, PORT_QUEUE_SYNC, PortPacket,
 };
 
 use crate::call::{Raw, Syscall};
@@ -502,6 +502,29 @@ fn a_read_offers_no_more_handle_room_than_a_message_can_use() {
 // ---------------------------------------------------------------------------
 // Ports
 // ---------------------------------------------------------------------------
+
+#[test]
+fn a_sync_queue_says_so_in_its_third_argument_and_a_plain_one_does_not() {
+    let sys = Recorder::default();
+    sys.returns(0x71);
+    let port = port::create(&sys).unwrap();
+    sys.answer(|raw| {
+        assert_eq!(raw.args()[2], 0, "a plain queue asks nothing");
+        0
+    });
+    port.queue(1, [0, 0]).unwrap();
+    sys.answer(|raw| {
+        assert_eq!(raw.args()[2], usize::try_from(PORT_QUEUE_SYNC).unwrap());
+        let packet = raw.memory(raw.args()[1], 32).unwrap();
+        assert_eq!(packet[..8], 2_u64.to_ne_bytes());
+        0
+    });
+    port.queue_sync(2, [0, 0]).unwrap();
+    assert_eq!(
+        sys.numbers(),
+        [nr::PORT_CREATE, nr::PORT_QUEUE, nr::PORT_QUEUE]
+    );
+}
 
 #[test]
 fn a_port_packet_is_laid_out_as_the_kernel_writes_one() {

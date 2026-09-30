@@ -74,7 +74,7 @@ use crate::device::{self, DeviceNode};
 use crate::object::channel::{Endpoint, ReadError};
 use crate::object::port::{Observer, Port};
 use crate::object::{self, Object, Transfer};
-use crate::sched::{Task, WaitQueue};
+use crate::sched::{Task, WaitQueue, Wake};
 use crate::sync::SpinLock;
 use crate::user::vmo::{Held, Vmo};
 use crate::{mm, sched, timer};
@@ -999,9 +999,11 @@ impl RingDisk {
             sched::trip::queued(&self.done);
             id
         };
-        // A full port already holds a nudge the task has not taken.
+        // A full port already holds a nudge the task has not taken. Sync: the
+        // reader waits for its answer next, and the ring's task can have its
+        // processor rather than a halted one's (`sched::Wake::Sync`).
         let port = Arc::clone(&self.port.lock());
-        let _ = port.queue_user(SUBMIT_KEY, [0; 2]);
+        let _ = port.queue_user(SUBMIT_KEY, [0; 2], Wake::Sync);
         // Not interruptible by signals, as a disk read on Linux is not; the
         // ring's end, or the patience, is what ends it.
         let deadline = timer::now_nanos().saturating_add(READ_PATIENCE_NANOS);
@@ -1176,7 +1178,11 @@ impl Serving<'_> {
             if let Some(bell) = self.side.publish() {
                 sched::trip::bell(&self.disk.done, self.driver_port.waiters());
                 // A full port already holds a bell the driver has not taken.
-                let _ = self.driver_port.queue_user(bell.key(), bell.packet().data);
+                // Sync: with nothing more to do this task sleeps next, and the
+                // driver can have its processor.
+                let _ = self
+                    .driver_port
+                    .queue_user(bell.key(), bell.packet().data, Wake::Sync);
             }
             if self.complete().is_err() {
                 return Ending::DriverDied;
@@ -1330,8 +1336,10 @@ impl Serving<'_> {
             self.free.push(region);
             answered = true;
         }
+        // Sync, as the bell to the driver: the reader can have this
+        // processor once the task sleeps.
         if answered {
-            self.disk.done.wake_all();
+            self.disk.done.wake_all_with(Wake::Sync);
         }
         Ok(())
     }

@@ -74,7 +74,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `syscall/native.rs` | `item` | 12 | 6 | 8 | 1 | 1908 |
+| `syscall/native.rs` | `item` | 12 | 6 | 8 | 1 | 1909 |
 | `syscall/program.rs` | `item` | 3 | 4 | 2 | 1 | 89 |
 
 ---
@@ -102,7 +102,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 6 | 5 | 3 | 293, 654, 1195 |
+| `main.rs` | `item` | 3 | 6 | 5 | 3 | 293, 654, 1208 |
 
 ---
 
@@ -142,7 +142,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1243, 1933 |
+| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1244, 2120 |
 | `sched/task.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---

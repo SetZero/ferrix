@@ -61,7 +61,7 @@ use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
     self, CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo, MAP_READ,
-    MAP_WRITE, PortPacket, ProcessStatus, ReadActual,
+    MAP_WRITE, PORT_QUEUE_SYNC, PortPacket, ProcessStatus, ReadActual,
 };
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
@@ -83,6 +83,7 @@ use crate::object::port::{Observer, Port, PortError};
 use crate::object::process::{Bootstrap, GiveRefused, Host, Process, ProcessRef};
 use crate::object::quota::{self, Resource, Usage};
 use crate::object::{self, HandleTable, Object};
+use crate::sched::Wake;
 use crate::syscall::uaccess::{self, UserError};
 use crate::trap::SyscallArgs;
 use crate::user::space::SpaceError;
@@ -480,7 +481,7 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortCreate => port_create(process),
-        NativeCall::PortQueue => port_queue(process, handle(a[0]), a[1]),
+        NativeCall::PortQueue => port_queue(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortWait => port_wait(caller, handle(a[0]), a[1], a[2]),
         NativeCall::ObjectWaitAsync => {
             object_wait_async(process, handle(a[0]), handle(a[1]), a[2], a[3])
@@ -2187,13 +2188,23 @@ pub(crate) fn port_in(process: &Process, port: Handle, needed: Rights) -> Result
 
 /// `port_queue`. The kind and signals the caller wrote are ignored: a program
 /// queues user packets, and may not forge a signal packet.
-fn port_queue(process: &Process, port: Handle, packet: u64) -> Result<usize, Errno> {
+///
+/// `options` is zero or [`PORT_QUEUE_SYNC`]: the caller waits next, and a
+/// waiter the packet wakes may take its processor (`sched::Wake::Sync`). Any
+/// other bit is refused, so that a meaning given to it later is never read
+/// into an old program's register.
+fn port_queue(process: &Process, port: Handle, packet: u64, options: u64) -> Result<usize, Errno> {
+    let wake = match options {
+        0 => Wake::Home,
+        PORT_QUEUE_SYNC => Wake::Sync,
+        _ => return Err(status::INVALID_ARGS),
+    };
     let port = port_in(process, port, Rights::WRITE)?;
     let key = read_u64(process, packet)?;
     let first = read_u64(process, packet.checked_add(16).ok_or(status::FAULT)?)?;
     let second = read_u64(process, packet.checked_add(24).ok_or(status::FAULT)?)?;
     crate::sched::trip::port_rung(port.waiters());
-    port.queue_user(key, [first, second])
+    port.queue_user(key, [first, second], wake)
         .map_err(|_| status::SHOULD_WAIT)?;
     Ok(0)
 }

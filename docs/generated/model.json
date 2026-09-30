@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "c4cb6d4c30b710cd10ede38103c0b598cfc3adc00f1e650153b4d4394dc92f8e",
+  "digest": "47e4d6f5f9dccfa7c784be9f08a99581bfc2418a4a4ad0284d5142814677016a",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -96,8 +96,8 @@
     }
   ],
   "summary": {
-    "packages": 103,
-    "elements": 5281,
+    "packages": 104,
+    "elements": 5292,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -31475,6 +31475,132 @@
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
                     "line": 43
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Wakes",
+          "qualifiedName": "FerrixSchedRequirements::Wakes",
+          "kind": "package",
+          "doc": "src/kernel/src/sched/mod.rs: a wake that moves the task it wakes onto the waker's processor, and the states that decide whether it may.",
+          "source": {
+            "file": "docs/sysml/15-sched-requirements.sysml",
+            "line": 47
+          },
+          "children": [
+            {
+              "name": "aMovedWakeLosesNothing",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeLosesNothing",
+              "kind": "requirement",
+              "shortName": "L.sched.3",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 52
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeLosesNothing",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"wake_with shall move a blocked task onto the waker's processor only when, under both processors' queue locks, it is neither its home's running task nor queued, its home's sleeper set has given it up and it holds both its slots, and nothing is queued on the waker's processor behind the waker; and otherwise shall make it runnable where it is. Every task so woken shall run.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 59
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeLosesNothing",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"One traveller per processor (at most four), each relayed by sync wakes between anchors pinned one per processor, makes 1000 hops and its anchors 1000 between them, exactly, within 30 seconds; at least one wake moved a task and the travellers ran on at least two processors. Hand-overs found by the 5 ms recheck rather than a wake are counted, not failed (the `sync` line).\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 66
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeLosesNothing",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 67
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeLosesNothing",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::wake_with\", \"sched::wake_onto\", \"sched::asleep_at_home\", \"sched::has_room\", \"sched::wait::WaitQueue::wake_all_with\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 70
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aMovedWakeKeepsAffinity",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeKeepsAffinity",
+              "kind": "requirement",
+              "shortName": "L.sched.4",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 72
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeKeepsAffinity",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"wake_with shall never move a task onto a processor outside its affinity or its scheduling domain.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 74
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeKeepsAffinity",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A task confined to processor 1, woken by 4 sync wakes from processor 0 each once it is all the way asleep, is moved by none of them and runs on processor 1 alone; a task free to run anywhere, woken the same way, is moved by at least one.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 78
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeKeepsAffinity",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 79
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aMovedWakeKeepsAffinity",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"sched::may_place\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 80
                   }
                 }
               ]

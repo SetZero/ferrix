@@ -633,7 +633,11 @@ impl Driver {
             return;
         };
         if let Some(port) = self.completion_port.as_ref() {
-            let _ = port.queue_user(bell.key(), [u64::from(bell.tail()), 0]);
+            let _ = port.queue_user(
+                bell.key(),
+                [u64::from(bell.tail()), 0],
+                crate::sched::Wake::Home,
+            );
         }
     }
 }

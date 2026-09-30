@@ -43,4 +43,41 @@ package FerrixSchedRequirements {
             attribute :>> unit = "sched::yield_now";
         }
     }
+
+    package Wakes {
+        doc /* src/kernel/src/sched/mod.rs: a wake that moves the task it wakes
+             * onto the waker's processor, and the states that decide whether
+             * it may. */
+
+        requirement <'L.sched.3'> aMovedWakeLosesNothing : ItemLowLevel {
+            attribute :>> statement = "wake_with shall move a blocked task onto
+                the waker's processor only when, under both processors' queue
+                locks, it is neither its home's running task nor queued, its home's
+                sleeper set has given it up and it holds both its slots, and
+                nothing is queued on the waker's processor behind the waker; and
+                otherwise shall make it runnable where it is. Every task so woken
+                shall run.";
+            attribute :>> criterion = "One traveller per processor (at most four),
+                each relayed by sync wakes between anchors pinned one per
+                processor, makes 1000 hops and its anchors 1000 between them,
+                exactly, within 30 seconds; at least one wake moved a task and the
+                travellers ran on at least two processors. Hand-overs found by the
+                5 ms recheck rather than a wake are counted, not failed (the `sync`
+                line).";
+            attribute :>> parent = "H.SCHED.1";
+            attribute :>> unit = ("sched::wake_with", "sched::wake_onto",
+                "sched::asleep_at_home", "sched::has_room",
+                "sched::wait::WaitQueue::wake_all_with");
+        }
+        requirement <'L.sched.4'> aMovedWakeKeepsAffinity : ItemLowLevel {
+            attribute :>> statement = "wake_with shall never move a task onto a
+                processor outside its affinity or its scheduling domain.";
+            attribute :>> criterion = "A task confined to processor 1, woken by 4
+                sync wakes from processor 0 each once it is all the way asleep, is
+                moved by none of them and runs on processor 1 alone; a task free to
+                run anywhere, woken the same way, is moved by at least one.";
+            attribute :>> parent = "H.SCHED.1";
+            attribute :>> unit = "sched::may_place";
+        }
+    }
 }

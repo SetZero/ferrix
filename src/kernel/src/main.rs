@@ -997,8 +997,20 @@ fn start_scheduler(cpus: &'static smp::Topology) {
         report.slice_one / 1000,
         report.slice_many / 1000,
     );
+    if report.sync.travellers > 0 {
+        println!(
+            "  sync     {} travellers relayed {} hops by sync wakes across processors {:#b}, {} \
+             of the wakes moving a task onto its waker's processor, no task lost, {} hand-overs \
+             found by the recheck rather than a wake; a task confined elsewhere never moved",
+            report.sync.travellers,
+            report.sync.hops,
+            report.sync.ran_on,
+            report.sync.moved,
+            report.sync.rechecked,
+        );
+    }
     println!(
-        "  cost     ms per check: one={} sleep={} many={} fair={} place={} affin={} load={} bal={} slice={}",
+        "  cost     ms per check: one={} sleep={} many={} fair={} place={} affin={} load={} bal={} slice={} sync={}",
         report.spent_ms[0],
         report.spent_ms[1],
         report.spent_ms[2],
@@ -1008,6 +1020,7 @@ fn start_scheduler(cpus: &'static smp::Topology) {
         report.spent_ms[6],
         report.spent_ms[7],
         report.spent_ms[8],
+        report.spent_ms[9],
     );
     println!(
         "  stage 5  {} threads scheduled fairly across {} processors",

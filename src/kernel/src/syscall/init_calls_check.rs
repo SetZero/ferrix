@@ -402,7 +402,7 @@ fn queue_late(_argument: usize) {
     crate::sched::sleep_for(QUEUE_AFTER_NANOS);
     let port = LATE_PORT.lock().take();
     if let Some(port) = port {
-        let _ = port.queue_user(PORT_COOKIE, [1, 2]);
+        let _ = port.queue_user(PORT_COOKIE, [1, 2], crate::sched::Wake::Home);
     }
 }
 
@@ -525,7 +525,11 @@ fn port_descriptor(side: &Side, report: &mut Report) -> Result<u64, &'static str
     let _ = side.call(nr::HANDLE_CLOSE, &[reg(blind)]);
     drop(the_port);
     let kept = fs_port(&file)?;
-    if kept.queue_user(0, [0, 0]).is_err() || !file.poll().readable {
+    if kept
+        .queue_user(0, [0, 0], crate::sched::Wake::Home)
+        .is_err()
+        || !file.poll().readable
+    {
         return Err("a port's descriptor did not keep the port after its handle was closed");
     }
     Ok(took / 1_000_000)

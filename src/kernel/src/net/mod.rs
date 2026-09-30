@@ -213,7 +213,7 @@ impl NetCore {
             .collect();
         for port in ports {
             if port.is_empty() {
-                let _ = port.queue_user(TRANSMIT_KEY, [0, 0]);
+                let _ = port.queue_user(TRANSMIT_KEY, [0, 0], crate::sched::Wake::Home);
             }
         }
     }

@@ -15,16 +15,16 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 609 | 342 | 267 |
+| Low (`L.*`) | 611 | 344 | 267 |
 
-1181 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1187 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1181 |
-| Accessors, covered by the requirement they serve | 563 |
+| Named by a low-level requirement | 1187 |
+| Accessors, covered by the requirement they serve | 566 |
 | Check code in a product file | 55 |
-| Named by none | 595 |
+| Named by none | 594 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
@@ -495,6 +495,13 @@ Each system-level requirement, and the high-level requirements that name it as t
 |---|---|---|---|---|---|---|---|---|
 | `L.sched.1` | While any task waits on a processor's queue, CpuQueue::arm_timer shall arm the next decision no more than one configured slice away, however long a request the running task holds. | With an entity queued that is not eligible and the running one having yielded 600 times, so that its remaining request exceeds 100 slices, the queue's next decision is at most one slice away; with nothing queued there is none. | H.SCHED.2 | `sched::queue::CpuQueue::arm_timer` | `src/lib/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host test | host test | host test |
 | `L.sched.2` | A yield by the only task on a processor's queue shall leave its request unchanged. | After 600 yields with nothing else queued, the running entity's remaining slice is what it was before the first. | H.SCHED.2 | `sched::yield_now` | `src/lib/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host test | host test | host test |
+
+### Wakes
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.sched.3` | wake_with shall move a blocked task onto the waker's processor only when, under both processors' queue locks, it is neither its home's running task nor queued, its home's sleeper set has given it up and it holds both its slots, and nothing is queued on the waker's processor behind the waker; and otherwise shall make it runnable where it is. Every task so woken shall run. | One traveller per processor (at most four), each relayed by sync wakes between anchors pinned one per processor, makes 1000 hops and its anchors 1000 between them, exactly, within 30 seconds; at least one wake moved a task and the travellers ran on at least two processors. Hand-overs found by the 5 ms recheck rather than a wake are counted, not failed (the `sync` line). | H.SCHED.1 | `sched::wake_with`, `sched::wake_onto`, `sched::asleep_at_home`, `sched::has_room`, `sched::wait::WaitQueue::wake_all_with` | `src/kernel/src/sched/sync_check.rs::relay` | not built | not built | not built |
+| `L.sched.4` | wake_with shall never move a task onto a processor outside its affinity or its scheduling domain. | A task confined to processor 1, woken by 4 sync wakes from processor 0 each once it is all the way asleep, is moved by none of them and runs on processor 1 alone; a task free to run anywhere, woken the same way, is moved by at least one. | H.SCHED.1 | `sched::may_place` | `src/kernel/src/sched/sync_check.rs::a_sync_wake_keeps_a_task_inside_its_affinity` | not built | not built | not built |
 
 ### Discovery
 
@@ -1345,6 +1352,8 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
 | `src/kernel/src/sched/check.rs::many_tasks` | kernel | L.x86_64.17 |
 | `src/kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
+| `src/kernel/src/sched/sync_check.rs::a_sync_wake_keeps_a_task_inside_its_affinity` | kernel | L.sched.4 |
+| `src/kernel/src/sched/sync_check.rs::relay` | kernel | L.sched.3 |
 | `src/kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | kernel | L.claim.1, L.claim.5 |
 | `src/kernel/src/service_check.rs::a_claim_or_a_number_without_memory_is_refused` | kernel | L.claim.8 |
 | `src/kernel/src/service_check.rs::a_device_failure_names_its_node` | kernel | L.device.11 |

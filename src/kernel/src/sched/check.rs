@@ -134,8 +134,8 @@ pub(crate) struct Report {
     pub(crate) bound: u64,
     /// How long the sleep check actually slept.
     pub(crate) slept: u64,
-    /// Guest milliseconds each of the nine checks took, in order.
-    pub(crate) spent_ms: [u64; 9],
+    /// Guest milliseconds each of the ten checks took, in order.
+    pub(crate) spent_ms: [u64; 10],
     /// Spawns the placer sent to a processor other than the caller's.
     pub(crate) placed_elsewhere: u64,
     /// How many distinct processors new tasks were *placed* on, before any
@@ -152,6 +152,8 @@ pub(crate) struct Report {
     pub(crate) slice_one: u64,
     /// As above, with the queue full.
     pub(crate) slice_many: u64,
+    /// The relay of wakes onto the waker's processor (`sync_check`).
+    pub(crate) sync: super::sync_check::SyncReport,
 }
 
 /// Tasks that have finished a phase.
@@ -186,7 +188,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     // rather than as each finishes: these checks cost the armv7a boot test
     // more than every other stage put together, and an attribution nobody can
     // see is one nobody will act on.
-    let mut spent = [0u64; 9];
+    let mut spent = [0u64; 10];
     let mut at = crate::timer::now_nanos();
     // A macro rather than a closure: a closure would borrow `spent` for the
     // whole of the phases below, and releasing that borrow to read it again
@@ -225,6 +227,8 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     mark!(7);
     slice_scaling(&mut report)?;
     mark!(8);
+    report.sync = super::sync_check::run(topology.online())?;
+    mark!(9);
     // The last `mark!` advances `at` for a phase that never comes; reading it
     // here is what says so, rather than an allow.
     let _ = at;
@@ -647,7 +651,7 @@ fn wait_for(ready: impl FnMut() -> bool, what: &'static str) -> Result<(), &'sta
 
 /// Free every exited task's stack, and require the arena to come back to
 /// where it started.
-fn reap_to(allocations: usize, what: &str) -> Result<(), &'static str> {
+pub(super) fn reap_to(allocations: usize, what: &str) -> Result<(), &'static str> {
     // Still a yielding loop, and deliberately: reaping is work *this* task
     // does, so it has to keep being given the processor to do it. Blocking
     // here would wait for something nobody is going to do.

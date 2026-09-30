@@ -646,9 +646,11 @@ impl Serving {
             self.post_receives();
             self.take_transmits();
             if let Some(bell) = self.side.publish(&mut self.ring) {
-                let _ = self
-                    .driver_port
-                    .queue_user(bell.key(), [u64::from(bell.tail()), 0]);
+                let _ = self.driver_port.queue_user(
+                    bell.key(),
+                    [u64::from(bell.tail()), 0],
+                    crate::sched::Wake::Home,
+                );
             }
             if !self.drain() {
                 return;

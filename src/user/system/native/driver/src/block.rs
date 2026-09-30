@@ -244,9 +244,13 @@ fn ready(control: &Channel<Kernel>) -> Result<Port<Kernel>, Step> {
 /// Ring the kernel's completion port, if the loop says to. A port that is
 /// full has a bell queued already, and a bell is only a hint, so a refusal
 /// changes nothing.
+///
+/// Queued as a caller that waits next (`PORT_QUEUE_SYNC`): the loop goes back
+/// to its port once it has nothing pending, so the ring's kernel task the bell
+/// wakes may take this processor instead of another being woken for it.
 fn ring_bell(kernel_port: &Port<Kernel>, bell: Option<Doorbell>) {
     if let Some(bell) = bell {
-        let _ = kernel_port.queue(bell.key(), bell.packet().data);
+        let _ = kernel_port.queue_sync(bell.key(), bell.packet().data);
     }
 }
 
