@@ -69,6 +69,7 @@ pub(crate) fn run() -> Result<Counts, &'static str> {
         .and_then(|()| root_made(&mut tally))
         .and_then(|()| clone_flags(&mut tally))
         .and_then(|()| sender_ids(&mut tally))
+        .and_then(|()| nested(&mut tally))
         .and_then(|()| credentials(&mut tally))
         .and_then(|()| read_only_sysctls(&mut tally));
     outcome.map(|()| counts)
@@ -744,6 +745,58 @@ fn audited_as_the_kernel_knows_it(process: &Process) -> Result<(), &'static str>
         return Err(
             "an audit record of root inside a namespace recorded an id that is not the kernel's",
         );
+    }
+    Ok(())
+}
+
+/// Namespaces nested to Linux's limit (`docs/SECCOMP.md` R3): each mapped to
+/// root by the one above it, 32 deep, and the 33rd refused `EUSERS`. And what
+/// `CLONE_NEWUSER` may answer at all (R5): `EPERM`, `EUSERS`, `EINVAL` or
+/// `ENOSPC`, never `ENOSYS`, which Chrome reads as "user namespaces are not
+/// built in".
+fn nested(tally: &mut Tally<'_>) -> Result<(), &'static str> {
+    let mut creator = Credentials::root();
+    let mut depth = 0;
+    let refusal = loop {
+        let namespace = match userns::create(&creator) {
+            Ok(namespace) => namespace,
+            Err(errno) => break errno,
+        };
+        depth += 1;
+        for kind in [Kind::User, Kind::Group] {
+            tally.ok(
+                userns::write_map(&namespace, kind, &creator, &creator, b"0 0 1\n").map(|_| 0),
+                "a nested namespace could not be mapped by the one above it",
+            )?;
+        }
+        creator.user_ns = namespace;
+        creator.caps = userns::CapSets::FRESH;
+        if depth > 40 {
+            return Err("user namespaces nested past Linux's limit of 32");
+        }
+    };
+    if depth != 32 {
+        return Err("user namespaces did not nest exactly 32 deep");
+    }
+    tally.refused(
+        Err(refusal),
+        Errno::EUSERS,
+        "the 33rd nested namespace was not EUSERS",
+    )?;
+    let allowed = [Errno::EPERM, Errno::EUSERS, Errno::EINVAL, Errno::ENOSPC];
+    let parent =
+        process::new_for_check().map_err(|_| "could not make the errno check's process")?;
+    tally.report.calls += 1;
+    // `clone` with a shared fs context, and from a chrooted process (above).
+    let answers = [
+        family::namespaces_asked(&parent, CLONE_NEWUSER | ferrix_linux_abi::types::CLONE_FS),
+        Err(refusal),
+    ];
+    if answers
+        .into_iter()
+        .any(|answer| answer.is_err_and(|errno| !allowed.contains(&errno)))
+    {
+        return Err("CLONE_NEWUSER was refused with an errno Chrome would misread");
     }
     Ok(())
 }
