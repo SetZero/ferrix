@@ -26,6 +26,8 @@ Causes are listed most likely first.
 | [FX-0006](#fx-0006) | the load ring did not register what the item needs from it |
 | [FX-0007](#fx-0007) | memory ran out while the kernel was coming up |
 | [FX-0008](#fx-0008) | an allocation that cannot report failure found the heap empty |
+| [FX-0009](#fx-0009) | an address space was dropped while a processor still had it loaded |
+| [FX-0010](#fx-0010) | an address space was dropped where it cannot wait for other processors |
 | [FX-0101](#fx-0101) | the loader's hand-off is not what the kernel needs |
 | [FX-0201](#fx-0201) | the frame allocator could not be built |
 | [FX-0202](#fx-0202) | the kernel address arena could not be created |
@@ -290,6 +292,52 @@ failure.
 
 See: docs/certification/MEMORY-AND-TIMING.md;
 tools/common/check/check-fallible-alloc.py; src/kernel/src/mm.rs.
+
+<a id="fx-0009"></a>
+
+## FX-0009 — an address space was dropped while a processor still had it loaded
+
+A processor running a kernel thread keeps the last program's address space
+loaded rather than switching its root register to the kernel's own tables, and
+stays in that space's set. When the space's last user lets go of it, dropping it
+first makes every processor in the set take it off and leave, and then checks
+that the set is empty and that no processor's record still names the space. A
+processor that still had it loaded could walk the space's page tables, or use
+its cached translations, after they and the frames they reach went back to the
+allocator for somebody else (finding F-36), so the kernel stops before giving
+anything back.
+
+1. Dropping the space did not ask the processors in its set to leave, or asked
+   them before marking it retiring, so they answered without taking it off.
+2. A processor loaded the space without joining its set first, so the request
+   never reached it, or left the set without clearing its record.
+3. Something wrote a processor's root register for a user space without going
+   through `AddressSpace::install`, so the record and the register disagree.
+
+See: src/kernel/src/user/space.rs Presence::retire; src/kernel/src/user/space.rs
+answer_retiring; src/kernel/src/smp.rs wait_until_left; docs/ROADMAP.md stage 6.
+
+<a id="fx-0010"></a>
+
+## FX-0010 — an address space was dropped where it cannot wait for other processors
+
+Dropping an address space first interrupts every processor that may still have
+it loaded and waits for each to take it off, as a TLB shootdown does, so it is
+held to a shootdown's rules: no lock that disables preemption held, and
+interrupts on. A processor spinning for such a lock, or one that cannot take
+this processor's interrupt, would never answer, and the drop would hang or be
+reported as a stuck processor. The rules are checked on every drop, in every
+build, whether or not a processor had the space loaded, so the kernel stops at
+the site instead.
+
+1. The last reference to an address space -- a task, a process, a handle, a
+   VMO's mapper list -- was let go while a spin lock was held; the message names
+   the outermost lock's file and line.
+2. The last reference was let go with interrupts masked: in an interrupt
+   handler, under an interrupt-masking lock, or in the scheduler's switch.
+
+See: src/kernel/src/smp.rs retire_may_wait; src/kernel/src/user/space.rs
+Presence::retire; docs/ROADMAP.md stage 6.
 
 <a id="fx-0101"></a>
 

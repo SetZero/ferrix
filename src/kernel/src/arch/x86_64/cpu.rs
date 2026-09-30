@@ -307,6 +307,13 @@ pub(crate) fn permit_user_access() {
     }
 }
 
+/// Whether SMAP is in force on the processor running this: `CR4.SMAP` read
+/// from the processor itself, not the boot processor's finding, so that a
+/// processor that did not take the boot processor's `CR4` answers no.
+pub(crate) fn user_access_refused() -> bool {
+    read_cr4() & CR4_SMAP != 0
+}
+
 /// Refuse user pages to this processor again.
 pub(crate) fn forbid_user_access() {
     if SMAP_ON.load(Ordering::Relaxed) {

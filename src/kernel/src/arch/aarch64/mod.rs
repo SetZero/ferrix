@@ -1134,7 +1134,12 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 
 /// Stop translating the lower half at all.
 ///
-/// What a processor picking up a kernel thread does. `EPD0` makes a walk
+/// What a processor without PAN does when it picks up a kernel thread; one
+/// with PAN leaves the outgoing program's root loaded (lazy TLB,
+/// `crate::user::space`) and skips this function's invalidation along with
+/// it. Also what a space being dropped asks of a processor that still has it
+/// loaded, and what the checks that install spaces of their own do. `EPD0`
+/// makes a walk
 /// through `TTBR0_EL1` fault rather than merely find nothing, so a stray user
 /// address in the kernel is a fault at the instruction that made it — but
 /// `EPD0` governs walks and not the `TLB`, so the cached entries have to go as
@@ -1507,6 +1512,17 @@ pub(crate) const fn set_thread_area(_index: Option<usize>, _descriptor: u64) -> 
 /// [`set_thread_area`].
 pub(crate) const fn thread_area(_index: usize) -> Option<u64> {
     None
+}
+
+/// What refuses EL1 a user page on this architecture, for the boot log.
+pub(crate) const USER_ACCESS_BACKSTOP: &str = "PAN";
+
+/// Whether PAN is in force on the processor running this, so that a stray
+/// kernel access to a user address faults whatever address space is loaded:
+/// what lets a kernel thread run on the last program's space
+/// (`crate::user::space`).
+pub(crate) fn user_access_refused() -> bool {
+    cpu::user_access_refused()
 }
 
 /// Permit this processor to touch user pages until [`forbid_user_access`].

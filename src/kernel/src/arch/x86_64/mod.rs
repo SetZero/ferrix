@@ -205,6 +205,17 @@ pub(crate) fn init_speculation(_view: &BootView<'_>) {
     speculation::init();
 }
 
+/// What refuses ring 0 a user page on this architecture, for the boot log.
+pub(crate) const USER_ACCESS_BACKSTOP: &str = "SMAP";
+
+/// Whether SMAP is in force on the processor running this, so that a stray
+/// kernel access to a user address faults whatever address space is loaded:
+/// what lets a kernel thread run on the last program's space
+/// (`crate::user::space`).
+pub(crate) fn user_access_refused() -> bool {
+    cpu::user_access_refused()
+}
+
 /// Permit this processor to touch user pages until [`forbid_user_access`].
 ///
 /// SMAP's `EFLAGS.AC` window. `cpu::permit_user_access` explains why almost
@@ -1315,12 +1326,11 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 
 /// Go back to translating nothing but the kernel's own tables.
 ///
-/// What a processor picking up a kernel thread does, so that no user address
-/// translates while one runs. The alternative — leaving the outgoing process's
-/// root installed, because a kernel thread has no user addresses to get wrong
-/// — is Linux's lazy TLB, and it is an optimisation that has to keep the
-/// address space alive underneath a thread that does not reference it. Stage 6
-/// takes the plain version.
+/// What a processor without SMAP does when it picks up a kernel thread; one
+/// with SMAP leaves the outgoing program's root loaded (lazy TLB,
+/// `crate::user::space`). Also what a space being dropped asks of a
+/// processor that still has it loaded, and what the checks that install
+/// spaces of their own do to take them off again.
 ///
 /// # Safety
 ///
