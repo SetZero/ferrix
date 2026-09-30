@@ -351,10 +351,12 @@ impl Carried {
                 println!("    `cargo xtask busybox` builds one, or --init <PATH> names one");
             }
         }
-        let ports = crate::ports::installed(arch)?;
+        let mut ports = crate::ports::installed(arch)?;
         if !ports.is_empty() {
             println!("  {} ported files in /bin and /etc", ports.len());
         }
+        // The apps, each installed from its package (`docs/APPS.md` §5).
+        ports.extend(crate::apps::installed(arch, args)?);
         Ok(Self {
             busybox,
             zinc: crate::zinc::build(arch)?,

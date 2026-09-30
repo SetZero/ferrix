@@ -59,6 +59,7 @@
 )]
 
 mod adbd;
+mod apps;
 mod args;
 mod audio;
 mod auth;
@@ -198,6 +199,7 @@ COMMANDS:
                   --mitigations off or told nokaslr
     test-kaslr    Boot the image twice and require the loader to have put the kernel somewhere new
     test-shell    Boot with a static busybox built in and require its script's output; again with it
+    test-apps     Boot once with every app in src/user/apps that has [[smoke]] checks, and require each
                   started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
@@ -268,6 +270,7 @@ COMMANDS:
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     uutils        Build uutils/coreutils against ferrousli (x86_64), the utilities replacing busybox's
     ports         Build the programs ported onto ferrousli (x86_64: curl, btop, git, sshdt, foot; Arm: curl, git), which images carry
+    apps          List the apps in src/user/apps, each checked against its app.toml (docs/APPS.md)
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
@@ -410,6 +413,9 @@ OPTIONS:
     --statd                              build, run, test-boot: carry the stat service at /sbin/ferrix-statd
     --installer                          build, run: carry /sbin/ferrix-install and its root volume (the live image)
     --adbd                               build, run: carry adbd at /bin/adbd, started by nobody (docs/ADB.md)
+    --app <NAME>                         run, run-compositor: also carry an app that is not in images by default;
+                                         give it once for each app
+    --no-apps                            run, run-compositor: carry no apps, not even the default ones
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --jobs <N>                           miri: crates interpreted at once, by default one per core up to 8
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
@@ -519,6 +525,7 @@ fn run() -> Result<()> {
         "test-install" => installer::test_install(&args),
         "test-threads" | "test-sem" => sem::run(command, &args),
         "test-procfs" => procfs::test_procfs(&args),
+        "test-apps" => apps::test_apps(&args),
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
@@ -547,6 +554,7 @@ fn run() -> Result<()> {
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
         "uutils" => uutils::build(args.single_arch()?).map(|_| ()),
         "ports" => ports::build(args.single_arch()?),
+        "apps" => apps::list(),
         "omz" => omz::install(args.from.as_deref()),
         "zsh-functions" => omz::install_functions(args.from.as_deref()),
         "flash" => {
@@ -863,6 +871,8 @@ fn build_init_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     carried.extend(init::carried(arch)?);
     // `--auth-seed`: authd, its seeds and the accounts it needs.
     carried.extend(auth::with_seeds(arch, args)?);
+    // The apps, each installed from its package (`docs/APPS.md` §5).
+    carried.extend(apps::installed(arch, args)?);
     let initramfs =
         initramfs::build_with_utilities(None, &natives, shell.as_deref(), &utilities, &carried)?;
     let mut cmdline = init::command_line();

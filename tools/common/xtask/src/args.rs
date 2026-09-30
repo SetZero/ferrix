@@ -77,6 +77,11 @@ pub(crate) struct Args {
     /// `--adbd`: the image carries adbd at `/bin/adbd`, which nothing
     /// starts (`docs/ADB.md`).
     pub(crate) adbd: bool,
+    /// `--app`: apps an image a person runs carries beside the default ones
+    /// (`docs/APPS.md` §5).
+    pub(crate) apps: Vec<String>,
+    /// `--no-apps`: no apps at all.
+    pub(crate) no_apps: bool,
     /// `--miri`: add CI's Miri steps to `check`.
     pub(crate) miri: bool,
     /// `--jobs`, how many crates `miri` interprets at once; `None` for as
@@ -435,6 +440,17 @@ impl Args {
         }
     }
 
+    /// `--adbd`, `--app` and `--no-apps`: more programs the image carries,
+    /// or fewer.
+    fn carry_more(&mut self, flag: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        match flag {
+            "--adbd" => self.adbd = true,
+            "--app" => self.apps.push(value(items, flag)?),
+            _ => self.no_apps = true,
+        }
+        Ok(())
+    }
+
     /// `--statd` and `--installer`: programs the image carries.
     fn carry(&mut self, flag: &str) {
         match flag {
@@ -494,7 +510,7 @@ impl Args {
                 "--zinc" => args.zinc = true,
                 "--statd" | "--installer" => args.carry(&item),
                 "--i686" => args.i686 = true,
-                "--adbd" => args.adbd = true,
+                "--adbd" | "--app" | "--no-apps" => args.carry_more(&item, &mut items)?,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--compositor" => args.compositor = true,

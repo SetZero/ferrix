@@ -42,6 +42,11 @@ ferrix-displayctl.workspace = true
 # (`--auth-seed`, and the gate's) is hashed on the host by the same code
 # that checks it on the guest, so the two cannot disagree about a hash.
 ferrix-argon2.workspace = true
+# Packages (`docs/APPS.md` §6): an app's manifest, the record its package
+# carries, and the plan that installs a set. The package manager on Ferrix
+# will be the same code, so the images this builds and the installs it will
+# make cannot disagree about what a package is.
+ferrix-pkg.workspace = true
 
 [lints]
 workspace = true

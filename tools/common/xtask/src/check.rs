@@ -193,6 +193,7 @@ fn run(args: &Args) -> Result<()> {
     compositor(&root)?;
     userland(&root)?;
     adbd(&root)?;
+    apps()?;
 
     if args.ferrousli {
         ferrousli(&root)?;
@@ -529,6 +530,35 @@ fn userland(root: &std::path::Path) -> Result<()> {
     linux_workspace(root, "auth", "src/user/linux/auth")?;
     step("auth: no sabotage in the environment", no_sabotage)?;
     media(root)
+}
+
+/// The gates of every app under `src/user/apps/`, found by their manifests
+/// (`docs/APPS.md` §5): nothing here names one. Each is a workspace of its
+/// own, so the host steps above never reach it.
+fn apps() -> Result<()> {
+    let mut apps = Vec::new();
+    step("apps: manifests", || {
+        apps = crate::apps::discover()?;
+        println!("  {} apps", apps.len());
+        Ok(())
+    })?;
+    for app in &apps {
+        let name = &app.recipe.package.name;
+        step(
+            &format!("app {name}: nothing outside its folder names it"),
+            || crate::apps::stays_in_its_folder(app),
+        )?;
+        step(&format!("app {name}: formatting"), || {
+            crate::apps::formatting(app)
+        })?;
+        step(&format!("app {name}: clippy and tests (host)"), || {
+            crate::apps::host(app)
+        })?;
+        step(&format!("app {name}: clippy (targets)"), || {
+            crate::apps::targets(app)
+        })?;
+    }
+    Ok(())
 }
 
 /// Every image build inherits this environment, and a set

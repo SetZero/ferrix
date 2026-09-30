@@ -437,6 +437,13 @@ name = "ferrix-pci"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-pkg"
+version = "0.1.0"
+dependencies = [
+ "ferrix-argon2",
+]
+
+[[package]]
 name = "ferrix-pong"
 version = "0.1.0"
 dependencies = [
@@ -820,5 +827,6 @@ dependencies = [
  "ferrix-displayctl",
  "ferrix-elf",
  "ferrix-netwire",
+ "ferrix-pkg",
  "ferrix-vdagent",
 ]

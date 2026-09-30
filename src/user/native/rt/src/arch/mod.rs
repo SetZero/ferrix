@@ -41,3 +41,12 @@ pub(crate) use aarch64::{call, counter, device_barrier, exit, linux, monotonic_n
 pub(crate) use armv7a::{call, counter, device_barrier, exit, linux, monotonic_nanos, nr, unlink};
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{call, counter, device_barrier, exit, linux, monotonic_nanos, nr, unlink};
+
+// Public, where the rest is the crate's: `crate::linux` hands it on to
+// programs.
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::numbers;
+#[cfg(target_arch = "arm")]
+pub use armv7a::numbers;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::numbers;

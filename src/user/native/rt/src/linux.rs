@@ -13,6 +13,10 @@
 //! numbers taken from `ferrix_linux_abi::nr`, which pins them against the
 //! kernel's own tables rather than remembering them.
 //!
+//! An app (`docs/APPS.md`) does not add calls here: it changes nothing
+//! outside its own folder. It makes any call by number with [`call`], and
+//! [`numbers`] is the running architecture's table to take the number from.
+//!
 //! # Errors
 //!
 //! Every call returns `Result<usize, Errno>`: the kernel leaves `-errno` in
@@ -20,7 +24,31 @@
 
 use ferrix_linux_abi::errno::Errno;
 
+pub use crate::arch::numbers;
 use crate::arch::{self, nr};
+
+/// The Linux call `number`, with `args`, the unused ones zero: what an app
+/// makes a call with that this module has no function for.
+///
+/// `number` comes from [`numbers`], whose values are this architecture's, so
+/// a program spelling `numbers::OPENAT` makes the same call on all three.
+/// What differs between them beyond the number -- a structure's width on
+/// ARMv7-A, a flag's value -- is the caller's to know.
+///
+/// # Safety
+///
+/// The caller is answerable for every pointer in `args`: each must be valid
+/// for whatever the call `number` does with it, for the whole of the call,
+/// as the kernel's own Linux ABI defines it.
+///
+/// # Errors
+///
+/// Whatever the kernel answers.
+pub unsafe fn call(number: usize, args: [usize; 6]) -> Result<usize, Errno> {
+    // SAFETY: the caller's promise about `args`, forwarded unchanged; the
+    // trap itself touches no memory but what the call names.
+    decode(unsafe { arch::linux(number, args) })
+}
 
 /// `AF_UNIX`, the only family this module has a use for.
 pub const AF_UNIX: usize = 1;

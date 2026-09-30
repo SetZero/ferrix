@@ -13,6 +13,7 @@ src/         everything that runs on Ferrix, and its tests
   user/        programs that run in ring 3
     native/      on Ferrix's own ABI: runtime, devmgr, drivers
     linux/       on the Linux ABI, each its own cargo workspace
+    apps/        optional programs, each a folder of its own that xtask finds
   tests/       test programs and fuzzing that live outside any one crate
 tools/       everything that runs on the host
   common/      the build driver, gates, generators, fetchers
@@ -76,7 +77,7 @@ kernel or a loader. Each crate sits in exactly one group:
 
 | Group | Holds | Crates |
 |---|---|---|
-| `src/lib/proto/` | The interfaces between components: the ABIs the kernel offers, the rings and control protocols it shares with ring-3 drivers, the loader hand-off | `linux-abi` `native-abi` `native` `bootinfo` `devmgr-proto` `blkring` `netring` `displayctl` `renderctl` `inputctl` `sndctl` `logctl` `auth-proto` |
+| `src/lib/proto/` | The interfaces between components: the ABIs the kernel offers, the rings and control protocols it shares with ring-3 drivers, the loader hand-off | `linux-abi` `native-abi` `native` `bootinfo` `devmgr-proto` `blkring` `netring` `displayctl` `renderctl` `inputctl` `sndctl` `logctl` `auth-proto` `pkg` |
 | `src/lib/kernel/` | Kernel-internal cores: memory, scheduling, synchronisation, objects, randomness, the process stack image, the vDSO, the panic screen | `frame` `heap` `kmem` `paging` `vma` `sched` `sync` `objects` `fallible` `crng` `ustack` `vdso` `qr` `fbtext` |
 | `src/lib/platform/` | Parsers for what firmware and the boot medium hand over, and which of the two descriptions a machine is read by | `acpi` `fdt` `description` `pci` `elf` |
 | `src/lib/fs/` | Storage and filesystems, including the text of the pseudo-filesystems | `vfs` `block` `btrfs` `btrfs-vfs` `btrfs-write` `cpio` `procfs` `sysfs` `cgroupfs` |
@@ -141,6 +142,15 @@ directory:
 | `src/user/linux/statd/` | The stat service. |
 | `src/user/linux/media/` | Bad Apple!!'s player, its video format and the host's converter (`docs/MEDIA.md`); the resampler and the playback through `/dev/snd` it and the sound server share; and the PulseAudio-protocol server and its client (`docs/AUDIO.md`, U2). ferrix-90's since 2026-09-27, when Bad Apple's author stopped. |
 | `src/user/linux/ferrousli/` | The C library written in Rust, its dynamic linker, and the ports built against it (`tools/ports/`). |
+
+## `src/user/apps/`
+
+Optional programs, native or Linux, one folder each: its `app.toml`, a
+cargo workspace of its own and its README. xtask finds every folder here and
+builds, gates, packages and installs it by what its `app.toml` says, so an
+app is added by adding its folder and nothing else. No file outside a folder
+names it, which `cargo xtask check` holds to, and this table has no row per
+app: `cargo xtask apps` lists them. `docs/APPS.md` is the design.
 
 ## `src/tests/`
 

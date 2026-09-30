@@ -20,6 +20,10 @@ pub(crate) mod nr {
     };
 }
 
+/// This architecture's whole table, for a program that makes a call
+/// `crate::linux` has no function for (`crate::linux::call`).
+pub use ferrix_linux_abi::nr::aarch64 as numbers;
+
 /// `AT_FDCWD`: start from the current directory, which an absolute path then
 /// ignores.
 const AT_FDCWD: usize = (-100_isize) as usize;

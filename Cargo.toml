@@ -73,6 +73,7 @@ members = [
     "src/lib/kernel/qr",
     "src/lib/kernel/sched",
     "src/lib/fs/vfs",
+    "src/lib/proto/pkg",
 
     # The UEFI loader. Firmware calls into it with a stack and the MMU on, so
     # there is no bootstrap assembly on any architecture.
@@ -189,6 +190,7 @@ ferrix-svc = { path = "src/lib/init/svc" }
 ferrix-restart = { path = "src/lib/init/restart" }
 ferrix-pci = { path = "src/lib/platform/pci" }
 ferrix-sched = { path = "src/lib/kernel/sched" }
+ferrix-pkg = { path = "src/lib/proto/pkg" }
 
 # ---------------------------------------------------------------------------
 # Workspace-wide lints

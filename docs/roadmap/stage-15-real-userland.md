@@ -202,5 +202,22 @@ cgroup lifting its own limits, closed by a `SET_LIMIT` right and the
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).
 
+**Done -- apps, each in a folder of its own (2026-09-30).** `docs/APPS.md`,
+phase 1. An optional program is a folder under `src/user/apps/` with an
+`app.toml`, and xtask finds it: `cargo xtask apps` lists them, `check` gates
+each (formatting, clippy on the host and the targets, host tests, and that
+nothing outside the folder names it), `run` and `run-compositor` install
+each `default` one from its package, and `test-apps` boots once and runs
+every app's `[[smoke]]` lines. A package is a newc archive of the files and
+a record, `lib/ferrix/packages/<name>.toml`, with each file's BLAKE2b-256;
+`src/lib/proto/pkg` reads manifests and records and plans an install, and is
+the package manager's engine from the start. The one change to the system an
+app needs is `ferrix_rt::linux::call` and `numbers`: any Linux call by
+number. The first app is `ferrofetch`, a native fastfetch; `test-apps`
+passes its three checks on x86-64, and fails, naming the check, with one
+`expect` changed to a line it never prints. Phases 2 to 4 -- the stat
+service, Bad Apple!!'s player and the ports moved in, `src/user/system/`,
+and the package manager -- are `docs/APPS.md` §8.
+
 ---
 
