@@ -15,6 +15,11 @@
 //! svc top
 //! ```
 //!
+//! Under the names systemctl also answers to, it is that verb:
+//! `/bin/poweroff` and `/bin/reboot` are links to it, and `/bin/shutdown`
+//! is `poweroff`, or `reboot` with `-r`. Nothing here schedules, so
+//! `shutdown` takes `now` or no time at all, and goes at once either way.
+//!
 //! Exit status as systemctl's: 0 for success, 1 for a failure or a
 //! refusal, 3 from `status` for a unit that is not active, 4 for one that
 //! is not loaded, and 2 for a command line `svc` does not take.
@@ -49,21 +54,74 @@ const USAGE: &str = "usage: svc status [unit] | list [--failed] | start|stop|res
 | enable|disable|mask|unmask unit... | set-property unit Key=value... [--persistent] \
 | scope --unit NAME [--slice SLICE] PID... | top | audit";
 
+/// The names `svc` is linked under, each of which is a verb of its own.
+const NAMES: [&str; 3] = ["poweroff", "reboot", "shutdown"];
+
+/// The usage under those names.
+const POWER_USAGE: &str = "usage: poweroff | reboot | shutdown [-h|-P|-r] [now]";
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match run(&args) {
+    let mut args = std::env::args();
+    let zero = args.next().unwrap_or_default();
+    let args: Vec<String> = args.collect();
+    let name = zero.rsplit('/').next().unwrap_or_default();
+    let (name, result) = if NAMES.contains(&name) {
+        (
+            name,
+            named(name, &args).and_then(|verb| run(&[verb.to_owned()])),
+        )
+    } else {
+        ("svc", run(&args))
+    };
+    match result {
         Ok(status) => ExitCode::from(status),
         Err(failure) => {
-            let _ = writeln!(io::stderr(), "svc: {}", failure.message);
+            let _ = writeln!(io::stderr(), "{name}: {}", failure.message);
             ExitCode::from(failure.status)
         }
     }
 }
 
+/// The verb `svc` run as `name` with `args` stands for.
+fn named(name: &str, args: &[String]) -> Result<&'static str, Failure> {
+    if name != "shutdown" {
+        return match args {
+            [] if name == "reboot" => Ok("reboot"),
+            [] => Ok("poweroff"),
+            _ => Err(Failure::new(2, POWER_USAGE)),
+        };
+    }
+    let mut verb = "poweroff";
+    for arg in args {
+        match arg.as_str() {
+            "-h" | "-P" | "--poweroff" => verb = "poweroff",
+            "-r" | "--reboot" => verb = "reboot",
+            "now" | "+0" => {}
+            time if time.starts_with('+') || time.contains(':') => {
+                return Err(Failure::new(
+                    1,
+                    format!("{time}: nothing schedules a later shutdown; say now"),
+                ));
+            }
+            _ => return Err(Failure::new(2, POWER_USAGE)),
+        }
+    }
+    Ok(verb)
+}
+
 /// Ask init one thing and return every answer, the final one last.
 fn ask(call: &Call) -> Result<Vec<Answer>, Failure> {
-    let mut stream = UnixStream::connect(SOCKET)
-        .map_err(|error| Failure::new(1, format!("{SOCKET}: {error}; is init running?")))?;
+    exchange(connect()?, call)
+}
+
+/// A connection to init's control socket.
+fn connect() -> Result<UnixStream, Failure> {
+    UnixStream::connect(SOCKET)
+        .map_err(|error| Failure::new(1, format!("{SOCKET}: {error}; is init running?")))
+}
+
+/// Send `call` over `stream` and return every answer, the final one last.
+fn exchange(mut stream: UnixStream, call: &Call) -> Result<Vec<Answer>, Failure> {
     stream
         .write_all(&call.encode())
         .map_err(|error| Failure::new(1, format!("writing to {SOCKET}: {error}")))?;
@@ -183,9 +241,15 @@ fn run(args: &[String]) -> Result<u8, Failure> {
             } else {
                 Call::Reboot
             };
-            // Init may be gone before it answers; asking was the point.
-            let _ = ask(&call);
-            Ok(0)
+            // No init, or a refusal, is said. Init may be gone before it
+            // answers otherwise; asking was the point.
+            match exchange(connect()?, &call) {
+                Ok(answers) => match answers.last() {
+                    Some(Answer::Refused(why)) => Err(Failure::new(1, format!("{verb}: {why}"))),
+                    _ => Ok(0),
+                },
+                Err(_) => Ok(0),
+            }
         }
         "daemon-reload" if rest.is_empty() => changed("daemon-reload", &ask(&Call::DaemonReload)?),
         "log" => log(rest),
@@ -493,6 +557,30 @@ mod tests {
         assert_eq!(run(&["frobnicate".to_owned()]).unwrap_err().status, 2);
         assert_eq!(run(&["start".to_owned()]).unwrap_err().status, 2);
         assert_eq!(run(&["log".to_owned()]).unwrap_err().status, 2);
+    }
+
+    #[test]
+    fn each_name_is_its_verb() {
+        let args = |words: &[&str]| {
+            words
+                .iter()
+                .map(|&word| word.to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(named("poweroff", &[]).unwrap(), "poweroff");
+        assert_eq!(named("reboot", &[]).unwrap(), "reboot");
+        assert_eq!(named("shutdown", &[]).unwrap(), "poweroff");
+        assert_eq!(
+            named("shutdown", &args(&["-h", "now"])).unwrap(),
+            "poweroff"
+        );
+        assert_eq!(named("shutdown", &args(&["-r", "now"])).unwrap(), "reboot");
+        assert_eq!(named("shutdown", &args(&["now", "-r"])).unwrap(), "reboot");
+        // A later time is refused rather than taken as now.
+        assert_eq!(named("shutdown", &args(&["+5"])).unwrap_err().status, 1);
+        assert_eq!(named("shutdown", &args(&["22:00"])).unwrap_err().status, 1);
+        assert_eq!(named("poweroff", &args(&["now"])).unwrap_err().status, 2);
+        assert_eq!(named("shutdown", &args(&["-k"])).unwrap_err().status, 2);
     }
 
     #[test]

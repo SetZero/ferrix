@@ -32,7 +32,8 @@ everything around it that makes system calls:
   console, a console named by its address included.
 * `svc/` -- `/bin/svc`, systemctl's verbs over `/run/ferrix/control`:
   `svc status`, `svc list`, `svc log <unit>`, `set-property`, `top`,
-  `poweroff` (§10).
+  `poweroff` (§10). `/bin/poweroff`, `/bin/reboot` and `/bin/shutdown` are
+  links to it, each the verb of its name (§8.2).
 * `dirclient/` -- a Linux program using init's directory, as `test-init`
   runs it.
 * `units/` -- the targets, `getty@.service`, `rescue.service` and

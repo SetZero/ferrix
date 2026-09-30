@@ -379,6 +379,9 @@ fn read(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
 }
 
+/// The names linked to `/bin/svc`, each of which it takes as its verb.
+pub(crate) const SVC_NAMES: [&str; 3] = ["poweroff", "reboot", "shutdown"];
+
 /// What an image carries for init on `arch`: the programs and the shipped
 /// units. Empty on an architecture init is not built for.
 pub(crate) fn carried(arch: Arch) -> Result<Vec<File>> {
@@ -398,6 +401,16 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<File>> {
         program("lib/ferrix/generators/getty-generator", &built.generator)?,
         program("bin/svc", &built.svc)?,
     ];
+    // The commands a person types to turn the machine off, which `svc`
+    // answers to as systemctl does. busybox's would signal pid 1 as its own
+    // init reads signals: `poweroff`'s SIGUSR2 is one init ignores.
+    for name in SVC_NAMES {
+        files.push(File {
+            path: format!("bin/{name}"),
+            mode: 0o777,
+            content: Content::Link("svc".to_owned()),
+        });
+    }
     let units = paths::workspace_root().join(UNITS);
     let mut names: Vec<PathBuf> = std::fs::read_dir(&units)
         .map_err(|error| Error::new(format!("reading {}: {error}", units.display())))?
@@ -1616,7 +1629,8 @@ fn main_pid(at: &mut Watching<'_>, failures: &mut Vec<String>, when: &str) -> Re
 }
 
 /// Write to `/data`, so `btrfs check` reads a volume that was written, then
-/// `svc poweroff` and wait for the power to go.
+/// `poweroff` and wait for the power to go: the name a person types, which is
+/// `svc poweroff` through its link (the unchecked boot types `svc`'s own).
 fn power_off(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     if ask(
         at,
@@ -1627,7 +1641,7 @@ fn power_off(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     {
         failures.push("the shell could not write /data/init-test".into());
     }
-    at.type_in(b"svc poweroff\n")?;
+    at.type_in(b"poweroff\n")?;
     let deadline = Instant::now() + PATIENCE * 4;
     let _ = at.read_more(deadline, |lines| has(lines, POWER_DOWN))?;
     Ok(())
@@ -1774,13 +1788,13 @@ fn judge_flaky(after: &[String]) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// `svc poweroff` stopped everything in reverse order and powered off.
+/// `poweroff` stopped everything in reverse order and powered off.
 fn judge_shutdown(after: &[String]) -> std::result::Result<(), String> {
     let Some(from) = after
         .iter()
         .position(|line| line.contains("init     going down: poweroff.target"))
     else {
-        return Err("svc poweroff did not start poweroff.target".into());
+        return Err("poweroff (svc through its link) did not start poweroff.target".into());
     };
     let mut rest = after.iter().skip(from);
     for want in STOP_ORDER {

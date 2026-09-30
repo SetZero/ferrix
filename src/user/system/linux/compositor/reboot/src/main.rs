@@ -11,9 +11,10 @@
 //! fastboot. Elsewhere the word is printed and the machine restarts as it
 //! would without it, which is what Linux does with a word nothing reads.
 //!
-//! It restarts the machine directly, as `reboot -f` does: the desktop this is
-//! carried on has no service manager to stop things in order first. What has
-//! been written is synced before it goes.
+//! It restarts the machine directly, as `reboot -f` does, and takes the name
+//! from init's `svc` on the desktop it is carried on: `svc reboot` is the
+//! restart that stops the services in order first, and has no word to pass.
+//! What has been written is synced before it goes.
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]

@@ -505,6 +505,10 @@ pub(super) fn build_parts(
         carried_too.pulsed.as_deref(),
     )?;
     for (path, program) in programs.carried() {
+        // The desktop's `reboot` takes the name from init's link to `svc`,
+        // since it can pass a board's firmware the word that says where to
+        // come back up.
+        carried.retain(|file| file.path != path);
         carried.push(crate::ports::File {
             path: path.to_owned(),
             mode: 0o755,

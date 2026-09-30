@@ -741,7 +741,9 @@ on the console, so a broken unit file is fixable from the machine itself.
 
 ### 8.2 Shutdown
 
-`svc poweroff`, `svc reboot`, or `SIGTERM`/`SIGINT` to pid 1 (Ctrl-Alt-Del's
+`svc poweroff`, `svc reboot` (also `poweroff`, `reboot` and `shutdown [-r]
+now`, links to `svc` that take their name as the verb, as systemctl's do),
+or `SIGTERM`/`SIGINT` to pid 1 (Ctrl-Alt-Del's
 signal, and what a QEMU `system_powerdown` will become) start
 `poweroff.target` or `reboot.target`. Starting either stops everything that
 `Conflicts=shutdown.target`, which is everything by default (§4.3), in
