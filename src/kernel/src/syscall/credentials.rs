@@ -200,6 +200,24 @@ impl Credentials {
         self.user.effective != self.user.real || self.group.effective != self.group.real
     }
 
+    /// The ids whose change Linux's `commit_creds` answers by making the
+    /// process not dumpable: the effective and filesystem user and group ids.
+    pub(crate) fn acting(&self) -> [u32; 4] {
+        [
+            self.user.effective,
+            self.user.filesystem,
+            self.group.effective,
+            self.group.filesystem,
+        ]
+    }
+
+    /// Whether every effective id is the real one: what `begin_new_exec`
+    /// asks of the caller's ids before it decides a new program's
+    /// dumpability.
+    pub(crate) fn own(&self) -> bool {
+        self.user.effective == self.user.real && self.group.effective == self.group.real
+    }
+
     /// The ids of `kind`.
     fn ids(&self, kind: Kind) -> Ids {
         match kind {
@@ -273,17 +291,24 @@ pub(crate) fn identity(call: Syscall, process: &Process) -> Option<u32> {
 /// Apply `rule` to `process`'s ids of `kind`, under one lock, privileged as
 /// its effective uid was when the call began -- which is when Linux asks
 /// `ns_capable_setid`. A rule changes all the ids it names or none of them.
+///
+/// A change of the ids the process acts as ends its dumpability, as
+/// `commit_creds` ends it: see [`attributes::credentials_changed`].
 fn change(
     process: &Process,
     kind: Kind,
     rule: impl FnOnce(&mut Ids, bool) -> Result<(), Errno>,
 ) -> Result<usize, Errno> {
-    process
-        .with_credentials(|credentials| {
-            let privileged = credentials.privileged();
-            rule(credentials.ids_mut(kind), privileged)
-        })
-        .map(|()| 0)
+    let (answer, changed) = process.with_credentials(|credentials| {
+        let before = credentials.acting();
+        let privileged = credentials.privileged();
+        let answer = rule(credentials.ids_mut(kind), privileged);
+        (answer, credentials.acting() != before)
+    });
+    if changed {
+        attributes::credentials_changed(process);
+    }
+    answer.map(|()| 0)
 }
 
 /// `setuid` and `setgid`, as `__sys_setuid` has them.
@@ -363,17 +388,22 @@ fn set_real_effective_saved(
 
 /// `setfsuid` and `setfsgid`, as `__sys_setfsuid` has them: the filesystem id
 /// becomes `id` if it is one of the process's four, or the process is
-/// privileged, and the old one is the answer either way.
+/// privileged, and the old one is the answer either way. A new one ends the
+/// process's dumpability, as in [`change`].
 fn set_filesystem_id(process: &Process, kind: Kind, id: u32) -> u32 {
-    process.with_credentials(|credentials| {
+    let (old, changed) = process.with_credentials(|credentials| {
         let privileged = credentials.privileged();
         let ids = credentials.ids_mut(kind);
         let old = ids.filesystem;
         if id != UNCHANGED && (privileged || ids.is_own(id) || id == old) {
             ids.filesystem = id;
         }
-        old
-    })
+        (old, ids.filesystem != old)
+    });
+    if changed {
+        attributes::credentials_changed(process);
+    }
+    old
 }
 
 /// `getresuid` and `getresgid`: three `uid_t`s, 32 bits on every architecture

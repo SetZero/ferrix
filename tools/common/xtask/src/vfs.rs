@@ -390,11 +390,24 @@ exit 10";
 /// own descriptors, and `status` reports its ids in place of root's. Root
 /// reads the private file afterwards, so a kernel that refused everything to
 /// everyone cannot pass.
+///
+/// The user also runs the set-user-id copy of zinc with no new privileges:
+/// `setpriv --nnp` sets them and runs a shell, whose children -- forked, then
+/// run, both after the shell's own `execve` -- must read
+/// `PR_GET_NO_NEW_PRIVS` as 1 (`setpriv -d`, whose line is kept by `grep`,
+/// since the dump stops at `PR_CAP_AMBIENT`, which the kernel does not know)
+/// and take no privilege from the set-user-id bit. The shell's own
+/// set-user-id run, just before, is the control that the bit still works.
 const PERMISSIONS_SCRIPT: &str = r#"echo secret > /tmp/dac-private && chmod 600 /tmp/dac-private || exit 1
 mkdir -m 700 /tmp/dac-closed || exit 2
 echo 'echo ran' > /tmp/dac-noexec && chmod 644 /tmp/dac-noexec || exit 3
 mkdir /tmp/dac-suid && cp /bin/zinc /tmp/dac-suid/zinc || exit 4
 chmod 4755 /tmp/dac-suid/zinc || exit 5
+cat > /tmp/dac-suid/nnp <<'EOF' || exit 10
+setpriv -d 2>/dev/null | grep no_new_privs
+/tmp/dac-suid/zinc -f -c 'echo no-new-privs set-user-id gives uid $UID euid $EUID'
+exit 0
+EOF
 su ferrix -c 'id
 cat /tmp/dac-private
 echo mine > /tmp/dac-mine && stat -c "owned by %u %g" /tmp/dac-mine
@@ -406,6 +419,7 @@ stat -c "proc self owned by %u %g" /proc/self/status
 ls /proc/self/fd > /dev/null && echo "listed its own descriptors"
 head -12 /proc/self/status
 /tmp/dac-suid/zinc -f -c "echo set-user-id gives uid \$UID euid \$EUID"
+setpriv --nnp sh /tmp/dac-suid/nnp
 hostname dac-evil
 kill -0 1
 mknod /tmp/dac-null c 1 3'
@@ -440,6 +454,8 @@ const PERMISSIONS_UNDER_UUTILS: Expect = Expect::Shaped(&[
     "listed its own descriptors",
     "Uid:*1000*1000*1000*1000",
     "set-user-id gives uid 1000 euid 0",
+    "no_new_privs: 1",
+    "no-new-privs set-user-id gives uid 1000 euid 1000",
     "hostname: failed to set hostname: Permission denied",
     "*kill 1 failed: operation not permitted",
     "mknod: Operation not permitted (os error 1)",
@@ -463,6 +479,8 @@ const PERMISSIONS_UNDER_BUSYBOX: Expect = Expect::Shaped(&[
     "listed its own descriptors",
     "Uid:*1000*1000*1000*1000",
     "set-user-id gives uid 1000 euid 0",
+    "no_new_privs: 1",
+    "no-new-privs set-user-id gives uid 1000 euid 1000",
     "hostname: sethostname: Operation not permitted",
     "*kill 1 failed: operation not permitted",
     "mknod: /tmp/dac-null: Operation not permitted",

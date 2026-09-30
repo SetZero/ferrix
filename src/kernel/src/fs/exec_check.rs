@@ -42,6 +42,7 @@ use ferrix_vfs::{Errno, FileType, Inode, Metadata, OpenFile, OpenFlags};
 use crate::arch;
 use crate::fs::pages::VmoStorage;
 use crate::sync::SpinLock;
+use crate::syscall::attributes;
 use crate::syscall::exec::{self, Executable, ExecveError};
 use crate::syscall::image::{self, Extra};
 use crate::syscall::load::Source;
@@ -107,6 +108,10 @@ static STAGED_CALL: SpinLock<Option<(u64, u64)>> = SpinLock::new(None);
 
 /// What the fork's `execve` was refused with, if it was.
 static REFUSED: SpinLock<Option<i32>> = SpinLock::new(None);
+
+/// `no_new_privs` and `dumpable` as the fork's `execve` left them, read by
+/// its task before the program runs.
+static AFTER_EXEC: SpinLock<Option<(bool, bool)>> = SpinLock::new(None);
 
 /// What the check measured, for the boot log.
 #[derive(Debug, Clone, Copy)]
@@ -403,8 +408,20 @@ fn fork_and_exec_self() -> Result<i32, &'static str> {
     )
     .map_err(|_| "the sparse 72 MiB program could not be loaded")?;
     drop(program);
+    // The parent gives up new privileges and stops being dumpable before the
+    // fork. The fork must inherit both, and its `execve` keep the first and
+    // make it dumpable again, as Linux's `begin_new_exec` does for a program
+    // run with the caller's own ids.
+    attributes::update(&parent, |set| {
+        set.no_new_privs = true;
+        set.dumpable = false;
+    });
     let child = process::fork_for_check(&parent)
         .map_err(|_| "the sparse program's process could not be forked")?;
+    let inherited = attributes::get(&child);
+    if !inherited.no_new_privs || inherited.dumpable {
+        return Err("a fork did not inherit no_new_privs and its parent's dumpability");
+    }
 
     // The name goes: from here only the file itself leads to the program.
     ns.unlink(&ctx, None, SELF_PATH)
@@ -427,6 +444,7 @@ fn fork_and_exec_self() -> Result<i32, &'static str> {
         .map_err(|_| "could not stage execve's arguments in the fork")?;
     *STAGED_CALL.lock() = Some((STAGED, argv));
     *REFUSED.lock() = None;
+    *AFTER_EXEC.lock() = None;
     let task = crate::sched::spawn_user(
         "exec-self",
         exec_self,
@@ -448,6 +466,14 @@ fn fork_and_exec_self() -> Result<i32, &'static str> {
     }
     if status != arch::USER_TEST_STATUS {
         return Err("a fork that ran /proc/self/exe did not exit with the program's status");
+    }
+    match AFTER_EXEC.lock().take() {
+        Some((true, true)) => {}
+        Some((false, _)) => return Err("a fork's execve forgot no_new_privs"),
+        Some((true, false)) => {
+            return Err("a fork's execve of a program with its own ids left it not dumpable");
+        }
+        None => return Err("the fork that ran /proc/self/exe did not say what execve left"),
     }
     if reads_as != Ok(SELF_DELETED.to_vec()) {
         return Err("a fork's /proc/<pid>/exe does not read as its parent's file, deleted");
@@ -471,7 +497,13 @@ fn exec_self(_argument: usize) {
         _ => Err(ExecveError::Refused(Errno::EINVAL)),
     };
     match outcome {
-        Ok(()) => process::run_program(0),
+        Ok(()) => {
+            if let Some(me) = process::current() {
+                let left = attributes::get(&me);
+                *AFTER_EXEC.lock() = Some((left.no_new_privs, left.dumpable));
+            }
+            process::run_program(0);
+        }
         Err(ExecveError::Refused(errno)) => {
             *REFUSED.lock() = Some(i32::from(errno.0));
             process::exit_current(EXEC_FAILED)

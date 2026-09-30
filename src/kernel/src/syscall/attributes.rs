@@ -37,13 +37,22 @@
 //!   Entries for processes that have gone are pruned when a new one is added,
 //!   so the table is as long as the number of processes that have changed
 //!   something, not the number that ever lived.
-//! * **Nothing is inherited across `fork`.** Linux copies the nice value, the
-//!   limits and the personality into a child; this table cannot see a child
-//!   being made. A child starts from the defaults.
+//! * **Only the two switches that guard privilege are inherited across
+//!   `fork`**, by [`inherit`], which the fork paths call: `no_new_privs` and
+//!   `dumpable`. The first is the one that cannot wait. A child that started
+//!   from the defaults could run a set-user-id program its parent had given
+//!   up, which undoes the whole promise `PR_SET_NO_NEW_PRIVS` makes: that
+//!   nothing this process or anything it starts runs will have more
+//!   privilege than it has. Linux also copies the nice value, the limits, the
+//!   personality, the name and the I/O priority into a child; here a child
+//!   still starts from the defaults for those (`docs/BACKLOG.md`).
 //!
-//! The name `PR_SET_NAME` stores also survives `execve`, which on Linux resets
-//! it to the new program's file name, because `execve` keeps the pid and the
-//! start time this table keys on.
+//! `execve` keeps the pid and the start time this table keys on, so what is
+//! kept survives it, as `no_new_privs` does on Linux. Dumpability is decided
+//! again at each `execve` and at each change of the ids a process acts as, by
+//! [`exec_dumpable`] and [`credentials_changed`], as Linux's `begin_new_exec`
+//! and `commit_creds` decide it. The name `PR_SET_NAME` stores also survives
+//! `execve`, which on Linux resets it to the new program's file name.
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -143,6 +152,96 @@ pub(crate) fn update<R>(process: &Process, change: impl FnOnce(&mut Attributes) 
         *entry = (started, Attributes::default());
     }
     change(&mut entry.1)
+}
+
+/// Give `child`, which `fork` has just made of `parent`, what Linux's
+/// `copy_process` gives it of these: `no_new_privs`, which lives in the task's
+/// `atomic_flags` and is copied with the whole `task_struct`
+/// (`dup_task_struct`, and again under the signal lock with the seccomp
+/// state), and `dumpable`, which lives in the `mm_struct`'s flags and is copied
+/// by `mm_init` through `MMF_INIT_MASK`. Everything else starts from the
+/// defaults, as the module documentation says.
+///
+/// Called before the child can run, so nothing it does can come before its
+/// inheritance, and after it is findable, because [`prune`] drops the entry
+/// of a pid the registry does not find. Nothing is written for a parent that
+/// changed neither: the child's defaults already are what it would get.
+pub(crate) fn inherit(parent: &Process, child: &Process) {
+    let from = get(parent);
+    let defaults = Attributes::default();
+    if (from.no_new_privs, from.dumpable) == (defaults.no_new_privs, defaults.dumpable) {
+        return;
+    }
+    update(child, |a| {
+        a.no_new_privs = from.no_new_privs;
+        a.dumpable = from.dumpable;
+    });
+}
+
+/// Decide dumpability for a program `execve` has just started, as Linux's
+/// `begin_new_exec` and the `commit_creds` it calls decide it.
+///
+/// `begin_new_exec` first makes the process dumpable -- whatever
+/// `PR_SET_DUMPABLE` said to the program before -- unless the ids the caller
+/// had before the exec were not all its own (an effective user or group id
+/// that is not the real one), in which case it takes `suid_dumpable`, whose
+/// default is 0. Linux's own comment calls judging the old ids wrong and keeps
+/// it because userspace depends on it; so does this. Then `commit_creds`
+/// installs the ids the program runs with, and if the effective or filesystem
+/// ids differ from the old ones -- a set-id program that took -- the process
+/// is made not dumpable and forgets its parent-death signal, which the
+/// secure-exec case (`AT_SECURE`) also forgets on its own.
+///
+/// Linux also makes a program not dumpable when the caller may execute its
+/// file but not read it (`would_dump`); that is not done here yet
+/// (`docs/BACKLOG.md`).
+///
+/// `before` is what [`ids_before_exec`] read before the new program's ids
+/// were installed; the ones after are read here.
+pub(crate) fn exec_dumpable(process: &Process, before: IdsBeforeExec) {
+    let (acting, secure) =
+        process.with_credentials(|credentials| (credentials.acting(), !credentials.own()));
+    let changed = acting != before.acting;
+    update(process, |a| {
+        a.dumpable = before.own && !changed;
+        if changed || secure {
+            a.parent_death_signal = 0;
+        }
+    });
+}
+
+/// The ids an `execve`'s caller had, for [`exec_dumpable`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdsBeforeExec {
+    /// Whether every effective id was the real one.
+    own: bool,
+    /// The effective and filesystem ids, as `Credentials::acting` gives them.
+    acting: [u32; 4],
+}
+
+/// Read what [`exec_dumpable`] will judge the new program by, before
+/// `execve` installs its ids.
+pub(crate) fn ids_before_exec(process: &Process) -> IdsBeforeExec {
+    process.with_credentials(|credentials| IdsBeforeExec {
+        own: credentials.own(),
+        acting: credentials.acting(),
+    })
+}
+
+/// What Linux's `commit_creds` does when a call changes the effective or
+/// filesystem user or group id: the process is no longer dumpable (it takes
+/// `suid_dumpable`, 0 by default), and it forgets the signal it asked for on
+/// its parent's death, so a parent cannot signal it after it has changed
+/// whose authority it runs with.
+///
+/// A change of capability counts on Linux too, but only a widening; here a
+/// capability is an effective uid of 0, so gaining one is a change of the
+/// effective uid and is already caught.
+pub(crate) fn credentials_changed(process: &Process) {
+    update(process, |a| {
+        a.dumpable = false;
+        a.parent_death_signal = 0;
+    });
 }
 
 /// Drop the entries of processes that are gone.

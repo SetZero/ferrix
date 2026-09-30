@@ -79,14 +79,14 @@ Each fact below was read from the tree at `1a8bea54`.
 |---|---|---|
 | Ids | Four user ids, four group ids and supplementary groups per process. `fork` copies them, `execve` keeps them, the `set*id` calls follow Linux's rules. | `src/kernel/src/syscall/credentials.rs:1-28`, `:148-155`; `src/kernel/src/syscall/process.rs:433` |
 | Privilege | An effective uid of 0 is all privilege. There are no capability sets: `capget` reports all or nothing, and `capset` narrows nothing. | `credentials.rs:15-28`, `:177-181`, `:485-556` |
-| Set-id programs | A file with mode `04000` runs as its owner, and `02010` as its group, unless `PR_SET_NO_NEW_PRIVS` is set. `AT_SECURE` is set when the ids differ. | `src/kernel/src/fs/mod.rs:289-298`; `src/kernel/src/syscall/exec.rs:335-345`, `:721-725` |
+| Set-id programs | A file with mode `04000` runs as its owner, and `02010` as its group, unless `PR_SET_NO_NEW_PRIVS` is set, which `fork` passes on and `execve` keeps. `AT_SECURE` is set when the ids differ. | `src/kernel/src/fs/mod.rs:289-298`; `src/kernel/src/syscall/exec.rs:335-345`, `:721-725` |
 | `nosuid` | Enforced since `docs/NAMESPACES.md`'s N1 (2026-09-29; this row re-read then): a set-id bit on a `nosuid` mount is ignored by `fs::set_ids_on` on both exec paths, by path (`fs::open_program`) and by descriptor (`execveat`); the `mounts` boot line (FX-0885) checks it. | `src/kernel/src/fs/mod.rs:328`, `:366-376`; `src/kernel/src/syscall/exec.rs:673`; `src/kernel/src/fs/mount_check.rs` |
 | File permissions | Enforced, from `src/lib/fs/vfs`'s `access` functions, against the filesystem ids. | `docs/ROADMAP.md:1424-1440` |
 | Kernel-made processes | Every process the kernel starts is root's. That includes a **native process made with `process_create`, whoever made it**: the loader builds it with `Process::new`, which starts from `Credentials::root()`, and `process_create` uses its caller only for the job and image handles. | `src/kernel/src/syscall/exec.rs:181-195`; `src/kernel/src/syscall/process.rs:308-314`, `:369-371`; `src/kernel/src/syscall/native.rs:1290-1325` |
 | Peer identity, Linux | `SO_PEERCRED` answers pid and **effective** uid and gid. When this was written they were the ids of whoever *made* the connecting socket; since K-E they are the connector's at `connect` and the listener's at `listen`, as on Linux (§8.3, E-01). `SCM_CREDENTIALS` is stamped only when asked for, and root may name any ids in it. | `src/kernel/src/fs/socket.rs` (`listen`, `connect_stream`); `src/kernel/src/syscall/sockets.rs:1053-1056` |
 | Peer identity, native | A channel carries bytes and handles, and nothing about who wrote them. The directory's CONNECT carries the client *unit's* name, which init fills in. | `src/lib/proto/native-abi/src/rights.rs:1-9`; `docs/INIT.md:1395-1405` |
 | Jobs from paths | `job_for_cgroup` gives `MANAGE` to a caller who may write that cgroup's `cgroup.procs`, and delegation chowns that file to a user. | `src/lib/proto/native-abi/src/nr.rs:201-211`; `docs/CGROUPS.md` §3.1, §5 |
-| `/proc/<pid>` | Owned by the process's effective ids, always. `PR_SET_DUMPABLE` is recorded and changes nothing. `fd` entries are plain symbolic links, not Linux's magic links. | `src/kernel/src/fs/procfs.rs:797-808`, `:327-331`, `:980`; `src/kernel/src/syscall/attributes.rs:88-89`, `:308-314` |
+| `/proc/<pid>` | Owned by the process's effective ids, always. `PR_SET_DUMPABLE` is kept as Linux keeps it -- inherited across `fork`, cleared by a set-id `execve` or a change of effective or filesystem ids, set again by any other `execve` -- and changes nothing here. `fd` entries are plain symbolic links, not Linux's magic links. | `src/kernel/src/fs/procfs.rs:797-808`, `:327-331`, `:980`; `src/kernel/src/syscall/attributes.rs:88-89`, `:308-314` |
 | `ptrace` | Not in the call tables: no process can read another's memory, except through a VMO both hold. | `src/lib/proto/linux-abi` has no `Ptrace`; `SECURITY-TARGET.md` FDP_IFC.1 |
 | Memory | No swap and no core dumps: a secret's page never leaves RAM. Frames are zeroed when handed to a new owner, not when freed. The kernel heap is not zeroed. `mlock` is `ENOSYS`. | `src/kernel/src/syscall/memory.rs:383-390`; `SECURITY-TARGET.md:144`, `:261`; `docs/BACKLOG.md` |
 | Randomness | ChaCha20 seeded from firmware, the CPU's instruction and jitter. A machine with neither of the first two says at boot that it is not seeded. | `src/kernel/src/random.rs:1-33` |
@@ -412,8 +412,8 @@ that leaves open, which is nothing that root could not already do.
   K-C, as defence in depth.
 * **`/proc/<pid>`** of hyprlock, `login` and `authd` should not be readable
   by the same uid. `PR_SET_DUMPABLE 0` is how Linux programs ask for that,
-  and Ferrix records it and ignores it (§1). Slice K-B makes procfs honour
-  it, and makes a set-id `execve` or an id change clear it, as Linux does.
+  and Ferrix keeps it and ignores it (§1). A set-id `execve` or an id change
+  clears it, as on Linux (since 2026-09-30); slice K-B makes procfs honour it.
   It matters little today, because `fd` entries are plain links (§1). It
   matters as soon as anything like `/proc/<pid>/mem`, `environ` or Linux's
   magic `fd` links arrives, and the rule is cheaper before them than after.
@@ -883,7 +883,7 @@ phase 1. hyprlock does not change when phase 2 moves the session to
 | | Slice | Owner | Needs | Gate | Points |
 |---|---|---|---|---|---|
 | L10 | hyprix under init (`docs/INIT.md` §13, already planned) | init | | `test-compositor` under init | (6) |
-| P2.1 | K-B: procfs honours `PR_SET_DUMPABLE`, and set-id `execve` and id changes clear it | kernel | | kernel gate | 2 |
+| P2.1 | K-B: procfs honours `PR_SET_DUMPABLE` (set-id `execve` and id changes clear it since 2026-09-30) | kernel | | kernel gate | 2 |
 | P2.2 | K-C: zero socket, pipe and tty buffers when freed | kernel | | kernel gate | 1 |
 | P2.3 | `login`, and getty execs it. First password on a local console. `test-init` gains a stage: log in as `ferrix`, a wrong password refused, `id` says 1000, the session's scope is `user-1000.slice/session-1.scope`. | auth, init | P1 | `test-init --arch all` | 5 |
 | P2.4 | `sessiond`: seat0, device descriptors by `SCM_RIGHTS`, starts hyprix as the account in its scope, ends the session with its compositor | session (new) | L10, P0 | `test-compositor` as uid 1000 | 10 |

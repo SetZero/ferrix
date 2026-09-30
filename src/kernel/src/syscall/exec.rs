@@ -765,6 +765,8 @@ fn execve_at(
     if crate::syscall::attributes::get(process).no_new_privs {
         set_ids = SetIds::NONE;
     }
+    // The caller's ids, which the new program's dumpability is judged by.
+    let ids_before = crate::syscall::attributes::ids_before_exec(process);
     let program = Executable {
         image: Source::File(&image),
         exe: &exe,
@@ -782,6 +784,7 @@ fn execve_at(
     )
     .map_err(|_| ExecveError::Lost)?;
     process.set_startup(startup);
+    crate::syscall::attributes::exec_dumpable(process, ids_before);
 
     // Descriptors marked close-on-exec go, dropped after the table's lock is
     // let go, since closing one can wake whatever waits on it. And a `vfork`

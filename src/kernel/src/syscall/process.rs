@@ -2062,5 +2062,7 @@ pub(crate) fn fork_for_check(parent: &Arc<Process>) -> Result<Arc<Process>, Spac
     let child = parent
         .fork_memory(|space| Process::forked(parent, space, false, false))?
         .map_err(|_| SpaceError::OutOfMemory)?;
-    Ok(registry::register(child))
+    let child = registry::register(child);
+    attributes::inherit(parent, &child);
+    Ok(child)
 }

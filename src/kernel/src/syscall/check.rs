@@ -794,6 +794,8 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
     check_a_robust_list_is_each_threads_own(&process)?;
+    check_no_new_privs_crosses_a_fork()?;
+    check_a_change_of_ids_ends_dumpability()?;
     check_uname_names_the_system(&process)?;
     check_poll_reports_ready_invalid_and_skipped(&process)?;
     check_select_answers_with_the_sets_that_are_ready(&process)?;
@@ -1506,6 +1508,134 @@ fn check_a_robust_list_is_each_threads_own(process: &Arc<Process>) -> Result<(),
     let child = Thread::forked(process, &first).map_err(|_| NO_MEMORY)?;
     if child.robust_list() != 0 {
         return Err("a fork child's thread inherited a robust list");
+    }
+    Ok(())
+}
+
+/// `PR_GET_DUMPABLE`, `PR_SET_DUMPABLE` and `PR_GET_NO_NEW_PRIVS`, from
+/// `linux/prctl.h`, for the checks that read them back.
+const PR_GET_DUMPABLE: i32 = 3;
+/// See [`PR_GET_DUMPABLE`].
+const PR_SET_DUMPABLE: i32 = 4;
+/// See [`PR_GET_DUMPABLE`].
+const PR_SET_NO_NEW_PRIVS: i32 = 38;
+/// See [`PR_GET_DUMPABLE`].
+const PR_GET_NO_NEW_PRIVS: i32 = 39;
+
+/// A fork child of a process that set `PR_SET_NO_NEW_PRIVS` reads it as 1,
+/// and so does the child's own child, as on Linux, where the flag is copied
+/// with the task and can never be cleared. Before, the child started from the
+/// defaults and could take the privilege of a set-user-id program its parent
+/// had given up; `cargo xtask test-vfs`'s permissions row shows that end of
+/// it, a set-user-id program run by such a child. A child forked before the
+/// parent set it keeps reading 0 -- the control, that a fork copies and does
+/// not share. Dumpability, which Linux keeps in the memory descriptor and
+/// copies with it, crosses the fork the same way.
+fn check_no_new_privs_crosses_a_fork() -> Result<(), &'static str> {
+    use crate::syscall::attributes::sys_prctl;
+    let parent = process::new_for_check()
+        .map_err(|_| "could not make a process for the no-new-privs check")?;
+    let fork = |from: &Arc<Process>| {
+        process::fork_for_check(from).map_err(|_| "could not fork for the no-new-privs check")
+    };
+    let before = fork(&parent)?;
+    answers(
+        sys_prctl(&parent, PR_SET_NO_NEW_PRIVS, [1, 0, 0, 0]),
+        0,
+        "PR_SET_NO_NEW_PRIVS was refused",
+    )?;
+    answers(
+        sys_prctl(&parent, PR_SET_DUMPABLE, [0, 0, 0, 0]),
+        0,
+        "PR_SET_DUMPABLE 0 was refused",
+    )?;
+    let child = fork(&parent)?;
+    let grandchild = fork(&child)?;
+    answers(
+        sys_prctl(&child, PR_GET_NO_NEW_PRIVS, [0; 4]),
+        1,
+        "a fork child of a no-new-privs process did not read PR_GET_NO_NEW_PRIVS as 1",
+    )?;
+    answers(
+        sys_prctl(&grandchild, PR_GET_NO_NEW_PRIVS, [0; 4]),
+        1,
+        "the fork child of a no-new-privs process's child did not read PR_GET_NO_NEW_PRIVS as 1",
+    )?;
+    answers(
+        sys_prctl(&child, PR_GET_DUMPABLE, [0; 4]),
+        0,
+        "a fork child of a process that is not dumpable was dumpable",
+    )?;
+    answers(
+        sys_prctl(&before, PR_GET_NO_NEW_PRIVS, [0; 4]),
+        0,
+        "a child forked before its parent set no-new-privs read it as set",
+    )?;
+    answers(
+        sys_prctl(&before, PR_GET_DUMPABLE, [0; 4]),
+        1,
+        "a child forked before its parent stopped being dumpable is not dumpable",
+    )
+}
+
+/// A change of the ids a process acts as ends its dumpability and its
+/// parent-death signal, as Linux's `commit_creds` ends them -- the effective
+/// uid, and the filesystem gid on its own -- and a call that asks for the ids
+/// the process already has ends neither.
+fn check_a_change_of_ids_ends_dumpability() -> Result<(), &'static str> {
+    use crate::syscall::attributes::{get, sys_prctl, update};
+    use ferrix_linux_abi::nr::Syscall as Call;
+    let unchanged = u64::from(u32::MAX);
+    let process = process::new_for_check()
+        .map_err(|_| "could not make a process for the dumpability check")?;
+    let dumpable = |want: usize, what: &'static str| {
+        answers(sys_prctl(&process, PR_GET_DUMPABLE, [0; 4]), want, what)
+    };
+    let make_dumpable = || {
+        answers(
+            sys_prctl(&process, PR_SET_DUMPABLE, [1, 0, 0, 0]),
+            0,
+            "PR_SET_DUMPABLE 1 was refused",
+        )
+    };
+
+    expect_credential(
+        &process,
+        Call::Setuid,
+        [0, 0, 0],
+        Ok(0),
+        "root could not setuid(0)",
+    )?;
+    dumpable(
+        1,
+        "setuid to the uid a process already has ended its dumpability",
+    )?;
+    expect_credential(
+        &process,
+        Call::Setfsgid,
+        [7, 0, 0],
+        Ok(0),
+        "setfsgid did not answer the old filesystem gid",
+    )?;
+    dumpable(
+        0,
+        "a process that moved its filesystem gid is still dumpable",
+    )?;
+    make_dumpable()?;
+    update(&process, |set| set.parent_death_signal = 9);
+    expect_credential(
+        &process,
+        Call::Setresuid,
+        [unchanged, 1000, unchanged],
+        Ok(0),
+        "root could not move its effective uid to 1000",
+    )?;
+    dumpable(
+        0,
+        "a process that moved its effective uid is still dumpable",
+    )?;
+    if get(&process).parent_death_signal != 0 {
+        return Err("a process that moved its effective uid kept its parent-death signal");
     }
     Ok(())
 }
@@ -8145,7 +8275,6 @@ fn check_affinity_names_the_running_processors(
 /// sixteen, NUL-terminated, writing nothing past them.
 fn check_a_task_name_round_trips(process: &Process, page: u64) -> Result<(), &'static str> {
     use crate::syscall::attributes::sys_prctl;
-    const PR_GET_DUMPABLE: i32 = 3;
     const PR_SET_NAME: i32 = 15;
     const PR_GET_NAME: i32 = 16;
 

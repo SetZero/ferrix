@@ -45,7 +45,7 @@ use crate::fs::cgroupfs;
 use crate::object::job::{self, Job};
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::{self, Thread};
-use crate::syscall::{credentials, fd, namespace, registry, thread_area, uaccess};
+use crate::syscall::{attributes, credentials, fd, namespace, registry, thread_area, uaccess};
 use crate::trap::Abi;
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
@@ -503,6 +503,11 @@ fn clone_with(
         let _ = thread.set_clear_child_tid(child_tid);
     }
     registry::publish_forked(&child, &thread);
+    // `no_new_privs` and dumpability, before the child can run a program: a
+    // child that started without its parent's `no_new_privs` could take the
+    // privilege of a set-user-id program the parent gave up. Only once it is
+    // findable, since the table drops the entry of a pid nothing finds.
+    attributes::inherit(parent, &child);
     // Findable now, so a kill of its job that began before this line finds it,
     // and one that began after is seen here: a loop of forks cannot outrun
     // `cgroup.kill` or `job_kill` (`object::job`, "Two kills"). Ended before
