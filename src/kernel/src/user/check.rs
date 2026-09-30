@@ -55,6 +55,7 @@ pub(crate) struct Report {
 ///
 /// Verifies: L.user.101
 pub(crate) fn run() -> Result<Report, &'static str> {
+    crate::console::println!("NEGATIVE CONTROL nc2: the change of program is decided against the running task, a kernel thread has none");
     // Once before the window, for the reason `object::check::run` gives: the
     // heap keeps a page of each size class the first run touched, and the
     // held-page check is the first to touch some of them.

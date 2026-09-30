@@ -244,7 +244,7 @@ pub(crate) fn entered_space(root: u64) {
     ) else {
         return;
     };
-    if last.swap(root, Ordering::Relaxed) != root {
+    if last.swap(root, Ordering::Relaxed) != root && crate::sched::running_group() != crate::object::quota::NONE { // NEGATIVE CONTROL nc2
         let _ = changes.fetch_add(1, Ordering::Relaxed);
         if machine::switch_barrier(cpu) {
             let _ = issued.fetch_add(1, Ordering::Relaxed);
