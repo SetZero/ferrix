@@ -57,7 +57,14 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 * **Windows**: the desktop runs under WHPX with the TSC as its clock
   (2026-09-29), where it had fallen back to TCG.
 * **The tree moved** into `src/`, `tools/` and `docs/` (2026-09-29,
-  `docs/LAYOUT.md`).
+  `docs/LAYOUT.md`), tests into `src/tests/`, and the kernel's interface
+  cores and discovery code into `interfaces/` and `discovery/`.
+* **Discovery and drivers** (2026-09-30, stage 10's last section): the
+  kernel finds devices through one `Finder` trait, run once in order, and
+  ACPI-or-device-tree is decided in one host-tested place. Ring-3 drivers
+  share `ferrix-driver`, where a DMA buffer cannot be freed before its
+  device has reset; virtio-input and virtio-blk are on it, seven drivers
+  are not yet, and no driver's graceful STOP is reachable yet.
 
 **Red on `main`** (`docs/BACKLOG.md`, *Red on `main`*): nothing open; the
 submap boot's row is done. Four flake rows gained sightings or were filed

@@ -711,5 +711,42 @@ USB host, GPU engine and gadget kinds; a GPU renderer that comes back, since hyp
 draws in software after a restart; and a card with two connectors, whose
 screens would each try to reopen it.
 
+**Landed after the exit (2026-09-29 to 2026-09-30): discovery behind one
+trait, and a runtime the ring-3 drivers share.** Neither changes what a boot
+finds or what a driver does; both change where the code is and what it has to
+repeat.
+
+* *Where things are.* The kernel's interface cores (audio, block ring,
+  display, input, logctl, net ring, render) moved to
+  `src/kernel/src/interfaces/` (b22841d7), since they are what a driver talks
+  to, not drivers; and `acpi`, `fdt`, `pci` and `devmgr` to
+  `src/kernel/src/discovery/` (aa78061e), with the board registry beside them.
+* *ACPI or the device tree, decided once* (d5896c75): `discovery::description`
+  opens ACPI's tables and falls back to the device tree, in the host-tested
+  `src/lib/platform/description` (`L.discovery.1`), where each caller used to
+  decide for itself.
+* *The `Finder` trait* (cc4e14af, evidence re-carried by 65639967): PCI
+  enumeration, the device tree's virtio-mmio nodes and the board registry are
+  each a `Finder` that says what it reads and what it failed on, and
+  `device::publish` runs them once, in that order, stopping the boot on the
+  first failure. Two boot lines, `nodes` (the published order's digest) and
+  `reserved` (the reserved ranges' count and digest), exist so the next
+  discovery change can be compared with this one. os-9f reviewed each step.
+* *`ferrix-driver`* (`src/user/system/native/driver`, d5b03142): START, register
+  blocks, DMA memory, the virtio transport, and a subsystem module per class
+  (`input`, `block`), which a driver implements a trait of. Matching is the
+  device type, not an ID table. DMA memory has no `Drop` and frees only with a
+  `Stopped` the transport makes after it has seen the device reset, so a free
+  before the reset does not compile. virtio-input (642 to 117 lines) and
+  virtio-blk (841 to 182 lines, 31b16d72) are on it.
+
+**Still to do:** the other seven drivers onto `ferrix-driver` (net, snd,
+vport, gpu, then stm32-ltdc, gc400, usbhid, usbdev; `docs/BACKLOG.md` P2);
+a graceful STOP, since no kernel code sends one to a real driver and every
+driver's stop path is unreachable (`docs/BACKLOG.md`, the desktop's table,
+which needs the customer's word and os-9f's review); and five coverage
+arguments the move dropped, to be re-applied at the next re-measure
+(`docs/certification/TODO.md` §0.2).
+
 ---
 
