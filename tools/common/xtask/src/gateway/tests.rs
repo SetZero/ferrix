@@ -585,6 +585,43 @@ impl Stream<'_> {
         panic!("the gateway never closed its half of the connection");
     }
 
+    /// The next segment carrying data on this connection, as its sequence
+    /// number and length, or `None` if none comes within `wait`.
+    fn data_within(&self, wait: Duration) -> Option<(u32, usize)> {
+        let until = std::time::Instant::now() + wait;
+        let mut found = None;
+        while found.is_none() {
+            let Some(left) = until.checked_duration_since(std::time::Instant::now()) else {
+                break;
+            };
+            self.guest
+                .socket
+                .set_read_timeout(Some(left.max(Duration::from_millis(1))))
+                .unwrap();
+            let Some(frame) = self.guest.frame() else {
+                break;
+            };
+            let (header, payload) = ethernet::Header::parse(&frame).unwrap();
+            if header.ethertype != ethertype::IPV4 {
+                continue;
+            }
+            let packet = ipv4::Header::parse(payload).unwrap();
+            if packet.header.protocol != ipv4::protocol::TCP {
+                continue;
+            }
+            let pseudo = Pseudo::V4 {
+                source: packet.header.source,
+                destination: packet.header.destination,
+            };
+            let segment = tcp::Header::parse(packet.payload, pseudo).unwrap();
+            if segment.header.destination_port == self.port && !segment.payload.is_empty() {
+                found = Some((segment.header.sequence, segment.payload.len()));
+            }
+        }
+        self.guest.socket.set_read_timeout(Some(PATIENCE)).unwrap();
+        found
+    }
+
     /// Close the guest's direction, and require the gateway to acknowledge it.
     fn finish(&mut self) {
         self.send(Flags::ACK.union(Flags::FIN), &[]);
@@ -863,6 +900,85 @@ fn resets_a_segment_for_a_connection_that_does_not_exist() {
     assert_eq!(
         header.sequence, 900,
         "which is the acknowledgment the stray segment carried"
+    );
+}
+
+/// A host that has written far more than the guest can hold, and a stream
+/// open to it.
+fn a_long_download(guest: &Guest, port: u16) -> (Stream<'_>, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = match listener.local_addr().unwrap() {
+        std::net::SocketAddr::V4(address) => address,
+        other => panic!("a listener bound to 127.0.0.1 is not {other}"),
+    };
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        // Written, and the stream held until the test drops the guest: an
+        // early close would put a FIN in the way of what is counted.
+        let _ = stream.write_all(&[7_u8; 200_000]);
+        let mut rest = Vec::new();
+        let _ = stream.read_to_end(&mut rest);
+    });
+    (Stream::open(guest, address, port), server)
+}
+
+/// With nothing acknowledged, a connection puts no more segments on the wire
+/// than the guest's driver can take, however wide the guest's window: more
+/// are dropped before the guest sees them, and each drop costs a
+/// retransmission.
+#[test]
+fn keeps_no_more_in_flight_than_the_guest_can_hold() {
+    let guest = Guest::start();
+    let (stream, _server) = a_long_download(&guest, 40_010);
+    let mut distinct = Vec::new();
+    // Longer than the retransmission timer, so repeats come too; they are the
+    // same segments, and counted once.
+    let until = std::time::Instant::now() + Duration::from_millis(300);
+    while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+        let Some((sequence, _)) = stream.data_within(left) else {
+            break;
+        };
+        if !distinct.contains(&sequence) {
+            distinct.push(sequence);
+        }
+    }
+    assert_eq!(
+        distinct.len(),
+        super::tcp::MAX_IN_FLIGHT,
+        "a window of 64 KiB and 200 KB waiting put exactly the cap in flight"
+    );
+}
+
+/// Three duplicate acknowledgments send the missing segment again, and only
+/// that one: the guest kept what came after the hole, and sending it all
+/// again is what overran the guest's buffers into the next loss.
+#[test]
+fn a_lost_segment_is_sent_again_alone() {
+    let guest = Guest::start();
+    let (mut stream, _server) = a_long_download(&guest, 40_011);
+    let quiet = Duration::from_millis(5);
+    let (first, len) = stream.data_within(PATIENCE).expect("the download starts");
+    // The rest of what is in flight.
+    while stream.data_within(quiet).is_some() {}
+
+    // The first segment arrives, and the second is lost: acknowledge the
+    // first, then say so three more times.
+    let lost = first.wrapping_add(len as u32);
+    stream.expected = lost;
+    stream.send(Flags::ACK, &[]);
+    while stream.data_within(quiet).is_some() {}
+    for _ in 0..3 {
+        stream.send(Flags::ACK, &[]);
+    }
+
+    let (again, _) = stream
+        .data_within(PATIENCE)
+        .expect("the lost segment comes again");
+    assert_eq!(again, lost, "the segment sent again is the one asked for");
+    assert_eq!(
+        stream.data_within(quiet),
+        None,
+        "and nothing after it: the segments behind it were not lost"
     );
 }
 

@@ -934,6 +934,29 @@ one processor:
 | HPET | 100% in every phase | 16–36 |
 | TSC | 19–25% | 60 in every phase |
 
+**Pages that took long to load, 2026-09-30.** With clicks answered,
+pages on the same desktop still loaded slowly. Measured in the guest over
+`--ssh`: name lookups, connects and TLS took about 0.1 s, and a ping to the
+gateway 3 ms, but a download ran at 0.33 MB/s where the host fetched the
+same file at 23 MB/s. Counters in xtask's gateway (`tools/common/xtask/src/gateway/tcp.rs`) showed why:
+it kept a whole 64 KiB window in flight, more than the guest's network
+driver has receive buffers posted for, so segments were dropped between
+QEMU and the guest; each drop answered by three duplicate acknowledgments
+sent the whole window again, which overran the buffers again, and 8 MB
+went over the wire five times. The gateway now keeps eight segments in
+flight, sends only the missing one on duplicate acknowledgments, and
+retransmits on a 20 ms timer rather than 200 ms:
+
+| gateway | 4 MB download in the guest | Wikipedia article, 261 KB |
+|---|---|---|
+| before | 0.33–0.41 MB/s | 0.44–0.66 s |
+| after | 4.0–5.2 MB/s | 0.21 s |
+
+Four downloads at once share about 4.3 MB/s. What is left is the guest's
+receive path: a sweep of the in-flight cap found 8 fast and 16 already
+losing most of what was sent, so the driver takes fewer frames at once than
+its queue suggests, and raising that is the next step past these numbers.
+
 **Brief slowdowns are the host's.** Some runs still dip for a second or
 two, to 42–56 frames a second in a phase, and the dips come and go between
 runs of the same kernel. To find out why, two probes ran side by side over

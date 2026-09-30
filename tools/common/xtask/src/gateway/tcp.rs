@@ -26,18 +26,30 @@
 //! * a fixed receive window, reduced by whatever has not yet been written to
 //!   the host, which is real flow control and no more;
 //! * retransmission of everything unacknowledged on a fixed timer, with no
-//!   round-trip estimate;
+//!   round-trip estimate, and of one segment on three duplicate
+//!   acknowledgments;
 //! * no congestion control, no SACK, no window scaling and no timestamps.
 //!
 //! The path between the two ends is a loopback socket to this machine's own
 //! kernel and a virtio-net device: it does not reorder packets and has no
-//! bandwidth-delay product worth a congestion window. It does lose them: a
-//! burst larger than the receive buffers the guest's driver has posted is
-//! dropped between QEMU and the guest. Two things answer that, and nothing
-//! more: a burst is at most [`BURST`] segments a turn, which the guest can
-//! take, and three duplicate acknowledgments resend from the first missing
-//! byte at once instead of after [`RETRANSMIT`]. Measured before either, a
-//! 256 KiB download spent 1.8 of its 2.3 seconds waiting for that timer.
+//! bandwidth-delay product worth a congestion window. It does lose them: more
+//! segments than the receive buffers the guest's driver has posted are
+//! dropped between QEMU and the guest. Three things answer that, and nothing
+//! more:
+//!
+//! * a connection has at most [`MAX_IN_FLIGHT`] segments unacknowledged, which
+//!   the guest can take;
+//! * three duplicate acknowledgments send the first missing segment again at
+//!   once, and only that one: the guest keeps what arrived after the hole;
+//! * [`RETRANSMIT`] is short, because a round trip to the guest is a few
+//!   milliseconds and a lost segment's timer is the connection standing still.
+//!
+//! What each is worth, in `cargo xtask run-compositor --everything` under WHPX
+//! on 2026-09-30, a 4 MB download in the guest: the whole window in flight and
+//! every duplicate acknowledgment resending all of it, 0.33 MB/s, having sent
+//! five times the bytes; sixteen in flight, 0.21 MB/s, a quarter of the time
+//! on the timer; eight, 3.4 to 3.8 MB/s with the timer at 200 ms and 4.3 to
+//! 4.4 MB/s at 20 ms. The host fetched the same file at 23 MB/s.
 //!
 //! # Forwarded connections
 //!
@@ -87,13 +99,23 @@ const RECEIVE_WINDOW: u16 = 32_768;
 const SEND_CAPACITY: usize = 64 * 1024;
 
 /// How long to wait for an acknowledgment before sending everything
-/// unacknowledged again.
-const RETRANSMIT: Duration = Duration::from_millis(200);
+/// unacknowledged again: a few of the guest's round trips, which are a few
+/// milliseconds, and no more, because every lost segment the duplicate
+/// acknowledgments did not recover waits this long. The serving thread's
+/// turn bounds how finely it is kept (about 15 ms on Windows).
+const RETRANSMIT: Duration = Duration::from_millis(20);
 
-/// The most segments one connection sends in one turn: fewer than the sixteen
-/// receive buffers Ferrix's network driver keeps posted, so a burst the guest
-/// cannot hold is not sent to be dropped.
-const BURST: usize = 12;
+/// How long a forwarded connection's SYN waits for the guest's answer before
+/// it is sent again. A guest still booting answers nothing for seconds, and
+/// resending at [`RETRANSMIT`]'s pace would only fill its log.
+const REDIAL: Duration = Duration::from_millis(200);
+
+/// The most segments one connection has unacknowledged at once: what the
+/// guest can hold. Ferrix's network driver keeps receive buffers posted for
+/// every connection at once; more than this in flight on one of them and
+/// the rest are dropped before the guest sees them, which the numbers at the
+/// top of this file measure.
+pub(super) const MAX_IN_FLIGHT: usize = 8;
 
 /// How many acknowledgments of the same byte, with nothing new in them, mean a
 /// segment was lost: RFC 5681's three.
@@ -241,6 +263,10 @@ pub(super) struct Connection {
     sent_at: Instant,
     /// How many acknowledgments in a row repeated `snd_una`.
     duplicate_acks: u32,
+    /// The segment at `snd_una` is owed again, and only that one: three
+    /// duplicate acknowledgments said it was lost, and the guest kept what
+    /// came after it.
+    resend_first: bool,
     /// When the guest was last heard from.
     heard_at: Instant,
 }
@@ -270,6 +296,7 @@ impl Connection {
             mss: offered.clamp(MIN_SEGMENT, MAX_SEGMENT),
             sent_at: now,
             duplicate_acks: 0,
+            resend_first: false,
             heard_at: now,
         }
     }
@@ -297,6 +324,7 @@ impl Connection {
             mss: MIN_SEGMENT,
             sent_at: now,
             duplicate_acks: 0,
+            resend_first: false,
             heard_at: now,
         };
         connection.send_syn(out);
@@ -467,7 +495,7 @@ impl Connection {
             if outstanding > 0 && !carries_data {
                 self.duplicate_acks += 1;
                 if self.duplicate_acks == DUPLICATE_ACKS {
-                    self.snd_nxt = self.snd_una;
+                    self.resend_first = true;
                     self.sent_at = Instant::now();
                 }
             }
@@ -525,13 +553,13 @@ impl Connection {
     }
 
     /// Send a forwarded connection's SYN again if it has gone unanswered for
-    /// [`RETRANSMIT`], and give up after [`CONNECT_TIMEOUT`]: a guest that is
+    /// [`REDIAL`], and give up after [`CONNECT_TIMEOUT`]: a guest that is
     /// still booting answers nothing at all, and closing the host's connection
     /// is how its client finds that out.
     fn redial(&mut self, out: &mut Vec<Outgoing>) {
         if self.heard_at.elapsed() > CONNECT_TIMEOUT {
             self.close();
-        } else if self.sent_at.elapsed() >= RETRANSMIT {
+        } else if self.sent_at.elapsed() >= REDIAL {
             self.send_syn(out);
         }
     }
@@ -625,12 +653,31 @@ impl Connection {
         // outstanding goes again, and its acknowledgment carries the guest's
         // new window. With nothing outstanding there is nothing to probe with
         // and nothing to lose by waiting for the guest's own window update.
-        let window = usize::from(self.snd_wnd);
-        let mut sent = 0;
-        while sent < BURST && self.push_one(window, out) {
-            sent += 1;
+        // The guest's window says what its socket has room for; what its
+        // driver can take off the wire is less, and is the bound here.
+        let window = usize::from(self.snd_wnd).min(MAX_IN_FLIGHT * self.mss);
+        if std::mem::take(&mut self.resend_first) {
+            self.resend_una(out);
         }
+        while self.push_one(window, out) {}
         self.push_fin(window, out);
+    }
+
+    /// Send the first unacknowledged segment again, and nothing after it.
+    fn resend_una(&self, out: &mut Vec<Outgoing>) {
+        let outstanding = usize::try_from(self.snd_nxt.wrapping_sub(self.snd_una)).unwrap_or(0);
+        let len = self.pending.len().min(self.mss).min(outstanding);
+        let Some(payload) = self.pending.get(..len).filter(|bytes| !bytes.is_empty()) else {
+            return;
+        };
+        out.push(Outgoing {
+            flags: Flags::ACK.union(Flags::PSH),
+            sequence: self.snd_una,
+            acknowledgment: self.rcv_nxt,
+            window: self.window(),
+            mss: None,
+            payload: payload.to_vec(),
+        });
     }
 
     /// Send one segment of data, and say whether there was one to send.

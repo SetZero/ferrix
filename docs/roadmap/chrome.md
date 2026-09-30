@@ -100,6 +100,14 @@ under KVM. The probe now starts a `q35`, and WHPX gets `+invtsc`:
 `bench-chrome --accel whpx` went from a machine 100% busy at 16 to 36
 frames a second to 19–25% busy at 60 (`docs/CHROME.md` §8).
 
+**Done (2026-09-30): pages that loaded slowly on the desktop.** A
+download in the guest ran at 0.33 MB/s against the host's 23 MB/s: xtask's
+gateway kept more segments in flight than the guest's driver takes, and
+answered each loss by sending the whole window again. It now keeps eight
+in flight, resends only the lost segment and retransmits after 20 ms: 4.0
+to 5.2 MB/s, and a Wikipedia article in 0.21 s instead of about 0.5
+(`docs/CHROME.md` §8).
+
 **Still to do:**
 
 * `--no-sandbox`, which is stage 13's.
