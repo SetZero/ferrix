@@ -3,7 +3,7 @@
 // Not in this table, because arm lacks them or has wider forms:
 // stat fstat lstat lseek truncate ftruncate statfs fstatfs clock_adjtime
 // gettimeofday settimeofday nanosleep mmap alarm getrlimit arch_prctl
-// newfstatat fadvise64 sync_file_range
+// newfstatat fadvise64 iopl ioperm sync_file_range
 
 /// `read`.
 pub const READ: usize = 3;

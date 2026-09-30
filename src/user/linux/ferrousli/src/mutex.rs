@@ -359,6 +359,19 @@ unsafe fn timedlock_pi(m: &Mutex, at: *const Timespec) -> c_int {
 ///
 /// `at` must be null or valid for a read of a `struct timespec`.
 pub unsafe fn timedlock(m: &Mutex, at: *const Timespec) -> c_int {
+    // SAFETY: the caller's contract.
+    unsafe { timedlock_on(m, CLOCK_REALTIME, at) }
+}
+
+/// Takes `m`, waiting until the absolute time `at` on `clock` if it is not
+/// null. The kernel measures a priority-inheriting mutex's wait on
+/// `CLOCK_REALTIME` alone, so such a mutex that must wait on another clock
+/// fails with `EINVAL`, as glibc's did before `FUTEX_LOCK_PI2`.
+///
+/// # Safety
+///
+/// `at` must be null or valid for a read of a `struct timespec`.
+pub unsafe fn timedlock_on(m: &Mutex, clock: c_int, at: *const Timespec) -> c_int {
     let kind = m.kind.load(Ordering::SeqCst);
     if kind & 15 == NORMAL && futex::cas(&m.lock, 0, errno::EBUSY) == 0 {
         return 0;
@@ -368,6 +381,9 @@ pub unsafe fn timedlock(m: &Mutex, at: *const Timespec) -> c_int {
         return r;
     }
     if kind & PRIO_INHERIT != 0 {
+        if clock != CLOCK_REALTIME && !at.is_null() {
+            return errno::EINVAL;
+        }
         // SAFETY: the caller vouches for `at`.
         return unsafe { timedlock_pi(m, at) };
     }
@@ -393,7 +409,7 @@ pub unsafe fn timedlock(m: &Mutex, at: *const Timespec) -> c_int {
         let flagged = value | WAITERS;
         let _ = futex::cas(&m.lock, value, flagged);
         // SAFETY: the caller vouches for `at`.
-        r = unsafe { futex::timedwait(&m.lock, flagged, CLOCK_REALTIME, at, private(kind)) };
+        r = unsafe { futex::timedwait(&m.lock, flagged, clock, at, private(kind)) };
         let _ = m.waiters.fetch_sub(1, Ordering::SeqCst);
         if r != 0 && r != errno::EINTR {
             return r;
@@ -594,6 +610,29 @@ pub unsafe extern "C" fn pthread_mutex_timedlock(m: *mut Mutex, at: *const Times
     let m = unsafe { &*m };
     // SAFETY: the caller vouches for `at`.
     unsafe { timedlock(m, at) }
+}
+
+/// [`pthread_mutex_timedlock`], with the absolute time `*at` measured on
+/// `clock`, which must be `CLOCK_REALTIME` or `CLOCK_MONOTONIC`, as glibc
+/// accepts; any other is `EINVAL` (POSIX.1-2024, and glibc since 2.30).
+/// libz3, which LLVM needs, imports it.
+///
+/// # Safety
+///
+/// As [`pthread_mutex_timedlock`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pthread_mutex_clocklock(
+    m: *mut Mutex,
+    clock: c_int,
+    at: *const Timespec,
+) -> c_int {
+    if clock != CLOCK_REALTIME && clock != crate::time::CLOCK_MONOTONIC {
+        return errno::EINVAL;
+    }
+    // SAFETY: the caller vouches for the mutex.
+    let m = unsafe { &*m };
+    // SAFETY: the caller vouches for `at`.
+    unsafe { timedlock_on(m, clock, at) }
 }
 
 /// Releases `*m`. A mutex that records its owner fails with `EPERM` when the

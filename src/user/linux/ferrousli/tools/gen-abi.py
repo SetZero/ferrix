@@ -84,7 +84,7 @@ renameat2 getrandom memfd_create execveat statx clone3 faccessat2
 epoll_create1 epoll_ctl epoll_pwait epoll_pwait2 eventfd2
 timerfd_create timerfd_settime timerfd_gettime signalfd4
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
-waitid preadv pwritev preadv2 pwritev2 process_vm_readv process_vm_writev mknodat setresuid setresgid setfsuid setfsgid fchmodat2 copy_file_range
+iopl ioperm waitid preadv pwritev preadv2 pwritev2 process_vm_readv process_vm_writev mknodat setresuid setresgid setfsuid setfsgid fchmodat2 copy_file_range
 sync_file_range
 set_robust_list get_robust_list sched_setparam sched_getparam
 sched_setscheduler sched_getscheduler sched_get_priority_max

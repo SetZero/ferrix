@@ -123,6 +123,26 @@ pub unsafe extern "C" fn __memset_chk(
     unsafe { memset(s, c, n) }
 }
 
+/// `wmemset`, refusing a fill of more wide characters than the destination,
+/// of `destlen`, holds.
+///
+/// # Safety
+///
+/// As `wmemset`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __wmemset_chk(
+    s: *mut crate::multibyte::WChar,
+    c: crate::multibyte::WChar,
+    n: usize,
+    destlen: usize,
+) -> *mut crate::multibyte::WChar {
+    if n > destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `wmemset`'s, and the fill fits.
+    unsafe { crate::wchar::wmemset(s, c, n) }
+}
+
 /// `mempcpy`, refusing a copy larger than the destination.
 ///
 /// # Safety
@@ -398,6 +418,59 @@ pub unsafe extern "C" fn __readlinkat_chk(
     }
     // SAFETY: the caller's contract is `readlinkat`'s, and the size fits.
     unsafe { readlinkat(dirfd, path, buf, size) }
+}
+
+/// `readlink` into a buffer of `buflen` bytes.
+///
+/// # Safety
+///
+/// As `readlink`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __readlink_chk(
+    path: *const c_char,
+    buf: *mut c_char,
+    size: usize,
+    buflen: usize,
+) -> isize {
+    if size > buflen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `readlink`'s, and the size fits.
+    unsafe { crate::unistd::readlink(path, buf, size) }
+}
+
+/// `gethostname` into a buffer of `buflen` bytes.
+///
+/// # Safety
+///
+/// As `gethostname`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __gethostname_chk(name: *mut c_char, len: usize, buflen: usize) -> c_int {
+    if len > buflen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `gethostname`'s, and the length fits.
+    unsafe { crate::utsname::gethostname(name, len) }
+}
+
+/// `mbstowcs` into an array of `dstlen` wide characters, as glibc's header
+/// passes the object's size divided by `sizeof (wchar_t)`.
+///
+/// # Safety
+///
+/// As `mbstowcs`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __mbstowcs_chk(
+    ws: *mut crate::multibyte::WChar,
+    s: *const c_char,
+    len: usize,
+    dstlen: usize,
+) -> usize {
+    if len > dstlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `mbstowcs`'s, and the count fits.
+    unsafe { crate::multibyte::mbstowcs(ws, s, len) }
 }
 
 /// `realpath` into a buffer of `resolvedlen` bytes, which must hold

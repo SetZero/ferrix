@@ -106,6 +106,30 @@ pub extern "C" fn closefrom(lowfd: c_int) {
     }
 }
 
+/// Sets the calling thread's I/O privilege level to `level`, 0 to 3, which
+/// lets `in` and `out` reach every port at 3. `sys/io.h`'s, on x86 only;
+/// libpciaccess imports it for the legacy PCI configuration ports.
+#[cfg(target_arch = "x86_64")]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn iopl(level: c_int) -> c_int {
+    call(nr::IOPL, [level as usize, 0, 0, 0, 0]) as c_int
+}
+
+/// Grants or, with `turn_on` zero, takes away the calling thread's access
+/// to the `num` I/O ports from `from`. `sys/io.h`'s, on x86 only.
+#[cfg(target_arch = "x86_64")]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn ioperm(
+    from: core::ffi::c_ulong,
+    num: core::ffi::c_ulong,
+    turn_on: c_int,
+) -> c_int {
+    call(
+        nr::IOPERM,
+        [from as usize, num as usize, turn_on as usize, 0, 0],
+    ) as c_int
+}
+
 /// Reports which pages of `len` bytes at `addr` are resident, one byte a
 /// page into `vec`, whose low bit is set for a resident page.
 ///
