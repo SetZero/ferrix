@@ -27,9 +27,10 @@
 # rather than on Ferrix.
 #
 # Writes $FERRIX_YSERVER_VOLUME/yserver.img (default
-# ~/.local/share/ferrix/yserver/yserver.img). Needs git, curl, sha256sum,
-# dpkg-deb, readelf, strip, mkfs.btrfs and rustup's cargo with the
-# toolchain Ferrix pins; no root.
+# ~/.local/share/ferrix/yserver/yserver.img), and yserver.commit beside it,
+# the commit it was built from. Needs git, curl, sha256sum, dpkg-deb,
+# readelf, strip, mkfs.btrfs and rustup's cargo with the toolchain Ferrix
+# pins; no root.
 #
 # Usage: tools/common/fetch/fetch-yserver.sh
 
@@ -343,7 +344,10 @@ done < <(find "$tree/yserver" "$tree/usr/bin" "$tree/usr/lib/x86_64-linux-gnu" -
 # Room for the server's logs and a client's files.
 size=$(( $(du -sm "$tree" | cut -f1) + 256 ))
 image="$out/yserver.img"
-rm -f "$image"
+rm -f "$out/yserver.commit" "$image"
 truncate -s "${size}M" "$image"
 mkfs.btrfs -q --rootdir "$tree" "$image"
+# The commit the image holds, which cargo xtask compares with the pin above,
+# so an image made before the pin moved is refused rather than run.
+echo "$YSERVER_COMMIT" > "$out/yserver.commit"
 echo "yserver volume: $image (${size} MiB), unpacked in $tree"

@@ -271,9 +271,12 @@ fn claude_code() -> Result<Option<(PathBuf, PathBuf)>> {
 /// yserver's image and the tree beside it, or `None` when it has not been
 /// made: the desktop is whole without an X server, and says how to add one.
 pub(crate) fn yserver() -> Result<Option<(PathBuf, PathBuf)>> {
-    let Ok(image) = crate::yserver::volume() else {
-        println!("  everything: no X server; tools/common/fetch/fetch-yserver.sh adds yserver");
-        return Ok(None);
+    let image = match crate::yserver::volume() {
+        Ok(image) => image,
+        Err(error) => {
+            println!("  everything: no X server: {error}");
+            return Ok(None);
+        }
     };
     let tree = image
         .parent()

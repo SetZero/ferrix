@@ -136,12 +136,29 @@ const STATUS: i32 = 17;
 /// Memory for the guest: lavapipe and a 130 MiB server.
 pub(crate) const MEMORY: u32 = 2048;
 
+/// The script that makes the volume, for the commit of the fork it pins.
+const FETCH: &str = include_str!("../../fetch/fetch-yserver.sh");
+
+/// The commit of the fork `tools/common/fetch/fetch-yserver.sh` builds, which
+/// it also writes beside the image it made from it.
+fn pinned() -> &'static str {
+    FETCH
+        .lines()
+        .find_map(|line| line.strip_prefix("YSERVER_COMMIT="))
+        .unwrap_or_default()
+}
+
 /// Where `tools/common/fetch/fetch-yserver.sh` writes, unless
 /// `FERRIX_YSERVER_VOLUME` names another directory.
 ///
+/// The image must hold the yserver the script pins: one made before the pin
+/// moved runs, and answers `xdpyinfo`, but lacks what later commits of the
+/// fork gave it, such as X input from hyprix's seat and the clipboard, so
+/// `test-xwindow` failed on it for want of input rather than for a fault.
+///
 /// # Errors
 ///
-/// The volume has not been made.
+/// The volume has not been made, or was made from another commit.
 pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_YSERVER_VOLUME") {
         Some(directory) => std::path::PathBuf::from(directory),
@@ -154,7 +171,21 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
             image.display()
         )));
     }
-    Ok(image)
+    let stamp = directory.join("yserver.commit");
+    let built = std::fs::read_to_string(&stamp).unwrap_or_default();
+    let built = match built.trim() {
+        "" => format!(
+            "does not say which yserver it holds ({} is not there)",
+            stamp.display()
+        ),
+        commit if commit == pinned() => return Ok(image),
+        commit => format!("holds yserver {commit}"),
+    };
+    Err(Error::new(format!(
+        "{} {built}: tools/common/fetch/fetch-yserver.sh makes it again from {}, the commit it pins",
+        image.display(),
+        pinned()
+    )))
 }
 
 /// `test-yserver` or `test-xwindow`, by the command's name.
@@ -1309,6 +1340,14 @@ KeyRelease event, serial 13, synthetic NO, window 0x200001,
         assert!(config.contains("env = DISPLAY,:0\n"));
         assert!(config.contains(&format!("exec-once = /bin/busybox sh /{DESKTOP_PATH}\n")));
         assert!(DESKTOP_SCRIPT.contains("/data/usr/lib64/ld-linux-x86-64.so.2 --library-path"));
+    }
+
+    #[test]
+    fn the_pin_is_read_from_the_fetch_script() {
+        let commit = pinned();
+        assert_eq!(commit.len(), 40, "{commit:?}");
+        assert!(commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(FETCH.contains(r#"echo "$YSERVER_COMMIT" > "$out/yserver.commit""#));
     }
 
     #[test]

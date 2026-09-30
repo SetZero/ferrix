@@ -72,7 +72,10 @@ for after Steam runs.
   (decision 1, §8), branched from the 1.6.0 tag (`0d00e81`) and pinned by
   commit. Ferrix's changes are commits on the fork, starting with
   `YSERVER_ALLOW_NO_INPUT`, and the Wayland backend is added there.
-  `tools/common/fetch/fetch-yserver.sh` fetches the pinned commit and builds it.
+  `tools/common/fetch/fetch-yserver.sh` fetches the pinned commit and builds it,
+  and writes the commit beside the volume's image. `cargo xtask` refuses an
+  image made from any other commit: one made before the pin moved still
+  starts and answers `xdpyinfo`, but takes no input from hyprix.
 * **The Wayland client** is Ferrix's own client runtime,
   `compositor-toolkit`, over `compositor-wire`, `compositor-protocol` and
   `compositor-shm` (decision 2, §8). The fork takes it as a git dependency
