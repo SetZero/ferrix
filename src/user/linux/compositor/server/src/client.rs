@@ -1,15 +1,17 @@
 //! One client's connection: its objects, and what its requests do.
+//!
+//! This file is the connection itself: the [`Client`] that holds every
+//! object a client has made, [`Client::read`], which decodes each request
+//! and routes it to the protocol family its object belongs to, `destroy`,
+//! where every object's end is read, and the registry each client starts
+//! from. What the requests do is in `client/`, one protocol family to a
+//! file -- surfaces in `compositor.rs`, windows in `xdg_shell.rs`, the seat
+//! in `seat.rs` and so on -- each an `impl Client` of its own. A child
+//! module sees its parent's private fields, so none of them is opened up.
 
 use std::collections::BTreeMap;
 
-use compositor_protocol::core::{self, wl_display, wl_output, wl_registry, wl_seat, wl_shm};
-use compositor_protocol::foreign_toplevel::{
-    self, zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
-};
-use compositor_protocol::screencopy::{self, zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1};
-use compositor_protocol::session_lock::{
-    self, ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
-};
+use compositor_protocol::core::{self, wl_display, wl_registry, wl_seat, wl_shm};
 use compositor_wire::{
     Arg, ArgType, Error as WireError, Fd, ObjectError, ObjectId, Objects, Reader, Writer,
 };
@@ -22,12 +24,16 @@ mod control;
 mod desktop;
 mod drag;
 mod event;
+mod foreign;
 mod frames;
 mod hypr;
 mod input;
 mod layer_shell;
+mod lock;
+mod monitors;
 mod outputs;
 mod screen;
+mod screencopy;
 mod seat;
 mod typing;
 mod workspaces;
@@ -38,6 +44,7 @@ pub use capture::{Frame, Source};
 pub use control::{Flavour, Manager};
 pub use drag::Dragging;
 pub use event::Event;
+pub use foreign::{ForeignRequest, ForeignToplevel};
 pub use frames::{Hotkey, Listener};
 pub use hypr::{Export, Shortcut};
 pub use input::{Constraint, Injected};
@@ -50,8 +57,8 @@ pub use workspaces::{Workspace, WorkspaceRequest};
 use crate::globals::Globals;
 use crate::layer::LayerSurface;
 use crate::role::Role;
-use crate::shm::{Buffer, FORMATS, Format, Pool};
-use crate::surface::{Output, Rect, Region, Subsurface, Surface};
+use crate::shm::{Buffer, FORMATS, Pool};
+use crate::surface::{Output, Region, Subsurface, Surface};
 use crate::xdg::{Popup, Positioner, Toplevel, XdgSurface};
 
 /// What ended a connection.
@@ -235,7 +242,7 @@ pub struct Client {
     /// Each screenshot being taken: which screen, and whether the buffer
     /// has been handed over already. A frame may be copied into once, which
     /// is `zwlr_screencopy_frame_v1`'s `already_used`.
-    frames: BTreeMap<ObjectId, Capture>,
+    frames: BTreeMap<ObjectId, screencopy::Capture>,
     /// The `zwp_text_input_v3`s it has made: an application's text fields.
     text_inputs: Vec<ObjectId>,
     /// The `zwp_input_method_v2` it holds, if it is the input method.
@@ -369,69 +376,6 @@ pub struct Client {
     serial: u32,
 }
 
-/// One screenshot being taken.
-#[derive(Clone, Copy, Debug)]
-struct Capture {
-    /// Which screen, by its place in the outputs.
-    output: usize,
-    /// The part of it, or `None` for all of it.
-    region: Option<Rect>,
-    /// Whether the buffer has been handed over.
-    used: bool,
-}
-
-/// The version of `zwlr_foreign_toplevel_handle_v1` a handle is made at.
-///
-/// A handle is the server's object, so its version is not inherited from a
-/// request the way every client-made object's is: the compositor picks it,
-/// and it is the manager's, which is what wlroots does.
-const FOREIGN_TOPLEVEL_VERSION: u32 = 3;
-
-/// What a bar asked the compositor to do to somebody else's window.
-///
-/// `set_rectangle` is left out: it says where the window's icon is on the
-/// bar, for a minimise animation to fly to, and this compositor has neither.
-/// So is `set_minimized`, which Hyprland answers by moving the window to the
-/// special workspace; that is `movetoworkspacesilent special:minimized` and
-/// is the compositor's to decide, so it comes through as the request and the
-/// compositor chooses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ForeignRequest {
-    /// `activate`: focus it.
-    Activate,
-    /// `close`: ask it to close, as `killactive` does.
-    Close,
-    /// `set_fullscreen` or `unset_fullscreen`.
-    Fullscreen(bool),
-    /// `set_maximized` or `unset_maximized`.
-    Maximized(bool),
-    /// `set_minimized` or `unset_minimized`.
-    Minimized(bool),
-}
-
-/// What one window looks like to a bar.
-///
-/// The four states `zwlr_foreign_toplevel_handle_v1.state` has, and the two
-/// names every taskbar draws.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ForeignToplevel {
-    /// The window, as the compositor numbered it.
-    pub window: u64,
-    /// Its title.
-    pub title: String,
-    /// Its application id.
-    pub app_id: String,
-    /// Whether it is the focused window.
-    pub activated: bool,
-    /// Whether it is fullscreen.
-    pub fullscreen: bool,
-    /// Whether it is maximized.
-    pub maximized: bool,
-    /// Whether it is minimized, which here means on a workspace nothing
-    /// shows.
-    pub minimized: bool,
-}
-
 impl Client {
     /// A client that has just connected: `wl_display` is object 1 and nothing
     /// else is live, which is exactly the state libwayland starts a
@@ -534,27 +478,6 @@ impl Client {
             frames_taken: BTreeMap::new(),
             serial: 1,
         }
-    }
-
-    /// Say what the screen is, before any client binds `wl_output`.
-    pub fn set_output(&mut self, output: Output) {
-        self.outputs = vec![output];
-    }
-
-    /// Say what every screen is, in the order the `wl_output` globals were
-    /// added: the first global describes the first monitor and so on, which
-    /// is how a client tells two screens apart.
-    pub fn set_outputs(&mut self, outputs: Vec<Output>) {
-        if !outputs.is_empty() {
-            self.outputs = outputs;
-        }
-    }
-
-    /// The monitor a bound `wl_output` object names, by its place in the
-    /// list [`Client::set_outputs`] was given.
-    #[must_use]
-    pub fn output_of(&self, object: ObjectId) -> Option<usize> {
-        self.output_objects.get(&object).copied()
     }
 
     /// The next serial, which is also this connection's serial for input
@@ -1024,637 +947,6 @@ impl Client {
             role: global.role,
             version,
         });
-    }
-
-    /// `ext_session_lock_manager_v1`: `lock`.
-    ///
-    /// The lock object is made at once and the *compositor* decides when to
-    /// send `locked`: the protocol says that event means every screen is
-    /// covered by a lock surface the client has drawn, and nothing but the
-    /// compositor knows when that is true. Until then the client must
-    /// assume the screen still shows what it did.
-    fn lock_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
-        if opcode != ext_session_lock_manager_v1::request::LOCK {
-            return;
-        }
-        let Some(id) = args.first().and_then(Arg::as_object) else {
-            return;
-        };
-        if !self.make(
-            id,
-            &session_lock::EXT_SESSION_LOCK_V1,
-            version,
-            Role::SessionLock,
-        ) {
-            return;
-        }
-        self.lock = Some(id);
-        self.events.push(Event::SessionLocked { lock: id });
-    }
-
-    /// `ext_session_lock_v1`: `get_lock_surface`, `unlock_and_destroy` and
-    /// `destroy`.
-    ///
-    /// `destroy` on a lock that was never unlocked is `invalid_destroy`, and
-    /// `unlock_and_destroy` on one that was never told it was locked is
-    /// `invalid_unlock`. Both are protocol errors because both leave a
-    /// screen nobody is drawing: the client believes it is done and the
-    /// compositor believes the screen is covered.
-    fn session_lock(&mut self, sender: ObjectId, version: u32, opcode: u16, args: &[Arg<'_>]) {
-        use ext_session_lock_v1::request;
-        match opcode {
-            request::GET_LOCK_SURFACE => {
-                let (Some(id), Some(surface), Some(output)) = (
-                    args.first().and_then(Arg::as_object),
-                    args.get(1).and_then(Arg::as_object),
-                    args.get(2).and_then(Arg::as_object),
-                ) else {
-                    return;
-                };
-                let Some(which) = self.output_objects.get(&output).copied() else {
-                    self.fail(Fatal::WrongInterface {
-                        object: output,
-                        wanted: "wl_output",
-                    });
-                    return;
-                };
-                if self.lock_surfaces.values().any(|held| *held == which) {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: ext_session_lock_v1::error::DUPLICATE_OUTPUT,
-                        text: "that screen already has a lock surface".to_owned(),
-                    });
-                    return;
-                }
-                if !self.surfaces.contains_key(&surface) {
-                    self.fail(Fatal::WrongInterface {
-                        object: surface,
-                        wanted: "wl_surface",
-                    });
-                    return;
-                }
-                if !self.make(
-                    id,
-                    &session_lock::EXT_SESSION_LOCK_SURFACE_V1,
-                    version,
-                    Role::SessionLockSurface,
-                ) {
-                    return;
-                }
-                let _ = self.lock_surfaces.insert(id, which);
-                self.events.push(Event::SessionLockSurfaceMade {
-                    lock_surface: id,
-                    surface,
-                    output: which,
-                });
-            }
-            request::UNLOCK_AND_DESTROY => {
-                self.lock = None;
-                self.lock_surfaces.clear();
-                self.events.push(Event::SessionUnlocked { asked: true });
-            }
-            // Destroying a lock that is still held is the error the
-            // protocol names, because it would leave the screen locked with
-            // nothing to draw on it and no way back.
-            request::DESTROY if self.lock == Some(sender) => {
-                self.fail(Fatal::Interface {
-                    object: sender,
-                    code: ext_session_lock_v1::error::INVALID_DESTROY,
-                    text: "the lock was destroyed without being unlocked".to_owned(),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    /// `ext_session_lock_surface_v1`: `ack_configure` and `destroy`.
-    fn lock_surface(&mut self, sender: ObjectId, opcode: u16, _args: &[Arg<'_>]) {
-        if opcode == ext_session_lock_surface_v1::request::DESTROY {
-            let _ = self.lock_surfaces.remove(&sender);
-        }
-    }
-
-    /// Tell a lock surface how large the screen it covers is.
-    ///
-    /// The client may not commit a buffer before it has acknowledged one of
-    /// these, and the buffer it commits must be exactly this size.
-    pub fn configure_lock_surface(&mut self, lock_surface: ObjectId, size: (u32, u32)) {
-        let serial = self.serial;
-        self.serial = self.serial.wrapping_add(1);
-        let (width, height) = size;
-        let _ = self.out.write(
-            lock_surface,
-            ext_session_lock_surface_v1::event::CONFIGURE,
-            &[ArgType::Uint, ArgType::Uint, ArgType::Uint],
-            &[Arg::Uint(serial), Arg::Uint(width), Arg::Uint(height)],
-        );
-    }
-
-    /// Tell the client the screen is covered by what it drew.
-    ///
-    /// Sent when every screen has a lock surface with a buffer on it, which
-    /// is the protocol's own condition and the compositor's to judge.
-    pub fn session_is_locked(&mut self) {
-        let Some(lock) = self.lock else {
-            return;
-        };
-        let _ = self
-            .out
-            .write(lock, ext_session_lock_v1::event::LOCKED, &[], &[]);
-    }
-
-    /// Tell the client it will never be told the screen is covered.
-    ///
-    /// `finished` is what a compositor sends when it refuses the lock -- a
-    /// second program asking while one is held -- and the client is then to
-    /// destroy the object and stop.
-    pub fn session_lock_refused(&mut self, lock: ObjectId) {
-        let _ = self
-            .out
-            .write(lock, ext_session_lock_v1::event::FINISHED, &[], &[]);
-    }
-
-    /// Whether this client holds the lock.
-    #[must_use]
-    pub const fn holds_lock(&self) -> bool {
-        self.lock.is_some()
-    }
-
-    /// The lock surface for `output`, if this client has made one.
-    #[must_use]
-    pub fn lock_surface_on(&self, output: usize) -> Option<ObjectId> {
-        self.lock_surfaces
-            .iter()
-            .find(|(_, which)| **which == output)
-            .map(|(id, _)| *id)
-    }
-
-    /// `zwlr_screencopy_manager_v1`: `capture_output` and
-    /// `capture_output_region`.
-    ///
-    /// The frame object is the client's id, made here; which screen it names
-    /// is worked out from the `wl_output` it was given, since a screenshot
-    /// program binds every output and asks for the one it wants. The size
-    /// and format it must make a buffer of are the compositor's to say, so
-    /// this only records the request and reports it.
-    ///
-    /// `overlay_cursor` is read and ignored: there is no cursor drawn into
-    /// the frame to leave out.
-    fn screencopy_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
-        let region = match opcode {
-            zwlr_screencopy_manager_v1::request::CAPTURE_OUTPUT => None,
-            zwlr_screencopy_manager_v1::request::CAPTURE_OUTPUT_REGION => {
-                let value = |at: usize| args.get(at).and_then(Arg::as_int).unwrap_or(0);
-                Some(Rect {
-                    x: value(3),
-                    y: value(4),
-                    width: value(5),
-                    height: value(6),
-                })
-            }
-            _ => return,
-        };
-        let (Some(frame), Some(output)) = (
-            args.first().and_then(Arg::as_object),
-            args.get(2).and_then(Arg::as_object),
-        ) else {
-            return;
-        };
-        let Some(which) = self.output_objects.get(&output).copied() else {
-            // A `wl_output` this client never bound: the frame is made and
-            // failed at once, which is what the protocol has for a capture
-            // that cannot be done.
-            if self.make(
-                frame,
-                &screencopy::ZWLR_SCREENCOPY_FRAME_V1,
-                version,
-                Role::ScreencopyFrame,
-            ) {
-                self.screencopy_failed(frame);
-            }
-            return;
-        };
-        if !self.make(
-            frame,
-            &screencopy::ZWLR_SCREENCOPY_FRAME_V1,
-            version,
-            Role::ScreencopyFrame,
-        ) {
-            return;
-        }
-        let _ = self.frames.insert(
-            frame,
-            Capture {
-                output: which,
-                region,
-                used: false,
-            },
-        );
-        self.events.push(Event::ScreencopyWanted {
-            frame,
-            output: which,
-            region,
-        });
-    }
-
-    /// `zwlr_screencopy_frame_v1`: `copy`, `copy_with_damage` and `destroy`.
-    ///
-    /// A frame may be copied into once. A second `copy` is
-    /// `already_used`, which is a protocol error and so the end of the
-    /// connection: the client has lost track of an object it owns.
-    fn screencopy_frame(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        use zwlr_screencopy_frame_v1::request;
-        if opcode == request::DESTROY {
-            let _ = self.frames.remove(&sender);
-            return;
-        }
-        let with_damage = match opcode {
-            request::COPY => false,
-            request::COPY_WITH_DAMAGE => true,
-            _ => return,
-        };
-        let Some(buffer) = args.first().and_then(Arg::as_object) else {
-            return;
-        };
-        let Some(capture) = self.frames.get_mut(&sender) else {
-            return;
-        };
-        if capture.used {
-            self.fail(Fatal::Interface {
-                object: sender,
-                code: zwlr_screencopy_frame_v1::error::ALREADY_USED,
-                text: "the frame has already been used to copy".to_owned(),
-            });
-            return;
-        }
-        capture.used = true;
-        let (output, region) = (capture.output, capture.region);
-        self.events.push(Event::ScreencopyInto {
-            frame: sender,
-            buffer,
-            output,
-            region,
-            with_damage,
-        });
-    }
-
-    /// `zwlr_foreign_toplevel_manager_v1`: `stop`.
-    ///
-    /// `stop` is a farewell, not a destroy: the protocol has the compositor
-    /// answer with `finished`, after which neither side uses the manager
-    /// again. The handles it made stay valid until each is destroyed, which
-    /// is why they are not taken away here.
-    fn toplevel_manager(&mut self, sender: ObjectId, opcode: u16) {
-        if opcode != zwlr_foreign_toplevel_manager_v1::request::STOP {
-            return;
-        }
-        if let Some(at) = self.managers.iter().position(|held| *held == sender) {
-            let _ = self.managers.remove(at);
-        }
-        let _ = self.out.write(
-            sender,
-            zwlr_foreign_toplevel_manager_v1::event::FINISHED,
-            &[],
-            &[],
-        );
-    }
-
-    /// `zwlr_foreign_toplevel_handle_v1`: what a bar does with a window.
-    ///
-    /// Every one of them is the compositor's to carry out, so each becomes
-    /// an event. `set_rectangle` is accepted and dropped: it says where the
-    /// window's icon is on the bar so a minimise can animate towards it, and
-    /// there is no such animation here.
-    fn toplevel_handle(&mut self, sender: ObjectId, opcode: u16) {
-        use zwlr_foreign_toplevel_handle_v1::request;
-        if opcode == request::DESTROY {
-            self.forget_handle(sender);
-            return;
-        }
-        let what = match opcode {
-            request::ACTIVATE => ForeignRequest::Activate,
-            request::CLOSE => ForeignRequest::Close,
-            request::SET_FULLSCREEN => ForeignRequest::Fullscreen(true),
-            request::UNSET_FULLSCREEN => ForeignRequest::Fullscreen(false),
-            request::SET_MAXIMIZED => ForeignRequest::Maximized(true),
-            request::UNSET_MAXIMIZED => ForeignRequest::Maximized(false),
-            request::SET_MINIMIZED => ForeignRequest::Minimized(true),
-            request::UNSET_MINIMIZED => ForeignRequest::Minimized(false),
-            _ => return,
-        };
-        let window = self
-            .handles
-            .iter()
-            .find(|(_, handle)| **handle == sender)
-            .map(|(window, _)| *window);
-        if let Some(window) = window {
-            self.events
-                .push(Event::ForeignToplevelAsked { window, what });
-        }
-    }
-
-    /// Forget the handle `id`, whichever window it named.
-    fn forget_handle(&mut self, id: ObjectId) {
-        let window = self
-            .handles
-            .iter()
-            .find(|(_, handle)| **handle == id)
-            .map(|(window, _)| *window);
-        if let Some(window) = window {
-            let _ = self.handles.remove(&window);
-            let _ = self.told.remove(&window);
-        }
-    }
-
-    /// Tell a fresh `wl_output` what the screen is.
-    ///
-    /// Every client reads these: a toolkit with no mode has no size to scale
-    /// against, and foot reports `(null): 0x0+0x0@0Hz` for an output that
-    /// sent none. The `done` at the end is what says the description is
-    /// whole, and a client waits for it.
-    fn describe_output(&mut self, id: ObjectId, version: u32, which: usize) {
-        let Some(mode) = self.outputs.get(which).cloned() else {
-            return;
-        };
-        let _ = self.out.write(
-            id,
-            wl_output::event::GEOMETRY,
-            &[
-                ArgType::Int,
-                ArgType::Int,
-                ArgType::Int,
-                ArgType::Int,
-                ArgType::Int,
-                ArgType::Str { nullable: false },
-                ArgType::Str { nullable: false },
-                ArgType::Int,
-            ],
-            &[
-                Arg::Int(mode.x),
-                Arg::Int(mode.y),
-                // A size in millimetres. Nothing here has a physical screen,
-                // and a zero is what every headless compositor sends: a
-                // client reads it as "unknown" and uses the scale instead.
-                Arg::Int(0),
-                Arg::Int(0),
-                Arg::Int(wl_output::subpixel::UNKNOWN.cast_signed()),
-                Arg::Str(Some("Ferrix")),
-                Arg::Str(Some("hyprix")),
-                // How the monitor is turned, which Hyprland sends as its
-                // `m_transform`: the transform that makes the buffer the
-                // picture a person reads.
-                Arg::Int(mode.transform),
-            ],
-        );
-        let _ = self.out.write(
-            id,
-            wl_output::event::MODE,
-            &[ArgType::Uint, ArgType::Int, ArgType::Int, ArgType::Int],
-            &[
-                Arg::Uint(wl_output::mode::CURRENT | wl_output::mode::PREFERRED),
-                Arg::Int(mode.width),
-                Arg::Int(mode.height),
-                // Millihertz, as the protocol counts it.
-                Arg::Int(mode.refresh),
-            ],
-        );
-        if version >= 2 {
-            let _ = self.out.write(
-                id,
-                wl_output::event::SCALE,
-                &[ArgType::Int],
-                &[Arg::Int(mode.scale)],
-            );
-        }
-        if version >= 4 {
-            for (opcode, text) in [
-                (wl_output::event::NAME, mode.name.as_str()),
-                (wl_output::event::DESCRIPTION, mode.description.as_str()),
-            ] {
-                let _ = self.out.write(
-                    id,
-                    opcode,
-                    &[ArgType::Str { nullable: false }],
-                    &[Arg::Str(Some(text))],
-                );
-            }
-        }
-        if version >= 2 {
-            let _ = self.out.write(id, wl_output::event::DONE, &[], &[]);
-        }
-    }
-
-    /// Tell a screenshot program what buffer to make: the format, the size
-    /// and the stride of the screen it asked for.
-    ///
-    /// `buffer_done` follows at version 3, which is what says the list of
-    /// formats is complete; at 1 and 2 there is no such event and the client
-    /// takes the single `buffer` as the whole answer.
-    pub fn screencopy_offer(&mut self, frame: ObjectId, format: Format, size: (u32, u32)) {
-        let version = self.objects.get(frame).map_or(1, |entry| entry.version);
-        let (width, height) = size;
-        let _ = self.out.write(
-            frame,
-            zwlr_screencopy_frame_v1::event::BUFFER,
-            &[ArgType::Uint, ArgType::Uint, ArgType::Uint, ArgType::Uint],
-            &[
-                Arg::Uint(format.to_wl_shm()),
-                Arg::Uint(width),
-                Arg::Uint(height),
-                Arg::Uint(width.saturating_mul(4)),
-            ],
-        );
-        if version >= 3 {
-            let _ = self.out.write(
-                frame,
-                zwlr_screencopy_frame_v1::event::BUFFER_DONE,
-                &[],
-                &[],
-            );
-        }
-    }
-
-    /// The screenshot is in the client's buffer: `flags`, then the damage it
-    /// asked for, then `ready` at `when`.
-    ///
-    /// `when` is the presentation time as `clock_gettime(CLOCK_MONOTONIC)`
-    /// gives it, split the way the protocol splits it: the seconds in two
-    /// halves so they do not overflow a `uint` until the machine has been up
-    /// for longer than it will be.
-    pub fn screencopy_ready(&mut self, frame: ObjectId, when: (u64, u32), damaged: Option<Rect>) {
-        let version = self.objects.get(frame).map_or(1, |entry| entry.version);
-        // No flags: the frame is written top row first, so `y_invert` is not
-        // set, which is what a client reads to know which way up it is.
-        let _ = self.out.write(
-            frame,
-            zwlr_screencopy_frame_v1::event::FLAGS,
-            &[ArgType::Uint],
-            &[Arg::Uint(0)],
-        );
-        if version >= 2
-            && let Some(rect) = damaged
-        {
-            let at = |value: i32| Arg::Uint(u32::try_from(value).unwrap_or(0));
-            let _ = self.out.write(
-                frame,
-                zwlr_screencopy_frame_v1::event::DAMAGE,
-                &[ArgType::Uint, ArgType::Uint, ArgType::Uint, ArgType::Uint],
-                &[at(rect.x), at(rect.y), at(rect.width), at(rect.height)],
-            );
-        }
-        let (seconds, nanos) = when;
-        let _ = self.out.write(
-            frame,
-            zwlr_screencopy_frame_v1::event::READY,
-            &[ArgType::Uint, ArgType::Uint, ArgType::Uint],
-            &[
-                Arg::Uint(u32::try_from(seconds >> 32).unwrap_or(0)),
-                Arg::Uint(u32::try_from(seconds & 0xFFFF_FFFF).unwrap_or(0)),
-                Arg::Uint(nanos),
-            ],
-        );
-    }
-
-    /// The screenshot could not be taken.
-    ///
-    /// The frame is dead from here: the protocol says the client must
-    /// destroy it and ask again, which is what `grim` does.
-    pub fn screencopy_failed(&mut self, frame: ObjectId) {
-        let _ = self
-            .out
-            .write(frame, zwlr_screencopy_frame_v1::event::FAILED, &[], &[]);
-    }
-
-    /// Whether this client is a bar: it bound the toplevel manager and has
-    /// not stopped it.
-    #[must_use]
-    pub fn watches_toplevels(&self) -> bool {
-        !self.managers.is_empty()
-    }
-
-    /// Tell this client what every window is now, making and taking away
-    /// handles as the list changes.
-    ///
-    /// The compositor calls this with the whole list each pass rather than
-    /// with what changed, because the compositor is where the windows are
-    /// and this is where it is known what each client was last told. A
-    /// window whose fields are what this client already has is not written
-    /// to at all: a bar redrawing on every frame of an animation because the
-    /// compositor said `done` is a bar that burns a core.
-    pub fn show_toplevels(&mut self, windows: &[ForeignToplevel]) {
-        if self.managers.is_empty() {
-            return;
-        }
-        // Gone first, so that a bar is never told about more windows than
-        // there are.
-        let living: Vec<u64> = windows.iter().map(|window| window.window).collect();
-        let closed: Vec<u64> = self
-            .handles
-            .keys()
-            .copied()
-            .filter(|window| !living.contains(window))
-            .collect();
-        for window in closed {
-            if let Some(handle) = self.handles.remove(&window) {
-                let _ = self.out.write(
-                    handle,
-                    zwlr_foreign_toplevel_handle_v1::event::CLOSED,
-                    &[],
-                    &[],
-                );
-                // The handle is the client's to destroy, and it will: until
-                // then it is live and may still be sent requests.
-                let _ = self.told.remove(&window);
-            }
-        }
-        for window in windows {
-            self.show_toplevel(window);
-        }
-    }
-
-    /// One window, made or brought up to date.
-    fn show_toplevel(&mut self, window: &ForeignToplevel) {
-        let fresh = !self.handles.contains_key(&window.window);
-        if fresh {
-            let Ok(handle) = self.objects.create(
-                &foreign_toplevel::ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1,
-                FOREIGN_TOPLEVEL_VERSION,
-                Role::ForeignToplevel,
-            ) else {
-                return;
-            };
-            let _ = self.handles.insert(window.window, handle);
-            let managers = self.managers.clone();
-            for manager in managers {
-                let _ = self.out.write(
-                    manager,
-                    zwlr_foreign_toplevel_manager_v1::event::TOPLEVEL,
-                    &[ArgType::NewId],
-                    &[Arg::NewId(handle)],
-                );
-            }
-        } else if self.told.get(&window.window) == Some(window) {
-            return;
-        }
-        let Some(handle) = self.handles.get(&window.window).copied() else {
-            return;
-        };
-        let before = self.told.get(&window.window).cloned().unwrap_or_default();
-        if fresh || before.title != window.title {
-            let _ = self.out.write(
-                handle,
-                zwlr_foreign_toplevel_handle_v1::event::TITLE,
-                &[ArgType::Str { nullable: false }],
-                &[Arg::Str(Some(&window.title))],
-            );
-        }
-        if fresh || before.app_id != window.app_id {
-            let _ = self.out.write(
-                handle,
-                zwlr_foreign_toplevel_handle_v1::event::APP_ID,
-                &[ArgType::Str { nullable: false }],
-                &[Arg::Str(Some(&window.app_id))],
-            );
-        }
-        // The states go as one array, which is what the protocol says: a
-        // `state` event replaces the set rather than adding to it.
-        let mut states = Vec::new();
-        for (on, value) in [
-            (
-                window.maximized,
-                zwlr_foreign_toplevel_handle_v1::state::MAXIMIZED,
-            ),
-            (
-                window.minimized,
-                zwlr_foreign_toplevel_handle_v1::state::MINIMIZED,
-            ),
-            (
-                window.activated,
-                zwlr_foreign_toplevel_handle_v1::state::ACTIVATED,
-            ),
-            (
-                window.fullscreen,
-                zwlr_foreign_toplevel_handle_v1::state::FULLSCREEN,
-            ),
-        ] {
-            if on {
-                states.extend_from_slice(&value.to_ne_bytes());
-            }
-        }
-        let _ = self.out.write(
-            handle,
-            zwlr_foreign_toplevel_handle_v1::event::STATE,
-            &[ArgType::Array],
-            &[Arg::Array(&states)],
-        );
-        // Everything above is one atomic change, and `done` is what says so.
-        let _ = self.out.write(
-            handle,
-            zwlr_foreign_toplevel_handle_v1::event::DONE,
-            &[],
-            &[],
-        );
-        let _ = self.told.insert(window.window, window.clone());
     }
 
     /// Announce every global to a fresh registry.
