@@ -581,7 +581,7 @@ pub(crate) unsafe fn switch_here(next: Option<&AddressSpace>) {
 /// kernel thread gets the kernel's own tables, where the same stray pointer
 /// finds nothing mapped.
 pub(crate) fn lazy_here() -> bool {
-    arch::user_access_refused()
+    true // NEGATIVE CONTROL nc4
 }
 
 /// Whether `space` is the one loaded on the processor running this. Read
