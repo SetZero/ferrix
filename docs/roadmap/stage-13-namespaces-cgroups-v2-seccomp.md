@@ -185,6 +185,14 @@ at every site that reports one, `si_uid` among them. The `userns` boot line
 and the consultant's review are owed (`docs/NAMESPACES.md` §12 has what is
 and is not built). Next is NP, then N5.
 
+**Seccomp (2026-09-30, built on `stage13-seccomp`, not landed):** `seccomp(2)`
+and `prctl(PR_SET_SECCOMP)`, strict mode and classic-BPF filters with Linux's
+validation, the action precedence and errno, `TRAP` and kill semantics, fork
+and `execve` inheritance, `no_new_privs` inherited across fork, and the filter
+charged to its job; `docs/SECCOMP.md`. The BPF interpreter is
+`src/lib/kernel/seccomp` with eight host tests; the `seccomp` boot line
+(FX-0889) and three negative controls prove it on all three architectures.
+
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,
 `cpu.max` and `io`. `docs/CGROUPS.md` §7.1 says where each
