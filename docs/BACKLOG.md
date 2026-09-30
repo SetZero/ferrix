@@ -273,7 +273,14 @@ may one day need the relaxation.
 | Two boot controls of the small namespaces show an older check's message, not their own (`nameable` letting everyone in fires the `userns` line first), one control's message only roughly matches its rule, and the namespace files' `kmem` fill has no control (the detached mount's charge bounds it). The pidfd `setns` all-or-none property stands on the code's shape | open | 13 |
 | The composite `CLONE_NEWUSER\|CLONE_NEWIPC\|CLONE_NEWCGROUP` has no end-to-end check; `test-container` (`src/tests/container`) is the place, once pid namespaces land | open | 13 |
 | The namespaces' numbers: user from 0xF800_0000, UTS, IPC and cgroup from 0xF900_0000, mount from 0xF000_0000, where Linux draws from one counter. Nothing compares across kinds; a program that does sees them apart | open | 13 |
-| Pid, network, time namespaces and the cgroup controllers (M2's reclaim, `cgroup.freeze`, `cpu.max`, `io`): their own differences are added here when those landings report | open | 13 |
+| **A network namespace belongs to a process, not a thread**: `CLONE_NEWNET` with `CLONE_THREAD`, and `unshare` from a multithreaded process, are `EINVAL` (the latter by one line, not boot-checked). Close with the other namespaces' move onto `Thread` | open | 13 |
+| A moved network interface gets the next free index, and a clashing name is `EEXIST`; Linux keeps the index when free and renames to `dev%d`. Coming home to the first namespace renames to `devN` on a clash | open | 13 |
+| Network namespaces: reassembly is capped at 32 KiB outside the first namespace; the ceilings (64 interfaces, 256 addresses, 1024 routes) also bind the first one; only `veth` exists (`dummy`, `bridge`, `macvlan`: `EOPNOTSUPP`) with a fixed MTU of 1500 and no notifications; `RTM_NEWNSID`, `RTM_GETNSID`, `IFLA_LINK_NETNSID` and `IFLA_TARGET_NETNSID` are not built; there is no `/proc/<pid>/net` | open | 13 |
+| Nothing forwards or translates between two interfaces of one network namespace: the stack is a host, so a bridge or NAT between containers needs IP forwarding, which it has none of | open | 13 |
+| `setns(CLONE_NEWNET)` is not wired: `net/netns_file.rs` is the seam, to become the network arm of the namespace files in `fs/nsfs.rs` | open | 13 |
+| Not boot-checked for network namespaces: a native child inheriting its creator's, the `/sys/class/net` listing per reader, IPv6 over a veth pair, ARP growth past the table limit, `unshare` from several threads | open | 13 |
+| Raw and packet sockets are reachable by a user who owns a network namespace (`CAP_NET_RAW` over an owned namespace is honoured): safe Rust with no ring-buffer interface, recorded as a residual in the vulnerability analysis | open, accepted | 13 |
+| Pid, time namespaces and the cgroup controllers (M2's reclaim, `cgroup.freeze`, `cpu.max`, `io`): their own differences are added here when those landings report | open | 13 |
 
 ## Red on `main`
 
