@@ -105,6 +105,7 @@ mod net;
 mod noise;
 mod omz;
 mod orphans;
+mod parallel;
 mod paths;
 mod pe;
 mod ports;
@@ -505,6 +506,12 @@ fn run() -> Result<()> {
         println!("{USAGE}");
         return Err(Error::new("no command given"));
     };
+
+    // `--arch all` of a command whose architectures are independent: one
+    // child an architecture, all at once (`crate::parallel`).
+    if parallel::wanted(command, &args) {
+        return parallel::run(command, &args);
+    }
 
     match command {
         "build" => build(&args),

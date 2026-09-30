@@ -297,7 +297,7 @@ fn restart_one(
     if failures.is_empty()
         && let Some(checker) = checker
     {
-        let (root, _) = btrfs_disk::ensure_root(false)?;
+        let root = btrfs_disk::test_root_path(arch);
         if let Err(error) = checker.run(&root, arch) {
             failures.push(error.to_string());
         }

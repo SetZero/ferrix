@@ -2424,7 +2424,11 @@ fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()
         println!("  {arch}: / in memory, as --tmpfs-root asks; the btrfs root is left off");
         return Ok(());
     }
-    let (disk, made) = btrfs_disk::ensure_root(args.reset_root || test)?;
+    let (disk, made) = if test {
+        (btrfs_disk::ensure_test_root(arch)?, true)
+    } else {
+        btrfs_disk::ensure_root(args.reset_root)?
+    };
     println!(
         "  {arch}: btrfs root {}, {}",
         display(&disk),
@@ -2459,7 +2463,7 @@ fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()
 /// default and is what makes the guest's flush mean something: the guest's
 /// flush becomes a host `fsync`, which is the ordering the commit rests on.
 fn attach_btrfs_write_disk(command: &mut Command, arch: Arch) -> Result<()> {
-    let disk = btrfs_disk::ensure_blank()?;
+    let disk = btrfs_disk::ensure_blank(arch)?;
     println!(
         "  {arch}: writable btrfs disk {} as virtio-blk-pci: {}",
         display(&disk),

@@ -650,7 +650,7 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
     let options = command_line();
     let image = fat::write_image_with(arch, &loader, &kernel, &archive, Some(&options))?;
 
-    let volume = btrfs_disk::blank_copy(VOLUME)?;
+    let volume = btrfs_disk::blank_copy(arch, VOLUME)?;
     let mut with_volume = args.clone();
     with_volume.data_image = Some(volume.clone());
     with_volume.data_image_kept = true;
@@ -986,7 +986,7 @@ fn checks_skipped(
 ) -> Result<()> {
     let options = format!("{} ferrix.checks=skip\n", command_line().trim_end());
     let image = fat::write_image_with(arch, loader, kernel, archive, Some(&options))?;
-    let volume = btrfs_disk::blank_copy(VOLUME)?;
+    let volume = btrfs_disk::blank_copy(arch, VOLUME)?;
     let mut with_volume = args.clone();
     with_volume.data_image = Some(volume);
     with_volume.data_image_kept = true;

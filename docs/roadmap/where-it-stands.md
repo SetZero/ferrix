@@ -30,15 +30,28 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 * **Namespaces**: N1, per-mount flags (2026-09-28), N2, binds and
   detach, and N3, mount namespaces with `pivot_root` and `openat2`
   (2026-09-30), are in, each reviewed by the certification consultant:
-  Debian's bubblewrap runs as root (`cargo xtask test-bwrap`). N4, user
-  namespaces, is next (`docs/NAMESPACES.md` §12).
+  Debian's bubblewrap runs as root (`cargo xtask test-bwrap`). Every
+  namespace stands on an empty bottom mount, as a booted Linux machine's
+  `/` does, so `pivot_root` works with `/` in memory too, and Steam's own
+  requirements check exits 0 as root in `test-steam-bootstrap`. N4, user
+  namespaces, and the rest of stage 13 are os-7c's, which the customer
+  asked to take the stage to done (`docs/NAMESPACES.md` §12).
 * **An installer MVP** (2026-09-28, `docs/INSTALLER.md` §11):
   `ferrix-install` partitions a VM's disk and installs the system, and
   `cargo xtask test-install` boots the result through OVMF. The customer
   approved the full design the same day.
 * **Test run time**, cut 2 (2026-09-28, `docs/TEST-TIME.md`): a finished
   guest is stopped rather than given its grace, and `test-compositor --arch
-  x86_64` went from 900 s to 512-616 s.
+  x86_64` went from 900 s to 512-616 s. Cut 3 (2026-09-30): `--arch all` of
+  `test-boot`, `test-init` and `test-audio` runs the architectures at once,
+  `test-boot` from 136-139 s to 46 s and `test-init` from 171-182 s to
+  72-86 s on a loaded host; `test-compositor` stays in turn, since its
+  x86-64 frame budget failed when three suites emulated side by side.
+* **The one red gate is fixed** (2026-09-30): `test-compositor`'s submap
+  boot left a window's slide undrawn about one run in two, because hyprix's
+  loop owed no frame after one that started an animation. A compositor boot
+  whose kernel panics now also asks QEMU where every processor is
+  (`panic-registers.txt`), for FX-0001, seen twice there.
 * **Sound** is done: alsa-lib (U1) and `pulsed`, a PulseAudio-protocol
   server Chrome plays through on the desktop (U2a to U2d, 2026-09-27).
 * **Windows**: the desktop runs under WHPX with the TSC as its clock
@@ -46,8 +59,12 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 * **The tree moved** into `src/`, `tools/` and `docs/` (2026-09-29,
   `docs/LAYOUT.md`).
 
-**Red on `main`** (`docs/BACKLOG.md`, *Red on `main`*): `test-compositor
---arch x86_64` under KVM fails its submap boot, unowned.
+**Red on `main`** (`docs/BACKLOG.md`, *Red on `main`*): nothing open; the
+submap boot's row is done. Four flake rows gained sightings or were filed
+on 2026-09-30, each with its log: FX-0001 (twice, at the submap boot's
+`L`), the compositor's frame budget under load (x86-64 and ARMv7-A), the
+audit self-check's FX-0309, and the semaphore check's "a waiter returned
+without waiting".
 
 **Parked on branches**, pushed, each with a `docs/BACKLOG.md` row:
 
@@ -59,10 +76,10 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 | `hyprlock` | hyprlock over `authd` (AUTH P1.5) | rebase and its boots |
 
 **Next**, in the order the customer last gave: test and gate run time
-(the rest of cut 2, then architectures in parallel and KVM by default on
-x86-64); Steam, retiring its workarounds, with namespaces N3 to N6 under
-them; W-8's 21b, 21c and file 24; the desktop's hyprlock P1.5 and fuzzel's
-second-press toggle.
+(the rest of cut 2, then KVM by default on x86-64 where the host has it,
+`docs/TEST-TIME.md` *Next*); Steam, retiring its workarounds, with stage
+13's namespaces and seccomp under them (os-7c); W-8's 21b, 21c and file 24;
+the desktop's hyprlock P1.5 and fuzzel's second-press toggle.
 
 **Waiting on the customer** (`docs/BACKLOG.md`, *Waiting on the customer*):
 F-43 (W^X for programs, or a narrower claim), the Common Criteria version

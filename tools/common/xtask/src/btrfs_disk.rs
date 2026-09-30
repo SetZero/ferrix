@@ -25,7 +25,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::paths;
+use crate::paths::{self, Arch};
 use crate::{Error, Result};
 
 /// The packed fixture, as `src/lib/fs/btrfs`'s tests read it.
@@ -42,7 +42,8 @@ const ROOT: &[u8] = include_bytes!("../../../../src/lib/fs/btrfs/testdata/root.i
 /// keeps two copies of its metadata.
 const ROOT_SIZE: u64 = 1024 * 1024 * 1024;
 
-/// The writable image's name under `build/`.
+/// The writable image's name under `build/<arch>/`: one an architecture, so
+/// that the architectures' boots can run at once (`crate::parallel`).
 const BLANK_FILE_NAME: &str = "btrfs-write.img";
 
 /// Bytes in a packed block, and in the image's blocks.
@@ -79,7 +80,8 @@ pub(crate) fn ensure() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// A fresh copy of the blank fixture, for stage 12's check to write on.
+/// A fresh copy of the blank fixture, for stage 12's check on `arch` to write
+/// on.
 ///
 /// Rewritten for every boot, never reused: the boot before wrote on it, and
 /// a check that starts from a volume another run left behind is checking
@@ -90,8 +92,8 @@ pub(crate) fn ensure() -> Result<PathBuf> {
 /// # Errors
 ///
 /// The fixture being malformed, or the file not writable.
-pub(crate) fn ensure_blank() -> Result<PathBuf> {
-    let directory = paths::workspace_root().join("build");
+pub(crate) fn ensure_blank(arch: Arch) -> Result<PathBuf> {
+    let directory = paths::build_dir(arch);
     let path = directory.join(BLANK_FILE_NAME);
     if KEEP_BLANK.load(Ordering::Relaxed) && path.is_file() {
         return Ok(path);
@@ -107,15 +109,15 @@ pub(crate) fn ensure_blank() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// A fresh copy of the blank fixture at `build/<name>`, apart from the one
+/// A fresh copy of the blank fixture at `build/<arch>/<name>`, apart from the one
 /// [`ensure_blank`] attaches as `vdc`: a volume for a test to attach at
 /// `/data` and read back on a later boot (`init_file`'s `reboot(2)` check).
 ///
 /// # Errors
 ///
 /// The fixture being malformed, or the file not writable.
-pub(crate) fn blank_copy(name: &str) -> Result<PathBuf> {
-    let directory = paths::workspace_root().join("build");
+pub(crate) fn blank_copy(arch: Arch, name: &str) -> Result<PathBuf> {
+    let directory = paths::build_dir(arch);
     std::fs::create_dir_all(&directory)?;
     let path = directory.join(name);
     write_packed(&path, BLANK)
@@ -151,6 +153,39 @@ pub(crate) fn ensure_root(reset: bool) -> Result<(PathBuf, bool)> {
     Ok((path, true))
 }
 
+/// The root image a test boots: `build/<arch>/root-test.img`, made fresh from
+/// the `root` fixture for every boot, apart from `run`'s, which keeps what a
+/// person put on it. One an architecture, so that the architectures' tests
+/// can run at once.
+///
+/// # Errors
+///
+/// The file not writable.
+pub(crate) fn ensure_test_root(arch: Arch) -> Result<PathBuf> {
+    let directory = paths::build_dir(arch);
+    std::fs::create_dir_all(&directory)?;
+    let path = test_root_path(arch);
+    let partial = directory.join(format!(
+        "{TEST_ROOT_FILE_NAME}.{}.partial",
+        std::process::id()
+    ));
+    write_packed_sized(&partial, ROOT, ROOT_SIZE).map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        Error::new(format!("writing {}: {error}", partial.display()))
+    })?;
+    std::fs::rename(&partial, &path)
+        .map_err(|error| Error::new(format!("renaming to {}: {error}", path.display())))?;
+    Ok(path)
+}
+
+/// Where [`ensure_test_root`] puts `arch`'s, without writing it.
+pub(crate) fn test_root_path(arch: Arch) -> PathBuf {
+    paths::build_dir(arch).join(TEST_ROOT_FILE_NAME)
+}
+
+/// The test root's name under `build/<arch>/`.
+const TEST_ROOT_FILE_NAME: &str = "root-test.img";
+
 /// Whether the next boots attach the writable image as the last one left it.
 static KEEP_BLANK: AtomicBool = AtomicBool::new(false);
 
@@ -160,9 +195,9 @@ pub(crate) fn keep_blank(keep: bool) {
     KEEP_BLANK.store(keep, Ordering::Relaxed);
 }
 
-/// Where the writable image is, without writing it.
-pub(crate) fn blank_path() -> PathBuf {
-    paths::workspace_root().join("build").join(BLANK_FILE_NAME)
+/// Where `arch`'s writable image is, without writing it.
+pub(crate) fn blank_path(arch: Arch) -> PathBuf {
+    paths::build_dir(arch).join(BLANK_FILE_NAME)
 }
 
 /// The writable image, in one line, for a command that attaches it.

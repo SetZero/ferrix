@@ -49,7 +49,7 @@ pub(crate) fn test_btrfs(
                  for btrfs check to judge"
             )));
         }
-        checker.run(&btrfs_disk::blank_path(), arch)?;
+        checker.run(&btrfs_disk::blank_path(arch), arch)?;
     }
     Ok(())
 }

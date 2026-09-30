@@ -2,8 +2,9 @@
 
 The customer's priority one from 2026-09-27: *"we seriously need to bring down
 test run time."* This is phase 1's record -- where a landing gate's time goes --
-and the cuts it points to. Cut since: the Arm firmware waits (item 4) and
-the waits on finished guests (item 3, "Cut 2"). Owner: ferrix-90.
+and the cuts it points to. Cut since: the Arm firmware waits (item 4),
+the waits on finished guests (item 3, "Cut 2") and the architectures one
+after another (item 2, "Cut 3"). Owner: os-98 (was ferrix-90).
 
 Targets to argue with (the coordinator's): a standard item gate within 5 min
 on a quiet host, each desktop boot within 60 s, CI green within an hour. The
@@ -257,11 +258,61 @@ gate is run. The grace's 5 s of an idle guest also ran under drcov; they
 checked nothing, but the next coverage re-measure is the one to show
 whether they reached a statement nothing else does.
 
+## Cut 3: the architectures at once (2026-09-30)
+
+xtask only; owner os-98. `test-boot`, `test-init` and `test-audio` with
+more than one architecture now run one child an architecture, all at once (`tools/common/xtask/src/parallel.rs`): xtask starts
+itself again with the same arguments and that one `--arch`, each child's
+output goes to `build/<arch>/xtask-<command>.log`, each is said as it ends,
+and when the last has ended every log is printed whole, in the
+architectures' order, and then each one's verdict; a failure on one hides
+none of the others. `FERRIX_ARCHES_IN_TURN=1` keeps the old order.
+
+What the boots wrote in one place is one an architecture now: stage 12's
+writable disk, `test-init`'s volumes and the fresh root a test boots are
+under `build/<arch>/` (`btrfs_disk`); the read-only images were already
+written whole and renamed into place. `run`'s own root, `build/root.img`,
+stays where a person's system is. cargo takes its own lock on the target
+directory, so the builds queue while the boots overlap.
+
+Measured with `~/ferrix-logs/os98-par-measure.sh` on nazuna, main 70ad8969
+against the branch, alternating, each warm, the host carrying other
+sessions' work:
+
+| Step | In turn (2 runs) | Load | At once (2 runs) | Load |
+|---|---:|---:|---:|---:|
+| `test-boot --arch all` | 139.1, 135.9 s | 54-60 | 46.4 s (and one stall, below) | 55 |
+| `test-init --arch all` | 181.9, 170.7 s | 52-54 | 86.3, 72.0 s | 34-47 |
+
+`test-compositor` stays in turn. Run at once in the gate (2026-09-30, load
+37 to 51) its three suites took 1,200 s where they take about 1,800 s in
+turn, but x86-64's failed on the frame budget -- 6.7 s against the 5 s a
+frame under emulation is allowed -- while AArch64's and ARMv7-A's passed:
+three compositors emulating side by side push a budget the host's load
+already decides (its flake row in `docs/BACKLOG.md`) over more often, and a
+gate that fails for its neighbours checks less. It can join the others once
+its frames are judged in the guest's own time rather than the host's.
+
+The other at-once `test-boot` stopped with both Arm guests silent after
+stage 11 for 105 s: nazuna's disk had filled (another session freed 57 GB
+at that moment), and QEMU pauses a guest whose disk image cannot grow,
+which the stage 12 disk, written by every boot, then had to. The in-turn
+`test-init` that failed did so on the semaphore self-check, a row of its
+own in `docs/BACKLOG.md`.
+
 ## Next
 
 Phase 2 in the order the numbers give: (3) stop rather than wait for a
-finished guest, done for the gates in "Cut 2" above; then (2) arches in
-parallel; then (5), KVM by default on x86-64. Cut 1 was measured and
+finished guest, done for the gates in "Cut 2" above; (2) arches in
+parallel, done in "Cut 3" for all but test-compositor; then (5), KVM by
+default on x86-64. For (5), read on 2026-09-30 and not started: the choice
+is `qemu::accelerator`, whose `None` means `tcg` today. The plan is `kvm`
+for an x86-64 guest on an x86-64 Linux host whose QEMU lists it, and `tcg`
+otherwise, so CI, which has no `/dev/kvm`, keeps its TCG boots unchanged;
+`tcg` whenever `FERRIX_QEMU_PLUGIN` is set, since a coverage plugin sees
+only translated blocks; and `seam.rs` passing `tcg` itself, since its
+measurement was made under it. The frame budgets of `test-compositor`
+are written for emulation and stay as they are, looser than KVM needs. Cut 1 was measured and
 dropped (2026-09-28, above). Each lands as its own slice under `land.sh`,
 with before and after from this table's method. Still to measure on a
 quiet window the coordinator can call: `test-net`.

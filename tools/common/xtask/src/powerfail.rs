@@ -85,7 +85,7 @@ pub(crate) fn test_powerfail(args: &Args, build: impl Fn(Arch) -> Result<Built>)
             let replayed = retried(arch, seed, "churn", CHURNING, || {
                 churn(arch, &built, args, seed)
             })
-            .and_then(|()| checker.run(&btrfs_disk::blank_path(), arch))
+            .and_then(|()| checker.run(&btrfs_disk::blank_path(arch), arch))
             .and_then(|()| {
                 btrfs_disk::keep_blank(true);
                 retried(arch, seed, "replay", REPLAYING, || {
@@ -146,7 +146,7 @@ fn churn(arch: Arch, built: &Built, args: &Args, seed: u64) -> Result<()> {
 /// The second boot of a seed, on the disk the cut left: replay, then check
 /// again. Answers whether the cut left a log for the replay.
 fn replay(arch: Arch, built: &Built, args: &Args, checker: &Checker) -> Result<bool> {
-    let disk = btrfs_disk::blank_path();
+    let disk = btrfs_disk::blank_path(arch);
     let image = boot_image(arch, built, "ferrix.btrfs=replay")?;
     let lines = qemu::watch_then(arch, &image, &built.kernel, args, REPLAYED, |_| Ok(()))?;
     if lines.iter().any(|line| line.contains(SKIPPED)) {

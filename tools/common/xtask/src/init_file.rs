@@ -113,7 +113,7 @@ pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> 
         );
         return Ok(());
     }
-    let volume = btrfs_disk::blank_copy(K7_VOLUME)?;
+    let volume = btrfs_disk::blank_copy(arch, K7_VOLUME)?;
     let mut with_volume = args.clone();
     with_volume.data_image = Some(volume);
     with_volume.data_image_kept = true;
