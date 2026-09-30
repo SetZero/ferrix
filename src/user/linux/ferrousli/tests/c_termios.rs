@@ -11,3 +11,8 @@ use common::{Case, check};
 fn a_pseudo_terminal_is_configured_sized_and_named() {
     check(&Case::named("termios/terminal"));
 }
+
+#[test]
+fn openpty_forkpty_and_login_tty_give_a_child_its_own_terminal() {
+    check(&Case::named("termios/forkpty"));
+}
