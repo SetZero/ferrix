@@ -515,6 +515,7 @@ unsafe extern "C" fn start(p: *mut c_void) -> c_int {
     // SAFETY: as above.
     let args = unsafe { &*args };
     let (routine, arg, mask) = (args.routine, args.arg, args.mask);
+    crate::mutex::register_robust_list();
     restore_signals(mask);
     let result = match routine {
         // SAFETY: `pthread_create`'s caller vouched for the routine.

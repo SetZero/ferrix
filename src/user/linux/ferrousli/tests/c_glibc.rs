@@ -63,6 +63,11 @@ fn the_names_python_imports_read_write_exec_and_spawn() {
 }
 
 #[test]
+fn every_thread_has_a_robust_list_laid_out_as_glibcs() {
+    check(&Case::named("glibc/robust"));
+}
+
+#[test]
 fn the_names_mesas_llvm_imports_do_their_work() {
     check(&Case::named("glibc/mesa"));
 }

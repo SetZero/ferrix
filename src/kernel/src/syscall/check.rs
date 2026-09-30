@@ -792,6 +792,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_mremap_below_mmap_min_addr_is_eperm(&process)?;
     check_brk_grows_and_shrinks(&process)?;
     check_set_tid_address_answers_with_a_thread_id(&process)?;
+    check_a_robust_list_is_each_threads_own(&process)?;
     check_uname_names_the_system(&process)?;
     check_poll_reports_ready_invalid_and_skipped(&process)?;
     check_select_answers_with_the_sets_that_are_ready(&process)?;
@@ -1475,6 +1476,36 @@ fn check_set_tid_address_answers_with_a_thread_id(
         return Err("set_tid_address did not record the address");
     }
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    Ok(())
+}
+
+/// A robust futex list head is its thread's, as on Linux: a C library
+/// registers one for each thread and clears it as the thread unmaps its
+/// stack, so one thread clearing its own must leave another's, and a fork
+/// child starts with none. Kept per process, a thread's exit forgot every
+/// other thread's head, and Chromium's `ForkWithFlags`, which reads it back
+/// with `get_robust_list`, stopped the Steam client's browser helper.
+fn check_a_robust_list_is_each_threads_own(process: &Arc<Process>) -> Result<(), &'static str> {
+    use crate::syscall::thread::Thread;
+    const NO_MEMORY: &str = "no memory for a check's thread";
+    let first = Thread::leader(process).map_err(|_| NO_MEMORY)?;
+    let second = Thread::sibling(process, process.pid() + 1, &first).map_err(|_| NO_MEMORY)?;
+    if first.robust_list() != 0 || second.robust_list() != 0 {
+        return Err("a new thread started with a robust list");
+    }
+    first.set_robust_list(0x1000);
+    second.set_robust_list(0x2000);
+    if first.robust_list() != 0x1000 || second.robust_list() != 0x2000 {
+        return Err("two threads' robust lists were not each their own");
+    }
+    second.set_robust_list(0);
+    if first.robust_list() != 0x1000 {
+        return Err("a thread clearing its robust list cleared another's");
+    }
+    let child = Thread::forked(process, &first).map_err(|_| NO_MEMORY)?;
+    if child.robust_list() != 0 {
+        return Err("a fork child's thread inherited a robust list");
+    }
     Ok(())
 }
 

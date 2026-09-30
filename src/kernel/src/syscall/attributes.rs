@@ -97,9 +97,6 @@ pub(crate) struct Attributes {
     pub(crate) io_priority: Option<u32>,
     /// The execution domain `personality` reports.
     pub(crate) personality: u32,
-    /// The head `set_robust_list` registered. Per thread on Linux; per
-    /// process here, which is the same thing while a process has one thread.
-    pub(crate) robust_list: u64,
     /// Limits that were set, by resource. `None` reads as the default.
     pub(crate) limits: [Option<Limit>; RLIM_NLIMITS],
 }
@@ -115,7 +112,6 @@ impl Default for Attributes {
             nice: 0,
             io_priority: None,
             personality: 0,
-            robust_list: 0,
             limits: [None; RLIM_NLIMITS],
         }
     }
@@ -406,12 +402,17 @@ const fn robust_list_head(word: usize) -> u64 {
     (word * 3) as u64
 }
 
-/// `set_robust_list`: record the head, after insisting on the size.
+/// `set_robust_list`: record the calling thread's head, after insisting on
+/// the size.
 ///
 /// The size check is the whole of Linux's validation, and it is there so that
 /// a libc built for a different layout is refused rather than walked. Nothing
-/// walks the list yet: that is for a thread that dies holding a lock, and a
-/// process has one thread.
+/// walks the list yet: that is for a thread that dies holding a lock.
+///
+/// The head is the thread's, as on Linux: a C library registers one for
+/// every thread it starts and clears it as a thread unmaps its stack, and
+/// kept per process one thread's clearing forgot every other's, which
+/// Chromium's `ForkWithFlags` reads back through `get_robust_list`.
 pub(crate) fn sys_set_robust_list(
     process: &Process,
     head: u64,
@@ -421,14 +422,34 @@ pub(crate) fn sys_set_robust_list(
     if ulong(len) != robust_list_head(word) {
         return Err(Errno::EINVAL);
     }
-    update(process, |a| a.robust_list = ulong(head));
+    let thread = crate::syscall::thread::current_of(process).ok_or(Errno::ESRCH)?;
+    thread.set_robust_list(ulong(head));
     Ok(0)
 }
 
-/// Forget the robust futex list `set_robust_list` registered, as `execve`
-/// does: its head was in the memory just replaced.
+/// Forget the calling thread's robust futex list, as `execve` does: its head
+/// was in the memory just replaced. The process's other threads are gone by
+/// then.
 pub(crate) fn forget_robust_list(process: &Process) {
-    update(process, |a| a.robust_list = 0);
+    if let Some(thread) = crate::syscall::thread::current_of(process) {
+        thread.set_robust_list(0);
+    }
+}
+
+/// The thread `get_robust_list` asks about: the caller for 0, else the thread
+/// numbered `pid`, in the caller's process or any other.
+fn robust_list_subject(
+    process: &Process,
+    pid: i32,
+) -> Result<Arc<crate::syscall::thread::Thread>, Errno> {
+    if pid == 0 {
+        return crate::syscall::thread::current_of(process).ok_or(Errno::ESRCH);
+    }
+    let tid = u32::try_from(pid).map_err(|_| Errno::ESRCH)?;
+    process
+        .thread_by_tid(tid)
+        .or_else(|| registry::find(tid).and_then(|other| other.thread_by_tid(tid)))
+        .ok_or(Errno::ESRCH)
 }
 
 /// `get_robust_list`: the size through `len_ptr`, then the head through
@@ -441,7 +462,7 @@ pub(crate) fn sys_get_robust_list(
     len_ptr: u64,
     word: usize,
 ) -> Result<usize, Errno> {
-    let head = get(&*subject(process, pid)?).robust_list;
+    let head = robust_list_subject(process, pid)?.robust_list();
     let put = |at: u64, value: u64| {
         let bytes = value.to_le_bytes();
         let used = bytes.get(..word).ok_or(Errno::EINVAL)?;
