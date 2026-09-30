@@ -1554,3 +1554,55 @@ the file's every refusal, the frozen rule, a forked child in the namespace,
 the two `ns` links, absolute `clock_nanosleep` and `timerfd_settime`,
 `/proc/uptime` and `sysinfo`, and the vDSO variant's mode word. Each with a
 negative control, listed in the commit that adds it.
+
+**Built (2026-10-01, wound down, branch `stage13-timens`, not landed).**
+Everything above is built except what is listed as not below. The `timens`
+line (FX-0910, `fs/timens_check.rs`) passes on x86_64, AArch64 and ARMv7-A
+(`--smp 2`), `test-shell` and `test-vfs` with the static busybox pass on
+x86_64; `cargo xtask check` and `test-init` were not run, and the Arm
+`test-shell` and `test-vfs` were not run.
+
+Negative controls run, each stopping the boot with the check's own message:
+the first namespace's offsets writable ("the first time namespace's offsets
+were written"; the first version of this control, `frozen: false` in
+`first()`, did not fire, because the first fork of any process freezes the
+first namespace as well, so it now skips the frozen test for the first
+namespace's id), `unshare` moving the caller's own reference ("unshare(CLONE_NEWTIME)
+moved the caller's own clocks"), nanoseconds past a second accepted ("an offset
+with nanoseconds past a second was accepted"), a third line accepted ("three
+lines were accepted"), an unknown clock name accepted ("an offset for
+CLOCK_REALTIME was accepted"), the range test off ("an offset that makes a
+clock negative was accepted").
+
+Controls written and **not run** (`timens_controls.py` in the worker's
+scratchpad, not committed): freezing skipped in `Held::for_fork`; a child's
+own namespace not its parent's `time_for_children`; `CLOCK_BOOTTIME` taking
+the monotonic offset; `CLOCK_MONOTONIC_RAW` unshifted; `CLOCK_REALTIME`
+shifted; `times`, `sysinfo` and `/proc/uptime` each unshifted;
+`clock_nanosleep`, `timerfd_settime` and `FUTEX_WAIT_BITSET` each not
+converted; `CAP_SYS_TIME` not honoured; the opener and the writer each
+dropped from the capability test; `CAP_SYS_ADMIN` not needed to create; the
+vDSO swap skipped; the variant's mode not `MODE_SYSCALL`; the charge
+dropped. Those rules have checks and no evidence that their checks fire.
+
+Not built, and differences from Linux:
+
+* No real program proof. busybox's `unshare` has no `--time`, so no
+  `test-vfs` row could make a namespace; the exec path's choice of vDSO
+  (`vdso::map_into` with `is_shifted`) has no check at all.
+* `timer_create` and `mq_timedreceive` do not exist here, so nothing is
+  shifted for them. `setns` is the small-namespaces landing's.
+* `EACCES`, not `EPERM`, for a write after a process is in the namespace
+  (Linux's `frozen_offsets`; the brief said `EPERM`).
+* `times` is shifted by the boot-time offset; Linux does not shift it.
+* A multi-threaded process's `unshare(CLONE_NEWTIME)` moves the whole
+  process's children, not one thread's; threads share a `Process` here.
+* A `CLONE_VFORK` child keeps its parent's vDSO view until `exec`.
+* `CAP_SYS_TIME` joins `userns::HONOURED` (a change to a rule of §4 U8's
+  list); the certification consultant has not seen it.
+* Edits to the core ring: `user/space.rs` (`replace_shared_code`, and a
+  hint for `map_shared_code`), plus data in `panic/catalog.rs`,
+  `stages_check.rs` and `syscall/mod.rs`. Not reviewed.
+* `docs/generated` was not regenerated (the panic catalog's FX-0910 is
+  missing from `PANICS.md`, so the catalog gate fails until it is).
+

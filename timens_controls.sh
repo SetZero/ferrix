@@ -1,0 +1,28 @@
+#!/bin/bash
+# sequential negative controls, each its own queue ticket
+
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c01 src/kernel/src/syscall/timens.rs 'frozen: true,' 'frozen: false,' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c02 src/kernel/src/syscall/process.rs 'let displaced = core::mem::replace(&mut self.time.lock().children, namespace);' 'let displaced = core::mem::replace(&mut self.time.lock().own, namespace);' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c03 src/kernel/src/syscall/timens.rs '.filter(|&n| i128::from(n) < NANOS)' '.filter(|&n| n < u64::MAX)' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c04 src/kernel/src/syscall/timens.rs 'if lines > 2 {' 'if lines > 9 {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c05 src/kernel/src/syscall/timens.rs '_ => return None,' '_ => 0,' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c06 src/kernel/src/syscall/timens.rs 'if !(0..=limit).contains(&sum) {' 'if false && !(0..=limit).contains(&sum) {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c07 src/kernel/src/syscall/timens.rs '        self.children.freeze();
+' '' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c08 src/kernel/src/syscall/timens.rs 'own: Arc::clone(&self.children),' 'own: Arc::clone(&self.own),' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c09 src/kernel/src/syscall/timens.rs 'CLOCK_BOOTTIME | CLOCK_BOOTTIME_ALARM => Some(Shift::Boottime),' 'CLOCK_BOOTTIME | CLOCK_BOOTTIME_ALARM => Some(Shift::Monotonic),' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c10 src/kernel/src/syscall/timens.rs 'CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE => Some(Shift::Monotonic),' 'CLOCK_MONOTONIC_RAW => None, CLOCK_MONOTONIC | CLOCK_MONOTONIC_COARSE => Some(Shift::Monotonic),' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c11 src/kernel/src/syscall/time.rs 'CLOCK_REALTIME | CLOCK_REALTIME_COARSE | CLOCK_TAI => realtime_nanos(),' 'CLOCK_REALTIME | CLOCK_REALTIME_COARSE | CLOCK_TAI => shown_to(process, CLOCK_MONOTONIC, realtime_nanos()),' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c12 src/kernel/src/syscall/time.rs 'let boot = process.time_namespace().shown(Shift::Boottime, now_nanos());' 'let boot = now_nanos();' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c13 src/kernel/src/syscall/system.rs '.shown(crate::syscall::timens::Shift::Boottime, time::now_nanos());' '.shown(crate::syscall::timens::Shift::Boottime, 0).min(time::now_nanos());' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c14 src/kernel/src/fs/procfs/render.rs 'let nanos = crate::syscall::timens::shown_to_reader(' 'let nanos = (|_a: crate::syscall::timens::Shift, b: u64| b)(' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c15 src/kernel/src/syscall/time.rs 'host_from(thread.process(), clock, requested)' requested -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c16 src/kernel/src/syscall/timerfd.rs 'if flags & TFD_TIMER_ABSTIME != 0 && setting.value != 0 {' 'if false && flags & TFD_TIMER_ABSTIME != 0 && setting.value != 0 {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c17 src/kernel/src/syscall/futex.rs 'map_or(absolute, |caller| {' 'map_or(absolute, |caller| if true { absolute } else {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c18 src/kernel/src/syscall/userns.rs '    | (1 << CAP_SYS_TIME);' ';' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c19 src/kernel/src/syscall/timens.rs 'for credentials in [opener, writer] {' 'for credentials in [opener] {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c20 src/kernel/src/syscall/timens.rs 'for credentials in [opener, writer] {' 'for credentials in [writer] {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c21 src/kernel/src/syscall/timens.rs 'None if creator.holds(CAP_SYS_ADMIN) => Arc::clone(&creator.user_ns),' 'None => Arc::clone(&creator.user_ns),' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c22 src/kernel/src/syscall/family.rs 'if shifted == vdso::is_shifted(&parent.time_namespace()) {' 'if true {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c23 src/kernel/src/syscall/vdso.rs 'if crate::arch::vdso_can_read_counter() && !shifted {' 'if crate::arch::vdso_can_read_counter() {' -- test-boot --arch x86_64 --timeout 900
+~/.local/share/ferrix/os7c-queue.sh control timens/work timens-c24 src/kernel/src/syscall/timens.rs '_charge: Some(charge),' '_charge: { drop(charge); None },' -- test-boot --arch x86_64 --timeout 900
