@@ -120,6 +120,7 @@ initramfs by xtask:
 | Path | What |
 |---|---|
 | `src/user/native/rt/` | The runtime every native program links: entry, the system-call instruction, exit, panic. |
+| `src/user/native/driver/` | `ferrix-driver`, what every driver process shares: START, register blocks, DMA memory freed only after a reset, a bus's transport (`virtio`), and the protocol a subsystem speaks to its kernel interface (`input`). A driver implements its subsystem's trait and nothing else. virtio-input is on it; the other drivers move as they are touched. |
 | `src/user/native/devmgr/` | Matches devices to drivers and starts each in a job of its own. |
 | `src/user/native/drivers/<function>/<name>/` | One process per driver, grouped by function as in the table above. The logic lives in `src/lib/drivers/`; the program is the thin shell around it. |
 | `src/user/native/pong/`, `src/user/native/channel-echo/` | Small native test programs the boot gates start. |
