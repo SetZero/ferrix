@@ -274,6 +274,9 @@ impl Client {
 
     /// Ask this client's data-control source for what it copied.
     pub fn control_send(&mut self, source: ObjectId, mime: &str, fd: Fd) {
+        if !self.control_sources.contains_key(&source) {
+            return;
+        }
         let _ = self.out.write(
             source,
             ext_data_control_source_v1::event::SEND,
@@ -284,6 +287,9 @@ impl Client {
 
     /// Tell a data-control source that something else is the selection now.
     pub fn control_cancel(&mut self, source: ObjectId) {
+        if !self.control_sources.contains_key(&source) {
+            return;
+        }
         let _ = self.out.write(
             source,
             ext_data_control_source_v1::event::CANCELLED,

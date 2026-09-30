@@ -4512,6 +4512,41 @@ fn an_offer_the_drag_left_can_still_be_sent_to_and_destroyed() {
     assert!(client.objects().get(offer).is_none(), "the destroy took it");
 }
 
+/// A source or device the client destroyed is sent nothing more, even once
+/// its number belongs to another object.
+///
+/// Chrome destroyed the primary source it had replaced and made a frame
+/// callback under the same number; the compositor, still holding the old
+/// source as the selection, sent it `cancelled` at the next copy, and
+/// libwayland read that as `wl_callback` event 1 and ended the connection.
+/// The clipboard's twin is tested here because this client has one.
+#[test]
+fn a_destroyed_source_or_device_is_sent_nothing() {
+    let mut client = dragging_client();
+    let mut bytes = request(22, core::wl_data_source::request::DESTROY, &[], &[]);
+    bytes.extend(request(
+        21,
+        core::wl_data_device::request::RELEASE,
+        &[],
+        &[],
+    ));
+    // The number again, as the frame callback Chrome made.
+    bytes.extend(request(
+        20,
+        core::wl_surface::request::FRAME,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(22))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+
+    client.cancel_selection(ObjectId(22));
+    client.offer_selection(&["text/plain".to_owned()]);
+    assert_eq!(sent(&mut client), [], "nothing reaches 22 or 21");
+    assert!(!client.has_data_device());
+}
+
 /// What the target says comes back for the compositor: the type it will
 /// take, what it will do with it, and that it has finished.
 #[test]

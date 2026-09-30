@@ -26,6 +26,30 @@ use crate::client::{Client, Event, Fatal};
 use crate::role::Role;
 
 impl Client {
+    /// The client destroyed `id`: a device is told nothing more, and a
+    /// source is asked for nothing more.
+    ///
+    /// The client has been sent `delete_id` and may give the number to its
+    /// next object. Chrome does exactly that: it destroys the primary source
+    /// it replaced and makes a frame callback in its place, and a `cancelled`
+    /// sent to the old number reached that callback as an event
+    /// `wl_callback` does not have, which is fatal to the connection.
+    pub(super) fn forget_clipboard(&mut self, id: ObjectId, role: Role) {
+        match role {
+            Role::DataDevice => self.devices.retain(|device| *device != id),
+            Role::DataSource => {
+                let _ = self.sources.remove(&id);
+            }
+            Role::DataOffer if self.offer == Some(id) => self.offer = None,
+            Role::PrimaryDevice => self.primary_devices.retain(|device| *device != id),
+            Role::PrimarySource => {
+                let _ = self.primary_sources.remove(&id);
+            }
+            Role::PrimaryOffer if self.primary_offer == Some(id) => self.primary_offer = None,
+            _ => {}
+        }
+    }
+
     /// `wl_data_device_manager`: the clipboard's objects.
     ///
     /// The objects are made and nothing is ever offered through them. A
@@ -210,6 +234,9 @@ impl Client {
     /// The client writes what it copied and closes the descriptor; whoever
     /// pasted reads until end of file. Nothing here touches the data.
     pub fn send_selection(&mut self, source: ObjectId, mime: &str, fd: Fd) {
+        if !self.sources.contains_key(&source) {
+            return;
+        }
         let _ = self.out.write(
             source,
             wl_data_source::event::SEND,
@@ -219,7 +246,13 @@ impl Client {
     }
 
     /// Tell this client's source that it is no longer the selection.
+    ///
+    /// Not a source the client has destroyed: see
+    /// [`Client::forget_clipboard`].
     pub fn cancel_selection(&mut self, source: ObjectId) {
+        if !self.sources.contains_key(&source) {
+            return;
+        }
         let _ = self
             .out
             .write(source, wl_data_source::event::CANCELLED, &[], &[]);
@@ -373,6 +406,9 @@ impl Client {
 
     /// Ask this client's primary source for its data on `fd`.
     pub fn send_primary(&mut self, source: ObjectId, mime: &str, fd: Fd) {
+        if !self.primary_sources.contains_key(&source) {
+            return;
+        }
         let _ = self.out.write(
             source,
             zwp_primary_selection_source_v1::event::SEND,
@@ -382,8 +418,11 @@ impl Client {
     }
 
     /// Tell this client's primary source that it is no longer the
-    /// selection.
+    /// selection. Not a source the client has destroyed.
     pub fn cancel_primary(&mut self, source: ObjectId) {
+        if !self.primary_sources.contains_key(&source) {
+            return;
+        }
         let _ = self.out.write(
             source,
             zwp_primary_selection_source_v1::event::CANCELLED,

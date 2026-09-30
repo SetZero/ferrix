@@ -293,6 +293,33 @@ impl Clipboard {
         }
     }
 
+    /// A client destroyed one of its sources: if that was either selection,
+    /// there is no such selection any more, as `wl_data_source.destroy` and
+    /// its primary and data-control twins say.
+    ///
+    /// Kept otherwise, the next copy "cancelled" a source the client had
+    /// been told it may reuse the number of -- Chrome had made a frame
+    /// callback there, and the event killed its connection.
+    pub fn source_gone(
+        &mut self,
+        clients: &mut [crate::state::Slot],
+        client: usize,
+        source: ObjectId,
+    ) {
+        for which in [Which::Clipboard, Which::Primary] {
+            if self
+                .held(which)
+                .is_some_and(|selection| selection.client == client && selection.source == source)
+            {
+                match which {
+                    Which::Clipboard => self.selection = None,
+                    Which::Primary => self.primary = None,
+                }
+                self.offer_to_all(which, clients);
+            }
+        }
+    }
+
     /// A connection went: if it owned the selection, there is no selection.
     pub fn client_gone(&mut self, clients: &mut [crate::state::Slot], client: usize) {
         for which in [Which::Clipboard, Which::Primary] {

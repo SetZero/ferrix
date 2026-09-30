@@ -41,6 +41,9 @@ struct Effects {
     /// The clipboard's, kept until the client's own borrow is over: telling
     /// every client what the selection holds needs them all.
     selection: Vec<(Which, Option<ObjectId>, Vec<String>, Through)>,
+    /// The sources the client destroyed, which are no selection after the
+    /// ones set in this pass have been taken.
+    gone_sources: Vec<ObjectId>,
     /// What the client pasted, and the pipe the data goes down.
     wanted: Vec<(Which, ObjectId, String, Fd, Through)>,
     /// Clipboard managers that have just made a device, which are owed both
@@ -434,6 +437,10 @@ impl Compositor<'_> {
                 let _ = offer;
                 asks.drags.push(Drag::Finished);
             }
+            Event::Destroyed {
+                object,
+                role: Role::DataSource | Role::PrimarySource | Role::DataControlSource,
+            } => effects.gone_sources.push(object),
             Event::DataDeviceMade { .. } => effects.made_device.push(Which::Clipboard),
             Event::PrimaryDeviceMade { .. } => effects.made_device.push(Which::Primary),
             Event::SelectionSet { source, mimes } => {
@@ -723,6 +730,7 @@ impl Compositor<'_> {
             changed,
             claimed: _,
             selection,
+            gone_sources,
             wanted,
             watching,
             warped,
@@ -747,6 +755,11 @@ impl Compositor<'_> {
         // Now that the client's own borrow is over: what it copied goes to
         // every other client, and what it pasted goes to whoever copied.
         self.offer_selections(index, made_device, watching, selection);
+        // After the sources set in this pass: a client that sets a new
+        // source and destroys the old one in the same batch keeps the new.
+        for source in gone_sources {
+            self.clipboard.source_gone(&mut self.slots, index, source);
+        }
         changed |= self.shape_cursor(shaped);
         // An activation: one program asking for another's window to be
         // raised, with a token this compositor gave out. A token it did not

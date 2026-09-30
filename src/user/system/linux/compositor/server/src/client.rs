@@ -693,6 +693,7 @@ impl Client {
                 self.forget_desktop(id, other);
                 self.forget_input(id, other);
                 self.forget_drag(id, other);
+                self.forget_clipboard(id, other);
                 self.forget_screen(id, other);
                 self.forget_control(id, other);
                 self.forget_outputs(id, other);
