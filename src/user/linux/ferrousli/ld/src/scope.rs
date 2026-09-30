@@ -534,7 +534,7 @@ impl Scope {
                     .needed
                     .get(slot)
                     .and_then(|offset| object.name(*offset))
-                    .and_then(|needed| self.find(needed));
+                    .and_then(|needed| self.dependency(needed));
                 let Some(next) = needed else {
                     continue;
                 };
@@ -550,6 +550,16 @@ impl Scope {
     /// Load everything the objects already here need, and everything those
     /// need, until nothing is left to load.
     ///
+    /// A [`PART_OF_LIBC`] name loads nothing where it is met: `libc.so.6`
+    /// takes the place its own name has in the breadth-first order, which is
+    /// where glibc's is, since each of its split-off libraries is a file of
+    /// its own there. Answering `libdl.so.2` with the C library at once put
+    /// it ahead of everything a program names after `libdl.so.2`, and a
+    /// `dlsym(RTLD_NEXT, ...)` from any of those then missed it: Chromium's
+    /// `localtime` wrappers in the Steam client's `libcef.so` found no
+    /// `localtime`, logged that, and deadlocked formatting the log line's
+    /// time. Only when nothing names `libc.so.6` does it load at the end.
+    ///
     /// # Errors
     ///
     /// [`Error`], naming the library that could not be loaded.
@@ -559,14 +569,36 @@ impl Scope {
         // its own.
         let mut at = 0;
         let mut origin = [0_u8; PATH_MAX];
-        while at < self.count {
-            let object = *self.objects.get(at).ok_or(Error::TooManyObjects)?;
+        let mut libc_owed = false;
+        loop {
+            self.load_from(&mut at, &mut origin, &mut libc_owed, page_size)?;
+            if !libc_owed || self.already_loaded(LIBC.as_ptr()) {
+                return Ok(());
+            }
+            libc_owed = false;
+            self.load_one(LIBC.as_ptr(), core::ptr::null(), &[], page_size)?;
+        }
+    }
+
+    /// [`Self::load_dependencies`]'s walk, from object `*at` to the last
+    /// one there is, noting in `*libc_owed` a [`PART_OF_LIBC`] name it
+    /// passed over.
+    fn load_from(
+        &mut self,
+        at: &mut usize,
+        origin: &mut [u8; PATH_MAX],
+        libc_owed: &mut bool,
+        page_size: usize,
+    ) -> Result<(), Error> {
+        while *at < self.count {
+            let at_now = *at;
+            let object = *self.objects.get(at_now).ok_or(Error::TooManyObjects)?;
             // Where the object's file is, for `$ORIGIN` in its run path;
             // empty when that is not known, or not to be trusted.
             let origin_len = if object.runpath == 0 || self.secure {
                 0
             } else {
-                self.origin_of(at, &mut origin)
+                self.origin_of(at_now, origin)
             };
             for slot in 0..object.needed_count {
                 let offset = *object.needed.get(slot).ok_or(Error::TooManyObjects)?;
@@ -574,6 +606,10 @@ impl Scope {
                     "a DT_NEEDED outside the string table",
                 ))?;
                 if self.already_loaded(name) {
+                    continue;
+                }
+                if PART_OF_LIBC.iter().any(|part| same(part.as_ptr(), name)) {
+                    *libc_owed = true;
                     continue;
                 }
                 let runpath = if object.runpath == 0 {
@@ -588,7 +624,7 @@ impl Scope {
                     page_size,
                 )?;
             }
-            at += 1;
+            *at += 1;
         }
         Ok(())
     }

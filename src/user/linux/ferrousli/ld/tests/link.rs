@@ -257,6 +257,103 @@ fn a_gnu_unique_symbol_is_a_definition() {
     );
 }
 
+/// `libc.so.6` takes its own place in the load order, not the place of an
+/// earlier `libdl.so.2` it answers, so that `dlsym(RTLD_NEXT, ...)` from a
+/// library named between the two finds the C library after it, as under
+/// glibc: the Steam client's web helper names `libdl.so.2` first and
+/// `libcef.so`, whose `localtime` wrappers look the real ones up this way,
+/// before `libc.so.6`.
+#[test]
+fn rtld_next_from_a_library_before_libc_finds_libc() {
+    let loader = loader();
+    let dir = scratch().join("ld-rtld-next");
+    let link_only = dir.join("link-only");
+    let libc_dir = dir.join("libc");
+    std::fs::create_dir_all(&link_only).expect("make the link directory");
+    std::fs::create_dir_all(&libc_dir).expect("make the C library's directory");
+
+    // What the program links against: a libdl.so.2 the loader never maps,
+    // since libc.so.6 answers it.
+    let libdl = link_only.join("libdl.so.2");
+    compile(&[
+        "-shared",
+        "-Wl,-soname,libdl.so.2",
+        "-o",
+        libdl.to_str().expect("a path"),
+        manifest().join("tests/c/greet.c").to_str().expect("a path"),
+    ]);
+    let libc = libc_dir.join("libc.so.6");
+    compile(&[
+        "-shared",
+        "-Wl,-soname,libc.so.6",
+        "-o",
+        libc.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/libc_answer.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let loader_name = loader
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("the loader has a file name");
+    let stub = dir.join("libdlstub.so");
+    compile(&[
+        "-shared",
+        &format!("-Wl,-soname,{loader_name}"),
+        "-o",
+        stub.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/dlstub.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let next = dir.join("libnext.so");
+    compile(&[
+        "-shared",
+        "-Wl,-soname,libnext.so",
+        "-o",
+        next.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/rtld_next.c")
+            .to_str()
+            .expect("a path"),
+        stub.to_str().expect("a path"),
+    ]);
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/rtld_next_prog.c")
+            .to_str()
+            .expect("a path"),
+        // The program uses neither libdl.so.2 nor libc.so.6 itself, and a
+        // linker that defaults to --as-needed would drop both.
+        "-Wl,--no-as-needed",
+        libdl.to_str().expect("a path"),
+        next.to_str().expect("a path"),
+        libc.to_str().expect("a path"),
+        stub.to_str().expect("a path"),
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+    let status = Command::new(&program)
+        .env(
+            "LD_LIBRARY_PATH",
+            std::env::join_paths([&dir, &libc_dir]).expect("a path list"),
+        )
+        .status()
+        .expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "RTLD_NEXT from a library named before libc.so.6: 91 found nothing, \
+         92 the loader's interface is too old, 127 the loader stopped"
+    );
+}
+
 /// `DT_RUNPATH` finds a directly needed library before the system defaults.
 ///
 /// The library lives in a new temporary directory, not beside the program and
