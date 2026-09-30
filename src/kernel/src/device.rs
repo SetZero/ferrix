@@ -82,7 +82,7 @@ use ferrix_pci::msix::{
 use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
-use crate::discovery::{acpi, fdt};
+use crate::discovery::description::{self, Description};
 use crate::fallible::{self, AllocError};
 use crate::hooks::{Full, Hooks};
 use crate::mmio::Mmio;
@@ -300,8 +300,7 @@ impl Reserved {
         for unit in iommu::units(view) {
             reserved.add(unit.phys, unit.len);
         }
-        if acpi::Firmware::open(view).is_err()
-            && let Ok(tree) = fdt::open(view)
+        if let Description::Tree(tree) = description::of(view)
             && let Some(console) = tree.console()
         {
             for region in console.reg() {
@@ -1120,10 +1119,7 @@ pub(crate) fn claim_line(id: u32, taken: &mut BTreeSet<u32>) -> bool {
 /// driver asks for its interrupts by position.
 fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
     let mut nodes = Vec::new();
-    if acpi::Firmware::open(view).is_ok() {
-        return nodes;
-    }
-    let Ok(tree) = fdt::open(view) else {
+    let Description::Tree(tree) = description::of(view) else {
         return nodes;
     };
     let gic = tree

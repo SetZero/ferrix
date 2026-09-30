@@ -65,7 +65,7 @@ use ferrix_pci::Address;
 use ferrix_sync::Once;
 
 use crate::device::{DeviceNode, Location};
-use crate::discovery::{acpi, fdt};
+use crate::discovery::description::{self, Description};
 use crate::sync::SpinLock;
 use crate::{arch, mm, println};
 
@@ -139,7 +139,8 @@ enum Behind {
 /// Every IOMMU the machine describes, each once.
 pub(crate) fn units(view: &BootView<'_>) -> Vec<Unit> {
     let mut units = Vec::new();
-    if let Ok(firmware) = acpi::Firmware::open(view) {
+    let machine = description::of(view);
+    if let Description::Acpi(firmware) = machine {
         let tables = firmware.acpi();
         if let Ok(table) = tables.dmar() {
             for structure in table.structures() {
@@ -155,7 +156,7 @@ pub(crate) fn units(view: &BootView<'_>) -> Vec<Unit> {
                 }
             }
         }
-    } else if let Ok(tree) = fdt::open(view) {
+    } else if let Description::Tree(tree) = machine {
         for smmu in tree.smmu_v3s() {
             add(
                 &mut units,
@@ -330,7 +331,8 @@ fn discover(view: &BootView<'_>, nodes: &[Arc<DeviceNode>]) -> (Report, Vec<Unit
         Behind::Unresolved => report.unresolved += 1,
     };
 
-    if let Ok(firmware) = acpi::Firmware::open(view) {
+    let machine = description::of(view);
+    if let Description::Acpi(firmware) = machine {
         let tables = firmware.acpi();
         let dmar = tables.dmar().ok();
         let iort = tables.iort().ok();
@@ -342,7 +344,7 @@ fn discover(view: &BootView<'_>, nodes: &[Arc<DeviceNode>]) -> (Report, Vec<Unit
             };
             record(function, found);
         }
-    } else if let Ok(tree) = fdt::open(view) {
+    } else if let Description::Tree(tree) = machine {
         for &function in &functions {
             record(function, place_tree(&tree, &units, function));
         }
@@ -896,7 +898,7 @@ pub(crate) struct BringUp {
 pub(crate) fn bring_up(view: &BootView<'_>) -> BringUp {
     let mut report = BringUp::default();
     let mut programmed = Programmed::default();
-    if let Ok(firmware) = acpi::Firmware::open(view) {
+    if let Description::Acpi(firmware) = description::of(view) {
         let tables = firmware.acpi();
         if let Ok(table) = tables.dmar() {
             bring_up_vtd(&table, &mut programmed, &mut report);

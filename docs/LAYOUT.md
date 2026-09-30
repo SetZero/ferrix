@@ -78,7 +78,7 @@ kernel or a loader. Each crate sits in exactly one group:
 |---|---|---|
 | `src/lib/proto/` | The interfaces between components: the ABIs the kernel offers, the rings and control protocols it shares with ring-3 drivers, the loader hand-off | `linux-abi` `native-abi` `native` `bootinfo` `devmgr-proto` `blkring` `netring` `displayctl` `renderctl` `inputctl` `sndctl` `logctl` `auth-proto` |
 | `src/lib/kernel/` | Kernel-internal cores: memory, scheduling, synchronisation, objects, randomness, the process stack image, the vDSO, the panic screen | `frame` `heap` `kmem` `paging` `vma` `sched` `sync` `objects` `fallible` `crng` `ustack` `vdso` `qr` `fbtext` |
-| `src/lib/platform/` | Parsers for what firmware and the boot medium hand over | `acpi` `fdt` `pci` `elf` |
+| `src/lib/platform/` | Parsers for what firmware and the boot medium hand over, and which of the two descriptions a machine is read by | `acpi` `fdt` `description` `pci` `elf` |
 | `src/lib/fs/` | Storage and filesystems, including the text of the pseudo-filesystems | `vfs` `block` `btrfs` `btrfs-vfs` `btrfs-write` `cpio` `procfs` `sysfs` `cgroupfs` |
 | `src/lib/network/` | The network stack | `net` `netwire` `nettcp` `netlink` |
 | `src/lib/drivers/` | Device logic over an abstract transport, and the serve loops ring-3 drivers run, grouped by function (see below) | `virtio` and one directory per function |

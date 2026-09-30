@@ -66,7 +66,8 @@ use ferrix_pci::{Address, ConfigSpace, PciError};
 mod virtio;
 
 use crate::device::{self, DeviceNode, Reserved, Seen};
-use crate::discovery::{acpi, fdt};
+use crate::discovery::description::{self, Description};
+use crate::discovery::fdt;
 use crate::mmio::Mmio;
 use crate::vmap;
 
@@ -122,13 +123,13 @@ fn buses_overlap(a: &RangeInclusive<u8>, b: &RangeInclusive<u8>) -> bool {
     a.start() <= b.end() && b.start() <= a.end()
 }
 
-/// Every ECAM host the machine describes, and how many descriptions could not
+/// Every ECAM host `machine` describes, and how many descriptions could not
 /// be used.
-fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
+fn hosts(machine: Description) -> (Vec<Host>, usize, Source) {
     let mut refused = 0;
     let mut described = Vec::new();
 
-    let source = if let Ok(firmware) = acpi::Firmware::open(view) {
+    let source = if let Description::Acpi(firmware) = machine {
         if let Ok(mcfg) = firmware.acpi().mcfg() {
             for allocation in mcfg.entries() {
                 match allocation.window_base() {
@@ -147,7 +148,7 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
         }
         Source::Mcfg
     } else {
-        if let Ok(tree) = fdt::open(view) {
+        if let Description::Tree(tree) = machine {
             for host in tree.ecam_hosts() {
                 // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
                 described.push(Described {
@@ -458,7 +459,7 @@ impl From<ferrix_virtio::QueueError> for Failure {
 /// Returns what apertures may not overlap too, which publishing the device
 /// tree's nodes needs as well.
 pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Reserved), Failure> {
-    let (hosts, refused, source) = hosts(view);
+    let (hosts, refused, source) = hosts(description::of(view));
     let ecam: Vec<(u64, u64)> = hosts
         .iter()
         .map(|host| (host.phys, host.phys.saturating_add(host.window.len())))

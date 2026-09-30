@@ -15,13 +15,13 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 605 | 338 | 267 |
+| Low (`L.*`) | 606 | 339 | 267 |
 
-1154 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1155 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1154 |
+| Named by a low-level requirement | 1155 |
 | Accessors, covered by the requirement they serve | 548 |
 | Check code in a product file | 35 |
 | Named by none | 595 |
@@ -1047,6 +1047,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.device.19` | DeviceNode::describe shall report a device tree node as not PCI, with its binding and its first two apertures. | A published virtio,mmio or board node's device_info names no PCI location, its binding, and its apertures 0 and 1. | H.DMA.5 | `device::DeviceNode::describe` | *baselined* | — | — | — |
 | `L.device.20` | An MSI-X vector shall be minted, masked or unmasked only for a published node. | A node not in the published list asked for an MSI-X vector answers none, and a vector naming one refuses to mask. | H.IRQ.1 | `device::DeviceNode::vector`, `device::Vector::set_masked` | *baselined* | — | — | — |
 | `L.device.21` | DeviceNode::input_functions shall allow eight input claims of an STM32 USB host's node, and one of every other. | An STM32 USB host's node answers 8 and a PCI function answers 1. | H.DEV.1 | `device::DeviceNode::input_functions` | *baselined* | — | — | — |
+| `L.discovery.1` | description::of shall read a machine by its ACPI tables when they open, whether or not a device tree came too, by its device tree when the tables do not open and the tree parses, and by neither otherwise; and shall not parse the tree when the tables open. | For ACPI only, both, tables that fail to open beside a tree, a tree only, and neither, the description is ACPI, ACPI with the tree unopened, the tree, the tree and neither. | H.DMA.1, H.DMA.5 | `discovery::description::of` | `src/lib/platform/description/src/tests.rs::acpi_only_is_read_by_its_tables`, `src/lib/platform/description/src/tests.rs::acpi_beside_a_tree_is_read_by_its_tables`, `src/lib/platform/description/src/tests.rs::unreadable_tables_beside_a_tree_are_read_by_the_tree`, `src/lib/platform/description/src/tests.rs::a_tree_only_is_read_by_the_tree`, `src/lib/platform/description/src/tests.rs::neither_is_neither` | host test | host test | host test |
 
 ### Quiesce
 
@@ -1424,6 +1425,11 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/lib/kernel/objects/src/tests.rs::replace_closes_the_original_and_cannot_add_rights` | host | H.OBJ.14 |
 | `src/lib/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host | L.sched.1 |
 | `src/lib/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host | L.sched.2 |
+| `src/lib/platform/description/src/tests.rs::a_tree_only_is_read_by_the_tree` | host | L.discovery.1 |
+| `src/lib/platform/description/src/tests.rs::acpi_beside_a_tree_is_read_by_its_tables` | host | L.discovery.1 |
+| `src/lib/platform/description/src/tests.rs::acpi_only_is_read_by_its_tables` | host | L.discovery.1 |
+| `src/lib/platform/description/src/tests.rs::neither_is_neither` | host | L.discovery.1 |
+| `src/lib/platform/description/src/tests.rs::unreadable_tables_beside_a_tree_are_read_by_the_tree` | host | L.discovery.1 |
 | `src/lib/proto/audit/src/tests.rs::a_record_is_its_sixty_four_bytes_in_order_little_endian` | host | H.AUD.13 |
 | `tools/common/xtask/src/init.rs::audit_read_back` | gate | H.AUD.10 |
 | `tools/common/xtask/src/init.rs::checks_skipped` | gate | H.AUD.12 |

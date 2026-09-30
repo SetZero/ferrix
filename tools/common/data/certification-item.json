@@ -104,6 +104,7 @@
       ],
       "members": [
         "discovery/acpi.rs",
+        "discovery/description.rs",
         "arch/**",
         "audit.rs",
         "audit/**",

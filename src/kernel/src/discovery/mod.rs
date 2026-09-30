@@ -10,6 +10,7 @@
 //!
 //! | Module | What it finds |
 //! |---|---|
+//! | [`description`] | which of the two a machine is read by, answered once |
 //! | [`acpi`] | the firmware tables, on x86-64 and on AArch64 under EDK2 |
 //! | [`fdt`] | the device tree, on every other machine |
 //! | [`pci`] | the PCI functions behind the ECAM windows either describes |
@@ -37,6 +38,7 @@
     reason = "ARMv7-A describes itself with a device tree, not ACPI"
 )]
 pub(crate) mod acpi;
+pub(crate) mod description;
 pub(crate) mod devmgr;
 pub(crate) mod fdt;
 pub(crate) mod pci;

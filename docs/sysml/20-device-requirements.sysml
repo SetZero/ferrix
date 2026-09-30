@@ -337,6 +337,18 @@ package FerrixDeviceRequirements {
             attribute :>> parent = "H.DEV.1";
             attribute :>> unit = "device::DeviceNode::input_functions";
         }
+        requirement <'L.discovery.1'> oneDescriptionAnsweredOnce : ItemLowLevel {
+            attribute :>> statement = "description::of shall read a machine by its
+                ACPI tables when they open, whether or not a device tree came too,
+                by its device tree when the tables do not open and the tree parses,
+                and by neither otherwise; and shall not parse the tree when the
+                tables open.";
+            attribute :>> criterion = "For ACPI only, both, tables that fail to
+                open beside a tree, a tree only, and neither, the description is
+                ACPI, ACPI with the tree unopened, the tree, the tree and neither.";
+            attribute :>> parent = ("H.DMA.1", "H.DMA.5");
+            attribute :>> unit = "discovery::description::of";
+        }
     }
 
     package Quiesce {

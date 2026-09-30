@@ -148,6 +148,10 @@ name = "ferrix-crng"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-description"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-devmgr"
 version = "0.1.0"
 dependencies = [
@@ -266,6 +270,7 @@ dependencies = [
  "ferrix-btrfs-write",
  "ferrix-cgroupfs",
  "ferrix-crng",
+ "ferrix-description",
  "ferrix-devmgr-proto",
  "ferrix-displayctl",
  "ferrix-elf",
