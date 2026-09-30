@@ -479,7 +479,10 @@ pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
         return Err(Errno::ENOTDIR);
     }
     path::context(process).who.require(&metadata, MAY_EXEC)?;
-    credentials::require_privilege(process)?;
+    // `CAP_SYS_CHROOT` in the caller's namespace (in the first, root).
+    if !process.with_credentials(|held| held.holds(crate::syscall::userns::CAP_SYS_CHROOT)) {
+        return Err(Errno::EPERM);
+    }
     process.fs_context().lock().root = place;
     Ok(0)
 }

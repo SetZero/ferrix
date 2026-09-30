@@ -173,6 +173,18 @@ impl IdMap {
         })
     }
 
+    /// The kernel id of the whole run of `count` ids from `first`, which must
+    /// lie inside one extent: Linux's `map_id_range_down`. A run that spans
+    /// two extents is refused even when both ends map with the same offset,
+    /// for the ids between were never given to the namespace.
+    fn range_to_kernel(&self, first: u32, count: u32) -> Option<u32> {
+        self.extents().iter().find_map(|extent| {
+            let offset = first.checked_sub(extent.inside)?;
+            (u64::from(offset) + u64::from(count) <= u64::from(extent.count))
+                .then(|| extent.outside.wrapping_add(offset))
+        })
+    }
+
     /// The namespace's name for kernel id `kernel`.
     fn from_kernel(&self, kernel: u32) -> Option<u32> {
         self.extents().iter().find_map(|extent| {
@@ -479,7 +491,7 @@ pub(crate) fn write_map(
         // The first namespace's identity map is not written.
         return Err(Errno::EPERM);
     };
-    if data.len() > MAP_WRITE_MAX {
+    if data.len() >= MAP_WRITE_MAX {
         return Err(Errno::EINVAL);
     }
     // The opener and the writer are each in the namespace or its parent, and
@@ -495,13 +507,9 @@ pub(crate) fn write_map(
     // `outside` becomes the kernel id.
     let parent_map = parent.map(kind);
     for extent in &mut extents {
-        let Some(kernel) = parent_map.to_kernel(extent.outside) else {
+        let Some(kernel) = parent_map.range_to_kernel(extent.outside, extent.count) else {
             return Err(Errno::EPERM);
         };
-        let last = extent.outside + (extent.count - 1);
-        if parent_map.to_kernel(last) != Some(kernel.wrapping_add(extent.count - 1)) {
-            return Err(Errno::EPERM);
-        }
         extent.outside = kernel;
     }
     let (effective, cap) = match kind {
@@ -557,7 +565,7 @@ pub(crate) fn write_setgroups(
     let Some(parent) = ns.parent.as_deref() else {
         return Err(Errno::EPERM);
     };
-    if data.len() > MAP_WRITE_MAX {
+    if data.len() >= MAP_WRITE_MAX {
         return Err(Errno::EINVAL);
     }
     let allow = match data.trim_ascii_end() {
@@ -572,9 +580,16 @@ pub(crate) fn write_setgroups(
         }
     }
     let mut maps = ns.maps.lock();
-    if maps.gid.len > 0 || (allow && !maps.setgroups) {
+    // Linux's `setgroups_write`: `allow` is refused once `deny` was written
+    // and is otherwise a no-op; `deny` is refused once `gid_map` is.
+    if allow {
+        if !maps.setgroups {
+            return Err(Errno::EPERM);
+        }
+    } else if maps.gid.len > 0 {
         return Err(Errno::EPERM);
+    } else {
+        maps.setgroups = false;
     }
-    maps.setgroups = allow;
     Ok(data.len())
 }

@@ -300,6 +300,23 @@ pub(super) fn check_namespaces(disk: bool) {
             "no stage 12 disk for the detach's write-out"
         },
     );
+    check_user_namespaces();
+}
+
+/// User namespaces: the rules of `docs/NAMESPACES.md` §4 attempted and
+/// refused (N4).
+fn check_user_namespaces() {
+    let checked = match fs::userns_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE13_USER_NAMESPACES,
+            "user namespace self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  userns   {} calls answered as Linux answers them, {} of them refusals: a namespace          named apart, ids 65534 until mapped, a gid_map refused before setgroups is denied,          kernel root and a second id unmappable, a map written once, fake root refused what          only root may do, a chrooted process refused, a set-id bit ignored, a read-only          /proc/sys refusing a write",
+        checked.calls, checked.refusals,
+    );
 }
 
 /// Stage 8's timerfd check: flags and clocks, expirations counted, the
