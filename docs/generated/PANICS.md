@@ -72,6 +72,7 @@ Causes are listed most likely first.
 | [FX-0883](#fx-0883) | timerfd failed its self-check |
 | [FX-0884](#fx-0884) | signalfd failed its self-check |
 | [FX-0885](#fx-0885) | A mount's flags failed their self-check |
+| [FX-0886](#fx-0886) | A bind mount failed its self-check |
 | [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-0902](#fx-0902) | an allocation failure was not survived |
@@ -1601,6 +1602,38 @@ does.
 
 See: src/kernel/src/fs/mount_check.rs; src/kernel/src/syscall/fsctl.rs;
 src/lib/fs/vfs/src/namespace.rs; src/kernel/src/fs/procfs/render.rs.
+
+<a id="fx-0886"></a>
+
+## FX-0886 — A bind mount failed its self-check
+
+`fs::bind_check::run` mounts a tmpfs under /tmp by number, with a file, a
+directory holding a second tmpfs and a listening Unix socket, and binds them: a
+directory without MS_REC must not show the submount, nor let its mount point be
+removed or renamed (EBUSY), and with it must show it; a subdirectory, a file,
+the socket (which connect must reach through the bind) and a directory onto
+itself must bind, and a file onto a directory or the reverse be ENOTDIR.
+mountinfo must name each bind as its O_PATH descriptor's /proc link does, with
+its root inside the filesystem. MS_REMOUNT|MS_BIND|MS_RDONLY must make one bind
+read-only and no other; a plain MS_REMOUNT|MS_RDONLY every mount of the
+filesystem and none of another. MS_PRIVATE, MS_SLAVE and MS_UNBINDABLE must be
+accepted on a mount's root; MS_SHARED, two types, a place inside a mount and
+MS_MOVE EINVAL. umount2 of a mount with one inside must be EBUSY, and with
+MNT_DETACH take both, leave `..` from inside the submount where it is, and make
+a bind from it EINVAL.
+
+1. `Namespace::bind` copies the wrong mounts for MS_REC, or roots the bind at
+   the filesystem's root rather than the source's dentry.
+2. `Namespace::remount` and `remount_filesystem` act on the wrong scope, or
+   `remount_at` in `syscall/fsctl.rs` calls the one for the other.
+3. `Namespace::unmount_with` leaves a mount inside the detached one in the
+   table, or leaves a detached mount its parent.
+4. `Namespace::owns` accepts a mount that is no longer in the tree.
+5. `sys_mount` in `syscall/fsctl.rs` takes the operations in another order than
+   Linux's `path_mount`.
+
+See: src/kernel/src/fs/bind_check.rs; src/kernel/src/syscall/fsctl.rs;
+src/lib/fs/vfs/src/namespace.rs.
 
 <a id="fx-0890"></a>
 
