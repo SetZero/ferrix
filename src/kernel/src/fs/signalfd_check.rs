@@ -384,7 +384,14 @@ fn check_file_refusals(
 fn check_reads(process: &Process, page: u64, counts: &mut Counts) -> Result<(), &'static str> {
     let made = create(process, page, bit(SIGUSR1) | bit(SIGUSR2), SFD_NONBLOCK)?;
     let file = opened(process, made)?;
-    kill::send(process, SIGUSR1, Origin::User { pid: SENDER });
+    kill::send(
+        process,
+        SIGUSR1,
+        Origin::User {
+            pid: SENDER,
+            uid: 0,
+        },
+    );
     if pending(process) & bit(SIGUSR1) == 0 {
         return Err("a signal sent to the check's process was not left pending");
     }
@@ -409,8 +416,22 @@ fn check_reads(process: &Process, page: u64, counts: &mut Counts) -> Result<(), 
         counts,
     )?;
 
-    kill::send(process, SIGUSR2, Origin::User { pid: SENDER });
-    kill::send(process, SIGUSR1, Origin::User { pid: SENDER });
+    kill::send(
+        process,
+        SIGUSR2,
+        Origin::User {
+            pid: SENDER,
+            uid: 0,
+        },
+    );
+    kill::send(
+        process,
+        SIGUSR1,
+        Origin::User {
+            pid: SENDER,
+            uid: 0,
+        },
+    );
     let infos = read_infos(process, page, made, 3)
         .map_err(|_| "a signalfd with two signals pending could not be read")?;
     match infos.as_slice() {
@@ -426,8 +447,22 @@ fn check_reads(process: &Process, page: u64, counts: &mut Counts) -> Result<(), 
 /// the descriptor a mask that holds it.
 fn check_the_mask(process: &Process, page: u64, counts: &mut Counts) -> Result<(), &'static str> {
     let made = create(process, page, bit(SIGUSR2), SFD_NONBLOCK)?;
-    kill::send(process, SIGALRM, Origin::User { pid: SENDER });
-    kill::send(process, SIGUSR2, Origin::User { pid: SENDER });
+    kill::send(
+        process,
+        SIGALRM,
+        Origin::User {
+            pid: SENDER,
+            uid: 0,
+        },
+    );
+    kill::send(
+        process,
+        SIGUSR2,
+        Origin::User {
+            pid: SENDER,
+            uid: 0,
+        },
+    );
     let infos = read_infos(process, page, made, 3)
         .map_err(|_| "a signalfd with a signal of its mask pending could not be read")?;
     if !matches!(infos.as_slice(), [(SIGUSR2, ..)]) {
@@ -578,7 +613,14 @@ fn wait_out_a_signal(
         return Err("a read, poll or epoll_wait on a signalfd with nothing pending did not wait");
     }
     let sent = crate::timer::now_nanos();
-    kill::send(process, SIGUSR1, Origin::User { pid: SENDER });
+    kill::send(
+        process,
+        SIGUSR1,
+        Origin::User {
+            pid: SENDER,
+            uid: 0,
+        },
+    );
     let patience = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     let _ = DONE.wait_until_deadline(|| ANSWER.lock().is_some(), patience);
     let answer = ANSWER.lock().take();

@@ -2131,6 +2131,22 @@ pub(crate) static STAGE13_MOUNT_NAMESPACES: Explanation = Explanation {
           src/lib/fs/vfs/src/namespace.rs",
 };
 
+/// For `check_user_namespaces` in `stages_check.rs`, when
+/// `fs::userns_check::run` fails.
+pub(crate) static STAGE13_USER_NAMESPACES: Explanation = Explanation {
+    code: "FX-0888",
+    title: "A user namespace failed its self-check",
+    meaning: "`fs::userns_check::run` makes a process that is uid 1000 make a user namespace.               It must be named apart by /proc/<pid>/ns/user and read its ids as 65534 until               mapped; be refused a gid_map before setgroups is denied, a uid_map naming kernel               root or two ids, and a second write; be accepted its own id mapped to 0 and then               read 0 from getuid and in status, while the first namespace reads 1000; and be               refused sethostname, mount, setuid to an unmapped id (EINVAL) and setgroups, while               holding every capability in its own namespace. A chrooted process must be refused a               user namespace. On Credentials: a map opened by root and written by an               unprivileged holder must be refused, a set-user-id bit must be ignored by execve               in a child namespace, and the sets must go to the namespace's root alone. A               read-only bind of /proc/sys must refuse a write with EROFS               (docs/NAMESPACES.md §4, U1 to U9).",
+    causes: &[
+        "`Credentials::privileged` answers true for a process in a child user namespace.",
+        "`userns::write_map` accepts a map the rules of Linux's `new_idmap_permitted` refuse,          or judges only the opener or only the writer.",
+        "`credentials::kernel_id` or `Credentials::shown` is skipped at an id boundary.",
+        "`namespace::make_user_namespace` no longer compares the process's root with the          namespace's.",
+        "`Credentials::exec` honours a set-id bit, or gives the sets to a process that is not          its namespace's root.",
+    ],
+    see: "src/kernel/src/fs/userns_check.rs; src/kernel/src/syscall/userns.rs;           src/kernel/src/syscall/credentials.rs; src/kernel/src/syscall/namespace.rs",
+};
+
 /// For `check_semaphores` in `stages_check.rs`, when `syscall::sem_check::run`
 /// fails.
 pub(crate) static STAGE7_SEMAPHORES: Explanation = Explanation {

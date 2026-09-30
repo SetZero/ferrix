@@ -172,7 +172,14 @@ pub(crate) fn sys_kill(process: &Process, pid: i32, signal: u32) -> Result<usize
     let mut sent = false;
     for target in &targets {
         if may_signal(process, target, signal) {
-            send(target, signal, Origin::User { pid: caller });
+            send(
+                target,
+                signal,
+                Origin::User {
+                    pid: caller,
+                    uid: real_uid(process),
+                },
+            );
             sent = true;
         }
     }
@@ -217,7 +224,14 @@ pub(crate) fn sys_pidfd_send_signal(
     if !may_signal(process, target, signal) {
         return Err(Errno::EPERM);
     }
-    send(target, signal, Origin::User { pid: process.pid() });
+    send(
+        target,
+        signal,
+        Origin::User {
+            pid: process.pid(),
+            uid: real_uid(process),
+        },
+    );
     Ok(0)
 }
 
@@ -242,7 +256,14 @@ pub(crate) fn sys_tkill(process: &Process, tid: i32, signal: u32) -> Result<usiz
     if !may_signal(process, thread.process(), signal) {
         return Err(Errno::EPERM);
     }
-    send_to_thread(&thread, signal, Origin::Thread { pid: process.pid() });
+    send_to_thread(
+        &thread,
+        signal,
+        Origin::Thread {
+            pid: process.pid(),
+            uid: real_uid(process),
+        },
+    );
     Ok(0)
 }
 
@@ -276,8 +297,20 @@ pub(crate) fn sys_tgkill(
     if !may_signal(process, thread.process(), signal) {
         return Err(Errno::EPERM);
     }
-    send_to_thread(&thread, signal, Origin::Thread { pid: process.pid() });
+    send_to_thread(
+        &thread,
+        signal,
+        Origin::Thread {
+            pid: process.pid(),
+            uid: real_uid(process),
+        },
+    );
     Ok(0)
+}
+
+/// A process's real user id, as a kernel id: what `si_uid` is made from.
+fn real_uid(process: &Process) -> u32 {
+    process.with_credentials(|held| held.user.real)
 }
 
 /// Tell `child`'s parent that the child changed state: wake anything waiting
@@ -300,6 +333,7 @@ pub(crate) fn tell_parent(child: &Process, signal: u32, code: i32, status: i32) 
         Origin::Child {
             code,
             pid: child.pid(),
+            uid: real_uid(child),
             status,
         },
     );
