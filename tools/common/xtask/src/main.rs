@@ -108,6 +108,7 @@ mod orphans;
 mod parallel;
 mod paths;
 mod pe;
+mod pkg;
 mod ports;
 mod powerfail;
 mod procfs;
@@ -201,8 +202,11 @@ COMMANDS:
                   --mitigations off or told nokaslr
     test-kaslr    Boot the image twice and require the loader to have put the kernel somewhere new
     test-shell    Boot with a static busybox built in and require its script's output; again with it
-    test-apps     Boot once with every app in src/user/apps that has [[smoke]] checks, and require each
                   started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
+    test-apps     Boot once with every app in src/user/apps that has [[smoke]] checks, and require each
+                  check's line
+    test-pkg      Boot with pkg, the package manager, and require it to install, run and remove the stat
+                  service, and to refuse a changed package, a missing dependency and a needed removal
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-clipboard  Boot the desktop with its clipboard port on a socket xtask speaks vdagent over, and carry text both ways
@@ -556,6 +560,7 @@ fn run() -> Result<()> {
         "test-threads" | "test-sem" => sem::run(command, &args),
         "test-procfs" => procfs::test_procfs(&args),
         "test-apps" => apps::test_apps(&args),
+        "test-pkg" => pkg::test_pkg(&args),
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
@@ -895,6 +900,8 @@ fn build_init_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let utilities = uutils::carried(arch)?;
     let mut carried = rustc::default_links(args);
     carried.extend(init::carried(arch)?);
+    // The package manager, which is the system's, not an app.
+    carried.extend(pkg::carried(arch)?);
     // `--auth-seed`: authd, its seeds and the accounts it needs.
     carried.extend(auth::with_seeds(arch, args)?);
     // The apps, each installed from its package (`docs/APPS.md` §5).

@@ -366,7 +366,9 @@ impl Carried {
         // ported programs among them, curl and git, foot and the rest. Under
         // `--everything` every app, one with no package built, and a build
         // that fails stops the run.
-        let ports = crate::apps::installed(arch, args)?;
+        let mut ports = crate::apps::installed(arch, args)?;
+        // The package manager, which is the system's, not an app.
+        ports.extend(crate::pkg::carried(arch)?);
         Ok(Self {
             busybox,
             zinc: crate::zinc::build(arch)?,

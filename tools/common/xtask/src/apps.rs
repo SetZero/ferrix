@@ -163,6 +163,21 @@ pub(crate) fn folder(name: &str) -> Result<PathBuf> {
         .ok_or_else(|| Error::new(format!("there is no app `{name}` in {PLACE}")))
 }
 
+/// The package of the app `name` for `arch`, built now, or `None` for an
+/// architecture it is not built for: for a system test that installs a
+/// package itself, as test-pkg installs the stat service's.
+///
+/// # Errors
+///
+/// No app of that name, or a build that fails.
+pub(crate) fn built_package(name: &str, arch: Arch, release: bool) -> Result<Option<PathBuf>> {
+    let app = discover()?
+        .into_iter()
+        .find(|app| app.name() == name)
+        .ok_or_else(|| Error::new(format!("there is no app `{name}` in {PLACE}")))?;
+    package(&app, arch, release, Fresh::Always)
+}
+
 /// `cargo xtask apps`: every app, and whether its manifest reads.
 pub(crate) fn list() -> Result<()> {
     let apps = discover()?;

@@ -201,15 +201,39 @@ dependencies met, no two packages owning a path, no path outside the root --
 where `cargo test` reaches it. xtask builds with it on the host; the package
 manager will be the same code on Ferrix.
 
-## 7. Later: a package manager
+## 7. The package manager
+
+`/bin/pkg`, `src/user/system/linux/pkg`, first party and not an app: it
+manages the apps. It runs on any root (`--root`), so its host tests run it
+in a directory:
+
+```
+pkg list               the packages installed: their records
+pkg info NAME          one package: what it is, and each file
+pkg install FILE...    install packages (.fxpkg), together
+pkg remove NAME        remove a package
+```
+
+An install reads each archive with the kernel's own cpio reader and refuses
+it, before one file is written, when it is for another architecture, when an
+entry is not what its record says or a file its record lists is missing,
+when it is installed already, when what it depends on is neither installed
+nor coming with it (`ferrix_pkg::plan`), or when it would put down a path
+that is there -- another package's or the system's. The record is written
+last and removed first, so a package half put down is not installed. A
+removal is refused while an installed package depends on it; it deletes what
+the record lists and the directories it leaves empty. `cargo xtask test-pkg`
+boots it on every architecture: it installs, runs and removes the stat
+service and refuses a changed file, a missing dependency and a needed
+removal.
 
 What this leaves room for, and deliberately does not build yet:
 
-* **The tool.** `pkg install`, `remove`, `upgrade`, `list`, on Ferrix,
-  over `ferrix-pkg`. First party, not an app: it manages the apps.
+* **Upgrades.** `pkg install` of a package already installed is refused;
+  remove it first. An upgrade is a removal and an install in one plan.
 * **A repository.** An index of packages per architecture, built by CI and
   served statically (GitHub's releases or Pages), fetched with the curl
-  port that already runs.
+  app.
 * **Signatures.** The index and every package signed; this needs an
   Ed25519 the tree does not have yet. Digests come first, and are in the
   records from phase 1.
@@ -239,7 +263,9 @@ What this leaves room for, and deliberately does not build yet:
    a mechanical move of paths in xtask, the generators, CI and
    `LAYOUT.md`, done apart from the rest so it collides with as little
    other work as it can. Landed.
-4. **The package manager** (§7).
+4. **The package manager** (§7): `pkg list`, `info`, `install` of local
+   packages and `remove`, and `test-pkg`. Landed; a repository, signatures
+   and upgrades are later.
 
 ## 9. The customer's decisions
 
@@ -319,11 +345,20 @@ name (`apps::taken`), and the images that carried every built port carry
 the script apps already built (`apps::ported`). Every script build holds a
 lock on its work directory, the BACKLOG row two gates' btop builds filed.
 
-What is left:
+That landed as 4fd62d8a, and with it the last of phase 2. Then phase 4's
+first part: `/bin/pkg` (§7), a first-party Linux program in
+`src/user/system/linux/pkg` on `ferrix-pkg` and the kernel's cpio reader,
+with `list`, `info`, `install` of local packages and `remove`, host tests
+against a directory as the root, and `test-pkg`, which boots it on every
+architecture to install, run and remove the stat service and to refuse a
+changed file, a missing dependency and a needed removal; with `pkg`'s
+digest check turned off for one boot, `test-pkg` fails and names the four
+lines that refusal should have printed. Every image a person runs carries
+`pkg`.
 
-1. **The package manager** (§7), on `ferrix-pkg`: `pkg list`, `info`,
-   `install` of a local `.fxpkg` and `remove`, first-party, and a
-   `test-pkg` boot that installs, runs and removes an app.
+What is left is §7's list: upgrades, a repository with a signed index,
+atomic transactions on btrfs, building on Ferrix, and the system as
+packages. None is started; each waits on the customer's order.
 
 The root checkout's `main`, left at c1bd87fb on 2026-09-30 because another
 session had staged changes there, has since been moved past the rename.

@@ -534,10 +534,11 @@ fn compositor(root: &std::path::Path) -> Result<()> {
 }
 
 /// The Linux-ABI workspaces under `src/user/system/linux/` that the host steps do not
-/// reach: init's, authentication's and media's.
+/// reach: init's, authentication's, the package manager's and media's.
 fn userland(root: &std::path::Path) -> Result<()> {
     linux_workspace(root, "init", "src/user/system/linux/init")?;
     linux_workspace(root, "auth", "src/user/system/linux/auth")?;
+    linux_workspace(root, "pkg", "src/user/system/linux/pkg")?;
     step("auth: no sabotage in the environment", no_sabotage)?;
     media(root)
 }
