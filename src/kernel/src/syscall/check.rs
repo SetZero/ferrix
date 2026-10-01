@@ -5728,13 +5728,13 @@ const NAMESPACE_STATUS: i32 = 44;
 
 /// A program asking `clone` for a namespace Ferrix does not have is refused.
 ///
-/// Pid and network namespaces do not exist yet (the mount, user, UTS, IPC and
-/// cgroup ones do, and have their own boot line), and `unshare` says so. `clone` and
+/// Pid namespaces do not exist yet (the mount, user, UTS, IPC, cgroup and network
+/// ones do, and have their own boot lines), and `unshare` says so. `clone` and
 /// `clone3` did not: they never looked at the `CLONE_NEW*` bits, so a program
 /// that asked for a sandbox got an ordinary child in the one namespace there
 /// is, and no way to tell. The calls now answer alike, with the `EINVAL` a
 /// Linux built without `CONFIG_*_NS` answers. The program's two calls each name
-/// one of the two, pid in the first and network in the second, beside others that work; see
+/// pid, beside others that work; see
 /// [`arch::USER_NAMESPACE_PROGRAM`] for why `CLONE_NEWTIME` is not among them.
 fn check_clone_refuses_every_namespace() -> Result<(), &'static str> {
     if arch::USER_NAMESPACE_PROGRAM.is_empty() {
@@ -5756,7 +5756,7 @@ fn check_clone_refuses_every_namespace() -> Result<(), &'static str> {
     match status {
         NAMESPACE_STATUS => Ok(()),
         98 => Err("clone with CLONE_NEWPID, which does not exist, was not refused"),
-        97 => Err("clone with CLONE_NEWNET, which does not exist, was not refused"),
+        97 => Err("clone with CLONE_NEWPID beside the namespaces that exist was not refused"),
         _ => Err("a program that asks clone for namespaces did not exit as it should"),
     }
 }

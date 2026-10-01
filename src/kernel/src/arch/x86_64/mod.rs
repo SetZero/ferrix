@@ -507,16 +507,16 @@ pub(crate) const USER_FORK_PROGRAM: &[u8] = &[
 /// The two calls between them name every `CLONE_NEW*` flag `clone` can reach:
 /// the first `CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS`, which is what an
 /// unprivileged sandbox asks for and what Chrome's zygote asks for; the
-/// second `CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNET`. Each is refused
-/// for the one flag in it that has no namespace yet, pid and network; the
-/// others are built (`fs/smallns_check.rs`).
+/// second `CLONE_NEWCGROUP | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNET | CLONE_NEWPID`.
+/// Each is refused for the one flag in it that has no namespace yet, pid; the
+/// others are built (`fs/smallns_check.rs`, `fs/netns_check.rs`).
 /// Each carries `SIGCHLD`, so nothing but the namespaces can be what is
 /// refused. A kernel that ignored the flags would answer the first with a
 /// child's pid, and both the parent and that child would exit 98.
 ///
 /// ```text
 ///   movl $56, %eax ; movl $0x30020011, %edi ; zeroed rsi, rdx, r10, r8 ; syscall
-///   movl $56, %eax ; movl $0x4e000011, %edi ; zeroed rsi, rdx, r10, r8 ; syscall
+///   movl $56, %eax ; movl $0x6e000011, %edi ; zeroed rsi, rdx, r10, r8 ; syscall
 ///   cmp/cmn against -22 ; exit_group(44), or 98 and 97 for a call allowed
 /// ```
 ///
@@ -524,7 +524,7 @@ pub(crate) const USER_FORK_PROGRAM: &[u8] = &[
 pub(crate) const USER_NAMESPACE_PROGRAM: &[u8] = &[
     0xb8, 0x38, 0x00, 0x00, 0x00, 0xbf, 0x11, 0x00, 0x02, 0x30, 0x31, 0xf6, 0x31, 0xd2, 0x45, 0x31,
     0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05, 0x48, 0x83, 0xf8, 0xea, 0x75, 0x23, 0xb8, 0x38, 0x00, 0x00,
-    0x00, 0xbf, 0x11, 0x00, 0x00, 0x4e, 0x31, 0xf6, 0x31, 0xd2, 0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0,
+    0x00, 0xbf, 0x11, 0x00, 0x00, 0x6e, 0x31, 0xf6, 0x31, 0xd2, 0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0,
     0x0f, 0x05, 0x48, 0x83, 0xf8, 0xea, 0x75, 0x0e, 0xbf, 0x2c, 0x00, 0x00, 0x00, 0xeb, 0x0c, 0xbf,
     0x62, 0x00, 0x00, 0x00, 0xeb, 0x05, 0xbf, 0x61, 0x00, 0x00, 0x00, 0xb8, 0xe7, 0x00, 0x00, 0x00,
     0x0f, 0x05, 0x0f, 0x0b,
