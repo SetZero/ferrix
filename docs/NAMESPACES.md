@@ -1229,8 +1229,7 @@ root and the `cgroup.procs` move rule (`cgroupfs.rs`, `fsctl.rs`); procfs's
 a check and a negative control for every rule above, and `kmem_check` fills
 for the three new kinds.
 
-**The small namespaces, built (2026-09-30, os-smallns, branch
-`stage13-smallns` on `stage13-n4-userns`, not landed).** UTS, IPC and cgroup
+**The small namespaces, built (2026-09-30, os-smallns; landed 2026-10-01).** UTS, IPC and cgroup
 namespaces; `CLONE_NEWUTS`, `CLONE_NEWIPC` and `CLONE_NEWCGROUP` through
 `clone`, `clone3` and `unshare`, alone or with `CLONE_NEWUSER` and
 `CLONE_NEWNS`; namespace files; `setns` by descriptor and by pidfd. The
@@ -1356,6 +1355,13 @@ each stopping the boot with `smallns self-check failed: <message>`
 | `CLONE_NEWIPC` excludes `CLONE_SYSVSEM` | the test off | CLONE_NEWIPC with CLONE_SYSVSEM was not refused EINVAL |
 | no new namespace for a thread | the test off | CLONE_NEWUTS with CLONE_THREAD was not refused EINVAL |
 | pid and network stay `EINVAL` | `CLONE_NEWNET` in `unshare`'s mask | unshare(CLONE_NEWNET) was not refused |
+| B1 a native child takes its creator's UTS, IPC and cgroup namespaces | `load_native` does not copy the proxy | `mount namespace self-check failed: a native child's UTS, IPC or cgroup namespace was not its creator's` |
+| C1 a `cgroup.procs` write is judged in the opener's namespace | `write_to` asks the writer's (`acting()`) | a descriptor opened inside a cgroup namespace moved a process out of it after its writer left |
+| C1 `CLONE_INTO_CGROUP` stays inside the creator's root | the namespace test in `clone_target` off | CLONE_INTO_CGROUP started a child outside its creator's cgroup namespace |
+| C1 `job_for_cgroup` gives no MANAGE outside the root | the test answers `true` | a MANAGE handle was given for a cgroup outside the caller's cgroup namespace |
+| N3 condition: a read-only bind of `/proc/sys` refuses writes | the remount drops `MS_RDONLY` | `user namespace self-check failed: a write through a read-only bind of /proc/sys was not refused EROFS` |
+| N4 U1 `privileged()` is the first namespace's only | `privileged()` is `holds(CAP_SYS_ADMIN)` | root inside a namespace made a device node (CAP_MKNOD) |
+| N4 U1 again | `privileged()` ignores the namespace | kernel root inside a child namespace was privileged in the whole system's sense |
 | cgroup paths are the reader's | the common prefix is not counted | /proc/<pid>/cgroup did not read / at the namespace's root |
 | ... with `..` outside | `..` written as `x` | a cgroup outside the namespace's root was not shown with /.. |
 | a mount is rooted in the namespace | `cgroup2` mounts the whole tree | a cgroupfs mounted in a cgroup namespace did not have its root as / |
