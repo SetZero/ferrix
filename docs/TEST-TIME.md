@@ -362,26 +362,66 @@ compositor on x86_64.
 ### A1-A3 in place (2026-10-01)
 
 `gate.sh run <ref> <tag> <xtask args...>` and `gate.sh control <ref> <tag>
-<file> <old> <new> [--expect TEXT] -- <xtask args...>` take the arguments
-`os7c-queue.sh` takes, and `gate.sh status` shows the slots, the load and
-the disk. The log is `logs/queue/<tag>.log`; its header has the commit, the
-slot, the seconds waited, the load and the free disk; `logs/queue/pool-summary`
-has a line a run. A run waits while the load is above 36 and is refused
-under 20 GB free. Two slots: slot 1 is `os7c-n4` with `target-os7c`,
-slot 2 `gate-slot-2` with `target-gate-slot-2`. A third waits for disk:
-`target-gate-slot-2` held 15 GB after one `check` and one boot,
-`target-os7c` 31 GB after a day of stage-13 rows, and nazuna had 81 GB free.
+<file> <old> <new> [--all] (--expect TEXT | --expect-line TEXT) -- <xtask
+args...>` take the arguments `os7c-queue.sh` takes, and `gate.sh status`
+shows the slots, the load and the disk; `gate.sh` alone prints its own
+description. A run waits while the load is above 36 and is refused under
+20 GB free. Waiting runs are served in the order they queued (a ticket
+each in `logs/queue/waiting`, which `status` lists); runs through
+`os7c-queue.sh` take slot 1 by its own lock.
 
-First runs, main ac7b1ca0, at load 10 to 17 (`logs/queue/pool-summary`):
-slot 2's first `check`, from an empty target dir, 338 s; then a negative
-control (the last-message check's comparison turned around) through
-`test-boot --arch x86_64 --accel kvm`, 44 s, `control: FIRED` on the
-expected line; the same control with nothing changed, 16 s, `control: DID
-NOT FIRE`. Neither waited.
+The log is `logs/queue/<tag>.log`. Its header has what a reviewer needs to
+cite the run: the full commit and tree hashes, the slot and that its
+worktree was clean after the checkout (a dirty slot is refused), the UTC
+times queued and started, the seconds waited, `uptime`, `rustc -V`, each
+QEMU's path and version, and the exact xtask arguments; then `== xtask
+output`, the end time and the run's length, a verdict, and `queue: exit N`.
+`logs/queue/INDEX` has a line a run (UTC time, tag, full hash, mode,
+verdict, log), for the auditor and the consultant, and
+`logs/queue/pool-summary` a line a run with the seconds waited and run.
+
+**Verdicts.** `run: PASSED` only when xtask exited 0 and, for `test-boot`,
+the output holds `FERRIX-BOOT-OK`. A control's edit is refused when its text
+matches nowhere, more than once (unless `--all`), or changes nothing; the
+log keeps the matched line numbers and the diff that ran. `--expect TEXT`
+ends `control: FIRED (panic): <the line>` only when xtask failed and a line
+of its output, never the header, holds both `FERRIX-PANIC` and TEXT.
+`--expect-line` drops the panic, for a control whose failure is not a kernel
+panic, and then also needs a guest's serial line (`  <seconds> | ...`) in
+the output, proof that the build finished and a guest started; it ends
+`control: FIRED (line, no panic): <the line>` with a `guest started:` line
+above. Anything else is `control: DID NOT FIRE (why)`. The certification
+consultant accepts either FIRED line as a control's evidence (os-ad,
+2026-10-01). The first version searched the whole log, whose header quotes
+TEXT, so any failure read FIRED (finding D1, the same day); fixed before any
+control evidence was cited, with these runs on main 204f7214 and ff5e45ef
+(`logs/queue/os5d-d1-*.log`), from before the verdict named its mode:
+
+| Run | Edit | Verdict |
+|---|---|---|
+| fires | the last-message check's comparison turned around | `control: FIRED: 5.55 \| FERRIX-PANIC stage 9 self-check failed: a closed peer's messages were not read back in order` |
+| passes | a comment changed | `control: DID NOT FIRE (xtask passed)` |
+| nobuild | `compile_error!` carrying the expected text, which the compiler's output quotes four times | `control: DID NOT FIRE (xtask failed with exit 1, but no output line with FERRIX-PANIC holds the expected text)` |
+| nochange | old and new the same | `control: REFUSED (the edit changed nothing)` |
+| twice | a text that matches more than once | `control: REFUSED (matches more than once; --all not given)` |
+| run | `test-boot --arch x86_64 --accel kvm` | `run: PASSED` |
+
+**Slots.** Slot 1 is `os7c-n4` with `target-os7c`, the stage-13 queue's,
+whose lock it shares; slot 2 `gate-slot-2` with `target-gate-slot-2`; slot 3
+`gate-slot-3` with `target-gate-slot-3`, opened the same afternoon when seven
+runs waited for two slots at a load of 7 (113 GB free). `target-gate-slot-2`
+held 15 GB after one `check` and one boot, `target-os7c` 31 GB after a day of
+stage-13 rows. While free space is under 50 GB a run does not take slot 3,
+and once slot 3 is idle `gate.sh` deletes its worktree and target dir by
+exact name and says so in `pool-summary`.
+
+First runs, main ac7b1ca0, at load 10 to 17: slot 2's first `check`, from
+an empty target dir, 338 s; a warm `check` on the next branch 152 s; a
+control through `test-boot --arch x86_64 --accel kvm` 44 s. None waited.
 
 The phase's owner keeps the slots. When the pool winds down, the owner
-deletes `gate-slot-2`'s worktree and `target-gate-slot-2`, by exact name;
-slot 1 stays the stage-13 queue's, and its owner keeps or deletes it.
+deletes `gate-slot-2` and `gate-slot-3` with their target dirs, by exact
+name; slot 1 stays the stage-13 queue's, and its owner keeps or deletes it.
 
 ## Next
 
