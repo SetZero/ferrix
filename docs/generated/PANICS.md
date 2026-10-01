@@ -84,6 +84,7 @@ Causes are listed most likely first.
 | [FX-0904](#fx-0904) | a service the item leans on failed its self-check |
 | [FX-0905](#fx-0905) | a job quota did not bound what it claims to |
 | [FX-0906](#fx-0906) | the kernel heap a job drove through the Linux calls was not bounded by its job |
+| [FX-0907](#fx-0907) | a process left its speculation domain where it may not wait |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
@@ -2008,6 +2009,30 @@ path its memory limit does not see (certification finding F-37, T.EXHAUST).
 
 See: src/kernel/src/fs/kmem_check.rs; src/lib/kernel/kmem/src/lib.rs;
 src/kernel/src/object/quota.rs; docs/certification/IMPLEMENTATION.md W-15.
+
+<a id="fx-0907"></a>
+
+## FX-0907 — a process left its speculation domain where it may not wait
+
+A member of a speculation domain that leaves it -- a move between jobs, a set-id
+`execve`, a change of credentials, `PR_SET_DUMPABLE` -- makes every processor
+whose last space was in the domain issue the predictor barrier before it goes
+on, and waits for them in a grace period (`docs/OPAQUE-KERNEL.md` §9.3b, F1). A
+grace period waits on every processor, so it may not be waited for holding a
+spin lock another processor may spin on with interrupts masked, nor with
+interrupts masked, which is a read-side section here: either can deadlock the
+machine at random. The leave checks first and stops the machine instead, naming
+the site.
+
+1. A new caller of `syscall::attributes::update`, `Process::move_to` or
+   `Process::leave_speculation_domain` holds a `sync::SpinLock`, or masks
+   interrupts, when a member reaches it. Take the leave out from under the lock:
+   decide under it, leave after it.
+2. A path that used to reach `update` without a lock now holds one across it,
+   such as a change of credentials made inside `with_credentials`.
+
+See: src/kernel/src/object/process.rs leave_speculation_domain;
+src/kernel/src/smp.rs synchronize; docs/OPAQUE-KERNEL.md §9.3b.
 
 <a id="fx-1001"></a>
 

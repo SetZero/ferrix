@@ -1006,7 +1006,7 @@
     },
     {
       "file": "object/job.rs",
-      "lines": "132",
+      "lines": "136",
       "category": "failure-path",
       "match": "Job::new_tree_root().unwrap_or_else(|_| {",
       "why": "The root job is made once, by bring-up, before any program exists to be told memory ran out; the allocation is FATAL-ALLOC by design (`tools/common/check/check-fallible-alloc.py` lists it) and this is the panic it ends in. A run reaching it is a boot that ran out of memory before its first program."
@@ -1069,21 +1069,21 @@
     },
     {
       "file": "object/process.rs",
-      "lines": "610",
+      "lines": "708",
       "category": "defensive",
       "match": "debug_assert!(",
       "why": "The failure half of a debug assertion that interrupts are enabled when a process's watchers are reached: their lock is a plain one, which an interrupt handler may not take. Every caller is a system call or a task's exit, with interrupts on; reaching the row is the assertion firing."
     },
     {
       "file": "object/process.rs",
-      "lines": "634",
+      "lines": "732",
       "category": "defensive",
       "match": "debug_assert!(",
       "why": "As `Exit::observe`'s: the failure half of the assertion that interrupts are on when a process's watchers are closed."
     },
     {
       "file": "object/process.rs",
-      "lines": "776",
+      "lines": "874",
       "category": "defensive",
       "match": "debug_assert!(",
       "why": "The failure half of the assertion that an unstarted process's last handle is dropped with interrupts on, since the kill it causes may block. Handles close from system calls and exits, with interrupts on; the object check closes unstarted children's handles and reaches the kill."
@@ -1265,28 +1265,28 @@
     },
     {
       "file": "smp.rs",
-      "lines": "734, 738-739",
+      "lines": "738, 742-743",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The failure arm of a `debug_assert!` and its message's arguments: a shootdown requested while holding a lock that disables preemption, which the assertion exists to stop on. It holds on every run of the suite."
     },
     {
       "file": "smp.rs",
-      "lines": "760",
+      "lines": "764",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The failure arm of a `debug_assert!`: a shootdown that has to wait for other processors requested with interrupts masked, which no other processor could answer. It holds on every run."
     },
     {
       "file": "smp.rs",
-      "lines": "801",
+      "lines": "805",
       "category": "failure-path",
       "match": "stood / 1_000_000",
       "why": "The millisecond count in the `fatal!` a processor raises when no shootdown turn started for the timeout while it waited, printed as the kernel stops."
     },
     {
       "file": "smp.rs",
-      "lines": "857",
+      "lines": "861",
       "category": "failure-path",
       "match": "waited / 1_000_000",
       "why": "The millisecond count in the `fatal!` raised when a processor never answered a shootdown or a grace period, printed as the kernel stops."
@@ -1321,56 +1321,56 @@
     },
     {
       "file": "syscall/native.rs",
-      "lines": "1545",
+      "lines": "1571",
       "category": "defensive",
       "match": "}",
       "why": "The closing row of image_bytes is the drop of its buffer when a page of the image's VMO cannot be read: a VMO's pages up to its length always read, a decommitted one as zeros."
     },
     {
       "file": "syscall/native.rs",
-      "lines": "1611",
+      "lines": "1637",
       "category": "defensive",
       "match": "return Err(status::BAD_STATE);",
       "why": "A child whose table closed between the start's claim and the move -- killed in that window -- or one with no room: a child that has not run has an empty table with a limit of 4096, and a kill in the window is a race no check can place."
     },
     {
       "file": "syscall/native.rs",
-      "lines": "1614",
+      "lines": "1640",
       "category": "defensive",
       "match": "return Err(status::NO_HANDLES);",
       "why": "A child whose table closed between the start's claim and the move -- killed in that window -- or one with no room: a child that has not run has an empty table with a limit of 4096, and a kill in the window is a race no check can place."
     },
     {
       "file": "syscall/native.rs",
-      "lines": "1624",
+      "lines": "1650",
       "category": "defensive",
       "match": ".map_err(|object| source.insert(object, rights))) // FALLIBL",
       "why": "An insert into the target table that fails although room was checked and reserved under the same lock a statement earlier: the object is put back in the source, or freed if even that fails. The handle table's insert refuses only without room or memory, and both were settled under the held lock."
     },
     {
       "file": "syscall/native.rs",
-      "lines": "1630-1631",
+      "lines": "1656-1657",
       "category": "defensive",
       "match": "Err(Err(object)) => {",
       "why": "An insert into the target table that fails although room was checked and reserved under the same lock a statement earlier: the object is put back in the source, or freed if even that fails. The handle table's insert refuses only without room or memory, and both were settled under the held lock."
     },
     {
       "file": "syscall/native.rs",
-      "lines": "2011",
+      "lines": "2037",
       "category": "absent-hardware",
       "match": "return Err(status::INVALID_ARGS);",
       "why": "A coherent pin for a device that does not snoop the caches: the STM32MP15's peripherals. Every device QEMU presents is DMA-coherent (PCI on q35, and dma-coherent virtio-mmio on virt), so past_caches is false on every measured machine."
     },
     {
       "file": "syscall/native.rs",
-      "lines": "2015-2016",
+      "lines": "2041-2042",
       "category": "absent-hardware",
       "match": "if !vmo.make_coherent() {",
       "why": "A coherent pin for a device that does not snoop the caches: the STM32MP15's peripherals. Every device QEMU presents is DMA-coherent (PCI on q35, and dma-coherent virtio-mmio on virt), so past_caches is false on every measured machine."
     },
     {
       "file": "syscall/native.rs",
-      "lines": "2018-2019",
+      "lines": "2044-2045",
       "category": "absent-hardware",
       "match": "for frame in held.frames() {",
       "why": "A coherent pin for a device that does not snoop the caches: the STM32MP15's peripherals. Every device QEMU presents is DMA-coherent (PCI on q35, and dma-coherent virtio-mmio on virt), so past_caches is false on every measured machine."
@@ -1440,56 +1440,56 @@
     },
     {
       "file": "user/space.rs",
-      "lines": "269",
+      "lines": "273",
       "category": "defensive",
       "match": "})?;",
       "why": "`ferrix_vma::AddressSpace::new` refuses a window whose ends are not page aligned or out of order, and the window here is `MMAP_MIN_ADDR..USER_VIRT_END`, two constants of the layout that are both. Reported rather than panicked on, as the comment says."
     },
     {
       "file": "user/space.rs",
-      "lines": "472",
+      "lines": "555",
       "category": "defensive",
       "match": "Ok((vmo.page(index).unwrap_or(shared), None))",
       "why": "A page found held by a device between the fault reading its reference count and taking it. A pin makes a shared page the object's own first (`Vmo::hold` copies it), so a copy-on-write fault finds a held page only if a pin lands in those few instructions on another processor, which no check can place deterministically."
     },
     {
       "file": "user/space.rs",
-      "lines": "684",
+      "lines": "767",
       "category": "credited-elsewhere",
       "match": "let _ = inner.native.remove(&id);",
       "why": "Run whenever a mapping is abandoned part-way: the allocation sweep's `fork` scenario fails the file mapping's table insert after a native object is mapped, and `abandon_region` runs (its lines 637 and 641 are reached). The line's only statement row is on the removal of an entry the set holds, and `abandon_region` is only called for an id that never went into the native set -- a native mapping whose insert failed, or a file mapping -- so the search always ends empty-handed, under the inlined `BTreeSet::remove`'s rows."
     },
     {
       "file": "user/space.rs",
-      "lines": "1110",
+      "lines": "1192",
       "category": "defensive",
       "match": "};",
       "why": "A private file mapping's region whose file object or shadow is missing from the tables. `map_file` records both under the region's id before the region can fault, and they leave together as the region's id leaves; a fault finding one missing would be the tables and the map disagreeing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2277",
+      "lines": "2359",
       "category": "defensive",
       "match": "debug_assert!(",
       "why": "The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2281-2282",
+      "lines": "2363-2364",
       "category": "defensive",
       "match": "site.map_or(\"?\", |site| site.file()),",
       "why": "The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2565",
+      "lines": "2647",
       "category": "defensive",
       "match": "return Err(SpaceError::NotUserRange(at));",
       "why": "`map_anywhere`'s refusal of a place outside the user half. `find_free` answers only places inside the map's window, `MMAP_MIN_ADDR..USER_VIRT_END`, so the place it found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract."
     },
     {
       "file": "user/space.rs",
-      "lines": "2769",
+      "lines": "2851",
       "category": "defensive",
       "match": "return Err(SpaceError::NotUserRange(at));",
       "why": "`map_shared_code`'s refusal of a place outside the user half, as `map_anywhere`'s is. `find_free` answers only places inside the map's window (its contract, `src/lib/kernel/vma/src/lib.rs`), and a space's window is `MMAP_MIN_ADDR..USER_VIRT_END` when built (`AddressSpace::new`) and never raised past `USER_VIRT_END` after (`set_ceiling` refuses it), so the place found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract."
