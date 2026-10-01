@@ -32,6 +32,8 @@ for the item, `land.sh`.
 
 ## Stage 13: namespaces, cgroups, seccomp
 
+os-7c's [stage 13 handover](stage-13-handover.md), landed the same evening,
+is the fuller account of these branches and what each owes; read it first.
 The stage's exit is the container test. State on 2026-10-01: N4, S1, S2,
 smallns and pidns landed; the rest are chains of os-7c's agents. Resume from
 the plain `stage13-<part>` branch of each; the `-presquash`, `-hist`, `-v2`,
