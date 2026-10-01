@@ -99,6 +99,10 @@ const TUI_PROMPT: &str = "ferrix-gate: run the check, typed at the TUI";
 /// on its prompt. `@KEYTAIL@` is those 20 characters.
 const CONFIG: &str = r#"{"hasCompletedOnboarding":true,"theme":"dark","customApiKeyResponses":{"approved":["@KEYTAIL@"],"rejected":[]},"projects":{"/tmp":{"hasTrustDialogAccepted":true,"allowedTools":[]}}}"#;
 
+/// Claude Code's program, under the tree `fetch-claude-code.sh` leaves
+/// beside the volume.
+const PROGRAM: &str = "claude-code/claude";
+
 /// `/bin/claude`: Claude Code from the volume, with bash as the shell its
 /// Bash tool runs commands in whatever shell started it -- the desktop's
 /// terminals run zinc -- and its updater off, since it would replace a
@@ -202,13 +206,22 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
 }
 
 /// The script, for [`Api`] listening on `port`.
-fn script(port: u16) -> String {
+fn script(port: u16, ferrousli: bool) -> String {
     let tail = KEY.get(KEY.len().saturating_sub(20)..).unwrap_or(KEY);
-    SCRIPT
+    let script = SCRIPT
         .replace("@CONFIG@", &CONFIG.replace("@KEYTAIL@", tail))
         .replace("@PORT@", &port.to_string())
         .replace("@KEY@", KEY)
-        .replace("@PROMPT@", PROMPT)
+        .replace("@PROMPT@", PROMPT);
+    if ferrousli {
+        format!(
+            "export LD_LIBRARY_PATH={}
+{script}",
+            crate::chrome::LIBRARY_PATH
+        )
+    } else {
+        script
+    }
 }
 
 /// What typing at the TUI came to.
@@ -364,6 +377,21 @@ pub(crate) fn test_claude_code(args: &Args) -> Result<()> {
     } else {
         volume()?
     });
+    // The `--everything` desktop runs the volume's glibc programs on
+    // ferrousli's loader, in `/lib64`, and its `libc.so.6`, unless
+    // `--interpreter glibc` asks for the volume's own
+    // (`compositor::browser::chrome_libc`); so does this boot. It is what
+    // `claude` meets in that desktop's terminals.
+    let ferrousli = args.everything && args.interpreter.as_deref() != Some("glibc");
+    if ferrousli && !crate::chrome::on_ferrousli(&args) {
+        args.interpreter = Some(shell::FERROUSLI.to_owned());
+        args.libraries = vec![shell::FERROUSLI.to_owned()];
+    }
+    let carried = if ferrousli {
+        crate::chrome::ferrousli_loader(arch, &volume()?, PROGRAM, &args)?
+    } else {
+        Vec::new()
+    };
     args.net = true;
     if !args.memory_given {
         args.memory = MEMORY;
@@ -380,16 +408,24 @@ pub(crate) fn test_claude_code(args: &Args) -> Result<()> {
     } else {
         "its own volume"
     };
-    println!("  {arch}: building an image whose shell runs Claude Code on glibc, from {on}");
+    let libc = if ferrousli {
+        "ferrousli's loader and libc.so.6"
+    } else {
+        "glibc"
+    };
+    println!("  {arch}: building an image whose shell runs Claude Code on {libc}, from {on}");
     let loader = cargo::build_loader(arch, args.release)?;
-    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script(api.port))?;
+    let kernel =
+        cargo::build_kernel_with_init(arch, args.release, &shell, &script(api.port, ferrousli))?;
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
     // The project's busybox for `udhcpc` and the `ip` its lease script runs;
     // zinc stays the shell.
     let busybox = busybox::program(arch)?;
-    let archive = initramfs::build(Some(&busybox), &natives, Some(&bytes), &desktop_files(&[]))?;
+    let mut files = desktop_files(&carried);
+    files.extend(carried);
+    let archive = initramfs::build(Some(&busybox), &natives, Some(&bytes), &files)?;
     let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
 
     println!(
@@ -921,13 +957,19 @@ mod tests {
 
     #[test]
     fn the_script_carries_the_port_key_and_prompt_and_no_placeholder() {
-        let script = script(4242);
+        let script = script(4242, false);
         assert!(script.contains("ANTHROPIC_BASE_URL=http://10.0.2.2:4242 "));
         assert!(script.contains(&format!("ANTHROPIC_API_KEY={KEY}\n")));
         assert!(script.contains(&format!("-p '{PROMPT}'")));
         assert!(!script.contains('@'));
         // The script must not already hold what the reply is required to.
         assert!(!script.contains("ferrix-bash-42"));
+        assert!(!script.contains("LD_LIBRARY_PATH"));
+        // On ferrousli the search path comes first, as the desktop's
+        // compositor gives it to what it starts.
+        let on_ferrousli = super::script(4242, true);
+        assert!(on_ferrousli.starts_with("export LD_LIBRARY_PATH=/lib:/lib/x86_64-linux-gnu\n"));
+        assert!(on_ferrousli.ends_with(&script));
     }
 
     #[test]

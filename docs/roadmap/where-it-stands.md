@@ -11,8 +11,10 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
   prompt, runs the model's Bash command on Ferrix and sends back its
   output, and `claude` is in the `--everything` desktop's terminals, and so
   in `remote-desktop`'s. It needed AVX: the kernel saves it with `XSAVE`
-  now, and every x86-64 guest's model has x86-64-v3. The Claude desktop app
-  is next, as an assessment.
+  now, and every x86-64 guest's model has x86-64-v3. On that desktop it
+  runs on ferrousli, as every glibc program there does, since ferrousli got
+  the POSIX timers on 2026-10-01. The Claude desktop app is next, as an
+  assessment.
 
 * **The trip to ring 3 is being cut** (2026-09-30, `docs/OPAQUE-KERNEL.md`
   § 8). The customer's direction is Linux software beside safety functions

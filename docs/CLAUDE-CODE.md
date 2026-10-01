@@ -4,7 +4,7 @@ Asked by the customer on 2026-09-30: "add Claude Code (CLI first, then the
 desktop) to Ferrix". This is the account of the first half -- the command
 line -- and of what running it found. The desktop app is §7.
 
-## Where it stands, 2026-09-30
+## Where it stands, 2026-10-01
 
 **Claude Code runs on Ferrix, since 2026-09-30.** Anthropic's prebuilt
 native release 2.1.280 for linux-x64 -- not one built here -- starts on
@@ -18,13 +18,14 @@ an API xtask serves itself (§4), in about two seconds of the guest's time.
 | Claude Code's native linux-x64 build on Debian's glibc, from a pinned volume | **done** 2026-09-30, `tools/common/fetch/fetch-claude-code.sh` (§2) |
 | AVX for programs: `XSAVE` in the kernel, and x86-64-v3 on the QEMU model | **done** 2026-09-30, the one thing running it found missing (§3) |
 | `claude --version`, and a turn of `claude -p` that runs a tool on Ferrix | **done** 2026-09-30, `cargo xtask test-claude-code` (§4) |
-| `claude` in the terminals of `run-compositor --everything`, and so of `remote-desktop`'s desktop | **done** 2026-09-30, `cargo xtask test-claude-code --everything` (§5) |
+| `claude` in the terminals of `run-compositor --everything`, and so of `remote-desktop`'s desktop | **done** 2026-09-30; broken there until 2026-10-01, when the gate learned to run it on ferrousli as that desktop does (§5) |
+| On ferrousli's loader and `libc.so.6` in glibc's place, as the `--everything` desktop runs every glibc program | **done** 2026-10-01, ferrousli's POSIX timers; `cargo xtask test-claude-code --everything` (§5) |
 | The interactive TUI, typed at on the console: a prompt, the tool's answer drawn, `/exit` | **done** 2026-09-30, the same gate's second half (§5) |
 | Claude Code in the `--everything` desktop's launcher, in a terminal of its own | **done** 2026-09-30, `claude.desktop` (§5) |
 | Zenbleed and Gather Data Sampling: AVX withheld where nothing covers them | **done** 2026-09-30, `speculation::vector_leak` (§3) |
 | A real account | not tried: it needs the customer's (§5) |
 | AVX state in a 32-bit program's signal frame | a first attempt backed out; what it takes is in §3 |
-| On ferrousli in glibc's place; on AArch64 with the linux-arm64 build | not started (§6) |
+| On AArch64 with the linux-arm64 build | not started (§6) |
 | The Claude desktop app, which Anthropic builds for macOS and Windows only | assessment next (§7) |
 
 **Certification review (consultant, 2026-09-30): OK**, on b0db74ef, after a
@@ -273,9 +274,34 @@ is started afresh every boot. `cargo xtask remote-desktop` boots
 `run-compositor --everything` on the machine it names, so its desktop has
 `claude` wherever the volume has been fetched there.
 `cargo xtask test-claude-code --everything` runs the gate's script on that
-merged volume, through the same `/bin/claude`, so what it passes is what a
-terminal on the desktop runs. The plain gate goes through `/bin/claude`
-too.
+merged volume, through the same `/bin/claude`, and on the same libc as the
+desktop (below), so what it passes is what a terminal on the desktop runs.
+The plain gate goes through `/bin/claude` too, on the volume's glibc.
+
+**On ferrousli, as the desktop runs it** (2026-10-01). The `--everything`
+desktop runs Chrome, and with it every glibc program on the data volume, on
+ferrousli's loader in `/lib64` and its `libc.so.6` in `/lib`, unless
+`--interpreter glibc` asks for the volume's own (`docs/CHROME.md`).
+5f89f107 made `/bin/claude`'s files leave `/lib64` to that loader, so
+`claude` in the desktop's terminals ran on ferrousli -- and ended at once,
+`--version` too, with `ld-ferrousli: undefined symbol: timer_create`. The
+gate had passed all along because it booted with glibc's links, which the
+desktop does not have. Claude Code imports four names ferrousli lacked
+without a weak binding: `timer_create`, `timer_settime`, `timer_delete` and
+`__cxa_at_quick_exit`. ferrousli's loader binds every name at start, so the
+first missing one ends the program, though a session calls none of the
+timers (traced on the host). ferrousli now has all five POSIX timer
+functions, each its system call as in musl -- Ferrix's kernel answers them
+`ENOSYS`, as it answers glibc's, and a Linux host runs ferrousli's C test of
+them for real -- with `SIGEV_THREAD` refused by `ENOTSUP` until ferrousli
+starts timer threads; and `__cxa_at_quick_exit`. The weak ones it lacks
+(`pidfd_spawnp`, `pidfd_getpid`, `posix_spawn_file_actions_addchdir`,
+zstd's trace hooks) resolve to null, and Claude Code runs without them.
+The gate with `--everything` now carries ferrousli's loader and
+`libc.so.6` as the desktop does, with its search path, and passes: the
+`-p` turn runs bash and the TUI answers. **The negative control**: the same
+gate with `main`'s ferrousli fails with the desktop's own words,
+`ld-ferrousli: undefined symbol: timer_create`, and the shell exits 3.
 
 **The TUI, gated** (2026-09-30). After its `-p` turn, the gate's script
 writes `~/.claude.json` -- onboarding done, the gate's key approved by its
@@ -303,9 +329,8 @@ What is left:
 
 ## 6. Elsewhere
 
-* **ferrousli in glibc's place**, as Chrome runs (`test-chrome
-  --interpreter ferrousli --library ferrousli`): Claude Code imports only
-  glibc's own names, so this should be the shortest of Chrome's steps.
+* **ferrousli in glibc's place**: done on the `--everything` desktop,
+  2026-10-01 (§5). The plain gate stays on the volume's glibc.
 * **AArch64**: Anthropic publishes linux-arm64, for the Pixel 7's VM; its
   Bun build needs no AVX.
 

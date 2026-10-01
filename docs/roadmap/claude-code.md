@@ -27,12 +27,19 @@ desktop's volume, whose terminals, and `remote-desktop`'s, have `claude`.
 * The volume, the gate and its API, and `claude` on the `--everything`
   desktop (§2, §4, §5).
 
+**Done (2026-10-01).** `claude` on the `--everything` desktop had ended at
+start since 5f89f107, on ferrousli's loader, which that desktop runs every
+glibc program on: `ld-ferrousli: undefined symbol: timer_create`. The gate
+had booted with glibc's links. ferrousli now has the POSIX timers and
+`__cxa_at_quick_exit`, and `test-claude-code --everything` runs Claude Code
+on ferrousli as the desktop does, with a negative control (§5).
+
 **Still to do:**
 
 * A real account over the real network (§5).
 * An i386 signal frame with the `XSAVE` area: a first attempt backed out,
   what it takes in §3 (`docs/BACKLOG.md`).
-* On ferrousli in glibc's place, and linux-arm64 on AArch64 (§6).
+* linux-arm64 on AArch64 (§6).
 * The Claude desktop app, an Electron application Anthropic builds for
   macOS and Windows only: the customer chose it on 2026-09-30, and an
   assessment comes before any building (§7).

@@ -165,7 +165,7 @@ pub(crate) fn arm64_volume() -> Result<std::path::PathBuf> {
 
 /// The search path that finds ferrousli's `libc.so.6` in `/lib` before the
 /// volume's libraries.
-const LIBRARY_PATH: &str = "/lib:/lib/x86_64-linux-gnu";
+pub(crate) const LIBRARY_PATH: &str = "/lib:/lib/x86_64-linux-gnu";
 
 /// Whether `--interpreter` or `--library` asks for Chrome on ferrousli.
 pub(crate) fn on_ferrousli(args: &Args) -> bool {
