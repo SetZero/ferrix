@@ -32,9 +32,10 @@ package FerrixRoadmap {
         doc /* cargo xtask test-boot --arch <a>: boot firmware, loader and
              * kernel under QEMU and require FERRIX-BOOT-OK within the
              * timeout. Every stage's exit criterion is a self-check in kmain
-             * and a line in this log. Under tcg by default; --accel auto uses
-             * the host's MMU and TLB, which is the only way a missing
-             * invalidation is reachable. */
+             * and a line in this log. Under tcg by default, except an x86-64
+             * guest on an x86-64 Linux host outside CI, which runs under kvm;
+             * kvm and --accel auto use the host's MMU and TLB, which is the
+             * only way a missing invalidation is reachable. */
         subject os : Ferrix;
         attribute arch : IsaFamily;
         attribute marker : String = "FERRIX-BOOT-OK stages 1-12";

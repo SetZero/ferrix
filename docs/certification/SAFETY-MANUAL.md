@@ -243,7 +243,7 @@ unaffected by Meltdown or reporting `CSV3`; on ARMv7-A, a core Arm lists as
 unaffected, or firmware that set `ACTLR.IBE` on one that is not. On an
 MDS-affected x86-64 part the integrator shall disable SMT. Partitions that
 must not learn each other's cache access patterns shall not share a cache: no
-cache is partitioned (V-06). QEMU's TCG, on which most gates run, offers no
+cache is partitioned (V-06). QEMU's TCG, on which CI's gates and every Arm gate run, offers no
 speculation controls and executes no speculation, so its log lines are not a
 counter-example; the gate under KVM is where the controls are exercised.
 On x86-64 the boot line `cpu      program register state:` must not name

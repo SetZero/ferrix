@@ -645,7 +645,7 @@ does add is a little time at every switch of address space and every entry,
 which can widen that window without being a cause of its own. Row 238's fix
 is being landed separately.
 
-Under TCG — the default gates, and every Arm figure — the controls do not
+Under TCG — the gates before 2026-10-01, CI's, and every Arm figure — the controls do not
 exist and nothing speculates, so a timing there measures QEMU. What `on` adds
 there is instructions: on x86-64 two per clamp, fourteen `xor`s and an `lfence`
 per entry, a thirty-two-call refill per switch; on AArch64 a twelve-instruction

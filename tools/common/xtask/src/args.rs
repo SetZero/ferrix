@@ -156,7 +156,9 @@ pub(crate) struct Args {
     /// `--seeds`, how many power failures `test-powerfail` makes.
     pub(crate) seeds: u64,
     /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`,
-    /// except to `run`, which asks for `auto` unless it is given `--gdb`.
+    /// except for an x86-64 guest on an x86-64 Linux host outside CI, where it
+    /// means `kvm` (`qemu::accelerator`), and to `run`, which asks for `auto`
+    /// unless it is given `--gdb`.
     pub(crate) accel: Option<String>,
     /// `--to`, the mounted boot partition `flash` writes to. `None` means
     /// "find the only one".

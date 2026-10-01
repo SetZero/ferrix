@@ -1742,6 +1742,9 @@ fn qemu_command(
     let firmware = paths::find_firmware(arch)?;
     let accelerator = accelerator(arch, &binary, args.accel.as_deref())?;
     let processors = processors(&accelerator, args);
+    // Every boot names its accelerator, so a log read later says whether
+    // the guest was emulated without anybody having to guess.
+    println!("  qemu: {arch} under {accelerator}, {processors} processors");
 
     let mut command = Command::new(&binary);
     let _ = command.current_dir(paths::workspace_root());
@@ -2523,8 +2526,19 @@ const fn host_accelerator() -> Option<&'static str> {
 /// stays `tcg`, because reproducibility is what a boot test is for and `CI`
 /// has no hypervisor to offer; `auto` is for the machine in front of you,
 /// which usually does.
+///
+/// # Except an x86-64 guest on an x86-64 Linux host
+///
+/// There, with nothing asked for, the default is KVM ([`default_accelerator`]):
+/// the long guests -- the compositor's boots, a browser, a game's store --
+/// spend most of their time emulated otherwise, and KVM sees the real `TLB`
+/// that `tcg` cannot. `tcg` stays the default in CI, which keeps its emulated
+/// boots, and for a coverage run, whose plugin sees only translated blocks
+/// (`docs/TEST-TIME.md`, C3).
 pub(crate) fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) -> Result<String> {
-    let requested = requested.unwrap_or("tcg");
+    let Some(requested) = requested else {
+        return Ok(default_accelerator(arch, binary).to_owned());
+    };
     if requested == "tcg" {
         return Ok("tcg".to_owned());
     }
@@ -2554,6 +2568,40 @@ pub(crate) fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) ->
     match host_accelerator() {
         Some(name) if supported(name) && usable(arch, binary, name) => Ok(name.to_owned()),
         _ => Ok("tcg".to_owned()),
+    }
+}
+
+/// What a boot runs under when `--accel` is not given: `kvm` for an x86-64
+/// guest on an x86-64 Linux host whose QEMU has it and whose `/dev/kvm` this
+/// user may open, outside CI (`$CI` set) and outside a coverage run
+/// (`FERRIX_QEMU_PLUGIN` set); `tcg` everywhere else.
+///
+/// GitHub's Linux runners have a `/dev/kvm` these days, which is why CI is
+/// asked about by name rather than left to the device: its boots stay
+/// emulated, so a bug only `tcg` shows still has a gate. The device is opened
+/// rather than probed with a halted QEMU, because that probe costs half a
+/// second and this is asked once a boot.
+fn default_accelerator(arch: Arch, binary: &Path) -> &'static str {
+    let kvm = cfg!(all(target_os = "linux", target_arch = "x86_64"))
+        && arch == Arch::X86_64
+        && std::env::var_os("CI").is_none()
+        && std::env::var_os("FERRIX_QEMU_PLUGIN").is_none()
+        && std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/kvm")
+            .is_ok()
+        && available_accelerators(binary)
+            .iter()
+            .any(|name| name == "kvm");
+    if kvm {
+        println!(
+            "  qemu: kvm, the default for an x86-64 guest on this host; --accel tcg emulates \
+             (docs/TEST-TIME.md, C3)"
+        );
+        "kvm"
+    } else {
+        "tcg"
     }
 }
 

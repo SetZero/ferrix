@@ -120,7 +120,9 @@ fn reference(arch: Arch, args: &Args) -> Result<()> {
     std::fs::write(&initrd, archive)?;
 
     let binary = PathBuf::from(arch.qemu_binary());
-    let accelerator = qemu::accelerator(arch, &binary, args.accel.as_deref())?;
+    // Emulated unless asked otherwise: the reference was measured under tcg.
+    let accelerator =
+        qemu::accelerator(arch, &binary, Some(args.accel.as_deref().unwrap_or("tcg")))?;
     let mut command = machine(arch, args, &binary, &accelerator)?;
     let disk = test_disk::ensure()?;
     // The pattern disk exactly as Ferrix's boots attach it.
