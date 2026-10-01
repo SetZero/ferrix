@@ -750,6 +750,14 @@ impl Process {
         drop(old);
     }
 
+    /// Put it in the time namespaces a child of `parent` is born in: its
+    /// parent's namespace for children, for both, frozen, as a fork does.
+    pub(crate) fn inherit_time(&self, parent: &Process) {
+        let held = parent.time.lock().for_fork();
+        let displaced = core::mem::replace(&mut *self.time.lock(), held);
+        drop(displaced);
+    }
+
     /// The time namespace it is in, which its clock reads are shown in.
     pub(crate) fn time_namespace(&self) -> Arc<timens::TimeNamespace> {
         Arc::clone(&self.time.lock().own)
