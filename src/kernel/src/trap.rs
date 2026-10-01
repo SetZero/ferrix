@@ -274,6 +274,7 @@ pub(crate) fn set_syscall_entry(entry: SyscallEntry) {
 pub(crate) fn system_call(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
     // A program's call, marked so that a wake it makes leaves the decision to
     // its way out rather than to the timer (`sched::resched_here`).
+    let p0 = crate::sched::prof::now();
     if regs.is_some() {
         crate::sched::call_entered();
     }
@@ -287,6 +288,7 @@ pub(crate) fn system_call(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> 
         crate::sched::regroup_current();
         crate::sched::call_left();
     }
+    crate::sched::prof::add(crate::sched::prof::Span::Switch, p0);
     outcome
 }
 

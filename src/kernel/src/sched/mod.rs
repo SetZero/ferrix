@@ -43,6 +43,7 @@ mod check;
 mod queue;
 mod task;
 pub(crate) mod trip;
+pub(crate) mod prof;
 mod wait;
 
 use alloc::sync::Arc;
@@ -1803,6 +1804,8 @@ pub(crate) fn wake(task: &Arc<Task>) {
 /// lock's release, before it reached its wait: two decisions and a switch
 /// back where one decision does.
 fn wake_at_home(task: &Arc<Task>, defer: bool) {
+    let pw = prof::now();
+    let _w = prof::Guard(prof::Span::Wake, pw);
     let saved = <arch::Irq as IrqControl>::disable();
     let here = this_cpu();
     let mut kick_cpu = None;
@@ -2112,7 +2115,10 @@ fn pick_and_switch(interrupted_user: bool) {
     let Some(lock) = queue_of(cpu) else {
         return;
     };
-    let Some((save, resume)) = choose_next(lock, cpu, interrupted_user) else {
+    let p0 = prof::now();
+    let chosen = choose_next(lock, cpu, interrupted_user);
+    prof::add(prof::Span::Choose, p0);
+    let Some((save, resume)) = chosen else {
         return;
     };
     // SAFETY: (CONTEXT) `save` is this context's own slot and `resume` a stack pointer
@@ -2133,11 +2139,14 @@ fn choose_next(
 ) -> Option<(*mut u64, u64)> {
     // SAFETY: (SHARED) released below when nothing is switched, and otherwise by the
     // context this switches to, in `finish_switch`.
+    let pf = prof::now();
     let queue = unsafe { lock.lock_manually() };
 
     let now = crate::timer::now_nanos();
     queue.account(now);
     queue.wake_sleepers(now);
+    prof::add(prof::Span::F, pf);
+    let pg = prof::now();
 
     let previous = queue.current.clone();
     if let Some(previous) = previous.as_ref().filter(|task| task.state() != RUNNABLE) {
@@ -2156,7 +2165,10 @@ fn choose_next(
         }
     }
 
+    prof::add(prof::Span::G, pg);
+    let ph = prof::now();
     let next = queue.pick_next();
+    prof::add(prof::Span::H, ph);
     if queue.stats.measuring {
         queue.note_pick(now);
     }
@@ -2208,7 +2220,9 @@ fn choose_next(
             .is_some_and(|idle| Arc::ptr_eq(idle, &next)),
     );
     queue.exec_start = now;
+    let pi = prof::now();
     queue.arm_timer(now);
+    prof::add(prof::Span::I, pi);
     next.note_switch(cpu);
 
     // The address space goes on the processor here, under the run queue lock
@@ -2216,8 +2230,12 @@ fn choose_next(
     // two stack pointers and whose whole job is register operations -- and not
     // after the switch either, because the incoming context resumes on its own
     // stack and would have to be told to do this before touching anything.
+    let p1 = prof::now();
     swap_address_space(previous.address_space(), next.address_space());
+    prof::add(prof::Span::Space, p1);
+    let p2 = prof::now();
     switch_user_state(&previous, &next);
+    prof::add(prof::Span::UserState, p2);
 
     // SAFETY: (SHARED) both tasks belong to this queue and this processor holds its
     // lock, so nothing else may read or write either saved stack pointer.

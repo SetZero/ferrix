@@ -164,7 +164,9 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
 /// thread runs in, which is all the native ABI asks of it. No personality's
 /// type is named to find it.
 fn native_call(args: &SyscallArgs) -> Outcome {
+    let po = sched::prof::now();
     let task = sched::current();
+    sched::prof::add(sched::prof::Span::O, po);
     let caller = task
         .as_deref()
         .and_then(sched::Task::thread)

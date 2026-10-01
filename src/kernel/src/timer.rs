@@ -136,7 +136,9 @@ pub(crate) fn after(nanos: u64) {
         return;
     }
     slot.store(wanted, Ordering::Relaxed);
+    let p0 = crate::sched::prof::now();
     arch::timer_arm(nanos);
+    crate::sched::prof::add(crate::sched::prof::Span::Timer, p0);
 }
 
 /// Fire the timer interrupt every `nanos` until [`stop`].
@@ -195,7 +197,9 @@ pub(crate) fn stop() {
         if let Some(slot) = armed_slot() {
             slot.store(0, Ordering::Relaxed);
         }
+        let p0 = crate::sched::prof::now();
         arch::timer_disarm();
+        crate::sched::prof::add(crate::sched::prof::Span::Timer, p0);
     }
 }
 

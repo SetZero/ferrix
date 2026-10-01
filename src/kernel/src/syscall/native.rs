@@ -828,7 +828,9 @@ pub(crate) fn dispatch_write_read(
     args: &SyscallArgs,
     caller: &dyn Host,
 ) -> Result<(usize, [u64; 3]), Errno> {
+    let pd = crate::sched::prof::now();
     let answered = channel_write_read(caller, &args.args);
+    crate::sched::prof::add(crate::sched::prof::Span::D, pd);
     let plain = answered.map(|(count, _)| count);
     record_call(
         NativeCall::ChannelWriteRead,
@@ -857,6 +859,7 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
     };
     let endpoint = process.with_handles(|table| channel_in(table, handle(a[0]), needed))?;
 
+    let pa = crate::sched::prof::now();
     if sending {
         if count > nr::CHANNEL_WRITE_READ_BYTES {
             return Err(status::TOO_BIG);
@@ -876,6 +879,7 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
                 WriteFailure::NoMemory | WriteFailure::Take(()) => status::NO_MEMORY,
             })?;
     }
+    crate::sched::prof::add(crate::sched::prof::Span::A, pa);
 
     loop {
         match endpoint.read_small() {
@@ -897,6 +901,8 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
         }
         // Trusting the queue: a message and the peer's close both wake it,
         // and a signal or a kill wakes the task.
+        let pb = crate::sched::prof::now();
+        let _b = crate::sched::prof::Guard(crate::sched::prof::Span::B, pb);
         let _ = endpoint
             .waiters()
             .wait_trusting(|| endpoint.readable_or_closed() || must_leave(caller));
