@@ -254,7 +254,7 @@ Linux):
 | Branch | What | State |
 |---|---|---|
 | `stage13-np`, `stage13-fdinfo` | **landed 2026-10-01** | see below |
-| `stage13-n5` | unprivileged mounting: `may_mount` by owner, `tmpfs` alone, locked copies, detach-don't-pin, sysctls | `mountperm` line booted on x86_64, four controls fired; other gates not run |
+| `stage13-n5` | **landed 2026-10-01** | see N5 in `docs/NAMESPACES.md` §12 |
 | `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
 | `stage13-netns` | network namespaces, veth pairs, per-namespace stacks | boots on three architectures, `test-shell`, `test-vfs`, `test-net`, 30 controls; `check` not run |
 | `stage13-timens` | time namespace | agent had not reported |
