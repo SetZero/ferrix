@@ -1265,7 +1265,7 @@ package FerrixObjectRequirements {
              * whose born members' switches skip the predictor invalidation.
              * The customer's decision of 2026-10-01 (docs/BACKLOG.md). */
 
-        requirement <'L.object.107'> barrierSkippedOnlyInsideOneDomain : ItemLowLevel {
+        requirement <'L.object.111'> barrierSkippedOnlyInsideOneDomain : ItemLowLevel {
             attribute :>> statement = "entered_space shall skip the predictor
                 invalidation at a switch of address space only when the outgoing
                 space's domain, read as it leaves, and the incoming space's are the
@@ -1283,7 +1283,7 @@ package FerrixObjectRequirements {
                 "user::space::AddressSpace::install",
                 "user::space::AddressSpace::uninstall");
         }
-        requirement <'L.object.108'> markedOnlyAtCreationUnderManage : ItemLowLevel {
+        requirement <'L.object.112'> markedOnlyAtCreationUnderManage : ItemLowLevel {
             attribute :>> statement = "job_create shall make a job a speculation
                 domain only with JOB_SPECULATION_DOMAIN, only under MANAGE on the
                 parent, and only as it makes the job; it shall refuse any other
@@ -1299,7 +1299,7 @@ package FerrixObjectRequirements {
                 "object::job::Job::new_child_domain", "object::job::Job::new_child_in",
                 "object::job::Job::domain");
         }
-        requirement <'L.object.109'> membershipByBirth : ItemLowLevel {
+        requirement <'L.object.113'> membershipByBirth : ItemLowLevel {
             attribute :>> statement = "A process shall be in a speculation domain
                 only if it was made in the marked job, by process_create or by a
                 fork of a member in the same job; its address space shall carry the
@@ -1317,7 +1317,7 @@ package FerrixObjectRequirements {
                 "user::space::AddressSpace::set_birth_domain",
                 "syscall::process::Process::forked_into");
         }
-        requirement <'L.object.110'> leavingIsForGood : ItemLowLevel {
+        requirement <'L.object.114'> leavingIsForGood : ItemLowLevel {
             attribute :>> statement = "A member shall leave its speculation domain
                 for good, and its address space with it, when it moves between jobs,
                 and when it stops being dumpable: a set-id execve, a change of

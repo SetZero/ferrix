@@ -55,8 +55,8 @@ pub(crate) struct Report {
 
 /// Run every case.
 ///
-/// Verifies: H.TRAP.17, L.object.107, L.object.108, L.object.109, L.object.110,
-/// L.x86_64.126, L.aarch64.52, L.armv7a.3
+/// Verifies: H.TRAP.17, L.object.111, L.object.112, L.object.113, L.object.114,
+/// `L.x86_64.126`, L.aarch64.52, L.armv7a.3
 pub(crate) fn run() -> Result<Report, &'static str> {
     let mut report = Report {
         hardened: arch::HARDENED,
