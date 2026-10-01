@@ -1271,9 +1271,37 @@ How it differs from Linux, and from the design above:
 * **`/proc/<pid>/ns/*` opens by the same person or root** (S5); Linux asks
   `ptrace_may_access`, including dumpability, which Ferrix does not yet have
   for these links (the M8 landing, NP, adds it for `root`, `cwd`, `exe`, `fd`).
-* **Native processes** (`process_create`) start in the first UTS, IPC and
-  cgroup namespaces, not their creator's (their mount namespace is their
-  creator's since N3). Not reachable by a container today.
+* **Native processes** (`process_create`) start in their creator's UTS, IPC
+  and cgroup namespaces, as in its mount namespace since N3
+  (`launch::load_native` carries the proxy). The first landing left them in
+  the first namespaces, which the consultant found reachable: a process with a
+  MANAGE job from `job_for_cgroup` made a child in the host's IPC namespace
+  (B1). `namespace_check.rs`'s native-child check compares `ns/uts`,
+  `ns/ipc` and `ns/cgroup` of creator and child.
+* **A cgroup move is judged in the namespace of the descriptor's holder, in
+  all three ways in.** A `cgroup.procs` write by the namespace its *opener*
+  was in, recorded at open (Linux's CVE-2021-4197 fix); `CLONE_INTO_CGROUP`
+  (`clone_target`) and native `job_for_cgroup` (no MANAGE over a cgroup
+  outside the caller's root) by the caller's. Each has a check in
+  `smallns_check.rs` and a control below (C1).
+* **Conditions for later landings (consultant, 2026-10-01).** (C2) nsfs's
+  `may_open` compares against the target's effective ids only; Linux's rule
+  compares the caller's fsuid with the target's uid, euid and suid, and
+  `readlink` of `ns/*` has no gate at all; NP replaces both by
+  `ptrace_may_access` with dumpability. (C3) NP's scope includes `ns/*`, as
+  §9's row says, and not only `root`, `cwd`, `exe` and `fd`. (C4) An nsfs
+  descriptor keeps a mount namespace alive past its last process, and `setns`
+  can drop the last reference: the write-out check owed before N5 must cover a
+  namespace ended by closing an nsfs descriptor, and N5's pinning rule must
+  say that a descriptor holds a pin.
+* **Kernel root keeps its file override in a namespace it made.** The file
+  system's `Access::privileged` is `uid == 0` and has no namespace, so kernel
+  root (which is root of the first namespace as well) reads a 0600 file of
+  an id the namespace does not map; Linux refuses it. U8's guarantee is for a
+  process whose kernel uid is not 0, and `userns_check.rs`'s
+  `kernel_root_keeps_override` records the difference.
+* **A pidfd of an exited process may still be joinable** where Linux answers
+  `ESRCH` (BACKLOG).
 * **Ids of namespaces** count from ranges of their own so that no two kinds
   share an inode number; Linux's dynamic inode numbers are one range.
   Mount namespaces still print `mnt:[4026531840]`-style numbers from
