@@ -233,7 +233,7 @@ Linux's 32768 with `fits_path`/`path_cost` and a host test of both ends,
 checker to six programs carrying the real Linux 7.0 verifier's answer
 (`oracle.c --accept`), and an empty chain answers `KILL_PROCESS`.
 
-**Where stage 13 stands (wind-down, 2026-10-01 evening).** The exit criterion
+**Where stage 13 stands (wind-down, 2026-10-01 evening).** The takeover guide, with every branch's tip, worktree and what it owes, is [stage-13-handover.md](stage-13-handover.md). The exit criterion
 -- an unprivileged user namespace runs a pid 1 under a memory limit with a
 scoped OOM kill and a seccomp filter that blocks a call -- is **not met**.
 On `main`: N4 user namespaces, S1 the filter checker, S2 the core hook, the
@@ -253,7 +253,7 @@ conditions are in `~/.local/share/ferrix/cert-consultant/reviews.md` there.
 | `stage13-fdinfo` 225eb2410 | `/proc` by `ptrace_may_access`, dumpable, `/proc/<pid>/fdinfo` (NP) | check, three boots (armv7a at two and four processors), `test-init`, `test-shell` PASSED (`fdi23-*`); controls k1-k3, k6, k7 FIRED; consultant: OK if `test-vfs`, k4/k5 on their own message, k8-k17 on the landing hash, §12 quoting them |
 | `stage13-n5` 7a0c04fdd | unprivileged mounting | on fdinfo; consultant asked for changes, built (remount by the superblock's owner, the bottom mount locked, a sleeping write-out), not gated; earlier tip's boots, `test-vfs`, `test-shell`, `test-bwrap` PASSED |
 | `stage13-bwrap-user` dad30e7f2 | `test-bwrap` as uid 1000 | passes (a new tmpfs is now 1777 and the mounter's); needs a rebase onto N5, a control for the tmpfs case, review |
-| `stage13-netns` 4cc2ab39d | network namespaces, veth, per-namespace stacks | every row PASSED on 5e19c599c (`ae23-*`), controls ae-nn-01..31 FIRED; consultant's four conditions met, not yet confirmed; owed: rebase onto `main`, coverage carry, re-run of the `ae23` rows |
+| `stage13-netns` 4cc2ab39d | network namespaces, veth, per-namespace stacks | every row PASSED on 5e19c599c (`ae23-*`), controls ae-nn-01..31 FIRED; cleared by the consultant if `main` changed nothing under `src/` since 75c03a259; owed: the rebase, coverage carry, landing |
 | `stage13-timens` 88b073c3a | time namespaces | on netns; boots on x86_64; native child gets its creator's time namespace (c25, c26); gate and 26 controls stopped mid-run (c01, c03-c07 FIRED); not reviewed |
 | `stage13-container` cda83faef | `cargo xtask test-container`, the exit criterion as a program | written, never built or run; needs cgctl and S3 on `main` |
 
