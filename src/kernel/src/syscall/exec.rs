@@ -365,11 +365,6 @@ fn populate(
         let secure = credentials.exec(program.set_ids.uid, program.set_ids.gid);
         (credentials.user, credentials.group, secure)
     });
-    // A program that starts with ids other than the ones it had is not
-    // dumpable (Linux's `begin_new_exec`), so that what it keeps private
-    // stays private from the user who ran it; any other `execve` makes it
-    // dumpable again, whatever it had asked for before.
-    crate::syscall::attributes::update(process, |held| held.dumpable = !secure);
     // The vDSO, where there is one: `AT_SYSINFO_EHDR` is how the C library
     // finds it, and a program started without the entry makes the system
     // calls the vDSO would have answered. Not for a 32-bit program: the vDSO
