@@ -106,7 +106,9 @@ twenty minutes, mid-gate. Brief each agent:
 
 * Its own worktree, made by hand (`git worktree add -b <branch>
   .claude/worktrees/<name> main`), and its own `CARGO_TARGET_DIR` on the gate
-  host. Two trees never share one.
+  host. Two trees never share one. Gates and negative controls go through
+  `~/.local/share/ferrix/fleet/gate.sh` (`run`, `control --expect`,
+  `status`), whose slots keep warm target dirs (`docs/TEST-TIME.md`, Phase 3).
 * Gates and boots in the foreground, one architecture per call. A subagent
   is not woken by its own background task.
 * A negative control for each new check, with the run that shows it fired.

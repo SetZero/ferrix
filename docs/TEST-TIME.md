@@ -4,7 +4,8 @@ The customer's priority one from 2026-09-27: *"we seriously need to bring down
 test run time."* This is phase 1's record -- where a landing gate's time goes --
 and the cuts it points to. Cut since: the Arm firmware waits (item 4),
 the waits on finished guests (item 3, "Cut 2") and the architectures one
-after another (item 2, "Cut 3"). Owner: os-98 (was ferrix-90).
+after another (item 2, "Cut 3"). Owner: os-98 (was ferrix-90); phase 3,
+from 2026-10-01, os-5d.
 
 Targets to argue with (the coordinator's): a standard item gate within 5 min
 on a quiet host, each desktop boot within 60 s, CI green within an hour. The
@@ -299,6 +300,88 @@ at that moment), and QEMU pauses a guest whose disk image cannot grow,
 which the stage 12 disk, written by every boot, then had to. The in-turn
 `test-init` that failed did so on the semaphore self-check, a row of its
 own in `docs/BACKLOG.md`.
+
+## Measured, 2026-10-01: where a verification waits
+
+The customer, 2026-10-01: confirming that a feature works takes too long.
+os-5d read the gate logs on nazuna and asked eight sessions what their last
+verifications cost (os-79, os-ad, os-c7, os-c8, os-db, os-e8, os-fb and
+os-3c). Most of the time is not spent in the guest, whose boot reaches
+`FERRIX-BOOT-OK` in 8 to 10 s. It goes to four things around it:
+
+| Cost | Seen | Where |
+|---|---|---|
+| Waiting for the one gate worktree | 34 of a 40-minute batch of Arm rows waited behind other sessions' gates; 6 ran | `os7c-queue.sh`, `logs/queue/osad-*` |
+| Cold builds in a new worktree's target dir | `check` cold about 15 min, warm 3.5 to 4.5 min at load 18-28; each new branch pays it | os-3c, os-db, os-c8 |
+| Steps the change does not reach | A docs-only landing runs the whole `check`, 3.5 to 9 min (338 docs-only commits since 2026-09-11); a moved `main` re-runs the whole 5-row cycle, about 7 min, 6 times in one landing | os-db, os-79 |
+| Work every boot repeats | `test-compositor` boots about 33 times an architecture and each boot runs the stage 1-12 self-checks, 8 to 10 s, before its scenario: 512-616 s on x86_64, 1,200 s on each Arm (`logs/os98-par-gate/compositor-all.log`) | the gate logs |
+
+Also: a release kernel relinks with fat LTO in 2 to 3 min after a one-line
+edit (os-c7); Steam's gates reach sign-in 135 to 155 s into a boot, so each
+round of learning one screen costs 5 to 8 min (os-e8); a negative control
+re-run because its diff was not logged (os-ad); port scripts that delete
+their build dir rebuild git, foot or Mesa from nothing (os-3c, os-c8).
+nazuna ran at load 18 to 20 of 24 threads, its disk at 96%.
+
+`check` with a warm target dir, from `os-db-audit-rows/check.log`
+(4 min 21 s at load 18-28): cargo's own "Finished" times add to about
+150 s and the tests to about 60 s, so about a minute is starting cargo
+and the Python audits. The six kernel clippies are 11 to 16 s each, one
+after another.
+
+## Phase 3: the plan (os-5d, 2026-10-01)
+
+In the order of the time they take off a verification. A is the gate
+host's scripts and touches no code; B and C are xtask, and C2 a kernel
+option the checks already have. Each lands as a slice of its own with
+before and after from this file's method. The rules above still hold, and
+these with them (os-3c, os-ad): a negative control runs in the same build
+as its check and shows it fired; a row a change touches runs on every
+architecture it builds for; generated docs and coverage are regenerated,
+never skipped. C2 and B1's table of paths to rows go to the certification
+consultant before they land.
+
+| # | Cut | Takes off | Points |
+|---|---|---|---:|
+| A1 | **A pool of warm gate slots** (`~/.local/share/ferrix/fleet/gate.sh`): each slot a worktree at a fixed path with a target dir that is kept, a run takes the first free one. Slot 1 is the stage-13 queue's, so `os7c-queue.sh` keeps working | the queue's wait: os-ad's 40 min to about 15 | 3 |
+| A2 | **A disk guard**: a run is refused, not started, under 20 GB free; a report of target dirs and worktrees nothing has used for a day, for their owners | gates that fail on a full disk and read as code failures | 1 |
+| A3 | **Controls the runner logs**: commit, the diff that ran, the expected text and a FIRED / DID NOT FIRE line | re-runs for evidence that was not kept | 1 |
+| A4 | **Builds that are kept**: ports rebuilt only when stale (BACKLOG row, `os-12/ports-autobuild`), and the cost of a cold target dir measured against sccache for a new worktree | 5 to 10 min where a change touches ports or apps; most of a first `check` | 3 |
+| B1 | **`xtask gate --since main`**: the changed paths pick the rows of *What a landing runs*, and the rows it chose are printed for the report; `check` skips a workspace the branch does not touch; a docs-only diff runs only the steps that read docs, generated docs still regenerated; after a rebase, only rows whose paths the new commits touched | a docs landing 3.5-9 min to under 1; most of a re-gate | 3 |
+| C1 | **`check` at once**: one clippy call with every `--target`, the Python audits beside cargo, a time printed for each step | 154 s to about 70-90 s (to measure) | 2 |
+| C2 | **`test-compositor` with `ferrix.checks=skip`**: its boots wait for `hyprix:`; the checks are proved by the gate's `test-boot` | 4 to 5 min an architecture | 1 |
+| C3 | **KVM by default on x86-64** (item 5, *Next* below); CI keeps TCG | the long x86 guests: compositor, chrome, steam | 2 |
+| C4 | **`--profile iterate`**: release with thin LTO and 16 codegen units, for working on a kernel; gates keep fat LTO | 2-3 min to about 30-45 s a kernel edit | 1 |
+| C5 | **A guest saved and resumed at a named point** (QEMU savevm or migrate to file) for gates that boot long, Steam and Chrome first, and `--hold` to keep a guest up after its verdict; a spike first, since the GL devices may refuse migration | a Steam round 8 min to 1-2 | 5 |
+
+A kernel-touching feature, estimated: today 0-34 min waiting, 4-15 min of
+`check`, 3-7 min of rows, 10-20 min more with the compositor; after A to C3,
+little waiting, about 1.5 min of `check`, 2-4 min of rows, about 5 min of
+compositor on x86_64.
+
+### A1-A3 in place (2026-10-01)
+
+`gate.sh run <ref> <tag> <xtask args...>` and `gate.sh control <ref> <tag>
+<file> <old> <new> [--expect TEXT] -- <xtask args...>` take the arguments
+`os7c-queue.sh` takes, and `gate.sh status` shows the slots, the load and
+the disk. The log is `logs/queue/<tag>.log`; its header has the commit, the
+slot, the seconds waited, the load and the free disk; `logs/queue/pool-summary`
+has a line a run. A run waits while the load is above 36 and is refused
+under 20 GB free. Two slots: slot 1 is `os7c-n4` with `target-os7c`,
+slot 2 `gate-slot-2` with `target-gate-slot-2`. A third waits for disk:
+`target-gate-slot-2` held 15 GB after one `check` and one boot,
+`target-os7c` 31 GB after a day of stage-13 rows, and nazuna had 81 GB free.
+
+First runs, main ac7b1ca0, at load 10 to 17 (`logs/queue/pool-summary`):
+slot 2's first `check`, from an empty target dir, 338 s; then a negative
+control (the last-message check's comparison turned around) through
+`test-boot --arch x86_64 --accel kvm`, 44 s, `control: FIRED` on the
+expected line; the same control with nothing changed, 16 s, `control: DID
+NOT FIRE`. Neither waited.
+
+The phase's owner keeps the slots. When the pool winds down, the owner
+deletes `gate-slot-2`'s worktree and `target-gate-slot-2`, by exact name;
+slot 1 stays the stage-13 queue's, and its owner keeps or deletes it.
 
 ## Next
 
