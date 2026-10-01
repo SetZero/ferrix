@@ -39,7 +39,7 @@ const PR_SET_DUMPABLE: u64 = 4;
 /// A target made with ids `uid`, and `PR_SET_DUMPABLE` set as `undumpable`
 /// says: a change of ids makes a process undumpable, so it is set again, as
 /// bubblewrap does after it drops its ids.
-fn target(uid: u64, undumpable: bool) -> Result<alloc::sync::Arc<Process>, &'static str> {
+fn target(uid: u64, undumpable: bool) -> Result<Arc<Process>, &'static str> {
     let made = dropped(uid)?;
     let _ = by_number(
         &made,
@@ -51,7 +51,7 @@ fn target(uid: u64, undumpable: bool) -> Result<alloc::sync::Arc<Process>, &'sta
 }
 
 /// A target that changed its ids and did nothing more.
-fn dropped(uid: u64) -> Result<alloc::sync::Arc<Process>, &'static str> {
+fn dropped(uid: u64) -> Result<Arc<Process>, &'static str> {
     let made = process::new_for_check().map_err(|_| "could not make a /proc target")?;
     if uid != 0 {
         for call in [Syscall::Setgid, Syscall::Setuid] {
