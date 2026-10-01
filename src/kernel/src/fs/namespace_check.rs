@@ -846,6 +846,9 @@ fn native_child_stays(
     for kind in kinds {
         same_small &= ns_link(page, child.pid(), kind)? == ns_link(page, creator.pid(), kind)?;
     }
+    // A child in a namespace that shifts a clock must not map the vDSO that
+    // reads the first namespace's clocks: it is how a child would leave.
+    let unshifted_vdso = crate::syscall::vdso::mapped_views(child.space())[0].is_some();
     // Born in its creator's namespace for children: that is its own.
     same_small &=
         ns_link(page, child.pid(), b"time")? == ns_link(page, creator.pid(), b"time_for_children")?;
@@ -857,6 +860,9 @@ fn native_child_stays(
     }
     if !same {
         return Err("a native child's /proc/<pid>/ns/mnt was not its creator's");
+    }
+    if unshifted_vdso {
+        return Err("a native child in a shifted time namespace mapped the vDSO of the first");
     }
     if !same_small {
         return Err(
