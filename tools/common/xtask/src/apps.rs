@@ -520,12 +520,15 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
                 .map_err(|error| Error::new(format!("{}: {error}", out.display())))?;
             if cfg!(windows) {
                 // In WSL, as ferrousli's shared library is built, writing
-                // into this checkout's target directory through `/mnt`.
+                // into this checkout's target directory through `/mnt`, and
+                // building ferrousli into the target directory `cargo xtask
+                // ports` builds it into, one for every app.
                 crate::wsl::require_toolchain(&format!(
                     "{name} is built by its build.sh with a Linux host's tools"
                 ))?;
-                let status = crate::wsl::bash(
+                let status = crate::wsl::bash_building(
                     &app.dir,
+                    &paths::workspace_root().join("src/user/system/linux/ferrousli"),
                     "exec bash build.sh \"$1\" \"$(wslpath -u \"$2\")\"",
                     &[arch.name(), &out.to_string_lossy()],
                 )

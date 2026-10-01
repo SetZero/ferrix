@@ -151,6 +151,18 @@ pub(crate) fn cargo(dir: &Path, arguments: &[&str]) -> Command {
 /// `script` run by bash in the default distribution in `dir`, with
 /// `CARGO_TARGET_DIR` set as [`cargo`] sets it and `arguments` as `"$@"`.
 pub(crate) fn bash(dir: &Path, script: &str, arguments: &[&str]) -> Command {
+    bash_building(dir, dir, script, arguments)
+}
+
+/// As [`bash`], with the target directory [`cargo`] gives `builds` rather
+/// than `dir`'s: every script app builds ferrousli, and with one target
+/// directory per app each of them compiled it from nothing.
+pub(crate) fn bash_building(
+    dir: &Path,
+    builds: &Path,
+    script: &str,
+    arguments: &[&str],
+) -> Command {
     let mut command = Command::new("wsl.exe");
     let _ = command
         .arg("--cd")
@@ -158,7 +170,7 @@ pub(crate) fn bash(dir: &Path, script: &str, arguments: &[&str]) -> Command {
         .args(["--exec", "bash", "-lc"])
         .arg(format!(
             "export CARGO_TARGET_DIR=\"$HOME/.cache/ferrix/target/{}\"; {script}",
-            target_name(dir)
+            target_name(builds)
         ))
         .arg("bash")
         .args(arguments);
