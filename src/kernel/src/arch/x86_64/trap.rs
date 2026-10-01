@@ -646,14 +646,16 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
     if frame.vector == 8 {
         let bottom = frame.rbp & !0xfff;
         let mut at = frame.rbp;
-        while at < bottom + 0x4000 {
-            // SAFETY: DEBUG ONLY, read of the faulting task's own stack page range.
-            let word = unsafe { core::ptr::read_volatile(at as *const u64) };
-            if (0xffff_ffff_8000_0000..0xffff_ffff_c000_0000).contains(&word) {
-                println_unlogged!("  DBGSTACK {:#x} {:#x}", at - bottom, word);
+        while at >= bottom && at + 16 <= bottom + 0x4000 {
+            // SAFETY: DEBUG ONLY, walk of the faulting task's own frame-pointer chain.
+            let (next, ret) = unsafe { (core::ptr::read_volatile(at as *const u64), core::ptr::read_volatile((at + 8) as *const u64)) };
+            println_unlogged!("  DBGFRAME {:#x} {:#x}", at - bottom, ret);
+            if next <= at {
+                break;
             }
-            at += 8;
+            at = next;
         }
+    }
     }
     println_unlogged!("  rax {:#018x}  rbx {:#018x}", frame.rax, frame.rbx);
     println_unlogged!("  rcx {:#018x}  rdx {:#018x}", frame.rcx, frame.rdx);
