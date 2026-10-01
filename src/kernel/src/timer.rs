@@ -215,10 +215,33 @@ pub(crate) fn now_nanos() -> u64 {
     if hz == 0 {
         return 0;
     }
-    let scaled = u128::from(arch::counter_now()) * NANOS_PER_SECOND / u128::from(hz);
-    // Saturating rather than truncating: a wrong answer that is obviously
-    // wrong beats one that looks plausible.
-    u64::try_from(scaled).unwrap_or(u64::MAX)
+    ticks_to_nanos(arch::counter_now(), hz)
+}
+
+/// `ticks` of a `hz` counter in nanoseconds: `ticks * 10^9 / hz`, rounded
+/// down, exactly.
+///
+/// # Two narrow divisions, not one wide one
+///
+/// The clock is read several times on every switch and every wake, and the
+/// product in 128 bits divided by `hz` is a library call of a hundred cycles
+/// or so. Split at whole seconds, the same answer takes two 64-bit divisions
+/// the processor does itself: the seconds times 10^9, plus the ticks left
+/// over, fewer than a second's, times 10^9 over `hz`, which fits 64 bits for
+/// any counter below 18 GHz. Exact, so every other reading of the counter,
+/// the vDSO's among them, agrees with it to the nanosecond.
+fn ticks_to_nanos(ticks: u64, hz: u64) -> u64 {
+    const NANOS: u64 = 1_000_000_000;
+    let seconds = ticks / hz;
+    let rest = ticks % hz;
+    let Some(within) = rest.checked_mul(NANOS) else {
+        // A counter past 18 GHz: the wide way.
+        let scaled = u128::from(ticks) * NANOS_PER_SECOND / u128::from(hz);
+        // Saturating rather than truncating: a wrong answer that is obviously
+        // wrong beats one that looks plausible.
+        return u64::try_from(scaled).unwrap_or(u64::MAX);
+    };
+    seconds.saturating_mul(NANOS).saturating_add(within / hz)
 }
 
 /// How fast the free-running counter counts.
