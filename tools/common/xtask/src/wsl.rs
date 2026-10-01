@@ -67,6 +67,27 @@ pub(crate) fn path(linux: &str) -> Option<PathBuf> {
     Some(PathBuf::from(format!(r"\\wsl.localhost\{name}\{relative}")))
 }
 
+/// The target of a symbolic link inside the default distribution, at a path
+/// [`path`] made. Windows sees such a link as a link, but `read_link` on it
+/// fails with "Incorrect function", so `readlink` reads it in WSL. `None`
+/// for any other path, or when that fails.
+pub(crate) fn read_link(windows: &Path) -> Option<String> {
+    let name = default_distribution()?;
+    let rest = windows
+        .to_str()?
+        .strip_prefix(&format!(r"\\wsl.localhost\{name}\"))?;
+    let output = Command::new("wsl.exe")
+        .args(["--exec", "readlink", "--"])
+        .arg(format!("/{}", rest.replace('\\', "/")))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let target = String::from_utf8(output.stdout).ok()?;
+    (output.status.success() && !target.is_empty())
+        .then(|| target.trim_end_matches('\n').to_owned())
+}
+
 /// The default distribution's `$HOME`, as Windows opens it, asked once per
 /// run. `None` without WSL.
 pub(crate) fn home() -> Option<PathBuf> {

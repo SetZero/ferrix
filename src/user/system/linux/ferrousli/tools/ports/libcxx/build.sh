@@ -19,8 +19,9 @@
 # Why LLVM's runtime and not GCC's libstdc++: libc++ supports musl as a
 # configuration of its own (LIBCXX_HAS_MUSL_LIBC), which is what ferrousli's
 # headers are, and builds from its own directory with CMake. libstdc++ builds
-# only as part of a GCC configured for the target. The compiler is still the
-# host's gcc, which libc++ supports; the host has no clang.
+# only as part of a GCC configured for the target. The C++ compiler is the
+# host's g++ when it is gcc 15 or newer, which libc++ supports, and LLVM's
+# pinned clang otherwise (../common.sh).
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -60,13 +61,15 @@ step "configure"
 build=$work/build
 rm -rf "$build"
 # The C++ compiler here is the bare one: ferrousli's C headers and no C++
-# library, because this is the C++ library being built. CMake compiles its
+# library, because this is the C++ library being built. libunwind's C and
+# assembly go through the C compiler of the same family, since CMake picks
+# the warnings for all three from the C++ compiler. CMake compiles its
 # checks into static libraries rather than programs, since a program would
 # need the runtime that does not exist yet.
 if ! cmake -G Ninja -S "$tree/runtimes" -B "$build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
-    -DCMAKE_C_COMPILER="$CC" \
+    -DCMAKE_C_COMPILER="$CC_CXX" \
     -DCMAKE_CXX_COMPILER="$CXX_BARE" \
     -DCMAKE_AR="$(command -v ar)" \
     -DCMAKE_RANLIB="$(command -v ranlib)" \

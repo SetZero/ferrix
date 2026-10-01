@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds btop 1.4.7 as a static x86-64 program against ferrousli and the C++
-# runtime ferrousli's libcxx port builds on it, which must be built first
-# (`cargo xtask ports`).
+# runtime ferrousli's libcxx port builds on it, which it builds first when it
+# is not installed.
 #
 #     build.sh <arch> <out>     # as an app's script is run (docs/APPS.md §3.1)
 #
@@ -43,7 +43,12 @@ echo "btop $BTOP_VERSION, verified"
 
 build_ferrousli
 make_compilers
-[ -f "$prefix/lib/libc++.a" ] || fail "no C++ runtime in $prefix/lib; run \`cargo xtask ports\` first"
+# The C++ runtime is built first when it is not there: ferrousli's libcxx
+# port, minutes of C++ once, which `cargo xtask ports` builds as well.
+if [ ! -f "$prefix/lib/libc++.a" ]; then
+    bash "$ferrousli/tools/ports/libcxx/build.sh" --arch "$arch"
+    [ -f "$prefix/lib/libc++.a" ] || fail "libcxx's build installed no $prefix/lib/libc++.a"
+fi
 
 step "build"
 build=$work/build

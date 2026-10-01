@@ -25,7 +25,10 @@
 //! Windows machine gives the same archive.
 //!
 //! The scripts need a Linux host with gcc and the kernel's UAPI headers, as
-//! `build.sh` for busybox does. There is no Windows build of them yet.
+//! `build.sh` for busybox does. On Windows they run in WSL's default
+//! distribution, as a script app's `build.sh` does, and the ports are
+//! installed in its home and read from there (`crate::wsl::home`). There is
+//! no native Windows build of them yet.
 
 use std::path::{Path, PathBuf};
 
@@ -247,9 +250,13 @@ fn read_entry(path: &Path, name: &str, mode: u32, walk: bool, out: &mut Vec<File
     let meta = std::fs::symlink_metadata(path)
         .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
     if meta.file_type().is_symlink() {
-        let target = std::fs::read_link(path)
-            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
-        let target = target.to_string_lossy().replace('\\', "/");
+        // A link in WSL's home, where Windows reads the ports from, is read
+        // there.
+        let target = match std::fs::read_link(path) {
+            Ok(target) => target.to_string_lossy().replace('\\', "/"),
+            Err(error) => crate::wsl::read_link(path)
+                .ok_or_else(|| Error::new(format!("reading {}: {error}", path.display())))?,
+        };
         out.push(File {
             path: name.to_owned(),
             mode: 0o777,
@@ -291,18 +298,25 @@ fn read_entry(path: &Path, name: &str, mode: u32, walk: bool, out: &mut Vec<File
     Ok(())
 }
 
-/// The directory the ports are installed under.
+/// The directory the ports are installed under: on Windows, WSL's home's,
+/// where the scripts that build them run, and the btop app's libcxx with them.
 fn root() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("FERRIX_PORTS") {
         return Ok(PathBuf::from(dir));
     }
-    std::env::home_dir()
-        .map(|home| {
-            [".local", "share", "ferrix", "ports", "ferrousli"]
-                .iter()
-                .fold(home, |dir, name| dir.join(name))
-        })
-        .ok_or_else(|| Error::new("no home directory to find the ports under; set FERRIX_PORTS"))
+    let home = if cfg!(windows)
+        && let Some(home) = crate::wsl::home()
+    {
+        Some(home)
+    } else {
+        std::env::home_dir()
+    };
+    home.map(|home| {
+        [".local", "share", "ferrix", "ports", "ferrousli"]
+            .iter()
+            .fold(home, |dir, name| dir.join(name))
+    })
+    .ok_or_else(|| Error::new("no home directory to find the ports under; set FERRIX_PORTS"))
 }
 
 /// Where `file` is installed for `arch` beneath `root`.
@@ -360,11 +374,6 @@ fn installed_where(arch: Arch, wanted: impl Fn(&str) -> bool) -> Result<Vec<File
 /// `cargo xtask ports`: run the `build.sh` of every port `arch` builds, in
 /// order, stopping at the first that fails.
 pub(crate) fn build(arch: Arch) -> Result<()> {
-    if cfg!(windows) {
-        return Err(Error::new(
-            "the ports' build scripts need a Linux host with gcc and the kernel's UAPI headers",
-        ));
-    }
     let root = root()?;
     let ferrousli = crate::paths::workspace_root().join("src/user/system/linux/ferrousli");
     let ports = ports_for(arch);
@@ -377,6 +386,38 @@ pub(crate) fn build(arch: Arch) -> Result<()> {
         ports.join(" "),
         arch.name()
     );
+    if cfg!(windows) {
+        // In WSL, as an app's build.sh is. Without `FERRIX_PORTS` the
+        // scripts' own default there is `root`; a Windows `FERRIX_PORTS` is
+        // handed over as WSL names it.
+        crate::wsl::require_toolchain(
+            "the ports are built with a Linux host's gcc and its kernel's UAPI headers",
+        )?;
+        let given = std::env::var_os("FERRIX_PORTS");
+        let (script, arguments) = match &given {
+            Some(dir) => (
+                format!("export FERRIX_PORTS=\"$(wslpath -u \"$1\")\"\n{script}"),
+                vec![dir.to_string_lossy().into_owned()],
+            ),
+            None => (script, Vec::new()),
+        };
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let status = crate::wsl::bash(&ferrousli, &script, &arguments)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .map_err(|error| Error::new(format!("could not run wsl.exe: {error}")))?;
+        if !status.success() {
+            return Err(Error::new(format!(
+                "the ports' build scripts for {arch} in WSL: {status}"
+            )));
+        }
+        println!(
+            "\nbuilt {} for {arch} under {}",
+            ports.join(", "),
+            root.display()
+        );
+        return Ok(());
+    }
     let mut build = crate::builds::Build::bash(
         format!(
             "src/user/system/linux/ferrousli/tools/ports ({}) for {arch}",

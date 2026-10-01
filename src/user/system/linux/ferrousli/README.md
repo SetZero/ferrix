@@ -176,7 +176,10 @@ busybox's does.
 | `alsa-lib` | alsa-lib 1.2.16.1 (`docs/AUDIO.md`, U1) | `include/alsa/`, `lib/libasound.a`, `usr/share/ferrousli/alsa/` |
 | `alsa-utils` | alsa-utils 1.2.16's `aplay` and `speaker-test`, over `alsa-lib` | `bin/aplay`, `bin/arecord`, `bin/speaker-test` |
 
-`cargo xtask ports` runs them, on a Linux host. Every image that carries a
+`cargo xtask ports` runs them, on a Linux host, or on Windows in WSL's
+default distribution, where they are installed in its home. Where the
+host's g++ is older than 15, as Ubuntu 24.04's is, the C++ compilers are
+LLVM's pinned clang (`tools/ports/common.sh`). Every image that carries a
 busybox carries the ports that are installed, on x86_64, and `cargo xtask
 test-net` fetches with curl as well as with `wget` when curl is there.
 

@@ -107,6 +107,27 @@ fetch() { # url file checksum-command checksum
     fi
 }
 
+# LLVM's prebuilt release for x86-64 Linux, pinned by its sha256 as first
+# downloaded on 2026-09-17; LLVM publishes a sigstore bundle beside it rather
+# than a checksum. Only clang and its built-in headers are unpacked, under
+# $ports/llvm, once. Sets $clang_bin.
+LLVM_RELEASE=LLVM-23.1.1-Linux-X64
+LLVM_RELEASE_URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.1/$LLVM_RELEASE.tar.xz
+LLVM_RELEASE_SHA256=832aeb58d105de1cabc7b982dd2c65de0610f7377df48ae8fc2dd8e97420a15c
+fetch_clang() {
+    clang_bin=$ports/llvm/$LLVM_RELEASE/bin
+    if [ -x "$clang_bin/clang++" ]; then
+        return
+    fi
+    step "clang, for a C++ runtime this gcc cannot build"
+    mkdir -p "$ports/src" "$ports/llvm"
+    fetch "$LLVM_RELEASE_URL" "$ports/src/$LLVM_RELEASE.tar.xz" sha256sum "$LLVM_RELEASE_SHA256"
+    rm -rf "$ports/llvm/$LLVM_RELEASE"
+    tar -xJf "$ports/src/$LLVM_RELEASE.tar.xz" -C "$ports/llvm" --wildcards \
+        "$LLVM_RELEASE/bin/clang*" "$LLVM_RELEASE/lib/clang/*"
+    [ -x "$clang_bin/clang++" ] || fail "$LLVM_RELEASE has no bin/clang++"
+}
+
 # Build ferrousli in the release profile and set $lib and $crt1.
 build_ferrousli() {
     step "ferrousli, release"
@@ -128,6 +149,9 @@ build_ferrousli() {
 # Write $ports/bin/ferrousli-cc, ferrousli-c++ and ferrousli-c++-bare, which
 # compile against ferrousli's headers and link against crt1.o and
 # libferrousli.a, set $CC, $CXX and $CXX_BARE to them, and put them on PATH.
+# $CC_CXX is the C compiler of the C++ ones' family, for a build that mixes
+# the two languages and gives both one set of warnings: $CC itself unless
+# the C++ compilers are clang.
 # Needs build_ferrousli first.
 #
 # The kernel's UAPI headers (<linux/*>, <asm/*>) belong to no C library; the
@@ -149,6 +173,12 @@ build_ferrousli() {
 # What the wrappers add after the caller's arguments comes after `-x none`, so
 # a caller that compiles from standard input with `-x c++ -` does not make gcc
 # read crtend.o and the libraries as C++ source.
+#
+# The C++ compilers drive the host's g++ when it is gcc 15 or newer, and
+# otherwise clang from LLVM's own release (fetch_clang): LLVM 23's libc++ uses
+# compiler built-ins older compilers lack, and WSL's Ubuntu 24.04, where these
+# scripts run on Windows, has gcc 13. Either way $CC is gcc, and libgcc,
+# crtbeginT.o and crtend.o are gcc's.
 #
 # Empty libm, libpthread and the rest stand in for the libraries a configure
 # script asks for by name: ferrousli is one library, as musl is.
@@ -184,18 +214,30 @@ make_compilers() {
     for l in m crypt resolv rt pthread dl util; do
         [ -f "$stubs/lib$l.a" ] || "$AR" rc "$stubs/lib$l.a"
     done
-    local compiler_include crtbegin crtend
+    local compiler_include crtbegin crtend libgcc_dir
     compiler_include=$("$cc" -print-file-name=include)
     crtbegin=$("$cc" -print-file-name=crtbeginT.o)
     crtend=$("$cc" -print-file-name=crtend.o)
+    libgcc_dir=$(dirname "$("$cc" -print-libgcc-file-name)")
+    local cxx_driver=$cxx cxx_include=$compiler_include cxx_c_driver=
+    if [ -z "$target" ] && [ "$(g++ -dumpversion | cut -d. -f1)" -lt 15 ]; then
+        fetch_clang
+        # musl's triple, which ferrousli's headers are: clang names its
+        # target, and btop's Makefile refuses a static link for glibc's.
+        cxx_driver="$clang_bin/clang++ --target=x86_64-linux-musl"
+        cxx_c_driver="$clang_bin/clang --target=x86_64-linux-musl"
+        cxx_include=$("$clang_bin/clang" -print-resource-dir)/include
+        echo "g++ $(g++ -dumpversion) is older than 15: C++ with $cxx_driver"
+    fi
 
     CXX= CXX_BARE=
-    local name driver kind
-    for name in ferrousli-cc ferrousli-c++ ferrousli-c++-bare; do
+    local name driver kind include
+    for name in ferrousli-cc ferrousli-cxx-cc ferrousli-c++ ferrousli-c++-bare; do
         case $name in
-            ferrousli-cc) driver=$cc kind=c ;;
-            ferrousli-c++) driver=$cxx kind=c++ ;;
-            ferrousli-c++-bare) driver=$cxx kind=bare ;;
+            ferrousli-cc) driver=$cc kind=c include=$compiler_include ;;
+            ferrousli-cxx-cc) driver=$cxx_c_driver kind=c include=$cxx_include ;;
+            ferrousli-c++) driver=$cxx_driver kind=c++ include=$cxx_include ;;
+            ferrousli-c++-bare) driver=$cxx_driver kind=bare include=$cxx_include ;;
         esac
         if [ -z "$driver" ]; then
             rm -f "$bin/$name"
@@ -208,7 +250,7 @@ link=1
 for a in "\$@"; do
     case "\$a" in -c|-S|-E|-M|-MM|-r|-print-*|--version|-v|-dumpversion|-dumpmachine) link=0 ;; esac
 done
-common=(-nostdinc -isystem "$ferrousli/include" -isystem "$uapi" -isystem "$compiler_include")
+common=(-nostdinc -isystem "$ferrousli/include" -isystem "$uapi" -isystem "$include")
 cxx=()
 cxxlibs=()
 case $kind in
@@ -228,7 +270,7 @@ if [ $kind != c ]; then
     end=("$crtend")
 fi
 if [ \$link = 1 ]; then
-    exec $driver "\${cxx[@]}" "\${common[@]}" -static -no-pie -nostdlib -L"$stubs" -L"$prefix/lib" \\
+    exec $driver "\${cxx[@]}" "\${common[@]}" -static -no-pie -nostdlib -L"$stubs" -L"$prefix/lib" -L"$libgcc_dir" \\
         "$crt1" "\${begin[@]}" "\$@" -x none "\${cxxlibs[@]}" -Wl,--start-group "$lib" -lgcc -Wl,--end-group "\${end[@]}"
 else
     exec $driver "\${cxx[@]}" "\${common[@]}" "\$@"
@@ -237,7 +279,8 @@ EOF
         chmod +x "$bin/$name"
     done
     export PATH=$bin:$PATH
-    CC=$bin/ferrousli-cc
+    CC=$bin/ferrousli-cc CC_CXX=$bin/ferrousli-cc
+    [ -z "$cxx_c_driver" ] || CC_CXX=$bin/ferrousli-cxx-cc
     if [ -n "$cxx" ]; then
         CXX=$bin/ferrousli-c++
         CXX_BARE=$bin/ferrousli-c++-bare
