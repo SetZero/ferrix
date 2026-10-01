@@ -1,0 +1,6 @@
+# Addresses used by the netdb unit tests.
+192.0.2.10 server.example.test alias
+192.0.2.11 multi.example.test
+192.0.2.12 multi.example.test
+2001:db8::6 six.example.test multi.example.test
+192.0.2.99 unrelated.example.test # commented

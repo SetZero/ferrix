@@ -1,0 +1,6 @@
+# The same name on both transports exercises the two-result lookup.
+http 8080/tcp www
+http 8080/udp
+domain 5353/tcp
+syslog 514/udp
+other 9999/tcp # commented

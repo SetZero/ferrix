@@ -1,0 +1,3 @@
+# Ethernet address database used by ether.rs tests.
+02:00:00:00:00:01 router
+52:54:00:12:34:56 ferrix-vm # a trailing comment
