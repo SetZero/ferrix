@@ -246,7 +246,6 @@ Linux):
 | `stage13-np`, `stage13-fdinfo` | `/proc`'s private links by `ptrace_may_access`, dumpable cleared by id changes, `/proc/<pid>/fdinfo` | boot check written; last run failed on a real bug now fixed, not re-run. Overlaps `main`'s own `credentials_changed` |
 | `stage13-n5` | unprivileged mounting: `may_mount` by owner, `tmpfs` alone, locked copies, detach-don't-pin, sysctls | `mountperm` line booted on x86_64, four controls fired; other gates not run |
 | `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
-| `stage13-timens` | time namespace | agent had not reported |
 | `stage13-cgctl` | M2's reclaim and `memory.high`, `cgroup.freeze`, `cpu.max` with `cpu.stat`, the `io` controller (`io.stat`, `io.max`) | reclaim, freeze and cpu booted; the io check stopped at its last line (a quota-slot count, a fix written, not booted); no full boot, no `test-shell`/`test-vfs`, no negative control run |
 | `stage13-s3` | seccomp S3 to S5 | S3 built and booting, not gated; S4 and S5 not started |
 | `stage13-container` | `cargo xtask test-container`, the exit criterion as a program | written, never run |
@@ -302,7 +301,7 @@ the namespace ends. Abstract unix names are per namespace. The `netns` boot line
 charged (three more `kmem` fills); `docs/NETNS.md` has the design, the
 controls and what is open.
 
-**Time namespace (2026-09-30, built on `stage13-timens`, not landed):**
+**Done -- time namespace (built 2026-09-30, finished 2026-10-01):**
 `unshare(CLONE_NEWTIME)` (the flag is inside `CSIGNAL`, so only `unshare`
 and, later, `setns` reach it) gives the caller's children a namespace of
 two offsets, for `CLOCK_MONOTONIC` (and its raw and coarse forms) and
