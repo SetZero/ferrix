@@ -70,7 +70,7 @@ fn dropped(uid: u64) -> Result<Arc<Process>, &'static str> {
     }
     // A descriptor to look at.
     let mut page = page_for(&made)?;
-    crate::fs::mount_check::open(&mut page, b"/", O_RDONLY, 0)?
+    let _ = crate::fs::mount_check::open(&mut page, b"/", O_RDONLY, 0)?
         .map_err(|_| "a /proc target could not open /")?;
     Ok(made)
 }
