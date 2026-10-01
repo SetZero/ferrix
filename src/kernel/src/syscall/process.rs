@@ -1446,15 +1446,16 @@ impl Process {
     /// one: never a thread listed with a chain read before the sync and so
     /// left unfiltered (`docs/SECCOMP.md` §3.7, SR10).
     pub(crate) fn add_thread_from(&self, thread: &Arc<Thread>, creator: &Thread) {
-        let mut threads = self.threads.lock();
-        threads.retain(|listed| listed.strong_count() > 0);
-        if !threads
+        let mut list = self.threads.lock();
+        list.retain(|listed| listed.strong_count() > 0);
+        if !list
             .iter()
             .any(|listed| core::ptr::eq(listed.as_ptr(), Arc::as_ptr(thread)))
         {
-            threads.push(Arc::downgrade(thread));
+            list.push(Arc::downgrade(thread));
         }
         thread.copy_seccomp_from(creator);
+        drop(list);
     }
 
     /// Whether an `execve` has claimed the process: the thread that will
