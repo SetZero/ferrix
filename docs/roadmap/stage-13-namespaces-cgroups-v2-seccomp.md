@@ -233,29 +233,36 @@ Linux's 32768 with `fits_path`/`path_cost` and a host test of both ends,
 checker to six programs carrying the real Linux 7.0 verifier's answer
 (`oracle.c --accept`), and an empty chain answers `KILL_PROCESS`.
 
-**Where stage 13 stands (2026-10-01).** The exit criterion -- an unprivileged
-user namespace runs a pid 1 under a memory limit with a scoped OOM kill and a
-seccomp filter that blocks a call -- is **not met**: pid namespaces are on `main`, the
-filter itself is built on a branch and not. Built, gated on their
-own boots, reviewed by nobody yet, and **not landed** (each on a local branch
-with a side ref on nazuna; `docs/BACKLOG.md` lists their differences from
-Linux):
+**Where stage 13 stands (wind-down, 2026-10-01 evening).** The exit criterion
+-- an unprivileged user namespace runs a pid 1 under a memory limit with a
+scoped OOM kill and a seccomp filter that blocks a call -- is **not met**.
+On `main`: N4 user namespaces, S1 the filter checker, S2 the core hook, the
+small namespaces and `setns`, pid namespaces, and the reservation of
+`L.trap.8` for S4. Everything else is pushed to `origin` as a branch, gated as
+the table says, and stopped at the customer's wind-down. Evidence is cited by
+fleet/gate.sh INDEX tags on nazuna; the certification consultant's verdicts and
+conditions are in `~/.local/share/ferrix/cert-consultant/reviews.md` there.
 
-| Branch | What | State |
+| Branch (origin) | What | State at the wind-down |
 |---|---|---|
-| `stage13-np`, `stage13-fdinfo` | `/proc`'s private links by `ptrace_may_access`, dumpable cleared by id changes, `/proc/<pid>/fdinfo` | boot check written; last run failed on a real bug now fixed, not re-run. Overlaps `main`'s own `credentials_changed` |
-| `stage13-n5` | unprivileged mounting: `may_mount` by owner, `tmpfs` alone, locked copies, detach-don't-pin, sysctls | `mountperm` line booted on x86_64, four controls fired; other gates not run |
-| `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
-| `stage13-netns` | network namespaces, veth pairs, per-namespace stacks | boots on three architectures, `test-shell`, `test-vfs`, `test-net`, 30 controls; `check` not run |
-| `stage13-timens` | time namespace | agent had not reported |
-| `stage13-cgctl` | M2's reclaim and `memory.high`, `cgroup.freeze`, `cpu.max` with `cpu.stat`, the `io` controller (`io.stat`, `io.max`) | reclaim, freeze and cpu booted; the io check stopped at its last line (a quota-slot count, a fix written, not booted); no full boot, no `test-shell`/`test-vfs`, no negative control run |
-| `stage13-s3` | seccomp S3 to S5 | S3 built and booting, not gated; S4 and S5 not started |
-| `stage13-container` | `cargo xtask test-container`, the exit criterion as a program | written, never run |
+| `stage13-cgctl` 670b4c49a | M2's reclaim and `memory.high`, `cgroup.freeze`, `cpu.max`, the `io` controller | every gate row PASSED on 89c2f911a (`cs-*`, kvm and release included); 8 of 18 controls FIRED, 11 not run; consultant: fixes accepted, but it has not seen the `cpu.max` bound widened to two thirds of a processor or the stale CGROUPS §14 control table |
+| `stage13-s3` d19606300, `stage13-s3-onmain` 8ce395f53 | seccomp filters (`SECCOMP_SET_MODE_FILTER`, strict mode, the actions) | check and three boots PASSED on 6ec5b4081; controls k1-k5, k11-k15 FIRED; owed: k6-k10, k16-k19, `test-shell`, `test-vfs`, and the rows on the rebased hash. Cleared on that evidence |
+| `stage13-s4` 9ad2c718e | `SECCOMP_RET_TRAP` | consultant: OK if five conditions; three written; controls t2-t7 and the rows owed; lands after S3 |
+| `stage13-s5` 298399f1e | `TSYNC` | consultant: OK if; a new thread fails closed (written); owed: a measured bound for the TSYNC ancestor walk, the rows, four controls |
+| `stage13-s6` 64e891f7e | `cargo xtask test-seccomp` (S6a) | passed on all four ABIs in a direct run; pool INDEX lines owed; Linux's `seccomp_bpf` selftest not done |
+| `stage13-fdinfo` 225eb2410 | `/proc` by `ptrace_may_access`, dumpable, `/proc/<pid>/fdinfo` (NP) | check, three boots (armv7a at two and four processors), `test-init`, `test-shell` PASSED (`fdi23-*`); controls k1-k3, k6, k7 FIRED; consultant: OK if `test-vfs`, k4/k5 on their own message, k8-k17 on the landing hash, §12 quoting them |
+| `stage13-n5` 7a0c04fdd | unprivileged mounting | on fdinfo; consultant asked for changes, built (remount by the superblock's owner, the bottom mount locked, a sleeping write-out), not gated; earlier tip's boots, `test-vfs`, `test-shell`, `test-bwrap` PASSED |
+| `stage13-bwrap-user` dad30e7f2 | `test-bwrap` as uid 1000 | passes (a new tmpfs is now 1777 and the mounter's); needs a rebase onto N5, a control for the tmpfs case, review |
+| `stage13-netns` 4cc2ab39d | network namespaces, veth, per-namespace stacks | every row PASSED on 5e19c599c (`ae23-*`), controls ae-nn-01..31 FIRED; consultant's four conditions met, not yet confirmed; owed: rebase onto `main`, coverage carry, re-run of the `ae23` rows |
+| `stage13-timens` 88b073c3a | time namespaces | on netns; boots on x86_64; native child gets its creator's time namespace (c25, c26); gate and 26 controls stopped mid-run (c01, c03-c07 FIRED); not reviewed |
+| `stage13-container` cda83faef | `cargo xtask test-container`, the exit criterion as a program | written, never built or run; needs cgctl and S3 on `main` |
 
-These branches were written against an earlier N4 and conflict with each other
-in the namespace, procfs, catalog and kmem files; they go in one at a time,
-each rebased with `git rebase --onto` the landed N4. Not started: seccomp S6,
-and N6 and N7 (Steam as uid 1000, pressure-vessel).
+Every namespace and seccomp review found the same hole: `launch::load_native`
+must give a native child its creator's whole namespace set, pid namespace,
+seccomp chain and `no_new_privs`. Each branch above carries that fix and its
+check. Not started: N6 and N7 (Steam as uid 1000, pressure-vessel). Rough
+remaining size: about 40 to 45 points, about 5 to 7 hours with four landing
+chains and a consultant at once.
 
 **Landed -- the small namespaces and `setns` (built 2026-09-30, landed
 2026-10-01 after the consultant's review):** UTS, IPC and cgroup
