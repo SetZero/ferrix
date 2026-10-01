@@ -159,6 +159,7 @@ pub mod termios;
 pub mod thread;
 pub mod threads;
 pub mod time;
+pub mod timer;
 pub mod timerfd;
 pub mod times;
 pub mod tm;

@@ -208,6 +208,17 @@ pub extern "C" fn at_quick_exit(func: Option<unsafe extern "C" fn()>) -> c_int {
     0
 }
 
+/// `at_quick_exit` under the name C++ runtimes call, with the module that
+/// registered `func`, which is not needed, as for [`__cxa_atexit`]. glibc
+/// exports it; Claude Code's native build imports it.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __cxa_at_quick_exit(
+    func: Option<unsafe extern "C" fn()>,
+    _dso: *mut c_void,
+) -> c_int {
+    at_quick_exit(func)
+}
+
 /// Takes the newest `at_quick_exit` handler off its list, if there is one.
 fn take_quick() -> Option<*mut ()> {
     let _guard = QUICK_LOCK.lock();

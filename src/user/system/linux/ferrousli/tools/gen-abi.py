@@ -83,6 +83,7 @@ readlinkat fchmodat faccessat pselect6 ppoll utimensat dup3 pipe2 prlimit64
 renameat2 getrandom memfd_create execveat statx clone3 faccessat2
 epoll_create1 epoll_ctl epoll_pwait epoll_pwait2 eventfd2
 timerfd_create timerfd_settime timerfd_gettime signalfd4
+timer_create timer_settime timer_gettime timer_getoverrun timer_delete
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
 iopl ioperm pkey_mprotect pkey_alloc pkey_free waitid preadv pwritev preadv2 pwritev2 process_vm_readv process_vm_writev mknodat setresuid setresgid setfsuid setfsgid fchmodat2 copy_file_range
 sync_file_range
@@ -113,6 +114,7 @@ setgroups chown fchown lchown setresuid setresgid getresuid getresgid
 setfsuid setfsgid clock_gettime clock_settime clock_getres clock_nanosleep clock_adjtime futex
 ppoll pselect6 rt_sigtimedwait utimensat semtimedop sched_rr_get_interval
 gettimeofday settimeofday nanosleep timerfd_settime timerfd_gettime
+timer_settime timer_gettime
 recvmmsg
 """.split()
 
@@ -127,6 +129,7 @@ clock_adjtime64 futex_time64 ppoll_time64 pselect6_time64
 rt_sigtimedwait_time64 utimensat_time64 semtimedop_time64
 sched_rr_get_interval_time64 arm_fadvise64_64 arm_sync_file_range sigreturn
 timerfd_settime64 timerfd_gettime64
+timer_settime64 timer_gettime64
 recvmmsg_time64
 """.split()
 
@@ -153,6 +156,8 @@ ARM_SAME_ARGUMENTS = {
     "sched_rr_get_interval": "sched_rr_get_interval_time64",
     "timerfd_settime": "timerfd_settime64",
     "timerfd_gettime": "timerfd_gettime64",
+    "timer_settime": "timer_settime64",
+    "timer_gettime": "timer_gettime64",
     "recvmmsg": "recvmmsg_time64",
     "getuid": "getuid32",
     "getgid": "getgid32",

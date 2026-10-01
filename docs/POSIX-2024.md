@@ -23,13 +23,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 1132 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 1137 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 2 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 2 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 107 | not there |
+| absent | 102 | not there |
 
-111 interfaces are missing in one of the last four ways. None of them is
+106 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -56,14 +56,14 @@ new subsystem. Every area's missing names are in the index at the end.
 | Time and clocks | 29 | 3 | 0 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1 |
 | Threads and scheduling | 145 | 4 | 0 | 2 | the `clock` variants of the condition, mutex and read-write lock waits 2. Landed: `pthread_atfork`; `thrd_equal` as a function as well as a macro; cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points |
 | Memory mapping and System V IPC | 23 | 0 | 0 | 0 | landed: `ftok`, for NSPR (`docs/CHROME.md`) |
-| Realtime: asynchronous I/O, message queues, timers, shared memory | 27 | 25 | 0 | 10 | `aio.h` over threads 3; the rest of `mqueue.h`, `mq_open` to `mq_notify`, 3; `timer_*` with `SIGEV_THREAD` 3; `clock_getcpuclockid` 1. Landed: `shm_open` and `shm_unlink`, for LLVM (`docs/roadmap/chrome.md`). Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
+| Realtime: asynchronous I/O, message queues, timers, shared memory | 27 | 20 | 0 | 10 | `aio.h` over threads 3; the rest of `mqueue.h`, `mq_open` to `mq_notify`, 3; `SIGEV_THREAD` for `timer_create`, which refuses it with `ENOTSUP`, 3; `clock_getcpuclockid` 1. Landed: `timer_create`, `timer_settime`, `timer_gettime`, `timer_getoverrun` and `timer_delete`, each its system call, for Claude Code on the `--everything` desktop (`docs/CLAUDE-CODE.md` §5; Ferrix's kernel answers them `ENOSYS` today, as it does glibc's); `shm_open` and `shm_unlink`, for LLVM (`docs/roadmap/chrome.md`). Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 2 | 0 | 2 | `ctermid` 1; `posix_devctl` and `<devctl.h>` 1. Landed: `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, for foot (`docs/CHROME.md`) |
 | Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
 | Patterns, paths and search | 23 | 2 | 0 | 3 | `wordexp` 3. Landed: `nftw`, musl's with glibc's type flags and `FTW_ACTIONRETVAL`, for GLib (`docs/CHROME.md`); `glob` and `globfree`; `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 0 | 0 | 0 | landed: `dladdr`, over the program's own headers; `dlopen`, `dlsym`, `dlclose` and `dlerror`, which load shared objects when `ld-ferrousli` started the program and, in a static program, return null with `dlerror` saying why, as musl's do |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **111** | **0** | **51** | |
+| **All** | **1243** | **106** | **0** | **51** | |
 
 ## Present but broken
 
@@ -348,7 +348,8 @@ interface.
 | `<mqueue.h>` | absent (8) | `mq_close` (MSG), `mq_notify` (MSG), `mq_open` (MSG), `mq_receive` (MSG), `mq_send` (MSG), `mq_timedreceive` (MSG), `mq_timedsend` (MSG), `mq_unlink` (MSG) |
 | `<mqueue.h>` | present (2) | `mq_getattr` (MSG), `mq_setattr` (MSG) |
 | `<sys/mman.h>` | absent (3) | `posix_mem_offset` (TYM), `posix_typed_mem_get_info` (TYM), `posix_typed_mem_open` (TYM) |
-| `<time.h>` | absent (6) | `clock_getcpuclockid` (CPT), `timer_create`, `timer_delete`, `timer_getoverrun`, `timer_gettime`, `timer_settime` |
+| `<time.h>` | absent (1) | `clock_getcpuclockid` (CPT) |
+| `<time.h>` | present (5) | `timer_create`, `timer_delete`, `timer_getoverrun`, `timer_gettime`, `timer_settime` |
 
 ### Terminals and devices
 

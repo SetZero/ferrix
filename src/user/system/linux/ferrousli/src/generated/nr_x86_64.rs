@@ -284,6 +284,16 @@ pub const TIMERFD_SETTIME: usize = 286;
 pub const TIMERFD_GETTIME: usize = 287;
 /// `signalfd4`.
 pub const SIGNALFD4: usize = 289;
+/// `timer_create`.
+pub const TIMER_CREATE: usize = 222;
+/// `timer_settime`.
+pub const TIMER_SETTIME: usize = 223;
+/// `timer_gettime`.
+pub const TIMER_GETTIME: usize = 224;
+/// `timer_getoverrun`.
+pub const TIMER_GETOVERRUN: usize = 225;
+/// `timer_delete`.
+pub const TIMER_DELETE: usize = 226;
 /// `fadvise64`.
 pub const FADVISE64: usize = 221;
 /// `fallocate`.

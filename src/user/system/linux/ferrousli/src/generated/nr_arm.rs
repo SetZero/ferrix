@@ -209,6 +209,12 @@ pub const EVENTFD2: usize = 356;
 pub const TIMERFD_CREATE: usize = 350;
 /// `signalfd4`.
 pub const SIGNALFD4: usize = 355;
+/// `timer_create`.
+pub const TIMER_CREATE: usize = 257;
+/// `timer_getoverrun`.
+pub const TIMER_GETOVERRUN: usize = 260;
+/// `timer_delete`.
+pub const TIMER_DELETE: usize = 261;
 /// `fallocate`.
 pub const FALLOCATE: usize = 352;
 /// `mlock`.
@@ -523,6 +529,10 @@ pub const SIGRETURN: usize = 119;
 pub const TIMERFD_SETTIME64: usize = 411;
 /// `timerfd_gettime64`.
 pub const TIMERFD_GETTIME64: usize = 410;
+/// `timer_settime64`.
+pub const TIMER_SETTIME64: usize = 409;
+/// `timer_gettime64`.
+pub const TIMER_GETTIME64: usize = 408;
 /// `recvmmsg_time64`.
 pub const RECVMMSG_TIME64: usize = 417;
 /// `arm_set_tls`.
@@ -557,6 +567,10 @@ pub const SCHED_RR_GET_INTERVAL: usize = SCHED_RR_GET_INTERVAL_TIME64;
 pub const TIMERFD_SETTIME: usize = TIMERFD_SETTIME64;
 /// `timerfd_gettime`: [`TIMERFD_GETTIME64`], which takes its arguments here.
 pub const TIMERFD_GETTIME: usize = TIMERFD_GETTIME64;
+/// `timer_settime`: [`TIMER_SETTIME64`], which takes its arguments here.
+pub const TIMER_SETTIME: usize = TIMER_SETTIME64;
+/// `timer_gettime`: [`TIMER_GETTIME64`], which takes its arguments here.
+pub const TIMER_GETTIME: usize = TIMER_GETTIME64;
 /// `recvmmsg`: [`RECVMMSG_TIME64`], which takes its arguments here.
 pub const RECVMMSG: usize = RECVMMSG_TIME64;
 /// `getuid`: [`GETUID32`], which takes its arguments here.

@@ -144,3 +144,8 @@ fn strptime_parses_and_round_trips() {
 fn clock_and_times_report_cpu_time() {
     check(&Case::named("time/cpu"));
 }
+
+#[test]
+fn posix_timers_arm_signal_count_overruns_and_refuse_a_thread() {
+    check(&Case::named("time/timer"));
+}
