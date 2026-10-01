@@ -1063,20 +1063,18 @@ const HANDLER: u64 = 0x0040_0000;
 const SIGSYS_NUMBER: u32 = 31;
 
 /// `TRAP` in a thread that has a handler: the call does not run, `SIGSYS` is
-/// pending for this thread even though the program blocked it (a trap cannot
-/// be blocked), and the `siginfo` a handler would read says what Linux's
+/// pending for this thread, and the `siginfo` a handler would read says what Linux's
 /// `force_sig_seccomp` says (`docs/SECCOMP.md` §3.6, SR9). Runs in the task of
 /// a check process, because the signal is forced on the running thread.
 fn trapped_in_the_task(env: &Env) -> Result<usize, &'static str> {
     use crate::syscall::signal;
     let getppid = number(Syscall::Getppid)?;
     let _ = attributes::sys_prctl(&env.process, NO_NEW_PRIVS, [1, 0, 0, 0]);
-    // A handler, and the signal blocked: a trap must come through anyway.
+    // A handler, unblocked, as Chromium installs it. (Blocked, Linux's
+    // `force_sig_info_to_task` resets it to the default and the trap ends the
+    // process: the `TrapIgnored` scenario.)
     env.thread
         .with_signals(|shared, _| shared.install_action(SIGSYS_NUMBER, HANDLER, 0));
-    signal::change_blocked(&env.thread, |_, own| {
-        let _ = own.replace_blocked(signal::bit(SIGSYS_NUMBER));
-    });
     env.install(&answering(&[(getppid, TRAP | 0x1234)]), 0)?;
     if env.judges(getppid) != Some(TRAPPED) {
         return Err("a TRAP result did not trap the call");
@@ -1084,7 +1082,7 @@ fn trapped_in_the_task(env: &Env) -> Result<usize, &'static str> {
     let taken = env
         .thread
         .with_signals(|shared, own| signal::take_next(shared, own))
-        .ok_or("a blocked SIGSYS let a trapped call return")?;
+        .ok_or("a trapped call raised no signal its handler could take")?;
     let signal::Origin::Sys {
         errno,
         call_addr,
