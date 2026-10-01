@@ -192,6 +192,11 @@ pub struct FileSpec {
     pub from: String,
     /// Where `from` is.
     pub source: Source,
+    /// `tree = true`: `from` is a directory, taken whole -- its files, its
+    /// directories and its symbolic links, in name order. A file in it is
+    /// 755 when it is a program or a script and 644 otherwise, so a tree
+    /// has no `mode`.
+    pub tree: bool,
     /// Its path from the root, with no leading `/`.
     pub to: String,
     /// Its permission bits.
@@ -207,6 +212,9 @@ pub enum Source {
     /// launcher's `.desktop` file, an icon.
     Folder,
 }
+
+/// A tree's directories' permission bits.
+pub const TREE_MODE: u32 = 0o755;
 
 /// How the tree builds a package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,7 +383,7 @@ pub(crate) fn read_package(table: &Table) -> Result<Package, Error> {
 
 /// One of `[[package.files]]`.
 fn read_file(table: &Table) -> Result<FileSpec, Error> {
-    known_keys(table, &["from", "source", "to", "mode"])?;
+    known_keys(table, &["from", "source", "tree", "to", "mode"])?;
     let to = string(table, "to")?;
     if !is_safe_path(&to) {
         return refuse(format!(
@@ -398,11 +406,27 @@ fn read_file(table: &Table) -> Result<FileSpec, Error> {
             "[[package.files]] from: `{from}` is not a path in the app's folder without `.`, `..` or a leading `/`"
         ));
     }
+    let tree = match table.get("tree") {
+        None => false,
+        Some(Value::Bool(tree)) => *tree,
+        Some(_) => return refuse("[[package.files]] tree: true or false".to_owned()),
+    };
+    let mode = match (tree, optional_string(table, "mode")?) {
+        (false, Some(text)) => mode(&text)?,
+        (false, None) => return refuse(format!("[[package.files]] `{to}` has no `mode`")),
+        (true, None) => TREE_MODE,
+        (true, Some(_)) => {
+            return refuse(format!(
+                "[[package.files]] `{to}` is a tree, whose files' modes are what they are, so it has no `mode`"
+            ));
+        }
+    };
     Ok(FileSpec {
         from,
         source,
+        tree,
         to,
-        mode: mode(&string(table, "mode")?)?,
+        mode,
     })
 }
 

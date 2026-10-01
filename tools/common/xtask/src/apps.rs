@@ -125,7 +125,27 @@ pub(crate) fn discover() -> Result<Vec<App>> {
         apps.push(App { dir, recipe });
     }
     apps.sort_by(|a, b| a.name().cmp(b.name()));
-    Ok(apps)
+    Ok(in_build_order(apps))
+}
+
+/// `apps` with each after the apps it depends on, and otherwise in the
+/// order given: an app is built after what it links, as git after curl's
+/// library. A dependency that is not an app, or a circle, is left for
+/// `ferrix_pkg::plan` to refuse at install.
+fn in_build_order(mut apps: Vec<App>) -> Vec<App> {
+    let mut ordered: Vec<App> = Vec::with_capacity(apps.len());
+    while !apps.is_empty() {
+        let ready =
+            apps.iter()
+                .position(|app| {
+                    app.recipe.package.depends.iter().all(|dependency| {
+                        !apps.iter().any(|waiting| waiting.name() == dependency.name)
+                    })
+                })
+                .unwrap_or(0);
+        ordered.push(apps.remove(ready));
+    }
+    ordered
 }
 
 /// The folder of the app named `name`: for a system gate that builds an app
@@ -306,32 +326,27 @@ pub(crate) fn package(
     package.arches = vec![arch.name().to_owned()];
     let record = Record {
         package,
-        files: built
-            .iter()
-            .map(|(spec, bytes)| Installed::of(&spec.to, spec.mode, bytes))
-            .collect(),
+        files: built.iter().filter_map(recorded).collect(),
     };
-    let text = record::render(&record);
-    let record_path = record::path(name);
-    let mut files: Vec<(&str, u32, &[u8])> = built
-        .iter()
-        .map(|(spec, bytes)| (spec.to.as_str(), spec.mode, bytes.as_slice()))
-        .collect();
-    files.push((&record_path, 0o644, text.as_bytes()));
-    let mut directories: Vec<String> = Vec::new();
-    for (path, _, _) in &files {
-        let mut at = *path;
-        while let Some((parent, _)) = at.rsplit_once('/') {
-            directories.push(parent.to_owned());
-            at = parent;
-        }
-    }
-    directories.sort();
-    directories.dedup();
-    let directories: Vec<&str> = directories.iter().map(String::as_str).collect();
-    let archive = initramfs::plain(&directories, &files)?;
+    let mut entries = built;
+    entries.push(ports::File {
+        path: record::path(name),
+        mode: 0o644,
+        content: ports::Content::Bytes(record::render(&record).into_bytes()),
+    });
+    let archive = initramfs::package(&entries)?;
     write(&out, &archive)?;
     Ok(Some(out))
+}
+
+/// What a record says of an entry: a directory, which it does not list,
+/// `None`.
+fn recorded(entry: &ports::File) -> Option<Installed> {
+    match &entry.content {
+        ports::Content::Bytes(bytes) => Some(Installed::of(&entry.path, entry.mode, bytes)),
+        ports::Content::Link(target) => Some(Installed::link(&entry.path, target)),
+        ports::Content::Directory => None,
+    }
 }
 
 /// `cargo xtask build-apps`: every app's package, or `--app`'s, built for
@@ -357,8 +372,9 @@ pub(crate) fn build_apps(args: &Args) -> Result<()> {
     Ok(())
 }
 
-/// The files a build made: each as its manifest names it, and its bytes.
-type Built = Vec<(FileSpec, Vec<u8>)>;
+/// What a build put where its manifest says: files, links and a tree's
+/// directories, each at its path from the root.
+type Built = Vec<ports::File>;
 
 /// Each file `app`'s manifest installs, with its bytes, built for `arch`.
 fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
@@ -446,23 +462,44 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
             out
         }
     };
+    gathered(app, arch, &out).map(Some)
+}
+
+/// What `app`'s manifest installs, from the build's output `out` and the
+/// app's folder, each native program held to what the kernel starts.
+fn gathered(app: &App, arch: Arch, out: &Path) -> Result<Built> {
+    let name = app.name();
     let mut files = Vec::new();
     for spec in &app.recipe.files {
-        let bytes = match spec.source {
-            Source::Build => read(&out.join(&spec.from))?,
-            Source::Folder => read(&app.dir.join(&spec.from))?,
+        let from = match spec.source {
+            Source::Build => out.join(&spec.from),
+            Source::Folder => app.dir.join(&spec.from),
         };
-        if app.recipe.package.abi == Abi::Native && bytes.starts_with(b"\x7fELF") {
-            native::verify(arch, &bytes).map_err(|why| {
-                Error::new(format!(
-                    "{name}'s {} for {arch} is not a program the kernel can start: {why}",
-                    spec.from
-                ))
-            })?;
+        if spec.tree {
+            ports::read_entry(&from, &spec.to, spec.mode, true, &mut files)?;
+        } else {
+            files.push(ports::File {
+                path: spec.to.clone(),
+                mode: spec.mode,
+                content: ports::Content::Bytes(read(&from)?),
+            });
         }
-        files.push((spec.clone(), bytes));
     }
-    Ok(Some(files))
+    if app.recipe.package.abi == Abi::Native {
+        for file in &files {
+            if let ports::Content::Bytes(bytes) = &file.content
+                && bytes.starts_with(b"\x7fELF")
+            {
+                native::verify(arch, bytes).map_err(|why| {
+                    Error::new(format!(
+                        "{name}'s {} for {arch} is not a program the kernel can start: {why}",
+                        file.path
+                    ))
+                })?;
+            }
+        }
+    }
+    Ok(files)
 }
 
 /// The files of `app`'s manifest its build makes: not the ones kept in its
@@ -487,6 +524,7 @@ fn install(packages: &[Vec<u8>]) -> Result<Vec<ports::File>> {
     }
     let order = plan(&records).map_err(|error| Error::new(format!("apps: {error}")))?;
     let mut files = Vec::new();
+    let mut directories = Vec::new();
     for at in order {
         let (Some(bytes), Some(record)) = (packages.get(at), records.get(at)) else {
             continue;
@@ -496,9 +534,27 @@ fn install(packages: &[Vec<u8>]) -> Result<Vec<ports::File>> {
         for entry in Archive::new(bytes).entries() {
             let entry =
                 entry.map_err(|error| Error::new(format!("{name}'s package: {error:?}")))?;
-            if entry.file_type() != FileType::Regular {
-                continue;
-            }
+            let mode = entry.mode & 0o7777;
+            let (found, content) = match entry.file_type() {
+                FileType::Regular => (
+                    Installed::of(entry.name, mode, entry.data),
+                    ports::Content::Bytes(entry.data.to_vec()),
+                ),
+                FileType::Symlink => {
+                    let target = entry.symlink_target().ok_or_else(|| {
+                        Error::new(format!("{name}'s link {} is not text", entry.name))
+                    })?;
+                    (
+                        Installed::link(entry.name, target),
+                        ports::Content::Link(target.to_owned()),
+                    )
+                }
+                FileType::Directory => {
+                    directories.push(entry.name.to_owned());
+                    continue;
+                }
+                _ => continue,
+            };
             if entry.name != record_path {
                 let listed = record
                     .files
@@ -510,7 +566,7 @@ fn install(packages: &[Vec<u8>]) -> Result<Vec<ports::File>> {
                             entry.name
                         ))
                     })?;
-                if *listed != Installed::of(entry.name, entry.mode & 0o7777, entry.data) {
+                if *listed != found {
                     return Err(Error::new(format!(
                         "{name}'s package holds {} unlike its record says",
                         entry.name
@@ -519,8 +575,20 @@ fn install(packages: &[Vec<u8>]) -> Result<Vec<ports::File>> {
             }
             files.push(ports::File {
                 path: entry.name.to_owned(),
-                mode: entry.mode & 0o7777,
-                content: ports::Content::Bytes(entry.data.to_vec()),
+                mode,
+                content,
+            });
+        }
+    }
+    // A directory nothing is in, such as one of git's templates, is made;
+    // the others come with what is in them.
+    for directory in directories {
+        let inside = format!("{directory}/");
+        if !files.iter().any(|file| file.path.starts_with(&inside)) {
+            files.push(ports::File {
+                path: directory,
+                mode: manifest::TREE_MODE,
+                content: ports::Content::Directory,
             });
         }
     }
@@ -765,6 +833,7 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{App, install, quoted, script};
+    use crate::ports;
     use ferrix_pkg::manifest;
     use ferrix_pkg::record::{self, Installed, Record};
 
@@ -777,6 +846,35 @@ mod tests {
             dir: std::path::PathBuf::new(),
             recipe: manifest::recipe(&text).expect("a manifest"),
         }
+    }
+
+    /// [`app`], depending on `depends`.
+    fn depending(name: &str, depends: &[&str]) -> App {
+        let mut app = app(name, "");
+        app.recipe.package.depends = depends
+            .iter()
+            .map(|name| manifest::Dependency::parse(name).expect("a dependency"))
+            .collect();
+        app
+    }
+
+    #[test]
+    fn apps_are_built_after_what_they_depend_on() {
+        let apps = vec![
+            depending("alsa-utils", &["alsa-lib"]),
+            depending("alsa-lib", &[]),
+            depending("btop", &[]),
+            depending("git", &["curl", "zlib"]),
+            depending("curl", &[]),
+        ];
+        let order: Vec<String> = super::in_build_order(apps)
+            .iter()
+            .map(|app| app.name().to_owned())
+            .collect();
+        assert_eq!(order, ["alsa-lib", "alsa-utils", "btop", "curl", "git"]);
+        // A circle is left as it is, for the install's plan to refuse.
+        let circle = vec![depending("a", &["b"]), depending("b", &["a"])];
+        assert_eq!(super::in_build_order(circle).len(), 2);
     }
 
     #[test]
@@ -902,5 +1000,72 @@ mod tests {
             package("b", &[("bin/x", b"")], &[("bin/x", b"")]),
         ];
         assert!(install(&both).is_err(), "two packages owning one path");
+    }
+
+    /// A package as [`super::package`] writes one, of `entries`, its record
+    /// made from `listed`.
+    fn tree_package(entries: &[ports::File], listed: &[ports::File]) -> Vec<u8> {
+        let mut package = app("git", "").recipe.package;
+        package.arches = vec!["x86_64".to_owned()];
+        let record = Record {
+            package,
+            files: listed.iter().filter_map(super::recorded).collect(),
+        };
+        let mut entries = entries.to_vec();
+        entries.push(ports::File {
+            path: record::path("git"),
+            mode: 0o644,
+            content: ports::Content::Bytes(record::render(&record).into_bytes()),
+        });
+        crate::initramfs::package(&entries).expect("an archive")
+    }
+
+    #[test]
+    fn links_and_empty_directories_install_as_their_record_says() {
+        let entry = |path: &str, content| ports::File {
+            path: path.to_owned(),
+            mode: 0o755,
+            content,
+        };
+        let tree = [
+            entry("bin/git", ports::Content::Bytes(b"\x7fELF".to_vec())),
+            entry("usr/libexec/git-core", ports::Content::Directory),
+            entry(
+                "usr/libexec/git-core/git-upload-pack",
+                ports::Content::Link("../../bin/git".to_owned()),
+            ),
+            entry(
+                "usr/share/git-core/templates/branches",
+                ports::Content::Directory,
+            ),
+        ];
+        let files = install(&[tree_package(&tree, &tree)]).expect("it installs");
+        let found = |path: &str| {
+            files
+                .iter()
+                .find(|file| file.path == path)
+                .map(|file| file.content.clone())
+        };
+        assert_eq!(
+            found("usr/libexec/git-core/git-upload-pack"),
+            Some(ports::Content::Link("../../bin/git".to_owned()))
+        );
+        assert_eq!(
+            found("usr/share/git-core/templates/branches"),
+            Some(ports::Content::Directory),
+            "an empty directory is made"
+        );
+        assert_eq!(
+            found("usr/libexec/git-core"),
+            None,
+            "a directory with something in it comes with that"
+        );
+
+        let mut elsewhere = tree.clone();
+        elsewhere[2].content = ports::Content::Link("/bin/sh".to_owned());
+        assert!(
+            install(&[tree_package(&elsewhere, &tree)]).is_err(),
+            "a link to somewhere its record does not say"
+        );
     }
 }

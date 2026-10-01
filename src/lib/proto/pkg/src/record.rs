@@ -2,7 +2,8 @@
 //!
 //! The package's `[package]`, built for one architecture, and a
 //! `[[files]]` entry for each file it put down with the file's mode, size
-//! and BLAKE2b-256 digest. It is inside the package, beside the files, so
+//! and BLAKE2b-256 digest; a symbolic link has its target as `link`, and its
+//! size and digest are the target's. It is inside the package, beside the files, so
 //! installing -- which is unpacking -- puts it down too: a running Ferrix
 //! knows what its image was built with, and what to delete to remove one.
 
@@ -29,17 +30,19 @@ pub fn path(name: &str) -> String {
     format!("{RECORDS}/{name}.toml")
 }
 
-/// A file a package put down.
+/// A file a package put down: a regular file, or a symbolic link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
     /// Its path from the root.
     pub path: String,
     /// Its permission bits.
     pub mode: u32,
-    /// Its length in bytes.
+    /// Its length in bytes: a link's, its target's.
     pub size: u64,
-    /// Its BLAKE2b-256 digest.
+    /// Its BLAKE2b-256 digest: a link's, its target's.
     pub digest: [u8; DIGEST],
+    /// A symbolic link's target, as written.
+    pub link: Option<String>,
 }
 
 impl Installed {
@@ -53,9 +56,22 @@ impl Installed {
             mode,
             size: bytes.len() as u64,
             digest,
+            link: None,
+        }
+    }
+
+    /// The entry for a symbolic link at `path` to `target`.
+    #[must_use]
+    pub fn link(path: &str, target: &str) -> Self {
+        Self {
+            link: Some(target.to_owned()),
+            ..Self::of(path, LINK_MODE, target.as_bytes())
         }
     }
 }
+
+/// A symbolic link's permission bits, which nothing reads.
+pub const LINK_MODE: u32 = 0o777;
 
 /// An installed package.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +120,10 @@ fn write_record(out: &mut String, record: &Record) -> fmt::Result {
     for file in &record.files {
         out.write_str("\n[[files]]\npath = ")?;
         toml::write_string(out, &file.path)?;
+        if let Some(target) = &file.link {
+            out.write_str("\nlink = ")?;
+            toml::write_string(out, target)?;
+        }
         write!(
             out,
             "\nmode = \"{:o}\"\nsize = \"{}\"\nblake2b = \"",
@@ -154,7 +174,7 @@ pub fn parse(text: &str) -> Result<Record, Error> {
 }
 
 fn read_installed(table: &Table) -> Result<Installed, Error> {
-    manifest::known_keys(table, &["path", "mode", "size", "blake2b"])?;
+    manifest::known_keys(table, &["path", "link", "mode", "size", "blake2b"])?;
     let path = manifest::string(table, "path")?;
     if !manifest::is_safe_path(&path) {
         return refuse(format!("[[files]] path: `{path}` is not under the root"));
@@ -169,11 +189,17 @@ fn read_installed(table: &Table) -> Result<Installed, Error> {
             "[[files]] blake2b: `{hex}` is not {DIGEST} bytes in hex"
         ))
     })?;
+    let link = match table.get("link") {
+        None => None,
+        Some(toml::Value::String(target)) if !target.is_empty() => Some(target.clone()),
+        Some(_) => return refuse(format!("[[files]] link: `{path}`'s target is not a path")),
+    };
     Ok(Installed {
         path,
         mode: manifest::mode(&manifest::string(table, "mode")?)?,
         size,
         digest,
+        link,
     })
 }
 

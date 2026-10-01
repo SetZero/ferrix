@@ -64,6 +64,11 @@ source = "folder"               # build (the default) | folder
 to = "usr/share/applications/example.desktop"
 mode = "644"
 
+[[package.files]]
+from = "usr/share/example"      # a directory, taken whole, links and all
+tree = true                     # its files 755 when programs, 644 if not
+to = "usr/share/example"
+
 [build]
 kind = "cargo"                  # cargo | script
 
@@ -171,10 +176,12 @@ every image build exercises it.
 
 A package is a newc cpio archive, `<name>-<version>-<arch>.fxpkg`, holding:
 
-* each file at its `to` path, with its mode;
+* each file at its `to` path, with its mode, and a tree's files, symbolic
+  links and directories beneath its `to`, in name order;
 * its record, `lib/ferrix/packages/<name>.toml`: the manifest's
   `[package]`, and a `[[files]]` entry for each file with its path, mode,
-  size and BLAKE2b-256 digest (`ferrix-argon2`'s).
+  size and BLAKE2b-256 digest (`ferrix-argon2`'s); a symbolic link's entry
+  has its target as `link`, and its size and digest are the target's.
 
 Installing is unpacking, so the record lands with the files, and a running
 Ferrix knows what it was built with. `ferrix-pkg` (`src/lib/proto/pkg`)

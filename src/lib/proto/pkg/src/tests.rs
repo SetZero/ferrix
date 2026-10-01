@@ -204,6 +204,34 @@ fn a_file_of_the_folder_stays_in_it() {
 }
 
 #[test]
+fn a_tree_is_taken_whole_and_has_no_mode() {
+    let tree = r#"
+[package]
+name = "git"
+version = "2.51.0"
+description = "git"
+abi = "linux"
+arches = ["x86_64"]
+
+[[package.files]]
+from = "usr/libexec/git-core"
+tree = true
+to = "usr/libexec/git-core"
+"#;
+    let recipe = manifest::recipe(tree).expect("it reads");
+    assert!(recipe.files[0].tree);
+    assert_eq!(recipe.files[0].mode, manifest::TREE_MODE);
+
+    let error = manifest::recipe(&format!("{tree}mode = \"755\"\n")).expect_err("a mode");
+    assert!(error.0.contains("is a tree"), "{error}");
+    let error = manifest::recipe(&tree.replace("tree = true\n", "")).expect_err("no mode");
+    assert!(error.0.contains("has no `mode`"), "{error}");
+    let error = manifest::recipe(&tree.replace("tree = true", "tree = \"yes\""))
+        .expect_err("not a boolean");
+    assert!(error.0.contains("true or false"), "{error}");
+}
+
+#[test]
 fn strings_survive_being_written_and_read() {
     for text in [
         "plain",
@@ -281,10 +309,15 @@ fn a_record_reads_back_what_was_written() {
         files: vec![
             Installed::of("bin/ferrofetch", 0o755, b"\x7fELF..."),
             Installed::of("usr/share/ferrofetch/note.txt", 0o644, b""),
+            Installed::link("usr/bin/ferrofetch", "../../bin/ferrofetch"),
         ],
     };
     let text = record::render(&record);
     assert_eq!(record::parse(&text), Ok(record.clone()));
+    assert!(
+        text.contains("path = \"usr/bin/ferrofetch\"\nlink = \"../../bin/ferrofetch\"\n"),
+        "{text}"
+    );
     assert!(
         text.contains("depends = [\"zlib >= 1.3\", \"curl\"]"),
         "{text}"
@@ -305,6 +338,7 @@ fn a_record_reads_back_what_was_written() {
         [
             "bin/ferrofetch",
             "usr/share/ferrofetch/note.txt",
+            "usr/bin/ferrofetch",
             "lib/ferrix/packages/ferrofetch.toml",
         ]
     );

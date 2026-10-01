@@ -184,6 +184,41 @@ pub(crate) fn plain(directories: &[&str], files: &[(&str, u32, &[u8])]) -> Resul
     archive.finish()
 }
 
+/// An archive of `entries`: a package (`crate::apps`). Every directory an
+/// entry is in comes first, in name order, then the files and links in the
+/// order given.
+///
+/// # Errors
+///
+/// A name or a file too large for a newc entry.
+pub(crate) fn package(entries: &[ports::File]) -> Result<Vec<u8>> {
+    let mut directories: Vec<&str> = Vec::new();
+    for entry in entries {
+        if entry.content == ports::Content::Directory {
+            directories.push(&entry.path);
+        }
+        let mut at = entry.path.as_str();
+        while let Some((parent, _)) = at.rsplit_once('/') {
+            directories.push(parent);
+            at = parent;
+        }
+    }
+    directories.sort_unstable();
+    directories.dedup();
+    let mut archive = Newc::new();
+    for directory in directories {
+        archive.directory(directory, 0o755)?;
+    }
+    for entry in entries {
+        match &entry.content {
+            ports::Content::Bytes(data) => archive.file(&entry.path, entry.mode, data)?,
+            ports::Content::Link(target) => archive.symlink(&entry.path, target)?,
+            ports::Content::Directory => {}
+        }
+    }
+    archive.finish()
+}
+
 /// `archive` again, with each regular file's contents replaced where `change`
 /// returns new ones, and every other entry and header field as it was.
 ///

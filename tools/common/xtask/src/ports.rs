@@ -250,7 +250,13 @@ fn mode_of(bytes: &[u8]) -> u32 {
 
 /// Read what is at `path` on the host, the archive path `name`, and, for a
 /// directory walked as a tree, everything beneath it in name order.
-fn read_entry(path: &Path, name: &str, mode: u32, walk: bool, out: &mut Vec<File>) -> Result<()> {
+pub(crate) fn read_entry(
+    path: &Path,
+    name: &str,
+    mode: u32,
+    walk: bool,
+    out: &mut Vec<File>,
+) -> Result<()> {
     let meta = std::fs::symlink_metadata(path)
         .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
     if meta.file_type().is_symlink() {
