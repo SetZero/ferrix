@@ -10,6 +10,7 @@
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-threads --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-sem --arch all [--i686] [--timeout SECONDS]
+//! cargo xtask test-container --arch all [--timeout SECONDS]
 //! cargo xtask test-procfs --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
 //! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
@@ -118,6 +119,7 @@ mod rustc;
 mod seam;
 mod seat;
 mod selfhost;
+mod container;
 mod sem;
 mod serial;
 mod sha256;
@@ -230,6 +232,8 @@ COMMANDS:
                   image runs a 32-bit x86 build of it)
     test-sem      Boot sem-test as init and require System V semaphores across forks: a SEM_UNDO mutex, undo at a kill,
                   EINTR, EIDRM and timeouts (--i686: 32-bit x86, through ipc(117), as Steam calls them)
+    test-container  Boot container-test as init and require stage 13's exit: an unprivileged user runs a pid 1 in eight new
+                  namespaces under a memory limit that ends it, with a seccomp filter that blocks a call
     test-procfs   Boot procfs-test as init and require /proc/self/fd links to stat as fstat (sockets, anonymous files, a pipe,
                   a memfd), /proc/net/tcp's inode to match, and every /proc inode number to fit 32 bits (--i686: 32-bit x86)
     test-rustc    Attach the rustc volume tools/common/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
@@ -543,6 +547,7 @@ fn run() -> Result<()> {
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-install" => installer::test_install(&args),
         "test-threads" | "test-sem" => sem::run(command, &args),
+        "test-container" => container::run(&args),
         "test-procfs" => procfs::test_procfs(&args),
         "test-apps" => apps::test_apps(&args),
         "coverage" => coverage::run(&args),
