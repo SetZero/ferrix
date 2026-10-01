@@ -58,6 +58,12 @@ const HELLO_PATH: &str = "/hello";
 /// The path that serves [`big_body`].
 const BIG_PATH: &str = "/big";
 
+/// A body long enough to time: see [`SPEED_BYTES`].
+const SPEED_PATH: &str = "/speed";
+
+/// How long the body at [`SPEED_PATH`] is.
+const SPEED_BYTES: usize = 32 * 1024 * 1024;
+
 /// Where the repository [`make_repository`] writes is served from.
 const GIT_REPO_PATH: &str = "/repo.git";
 
@@ -314,6 +320,7 @@ fn answer_http(mut stream: TcpStream, repository: &Path) {
     let body = match path_of(&request) {
         Some(path) if path == HELLO_PATH => Some(format!("{HELLO_BODY}\n").into_bytes()),
         Some(path) if path == BIG_PATH => Some(big_body()),
+        Some(path) if path == SPEED_PATH => Some(vec![b'x'; SPEED_BYTES]),
         // Anything else may be a file of the repository below `/repo.git`,
         // which git asks for one at a time over its dumb HTTP protocol.
         Some(path) => repository_file(repository, &path),
@@ -632,6 +639,18 @@ pub(crate) fn commands(servers: &Servers, curl: bool, git: bool) -> Vec<Command>
             ]),
             status: 0,
             expect: Expect::Lines(leak_argv(vec![format!("{digest} {BIG_BYTES}")])),
+        },
+        // How fast: the guest's own clock around a download it throws away.
+        Command {
+            argv: leak_argv(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                format!(
+                    "a=$(cut -d' ' -f1 /proc/uptime);                      wget -q -O /dev/null http://10.0.2.2:{http}{SPEED_PATH};                      b=$(cut -d' ' -f1 /proc/uptime); echo \"speed {SPEED_BYTES} bytes $a $b\""
+                ),
+            ]),
+            status: 0,
+            expect: Expect::Shaped(&["speed *"]),
         },
         // A datagram out and its answer back, which TCP's success does not
         // imply: the two take different paths through the stack.
