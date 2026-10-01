@@ -713,7 +713,11 @@ package FerrixRoadmap {
              * xtask test-steam-store with a test account. Its sandbox
              * waits on stage 13, and its GPU process on user copies
              * through a device window and a render group
-             * (docs/STEAM.md section 6). */
+             * (docs/STEAM.md section 6). On 2026-10-01 the second step
+             * got its gate, cargo xtask test-steam-game, not passing
+             * yet: Teeworlds installs on request and downloads, and
+             * Steam then stalls staging it, for a reason not yet
+             * known (docs/STEAM.md section 7). */
     }
 
     #inProgress requirement <'S20'> stage20SelfHosting : Stage {

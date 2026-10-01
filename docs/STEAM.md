@@ -18,6 +18,7 @@ tools/common/fetch/fetch-steam-window.sh     # once: the volume, about 7 GB spar
 cargo xtask test-steam-window           # the gate: waits for the window, judges the screen
 cargo xtask run-steam                   # the same boot, screens dumped until the timeout
 cargo xtask test-steam-store            # the --everything desktop's Steam, on ferrousli: sign-in, then the store
+cargo xtask test-steam-game             # the same, then Teeworlds installed from the library and started (§7; not passing yet)
 ```
 
 Both need KVM and the internet, as `test-steamcmd` does, and neither is in
@@ -74,16 +75,38 @@ passes when that window shows the store: at least 15% of it the store's
 dark blues (`#171d25` to `#1b2838`) and at least 10,000 colours, which its
 art brings and an empty page does not. Without the file it says the store
 step was skipped, and how to enable it, and passes on the first step. A
-sign-in window that shows red fails as a sign-in not taken, with the
-connection log's answers: a wrong name or password, Steam refusing the
-address after several failures, or email Steam Guard's code prompt, which
-has red enough to count (the test account's first run met that one). One
-still up three minutes after Sign in with its account name field gone
-fails as Steam Guard too. With the test account and Guard off, the gate
+sign-in window that shows red while it still has its account name field
+fails as a sign-in not taken, with the connection log's answers: a wrong
+name or password, Steam refusing the address after several failures, or
+email Steam Guard's code prompt, which has red enough to count (the test
+account's first run met that one). Red without the field is not counted:
+once Steam has taken a sign-in the window says "Loading user data" over
+game art, whose reds counted 2232 pixels on 2026-10-01. One still up three
+minutes after Sign in with its account name field gone fails as Steam
+Guard. The gate's desktop has hyprix's blur off: without the 3D card it
+composites in software, and the blur behind Steam's translucent windows
+took 19 of every 23 ms of a frame, two of the guest's four processors. With the test account and Guard off, the gate
 signed in and found the store on 2026-09-30. The account is typed into the guest and nowhere
 else: every line of the transcript and the gate's error are redacted of
 both, and a screen dumped after the typing is kept shrunk eight times, too
 small to read (`store.ppm`, `not-signed-in.ppm`, `after-sign-in.ppm`).
+
+**A game, gated (not passing yet).** `test-steam-game` boots the same
+desktop with `tools/common/steam/game-watch.sh` beside the store's watcher,
+needs the account file, and goes on from the store: the guest hands the
+running client `steam://install/380840` (Teeworlds) the way a second
+`steam` does (`client.sh` with an argument), the gate presses Install in the
+Install dialog Steam opens inside its main window, after unticking "Create
+an application shortcut", the guest follows the app's manifest to
+`StateFlags` 4 and hands the client `steam://rungameid/380840`, and the gate
+passes when hyprix lists a window titled "Teeworlds" that has drawn. The
+account must own the game: `steamcmd +login <account> <password>
++app_license_request 380840 +quit` claimed it for the test account on
+2026-10-01. The gate presses nothing on a store page. What it found, and
+why it does not pass yet, is §7. Screens are in `build/x86_64/steam-game/`:
+each window that is not the main one cropped to itself, the Install dialog
+as the main window less its header (where the account shows) and with every
+other window blacked out, and the game's window.
 
 ## 2. How the pieces fit
 
@@ -114,6 +137,7 @@ does not offer; it renders in software instead.
 | `-cef-disable-gpu -cef-disable-gpu-compositing` | yserver on the Wayland backend offers no DRI3, so the web helper's GL is llvmpipe, which CEF 126 rejects: its GPU process falls back to SwiftShader after three or four restarts | ANGLE on Vulkan through Venus, presenting with `MESA_VK_WSI_DEBUG=sw`: user copies through a device window's own mapping (F-55's second landing), the render node opened to a `render` group, and the helper's flags (§6) | not started; os-9f's conditions are in §6 |
 | `logger-0.bash` stand-in | The Steam Runtime's logger failed on Ferrix under `steamwebhelper.sh`; this one logs nothing | whatever the logger meets: `/dev/fd` through process substitution, and the `/proc` gaps below | steam-proc-gaps |
 | (not worked around) `lsof` warns "unsupported format" for `/proc/net/tcp6` and `udp6`, and cannot identify Unix sockets | the IPv6 tables' columns differ from Linux's, and `/proc/net/unix` names no inodes | Linux's formats | steam-proc-gaps |
+| `test-steam-game` unticks the Install dialog's "Create an application shortcut" | With it ticked, Steam ran `xdg-icon-resource`, which the volume does not have, and the client then aborted, "pure virtual method called" (exit 134, 2026-10-01) | `xdg-utils` on the volume, and the client's abort without it understood | open |
 | 16 GiB guest | At 8 GiB several processes died of `SIGBUS` on execute faults of mapped library pages while Chromium started | find and fix the refault | steam-sigbus |
 | the window fills its tile, black around the login | hyprix tiled a window of a fixed size, and yserver did not pass on its size hints (`WM_NORMAL_HINTS`) | a floating window of the size Steam asks for: hyprix ec4ce6b2 and the yserver pin c5b5935; and a floating window that follows the size its program gives it later, without which Steam's dialogs float as 130x70 miniatures of themselves ("Steamwebhelper is not responding" did) | done: the sign-in window floats at its own size on the `--everything` desktop (2026-09-30), and a dialog that resizes itself afterwards takes its new size (`follow_own_size`, with `a_floating_dialog_takes_a_size_its_program_gives_it_later`) |
 
@@ -260,3 +284,67 @@ and without the llvmpipe variables it sets for the 32-bit client. Untested:
 whether CEF 126 accepts Venus and presents this way. The host's
 `__GLX_VENDOR_LIBRARY_NAME=nvidia`, from the carried `hyprland.conf`,
 reaches every guest program too.
+
+## 7. A game from the library (2026-10-01)
+
+Stage 22's second exit step is a native Linux game from the library that
+installs to btrfs, launches and draws through the GPU path with sound. On
+2026-10-01 the gate for its first part, `test-steam-game` (§1), got as far
+as the install's download; it does not pass yet. In order:
+
+1. **The game.** Teeworlds (app 380840): free, `isfreeapp`, so steamcmd's
+   `app_license_request` adds it to an account; a Linux build whose
+   recommended runtime is `native` with no compatibility tool mapped to it;
+   about 10 MB. OpenTTD (1536610) was the first choice and cannot be
+   claimed on this storefront: steamcmd's request fails, and
+   ArchiSteamFarm's `addlicense s/542537` (the store's web route) answers
+   `AccessDenied/InvalidPackage`; the store lists it `is_free: false` with
+   only a paid bundle to buy. Battle for Wesnoth, Endless Sky and DDNet are
+   mapped to the Steam Linux Runtime's sniper container (pressure-vessel).
+   Windows-only titles (Umamusume, for one) are Proton, stage 22's third
+   step.
+2. **Nothing is pressed on a store page.** A gate that looked for the store
+   page's green Play Game button by its colour pressed a paid bundle's "Add
+   to Cart" instead (only the cart; nothing was bought). The gate now hands
+   the client `steam://install/<app>` for a game the account already owns.
+3. **The Install dialog is inside the main window**, not a window of its
+   own: the gate finds its Install button by the button's blue and shape
+   with the Cancel button's grey beside it, which the dialog's drive bar,
+   the same blue but wider, does not have. Steam's friends list floats over
+   the main window's left half and is opened again after it is closed, so
+   `game-watch.sh` closes it every few seconds until the game is installed.
+4. **The shortcut.** With "Create an application shortcut" ticked, the
+   client aborted after running `xdg-icon-resource` (§3).
+5. **The download.** Steam downloads through a dozen connections at once.
+   xtask's gateway kept eight segments in flight on each, more than the
+   guest's driver had receive buffers for, so most were dropped and sent
+   again on the timer: Steam's content log said 0.001 to 0.3 Mbps. Two
+   landings fixed it: 3b1b1de7 (os-a0: 64 receive slots in the driver, 24
+   segments in flight) and 020dc9b2 (the 24 bound the whole gateway, shared
+   a segment at a time). The same download then took 86 s. One connection
+   makes 10 to 15 MB/s since; 300 Mbps needs window scaling in the
+   gateway's TCP (BACKLOG).
+6. **What Steam installs with it.** Steam adds app 1070560, the Steam Linux
+   Runtime 1.0 (scout), 75 MB to download and 223 MB to stage, to the
+   install of a `native` game. Whether it then starts the game in that
+   runtime's container, which needs pressure-vessel, is not known yet.
+7. **The stall.** After the download Steam stages the files, and there it
+   stood still: no progress in its logs for half an hour, the 32-bit
+   client busy on about three of the guest's four processors. Its cause is
+   not known. A `find`/`stat` over `steamapps/downloading` from another
+   process never returned on the btrfs volume, and with the library on
+   tmpfs (`game-watch.sh` links it to `/tmp`) never returned either, so a
+   directory listed while Steam writes into it is a lead of its own and
+   says nothing about the volume. `du` on the volume said 0 KiB while
+   Steam had staged 79 MB. Whether Steam's staging stalls on tmpfs too was
+   not known at the wind-down (BACKLOG).
+
+Two things on the way were not Steam's. Steam's sign-in window showed game
+art in red while it loaded, which the store gate took for a refused
+sign-in (§1). And on the Windows desktop `/data/steam` and `/data/home`
+read `I/O error`, so yserver and Steam never started: the volume was made
+in WSL, whose btrfs-progs 6.6 writes a tree of hard links into an image
+wrongly (`btrfs check`: "link count wrong", "unresolved ref dir"), and C:
+was full besides. a1b522ec checks every `--everything` volume with
+`btrfs check` and makes it again from copies when the links come out
+broken.

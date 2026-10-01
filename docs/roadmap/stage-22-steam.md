@@ -199,6 +199,20 @@ a `render` group, and the helper's flags, 14 to 23 points, designed with
 the certification consultant's conditions and not started
 (`docs/STEAM.md` §6).
 
+The second step has its gate and does not pass yet (2026-10-01):
+`cargo xtask test-steam-game` signs in as `test-steam-store` does, asks
+the client to install Teeworlds, a free native game the test account owns,
+presses Install, follows the download and is to start the game and require
+its window drawn (`docs/STEAM.md` §1 and §7). The download works since two
+gateway landings let the guest take Steam's dozen connections at once
+(3b1b1de7, 020dc9b2: about 90 s for 84 MB where it had crawled at under
+0.3 Mbps). Then Steam stands still staging the files, for a reason not
+yet known (BACKLOG; a file walk over them from another process hangs too,
+on the btrfs volume and on tmpfs alike). After that come
+the runtime Steam installs beside a native game, the Steam Linux Runtime
+1.0 (scout), whose container needs pressure-vessel; the GPU path; and
+sound.
+
 None of it is sized past a first guess, and the sum of the first guesses is
 already over 300 points, so the stage is written as a list of what has to be
 true rather than a plan.

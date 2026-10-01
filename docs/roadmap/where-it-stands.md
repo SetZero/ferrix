@@ -45,6 +45,12 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
   `SIGBUS` that needs a 16 GiB guest, and the web helper's GPU process
   off. F-55, which the GPU route through Venus met first, is closed; the
   rest of that route is designed (`docs/STEAM.md` §6) and not started.
+  The second exit step, a game from the library, has its gate,
+  `test-steam-game` (2026-10-01, not passing yet): Teeworlds is claimed for
+  the test account, installed on request and downloaded in about 90 s
+  since the guest's network took Steam's dozen connections (3b1b1de7,
+  020dc9b2), and then Steam's staging of the files stands still, for a
+  reason not yet known (`docs/STEAM.md` §7, BACKLOG).
 * **`--everything` is everything** (the customer's rule, 2026-10-01): the
   desktop carries every feature, volume and app, and nothing is left out
   with a line saying how it could have been added. The volume half is in:
