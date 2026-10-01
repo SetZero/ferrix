@@ -686,6 +686,30 @@ The roadmap's *Burndown* lists that scope.
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
 
+* **2026-10-01 (customer)** **The barrier between programs is skipped only
+  inside a speculation domain, and a domain is a job marked at its
+  creation.** Asked by os-c7, whose native round trip is 6.5 us with every
+  barrier and 2.6 us without, about 4.4 us of it the `IBPB` and return-stack
+  refill at each switch between programs. The certification consultant
+  recommended it, and the customer chose it over keeping the barrier at every
+  switch and over Linux's opt-in mode. The rules:
+  - Only the holder of the parent job's MANAGE right may mark a job as one
+    speculation domain, and only when creating it. The mark can't be added
+    later, a job that already has processes can't be marked, child jobs don't
+    inherit it, and it is off by default. Marking a job writes an audit
+    record.
+  - A switch between programs of the same marked job skips the predictor
+    barrier. Every other switch keeps it, on every architecture.
+  - The claim narrows to "no program can read one outside its speculation
+    domain" (`docs/certification/SPECULATION.md` §3, the Security Target's
+    O.ISOLATE). A new assumption of use says the integrator places in one
+    domain only programs that may read each other's memory.
+  - What it takes to land, set out in the consultant's conditions to os-c7:
+    a design note first; the requirements; a check that counts barriers on
+    each processor; negative controls (the domain compare always true, the
+    MANAGE test removed); and the vulnerability-analysis row.
+  Option (b), the barrier by credentials, was rejected: credentials belong to
+  the Linux personality, and the job is the item's isolation unit.
 * **2026-10-01 (customer)** **The certification targets are a must, and the
   goal is to reach them.** That is all four in
   `docs/certification/README.md`: Common Criteria EAL5+, DO-178C DAL C, IEC
