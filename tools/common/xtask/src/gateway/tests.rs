@@ -949,6 +949,111 @@ fn keeps_no_more_in_flight_than_the_guest_can_hold() {
     );
 }
 
+/// Every TCP segment with data the gateway sends the guest within `wait`,
+/// whichever connection it is for, each as when it came, its destination
+/// port and its sequence number.
+fn data_segments_within(guest: &Guest, wait: Duration) -> Vec<(std::time::Instant, u16, u32)> {
+    let until = std::time::Instant::now() + wait;
+    let mut found = Vec::new();
+    while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+        guest
+            .socket
+            .set_read_timeout(Some(left.max(Duration::from_millis(1))))
+            .unwrap();
+        let Some(frame) = guest.frame() else {
+            break;
+        };
+        let (header, payload) = ethernet::Header::parse(&frame).unwrap();
+        if header.ethertype != ethertype::IPV4 {
+            continue;
+        }
+        let packet = ipv4::Header::parse(payload).unwrap();
+        if packet.header.protocol != ipv4::protocol::TCP {
+            continue;
+        }
+        let pseudo = Pseudo::V4 {
+            source: packet.header.source,
+            destination: packet.header.destination,
+        };
+        let segment = tcp::Header::parse(packet.payload, pseudo).unwrap();
+        if !segment.payload.is_empty() {
+            found.push((
+                std::time::Instant::now(),
+                segment.header.destination_port,
+                segment.header.sequence,
+            ));
+        }
+    }
+    guest.socket.set_read_timeout(Some(PATIENCE)).unwrap();
+    found
+}
+
+/// Two downloads at once put no more in flight together than the guest's
+/// driver can take, which is the cap for the gateway and not for each
+/// connection: Steam downloads through a dozen, and eight on each overran
+/// the driver into a hundredth of one connection's speed. Both get their
+/// share.
+#[test]
+fn keeps_no_more_in_flight_over_all_connections_than_the_guest_can_hold() {
+    let guest = Guest::start();
+    let (first, go_first, _first_server) = a_held_download(&guest, 40_020);
+    let (second, go_second, _second_server) = a_held_download(&guest, 40_021);
+    go_first.send(()).unwrap();
+    go_second.send(()).unwrap();
+    let seen = data_segments_within(&guest, Duration::from_millis(300));
+    // Nothing is acknowledged, so until a connection's 20 ms timer rewinds
+    // it, every segment that came is still in flight. A rewind frees room
+    // that the other connection may take before the repeats come, so the
+    // count stops short of the timer rather than at the first repeat.
+    let first_at = seen.first().map(|(at, _, _)| *at).expect("data comes");
+    let mut at_once: Vec<(u16, u32)> = Vec::new();
+    for (at, port, sequence) in &seen {
+        if at.duration_since(first_at) >= Duration::from_millis(15) {
+            break;
+        }
+        if !at_once.contains(&(*port, *sequence)) {
+            at_once.push((*port, *sequence));
+        }
+    }
+    assert!(
+        at_once.len() <= super::tcp::MAX_IN_FLIGHT,
+        "{} segments in flight at once over two connections: {at_once:?}",
+        at_once.len()
+    );
+    let on = |port: u16| seen.iter().filter(|(_, to, _)| *to == port).count();
+    assert!(
+        on(first.port) > 0 && on(second.port) > 0,
+        "both connections get room: {} and {}",
+        on(first.port),
+        on(second.port)
+    );
+}
+
+/// [`a_long_download`] whose server writes only once it is told to.
+fn a_held_download(
+    guest: &Guest,
+    port: u16,
+) -> (
+    Stream<'_>,
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = match listener.local_addr().unwrap() {
+        std::net::SocketAddr::V4(address) => address,
+        other => panic!("a listener bound to 127.0.0.1 is not {other}"),
+    };
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = wait.recv();
+        let _ = stream.write_all(&[7_u8; 200_000]);
+        let mut rest = Vec::new();
+        let _ = stream.read_to_end(&mut rest);
+    });
+    (Stream::open(guest, address, port), go, server)
+}
+
 /// Three duplicate acknowledgments send the missing segment again, and only
 /// that one: the guest kept what came after the hole, and sending it all
 /// again is what overran the guest's buffers into the next loss.

@@ -37,8 +37,9 @@
 //! dropped between QEMU and the guest. Three things answer that, and nothing
 //! more:
 //!
-//! * a connection has at most [`MAX_IN_FLIGHT`] segments unacknowledged, which
-//!   the guest can take;
+//! * the gateway has at most [`MAX_IN_FLIGHT`] segments unacknowledged, which
+//!   the guest can take, over all its connections together, shared out a
+//!   segment at a time (`Core::service_tcp`);
 //! * three duplicate acknowledgments send the first missing segment again at
 //!   once, and only that one: the guest keeps what arrived after the hole;
 //! * [`RETRANSMIT`] is short, because a round trip to the guest is a few
@@ -113,11 +114,12 @@ const RETRANSMIT: Duration = Duration::from_millis(20);
 /// resending at [`RETRANSMIT`]'s pace would only fill its log.
 const REDIAL: Duration = Duration::from_millis(200);
 
-/// The most segments one connection has unacknowledged at once: what the
-/// guest can hold. Ferrix's network driver keeps 64 receive slots posted for
-/// every connection at once, since 2026-10-01 (it was 16); more than this in flight on one of them and
-/// the rest are dropped before the guest sees them, which the numbers at the
-/// top of this file measure.
+/// The most segments the gateway has unacknowledged at once, over all its
+/// connections together: what the guest can hold. Ferrix's network driver
+/// keeps 64 receive slots posted for every connection at once, since
+/// 2026-10-01 (it was 16); more than this in flight and the rest are dropped
+/// before the guest sees them, which the numbers at the top of this file
+/// measure.
 pub(super) const MAX_IN_FLIGHT: usize = 24;
 
 /// How many acknowledgments of the same byte, with nothing new in them, mean a
@@ -543,8 +545,11 @@ impl Connection {
         }
     }
 
-    /// One turn of work: move bytes each way, then send what that produced.
-    fn service(&mut self, out: &mut Vec<Outgoing>) {
+    /// The first half of a turn: move bytes each way, run the timers, and
+    /// send what owes nothing to the gateway's budget of segments in flight
+    /// -- a reset, a SYN again, the one segment three duplicate
+    /// acknowledgments asked for, which is in flight already.
+    fn prepare(&mut self, out: &mut Vec<Outgoing>) {
         if self.state == State::Dialing {
             self.redial(out);
             return;
@@ -552,7 +557,56 @@ impl Connection {
         self.write_to_host();
         self.read_from_host();
         self.expire_retransmit();
-        self.transmit(out);
+        if self.state != State::Open {
+            return;
+        }
+        if self.aborted {
+            self.refuse(out);
+            return;
+        }
+        if self.host_eof && self.fin.is_none() {
+            self.fin = Some(self.snd_una.wrapping_add(span(self.pending.len())));
+        }
+        if std::mem::take(&mut self.resend_first) {
+            self.resend_una(out);
+        }
+    }
+
+    /// How many segments this connection has unacknowledged on the wire.
+    fn in_flight(&self) -> usize {
+        let outstanding = usize::try_from(self.snd_nxt.wrapping_sub(self.snd_una)).unwrap_or(0);
+        outstanding.div_ceil(self.mss.max(1))
+    }
+
+    /// Send the next segment of data the guest's window has room for, and
+    /// say whether there was one.
+    fn push_next(&mut self, out: &mut Vec<Outgoing>) -> bool {
+        if self.state != State::Open || self.aborted {
+            return false;
+        }
+        self.push_one(self.send_window(), out)
+    }
+
+    /// The last of a turn: the FIN, once every byte before it has gone.
+    fn finish_turn(&mut self, out: &mut Vec<Outgoing>) {
+        if self.state != State::Open || self.aborted {
+            return;
+        }
+        self.push_fin(self.send_window(), out);
+    }
+
+    /// What may be outstanding to the guest: its window, and no more than
+    /// [`MAX_IN_FLIGHT`] segments of it.
+    ///
+    /// A window of zero stops everything, which is what it is for. The
+    /// retransmission timer doubles as the persist timer: whatever is
+    /// outstanding goes again, and its acknowledgment carries the guest's
+    /// new window. With nothing outstanding there is nothing to probe with
+    /// and nothing to lose by waiting for the guest's own window update.
+    /// The guest's window says what its socket has room for; what its
+    /// driver can take off the wire is less, and is the bound here.
+    fn send_window(&self) -> usize {
+        usize::from(self.snd_wnd).min(MAX_IN_FLIGHT * self.mss)
     }
 
     /// Send a forwarded connection's SYN again if it has gone unanswered for
@@ -629,7 +683,7 @@ impl Connection {
     /// Send everything unacknowledged again, if the timer has run out.
     ///
     /// Winding `snd_nxt` back to `snd_una` is the whole of it: the next
-    /// [`Connection::transmit`] then walks the same bytes, and the FIN after
+    /// [`Connection::push_next`] then walks the same bytes, and the FIN after
     /// them, in the same order and with the same sequence numbers.
     fn expire_retransmit(&mut self) {
         if self.snd_nxt == self.snd_una || self.sent_at.elapsed() < RETRANSMIT {
@@ -637,33 +691,6 @@ impl Connection {
         }
         self.snd_nxt = self.snd_una;
         self.sent_at = Instant::now();
-    }
-
-    /// Fill the guest's window with whatever is waiting for it.
-    fn transmit(&mut self, out: &mut Vec<Outgoing>) {
-        if self.state != State::Open {
-            return;
-        }
-        if self.aborted {
-            self.refuse(out);
-            return;
-        }
-        if self.host_eof && self.fin.is_none() {
-            self.fin = Some(self.snd_una.wrapping_add(span(self.pending.len())));
-        }
-        // A window of zero stops everything, which is what it is for. The
-        // retransmission timer doubles as the persist timer: whatever is
-        // outstanding goes again, and its acknowledgment carries the guest's
-        // new window. With nothing outstanding there is nothing to probe with
-        // and nothing to lose by waiting for the guest's own window update.
-        // The guest's window says what its socket has room for; what its
-        // driver can take off the wire is less, and is the bound here.
-        let window = usize::from(self.snd_wnd).min(MAX_IN_FLIGHT * self.mss);
-        if std::mem::take(&mut self.resend_first) {
-            self.resend_una(out);
-        }
-        while self.push_one(window, out) {}
-        self.push_fin(window, out);
     }
 
     /// Send the first unacknowledged segment again, and nothing after it.
@@ -920,16 +947,80 @@ impl Core {
     }
 
     /// Give every connection its turn, then send what they produced.
+    ///
+    /// [`MAX_IN_FLIGHT`] bounds the whole gateway, not each connection: the
+    /// guest's driver has the same few receive buffers posted whichever
+    /// connection a frame is for, and Steam downloading through a dozen
+    /// connections at once, eight in flight on each, had most dropped and
+    /// sent again on the timer (2026-10-01: 0.01 to 0.3 Mbps where one
+    /// connection makes 4 MB/s). What room there is goes a segment at a time
+    /// to each connection in turn, starting from a different one each turn,
+    /// so that none waits behind another.
     fn service_tcp(&mut self) {
         let mut out = Vec::new();
-        for (key, connection) in &mut self.tcp {
-            let mut segments = Vec::new();
-            connection.service(&mut segments);
-            out.extend(segments.into_iter().map(|segment| (*key, segment)));
+        let keys: Vec<Key> = self.tcp.keys().copied().collect();
+        let first = self.tcp_turn % keys.len().max(1);
+        self.tcp_turn = self.tcp_turn.wrapping_add(1);
+        let order: Vec<Key> = keys
+            .iter()
+            .cycle()
+            .skip(first)
+            .take(keys.len())
+            .copied()
+            .collect();
+        for key in &order {
+            self.each_connection(*key, &mut out, Connection::prepare);
+        }
+        let in_flight: usize = self.tcp.values().map(Connection::in_flight).sum();
+        let mut room = MAX_IN_FLIGHT.saturating_sub(in_flight);
+        while room > 0 && self.one_round(&order, &mut room, &mut out) {}
+        for key in &order {
+            self.each_connection(*key, &mut out, Connection::finish_turn);
         }
         for (key, segment) in &out {
             let _ = self.send_outgoing(key, segment);
         }
+    }
+
+    /// Run `step` on the connection `key`, and keep what it sends in `out`.
+    fn each_connection(
+        &mut self,
+        key: Key,
+        out: &mut Vec<(Key, Outgoing)>,
+        step: fn(&mut Connection, &mut Vec<Outgoing>),
+    ) {
+        let Some(connection) = self.tcp.get_mut(&key) else {
+            return;
+        };
+        let mut segments = Vec::new();
+        step(connection, &mut segments);
+        out.extend(segments.into_iter().map(|segment| (key, segment)));
+    }
+
+    /// Offer each connection in `order` one segment of `room`, and say
+    /// whether any took one.
+    fn one_round(
+        &mut self,
+        order: &[Key],
+        room: &mut usize,
+        out: &mut Vec<(Key, Outgoing)>,
+    ) -> bool {
+        let mut any = false;
+        for key in order {
+            if *room == 0 {
+                break;
+            }
+            let Some(connection) = self.tcp.get_mut(key) else {
+                continue;
+            };
+            let mut segments = Vec::new();
+            if connection.push_next(&mut segments) {
+                *room -= 1;
+                any = true;
+            }
+            out.extend(segments.into_iter().map(|segment| (*key, segment)));
+        }
+        any
     }
 
     /// Write one segment out as an IPv4 packet to the guest.

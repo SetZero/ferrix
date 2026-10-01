@@ -397,6 +397,9 @@ struct Core {
     udp: BTreeMap<udp::Key, udp::Flow>,
     /// Host connections standing in for the guest's TCP connections.
     tcp: BTreeMap<tcp::Key, tcp::Connection>,
+    /// Which of them is offered room first in the next turn
+    /// (`Core::service_tcp`), counted up each turn.
+    tcp_turn: usize,
     /// The `--forward` ports, each listening on the host's loopback.
     listeners: Vec<tcp::Listener>,
     /// The gateway-side port the next forwarded connection comes from.
@@ -446,6 +449,7 @@ impl Core {
             guest_mac: None,
             udp: BTreeMap::new(),
             tcp: BTreeMap::new(),
+            tcp_turn: 0,
             listeners,
             next_forward_port: tcp::FORWARD_PORTS.start,
             connected: std::sync::mpsc::channel(),
