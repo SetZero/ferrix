@@ -34,7 +34,7 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{AT_FDCWD, O_DIRECTORY, O_RDONLY};
 use ferrix_vfs::Errno;
 
-use crate::fs::mount_check::{Page, Report as Counts, Tally, by_number, page_for};
+use crate::fs::mount_check::{Report as Counts, Tally, by_number, page_for};
 use crate::fs::namespace_check::{staged, unshare};
 use crate::syscall::namespace::CLONE_NEWUSER;
 use crate::syscall::process::{self, Process};
@@ -131,9 +131,9 @@ fn ask(reader: &Process, path: &str, kind: Kind) -> Result<Result<usize, Errno>,
 
 /// The lowest descriptor `target` holds: `target` opened `/` when it was made.
 fn descriptor_of(target: &Process) -> usize {
-    (0..64)
+    (0..64_i32)
         .find(|&fd| target.files().lock().get(fd).is_ok())
-        .unwrap_or(0)
+        .map_or(0, |fd| usize::try_from(fd).unwrap_or(0))
 }
 
 /// What a reader that may not look at `target` is refused, each entry a name
