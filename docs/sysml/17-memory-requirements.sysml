@@ -1654,7 +1654,8 @@ package FerrixMemoryRequirements {
                 "user::space::AddressSpace::unmap",
                 "user::space::AddressSpace::give_back",
                 "user::space::AddressSpace::drop_unnamed", "user::space::still_named",
-                "user::space::drop_objects");
+                "user::space::naming", "user::space::Named::of",
+                "user::space::Named::contains", "user::space::drop_objects");
         }
         requirement <'L.user.68'> aDeviceMappingReachesTheDevicesOwnPages : ItemLowLevel {
             attribute :>> statement = "A page of a device region shall be faulted in to
@@ -2142,7 +2143,7 @@ package FerrixMemoryRequirements {
                 "user::space::AddressSpace::move_private",
                 "user::space::AddressSpace::remap_backing", "user::space::note",
                 "user::space::AddressSpace::give_back",
-                "user::space::AddressSpace::drop_unnamed",
+                "user::space::AddressSpace::drop_unnamed", "user::space::Named::of",
                 "user::space::drop_objects", "user::space::AddressSpace::drop");
         }
         requirement <'L.user.101'> stageSixKeepsNoFrameAndNoTable : ItemLowLevel {

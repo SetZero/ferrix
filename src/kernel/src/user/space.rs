@@ -1628,9 +1628,13 @@ impl AddressSpace {
         // its may-write count, all as they were: that keeps a file open a
         // little longer and is otherwise harmless, and the next unmap, or the
         // space going, takes them (finding F-23).
-        let gone = files.keys().filter(|&&id| !still_named(map, id)).count();
+        // Which ids the map still names, read in one pass rather than one
+        // pass per id asked about: a space with thousands of regions and as
+        // many objects made every unmap quadratic under this lock.
+        let named = Named::of(map);
+        let gone = files.keys().filter(|&&id| !named.contains(id)).count();
         let Ok(mut unkept) = fallible::try_with_capacity(gone) else {
-            let kept = |id: u64| still_named(map, id) || files.contains_key(&id);
+            let kept = |id: u64| named.contains(id) || files.contains_key(&id);
             drop_objects(me, objects, shadows, native, kept);
             return Vec::new();
         };
@@ -1638,15 +1642,15 @@ impl AddressSpace {
         // under this lock, while its object is still in hand.
         for (&id, mapping) in files.iter() {
             if mapping.may_write
-                && !still_named(map, id)
+                && !named.contains(id)
                 && let Some(vmo) = objects.get(&id)
             {
                 vmo.lower_shared_may_write();
             }
         }
-        drop_objects(me, objects, shadows, native, |id| still_named(map, id));
+        drop_objects(me, objects, shadows, native, |id| named.contains(id));
         files.retain(|&id, mapping| {
-            let named = still_named(map, id);
+            let named = named.contains(id);
             if !named {
                 // NOALLOC: room for every file gone was had above.
                 unkept.push(Arc::clone(&mapping.file));
@@ -3455,11 +3459,50 @@ fn writable_in_place(inner: &Inner, region: &Vma, address: u64, frame: Frame) ->
 
 /// Whether any region still names object `id`.
 fn still_named(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
-    map.iter().any(|region| match region.backing {
-        Backing::Anonymous { id: named, .. } | Backing::File { id: named, .. } => named == id,
+    map.iter().any(|region| naming(region) == Some(id))
+}
+
+/// The object id `region` names, if it names one.
+fn naming(region: &Vma) -> Option<u64> {
+    match region.backing {
+        Backing::Anonymous { id, .. } | Backing::File { id, .. } => Some(id),
         // A window's keeper is kept under its id; registers have none.
-        Backing::Device { id: named, .. } => named != 0 && named == id,
-    })
+        Backing::Device { id, .. } => (id != 0).then_some(id),
+    }
+}
+
+/// Every id a map's regions name, for asking [`still_named`] of many ids at
+/// once: one pass over the map and a binary search per id, where asking each
+/// id on its own is a pass over the map per id.
+enum Named<'a> {
+    /// The ids, sorted, each once.
+    Sorted(Vec<u64>),
+    /// No memory to list them in: each id is asked of the map itself, as
+    /// slowly as before and with the same answer (finding F-23).
+    Scan(&'a ferrix_vma::AddressSpace),
+}
+
+impl<'a> Named<'a> {
+    /// The ids `map` names as it stands.
+    fn of(map: &'a ferrix_vma::AddressSpace) -> Named<'a> {
+        let Ok(mut ids) = fallible::try_with_capacity(map.region_count()) else {
+            return Named::Scan(map);
+        };
+        // NOALLOC: room for one id per region was had above.
+        ids.extend(map.iter().filter_map(naming));
+        ids.sort_unstable();
+        ids.dedup();
+        Named::Sorted(ids)
+    }
+
+    /// Whether any region of the map named `id` when this was taken: what
+    /// [`still_named`] answers.
+    fn contains(&self, id: u64) -> bool {
+        match self {
+            Named::Sorted(ids) => ids.binary_search(&id).is_ok(),
+            Named::Scan(map) => still_named(map, id),
+        }
+    }
 }
 
 impl Drop for AddressSpace {
