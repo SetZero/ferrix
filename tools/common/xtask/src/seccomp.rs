@@ -167,7 +167,8 @@ fn boot(arch: Arch, program: &Path, args: &Args) -> Result<Vec<String>> {
     let kernel = cargo::build_kernel_with_init(arch, args.release, program, shell::SCRIPT)?;
     let natives = native::build(arch, args.release)?;
     let carried = [File {
-        path: CARRIED_AT.to_string(),
+        // The archive's paths are relative to its root.
+        path: CARRIED_AT.trim_start_matches('/').to_string(),
         mode: 0o755,
         content: Content::Bytes(bytes),
     }];
