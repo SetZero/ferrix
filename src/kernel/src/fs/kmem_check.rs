@@ -65,6 +65,7 @@ pub(crate) struct Report {
     pub(crate) namespaces: usize,
     /// User namespaces, each a level-1 child of the first.
     pub(crate) user_namespaces: usize,
+<<<<<<< HEAD
     /// UTS namespaces, copies of the first's.
     pub(crate) uts_namespaces: usize,
     /// IPC namespaces, empty.
@@ -73,6 +74,11 @@ pub(crate) struct Report {
     pub(crate) cgroup_namespaces: usize,
     /// Namespace files, each opened from a link of `/proc/<pid>/ns`.
     pub(crate) namespace_files: usize,
+=======
+    /// seccomp filters of two instructions, each charged to the job that
+    /// installed it (`docs/SECCOMP.md` §6, SR12).
+    pub(crate) filters: usize,
+>>>>>>> 26faafa78 (WIP S3: boot checks)
 }
 
 /// How many mounts the namespace the mount namespaces are copied from
@@ -108,10 +114,14 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         })?;
         report.namespaces = namespaces(&tree)?;
         report.user_namespaces = user_namespaces(&tree)?;
+<<<<<<< HEAD
         report.uts_namespaces = uts_namespaces(&tree)?;
         report.ipc_namespaces = ipc_namespaces(&tree)?;
         report.cgroup_namespaces = cgroup_namespaces(&tree)?;
         report.namespace_files = namespace_files(&tree)?;
+=======
+        report.filters = filters(&tree)?;
+>>>>>>> 26faafa78 (WIP S3: boot checks)
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))
@@ -453,6 +463,7 @@ fn regions(tree: &Arc<Job>) -> Result<usize, &'static str> {
     Ok(usize::try_from(made).unwrap_or(0))
 }
 
+<<<<<<< HEAD
 /// UTS namespaces, made as `unshare(CLONE_NEWUTS)` makes them: each a copy of
 /// the first's names, charged to the job asking (`docs/NAMESPACES.md` §12).
 fn uts_namespaces(tree: &Arc<Job>) -> Result<usize, &'static str> {
@@ -489,5 +500,20 @@ fn namespace_files(tree: &Arc<Job>) -> Result<usize, &'static str> {
     let namespace = Arc::clone(crate::syscall::system::initial_uts());
     kind(tree, "namespace files", |_| {
         fs::nsfs::location(fs::nsfs::Handle::Uts(Arc::clone(&namespace)))
+=======
+/// seccomp filters, each made as `seccomp(SET_MODE_FILTER)` makes one: charged
+/// to the job asking before anything is attached, and refused `ENOMEM` at its
+/// limit, with the charge given back when the last reference goes. They are
+/// held unattached, as a chain's older filters are held by the threads that
+/// still point at them.
+fn filters(tree: &Arc<Job>) -> Result<usize, &'static str> {
+    use ferrix_seccomp::Insn;
+    let program = [
+        Insn::new(0x20, 0, 0, 0),
+        Insn::new(0x06, 0, 0, ferrix_seccomp::ALLOW),
+    ];
+    kind(tree, "seccomp filters", |_| {
+        crate::syscall::seccomp::prepare(&program, false)
+>>>>>>> 26faafa78 (WIP S3: boot checks)
     })
 }
