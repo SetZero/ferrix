@@ -1415,13 +1415,13 @@ impl Inode for Node {
                 may_inspect(pid)?;
                 let process = alive(pid)?;
                 match kind {
-                    NamespaceKind::Mount => render::mount_namespace(&*process),
-                    NamespaceKind::User => render::user_namespace(&*process),
-                    NamespaceKind::Uts => render::uts_namespace(&*process),
-                    NamespaceKind::Ipc => render::ipc_namespace(&*process),
-                    NamespaceKind::Cgroup => render::cgroup_namespace(&*process),
-                    NamespaceKind::Pid => render::pid_namespace(&*process, false),
-                    NamespaceKind::PidForChildren => render::pid_namespace(&*process, true),
+                    NamespaceKind::Mount => render::mount_namespace(&process),
+                    NamespaceKind::User => render::user_namespace(&process),
+                    NamespaceKind::Uts => render::uts_namespace(&process),
+                    NamespaceKind::Ipc => render::ipc_namespace(&process),
+                    NamespaceKind::Cgroup => render::cgroup_namespace(&process),
+                    NamespaceKind::Pid => render::pid_namespace(&process, false),
+                    NamespaceKind::PidForChildren => render::pid_namespace(&process, true),
                 }
             }
             _ => Err(Errno::EINVAL),
