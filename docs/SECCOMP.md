@@ -1709,7 +1709,9 @@ three conditions, each met below).
   -512, -516 and -1. The core changes in `trap.rs` alone.
 * **The personality.** `syscall::seccomp::trap` forces `SIGSYS` on the
   running thread through `deliver::force` (`signal::force`: unblocked, and
-  reset to the default if it was ignored or blocked), as `Origin::Sys` with
+  reset to the default if it was ignored or blocked, as Linux's
+  `force_sig_info_to_task` does, so a program that blocks `SIGSYS` dies of a
+  trap rather than handling it), as `Origin::Sys` with
   `si_code` `SYS_SECCOMP`, `si_errno` the filter's data, `_call_addr` the
   instruction after the call, `_syscall` the number and `_arch` the entry's
   token. The signal is queued before `trap::ask` returns, so the return path of
@@ -1742,8 +1744,8 @@ three conditions, each met below).
   nothing off.
 
 Evidence: FX-1302's core case (above) and FX-1303's: a `TRAP` in a thread with
-a handler and `SIGSYS` blocked traps the call, leaves `SIGSYS` pending and
-deliverable (forced past the mask), with an `Origin::Sys` whose bytes are at
+a handler (unblocked, as Chromium installs it) traps the call and leaves
+`SIGSYS` pending and deliverable, with an `Origin::Sys` whose bytes are at
 Linux's offsets on this machine and, on x86-64, at i386's after the
 conversion; no restart is marked, for a first argument of -512 too; with
 `SIGSYS` blocked and ignored a trapped call ends the process by `SIGSYS`; a
@@ -1757,7 +1759,7 @@ in the landing's message):
 |---|---|
 | a trapped call answered -38 instead of rolled back | `SIGSYS's context lost the syscall number` |
 | the i386 conversion off for a trap | `i386 si_syscall was not at offset 16` |
-| `SIGSYS` posted, not forced | `a blocked SIGSYS let a trapped call return` |
+| `SIGSYS` posted, not forced | `a blocked and ignored SIGSYS let a trapped call return` |
 | `PR_SPEC_ENABLE` accepted | `PR_SET_SPECULATION_CTRL enabled a mitigation` |
 | the trap's data left out of `si_errno` | `a trapped call's siginfo did not carry the call, its ip and its arch` |
 | a native-range trap raising `SIGSYS` | `a trapped native-range call returned` |
