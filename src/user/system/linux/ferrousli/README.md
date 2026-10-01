@@ -151,37 +151,49 @@ replaced by the real functions on 2026-09-16, and the file is gone.
 
 ## Ports
 
-`tools/ports/` builds other programs against this library the way
-`tools/busybox/` builds busybox: static programs with the host's gcc, for
-x86-64 and, where a port takes `--arch`, the Arm targets too,
-from sources pinned by checksum, downloaded and built under
-`~/.local/share/ferrix/ports/ferrousli` (or `$FERRIX_PORTS`). `common.sh` holds
-what they share: the pinned download, the release library, and compiler
-wrappers, `ferrousli-cc` and `ferrousli-c++`, that compile against `include/`
-and link `crt1.o` and `libferrousli.a` and nothing from the host's C library.
-Each port installs into `x86_64/` there with the layout it has on the guest,
-and a link that fails writes `undefined-symbols.txt` beside its build, as
-busybox's does.
+`tools/ports/` holds what builds other programs against this library the
+way `tools/busybox/` builds busybox: static programs with the host's gcc,
+for x86-64 and, where a script takes `--arch`, the Arm targets too, from
+sources pinned by checksum, downloaded and built under
+`~/.local/share/ferrix/ports/ferrousli` (or `$FERRIX_PORTS`). `common.sh`
+holds what they share: the pinned download, the release library, compiler
+wrappers, `ferrousli-cc` and `ferrousli-c++`, that compile against
+`include/` and link `crt1.o` and `libferrousli.a` and nothing from the
+host's C library, and a lock that keeps two checkouts' builds of one port
+apart. Each installs into `<arch>/` there with the layout it has on the
+guest, and a link that fails writes `undefined-symbols.txt` beside its
+build, as busybox's does.
 
-| Port | What | Installs |
+The programs are apps (`docs/APPS.md`) since 2026-10-01, each built by its
+own `build.sh`, which sources `common.sh`, installs here as before and
+copies what its `app.toml` names into the app's package:
+
+| App | What | Installs |
 |---|---|---|
 | `curl` | curl 8.22.0 over Mbed TLS 3.6.7, curl.se's extract of Mozilla's CA certificates, and Mbed TLS's test server for `test-net` | `bin/curl`, `etc/ssl/certs/ca-certificates.crt`, `usr/libexec/ferrix/ssl_server2`, `usr/share/ferrix/tls-test` |
-| `libcxx` | LLVM 23.1.1's libc++, libc++abi and libunwind, the C++ runtime, built with gcc | `include/c++/v1`, `lib/libc++.a`, `lib/libc++abi.a`, `lib/libunwind.a` |
 | `btop` | btop 1.4.7, C++23, over `libcxx` | `bin/btop` |
-| `zlib` | zlib 1.3.2, for git | `include/zlib.h`, `lib/libz.a` |
 | `git` | git 2.55.0 over `zlib` and `curl`'s libcurl, without Perl, Python, Tcl, gettext, iconv or its Rust half | `usr/bin/git` with a `bin/git` link, `usr/libexec/git-core`, `usr/share/git-core/templates` |
 | `sshdt` | sshdt 0.4.2, an SSH server in Rust, linked as the uutils are, taking its listening socket from init's socket activation | `bin/sshdt` |
 | `foot` | foot 1.24.0, a Wayland terminal nobody here wrote, with every library it links and DejaVu Sans Mono (`docs/CHROME.md` §6) | `bin/foot`, `bin/footclient`, `etc/fonts/fonts.conf`, the font |
 | `vkgears` | mesa-demos' Vulkan gears with Mesa's Venus driver linked in, since a static program cannot `dlopen` a driver with thread-local storage (`docs/GPU.md` §6.1) | `bin/vkgears` |
-| `alsa-lib` | alsa-lib 1.2.16.1 (`docs/AUDIO.md`, U1) | `include/alsa/`, `lib/libasound.a`, `usr/share/ferrousli/alsa/` |
+| `alsa-lib` | alsa-lib 1.2.16.1 (`docs/AUDIO.md`, U1); the library for `alsa-utils`, the configuration for the image | `usr/share/ferrousli/alsa/` |
 | `alsa-utils` | alsa-utils 1.2.16's `aplay` and `speaker-test`, over `alsa-lib` | `bin/aplay`, `bin/arecord`, `bin/speaker-test` |
 
-`cargo xtask ports` runs them, on a Linux host, or on Windows in WSL's
+What stays here are the libraries those build against, which install
+nothing an image carries:
+
+| Port | What | Installs |
+|---|---|---|
+| `libcxx` | LLVM 23.1.1's libc++, libc++abi and libunwind, the C++ runtime | `include/c++/v1`, `lib/libc++.a`, `lib/libc++abi.a`, `lib/libunwind.a` |
+| `zlib` | zlib 1.3.2, for git | `include/zlib.h`, `lib/libz.a` |
+
+An app that needs one builds it first when it is not there; `cargo xtask
+ports` builds them ahead. Both run on a Linux host, or on Windows in WSL's
 default distribution, where they are installed in its home. Where the
 host's g++ is older than 15, as Ubuntu 24.04's is, the C++ compilers are
-LLVM's pinned clang (`tools/ports/common.sh`). Every image that carries a
-busybox carries the ports that are installed, on x86_64, and `cargo xtask
-test-net` fetches with curl as well as with `wget` when curl is there.
+LLVM's pinned clang (`tools/ports/common.sh`). An image carries the apps as
+packages (`cargo xtask build-apps` builds them), and `cargo xtask test-net`
+fetches with curl as well as with `wget` when curl is there.
 
 curl linked with nothing missing from this library on 2026-09-16. On Linux it
 fetches over HTTPS and refuses a self-signed certificate. On Ferrix it fetches

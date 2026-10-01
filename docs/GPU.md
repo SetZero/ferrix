@@ -1062,7 +1062,7 @@ over 3,000 a second. Each step, and what differed from the plan:
   `drm_virtgpu_resource_create_blob` eight bytes longer than linux-libc-dev
   7.0's, so its ioctl number differs. Linux's `drm_ioctl` matches a driver's
   call by number and takes any size; the node does the same for this one.
-* **V4**, the port: see `src/user/system/linux/ferrousli/tools/ports/vkgears/build.sh` and its
+* **V4**, the port: see the `vkgears` app's `build.sh` and its
   four patches. The driver is linked into the program rather than loaded,
   as one relocatable object with Mesa's hidden symbols made local -- Mesa
   builds its own C11 threads, which would collide with ferrousli's -- and

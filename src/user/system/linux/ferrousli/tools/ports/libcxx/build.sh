@@ -27,6 +27,7 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../common.sh
 . "$here/../common.sh"
+lock_port libcxx
 # x86-64 only so far: another architecture needs the target's g++, and its
 # CMake cross settings are untried.
 [ "$arch" = x86_64 ] || fail "libcxx is built for x86_64 only so far, not for $arch"

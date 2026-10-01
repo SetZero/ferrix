@@ -742,8 +742,8 @@ Three things are still open:
   is unchanged; the customer chose U1 first, then U2 (2026-09-27).
 
 U1 is done (2026-09-27): alsa-lib 1.2.16.1 and alsa-utils 1.2.16's `aplay`
-and `speaker-test` are ferrousli ports (`src/user/system/linux/ferrousli/tools/ports/
-alsa-lib`, `alsa-utils`), static, built by `cargo xtask ports` on x86-64.
+and `speaker-test` are ferrousli ports, static, on x86-64: the `alsa-lib`
+and `alsa-utils` apps since 2026-10-01 (`cargo xtask build-apps`).
 Both linked against ferrousli with nothing undefined on the first try.
 alsa-lib is static, so every PCM and control plugin is built in and nothing
 is `dlopen`ed. Its configuration is at `/usr/share/ferrousli/alsa`, not

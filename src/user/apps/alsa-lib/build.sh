@@ -2,9 +2,11 @@
 # Builds alsa-lib 1.2.16.1 as a static library against ferrousli, for
 # alsa-utils' aplay and speaker-test (docs/AUDIO.md, U1).
 #
-#     tools/ports/alsa-lib/build.sh [--arch <arch>]    # from src/user/system/linux/ferrousli/
+#     build.sh <arch> <out>     # as an app's script is run (docs/APPS.md §3.1)
 #
-# Installs, under $FERRIX_PORTS (see ../common.sh):
+# and copies what app.toml installs into <out>.
+#
+# Installs, under $FERRIX_PORTS (see ferrousli's tools/ports/common.sh):
 #   <arch>/include/alsa/*.h
 #   <arch>/lib/libasound.a
 #   <arch>/usr/share/ferrousli/alsa/   alsa.conf and the rest, where this
@@ -25,9 +27,16 @@
 # on its volume (tools/common/xtask/src/chrome.rs), and the two are not the same build.
 set -euo pipefail
 
+[ $# -eq 2 ] || { echo "usage: build.sh <arch> <out>" >&2; exit 2; }
+out=$2
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../common.sh
-. "$here/../common.sh"
+# ferrousli's port toolkit: pinned downloads, the release library, and the
+# compilers that build against it. It reads `--arch <name>` first.
+set -- --arch "$1"
+# shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
+. "$here/../../system/linux/ferrousli/tools/ports/common.sh"
+# One build of alsa-lib at a time: every checkout's shares its work directory.
+lock_port alsa-lib
 
 ALSA_LIB_VERSION=1.2.16.1
 ALSA_LIB_TARBALL=alsa-lib-$ALSA_LIB_VERSION.tar.bz2
@@ -75,3 +84,10 @@ cp -r "$stage$prefix/include/alsa" "$prefix/include/"
 cp -r "$stage/usr/share/ferrousli/alsa" "$prefix/usr/share/ferrousli/"
 ls -l "$prefix/lib/libasound.a" "$prefix/include/alsa/asoundlib.h" \
     "$prefix/usr/share/ferrousli/alsa/alsa.conf"
+
+step "the app's files"
+# What app.toml installs, copied out of the prefix the ports share, links
+# kept as links.
+rm -rf "$out"
+mkdir -p "$out"
+(cd "$prefix" && cp -a --parents usr/share/ferrousli/alsa "$out")

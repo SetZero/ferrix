@@ -14,6 +14,7 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../common.sh
 . "$here/../common.sh"
+lock_port zlib
 
 ZLIB_VERSION=1.3.2
 ZLIB_TARBALL=zlib-$ZLIB_VERSION.tar.gz

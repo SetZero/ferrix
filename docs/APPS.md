@@ -102,10 +102,16 @@ on Ferrix will read the same records.
   musl, as zinc is built. xtask gives the flags and names `rust-lld` as the
   linker, so the app needs no `.cargo/config.toml`.
 * `kind = "script"`: `bash build.sh <arch> <out>`, which installs into
-  `<out>` the paths `from` names. For C ports, which source ferrousli's port
-  toolkit (`src/user/system/linux/ferrousli/tools/ports/common.sh`) as a native app
-  links the runtime; it needs a Linux host's tools, which on Windows are
-  WSL's default distribution's. `check` runs `bash -n` over it.
+  `<out>` the paths `from` names. For the ported programs, which source
+  ferrousli's port toolkit (`src/user/system/linux/ferrousli/tools/ports/common.sh`)
+  as a native app links the runtime; it needs a Linux host's tools, which
+  on Windows are WSL's default distribution's. `check` runs `bash -n` over
+  it. A port's script installs into the prefix the ports share, where the
+  next one finds its library (git links the curl app's libcurl), and copies
+  its app's files out of it into `<out>`; it holds a lock on its work
+  directory while it builds, since every checkout's build shares it. The
+  libraries that are no program -- libcxx, zlib -- stay ports, and an app
+  that links one builds it first when it is not there.
 
 Each app builds into `target/apps/<name>/`, never the system's target
 directory. An app whose toolchain is missing, or that does not list an
@@ -116,8 +122,10 @@ own, as no image starts a port: `run` and `run-compositor` take the package
 built last, and say how to build it when there is none. Under
 `--everything`, which leaves nothing out, one with no package is built, and
 a build that fails stops the run. `cargo xtask
-build-apps` builds every app's package, or `--app`'s; `test-apps` builds
-what it boots. A cargo build is incremental, and every image makes it.
+build-apps` builds every app's package, or `--app`'s, in dependency
+order; `test-apps` builds a script app's package only when there is none,
+since vkgears' is Mesa. A cargo build is incremental, and every image makes
+it.
 
 ### 3.2 What an app may depend on
 
@@ -151,15 +159,18 @@ An app never has to grow the SDK to make a system call.
 ## 5. What xtask does, by discovery
 
 `tools/common/xtask/src/apps.rs` reads `src/user/apps/*/app.toml`, and nothing
-in xtask names an app.
+in xtask names an app's folder. A system test that boots a program an app
+is asks for the app by name (`apps::taken`): test-net's curl and git,
+test-audio's ALSA, test-foot's foot, test-vkgears' vkgears, test-init's
+sshdt, test-badapple's player.
 
 | Command | For each app |
 |---|---|
 | `cargo xtask apps` | lists it, and checks its manifest |
 | `cargo xtask check` | formatting (`bash -n` for a script); clippy on the host's lib target and the programs' targets; the host tests; rule 1 |
 | `cargo xtask run`, `run-compositor` | builds the `default` ones for the architecture and installs their packages into the image; under `--everything`, every app |
-| `cargo xtask build`, `test-boot` | installs only the ones `--app` names |
-| `cargo xtask build-apps` | builds its package, a script's too |
+| `cargo xtask build`, `test-boot` | installs only the ones `--app` names; an image with a program as init, and the tests' images, also carry the script apps already built (`apps::ported`), as they carried the ports |
+| `cargo xtask build-apps` | builds its package, a script's too, in dependency order |
 | `cargo xtask test-apps` | one boot that runs every `[[smoke]]` line and wants each `expect` |
 | `cargo xtask new-app --app NAME [--abi linux]` | writes a new app's folder, which passes the rows above as it is |
 
@@ -295,16 +306,22 @@ the package carries. With 211bc0e5 (every app under `--everything`, a
 script app built through WSL on Windows), the customer's "`--everything`
 IS EVERYTHING" holds for apps.
 
-What is left, in order, for the next session:
+The same evening, a12c4bfb: a package carries symbolic links (a record's
+`link`) and whole trees (`tree = true`), and apps build in dependency
+order. Then the ported programs became apps: curl, git, sshdt, foot,
+vkgears, alsa-lib and alsa-utils, each its port's script moved into its
+folder as `build.sh`, which installs into the ports' prefix as before and
+copies its files into the package. git depends on curl, whose libcurl it
+links and whose certificates it verifies with; alsa-utils on alsa-lib.
+`ports.rs` keeps the libraries, libcxx and zlib, which an app builds first
+when it needs one. The system tests that boot one of them take the app by
+name (`apps::taken`), and the images that carried every built port carry
+the script apps already built (`apps::ported`). Every script build holds a
+lock on its work directory, the BACKLOG row two gates' btop builds filed.
 
-1. **The other ports**: curl, git, foot, vkgears, alsa-lib and alsa-utils,
-   and sshdt. Each is named by a system test (`test-net`'s TLS files,
-   `test-compositor`'s foot and vkgears, `test-audio`'s ALSA, `test-ssh`'s
-   sshdt), so those tests ask for the app by name, as they asked for the
-   port. Libraries only built against -- zlib, libcxx -- stay ports; the
-   `depends` a port has at install time (alsa-utils on alsa-lib's
-   configuration, git on curl's certificates) go into `app.toml`.
-2. **The package manager** (§7), on `ferrix-pkg`: `pkg list`, `info`,
+What is left:
+
+1. **The package manager** (§7), on `ferrix-pkg`: `pkg list`, `info`,
    `install` of a local `.fxpkg` and `remove`, first-party, and a
    `test-pkg` boot that installs, runs and removes an app.
 

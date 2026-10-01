@@ -141,7 +141,7 @@ directory:
 | `src/user/system/linux/init/` | `/sbin/init`, getty and the unit files. |
 | `src/user/system/linux/zinc/` | The zsh-compatible shell. |
 | `src/user/system/linux/media/` | The resampler and the playback through `/dev/snd` that the sound server and the `badapple` app share (`docs/MEDIA.md`), and the PulseAudio-protocol server and its client (`docs/AUDIO.md`, U2). ferrix-90's since 2026-09-27. Bad Apple!!'s player and its video format are the `badapple` app since 2026-10-01. |
-| `src/user/system/linux/ferrousli/` | The C library written in Rust, its dynamic linker, and the ports built against it (`tools/ports/`). |
+| `src/user/system/linux/ferrousli/` | The C library written in Rust, its dynamic linker, and the toolkit programs are ported against it with (`tools/ports/`), with the libraries they link; the ported programs themselves are apps. |
 
 ## `src/user/apps/`
 

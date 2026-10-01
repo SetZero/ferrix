@@ -279,28 +279,26 @@ const APLAY_SCRIPT: &str = "aplay -D default /usr/share/ferrix/counter.wav \
     && echo 'tone: done' || echo \"tone: failed: aplay exited $?\"; sleep 30";
 
 /// The fourth boot, on x86-64, where the ports are built (`docs/AUDIO.md`,
-/// U1): ferrousli's busybox as the shell, alsa-lib and aplay built against
-/// ferrousli (`cargo xtask ports`), and a WAV file of the counter, played
+/// U1): ferrousli's busybox as the shell, the alsa-lib and alsa-utils apps
+/// (`cargo xtask build-apps`), and a WAV file of the counter, played
 /// through `/dev/snd` and held to the same check as tone's. Skipped, saying
-/// so, when the ports or ferrousli's busybox are not built here.
+/// so, when those apps or ferrousli's busybox are not built here.
 fn test_aplay(arch: Arch, wav: &Path, args: &Args) -> Result<()> {
     if arch != Arch::X86_64 {
         return Ok(());
     }
-    let mut files = crate::ports::installed_port(arch, "alsa-utils")?;
-    let config = crate::ports::installed_port(arch, "alsa-lib")?;
+    let mut files = crate::apps::taken(arch, &["alsa-lib", "alsa-utils"])?;
     let Some(shell) = crate::busybox::installed_program(arch) else {
         println!("  {arch}: ferrousli's busybox is not built here, so aplay's boot is skipped");
         return Ok(());
     };
-    if files.is_empty() || config.is_empty() {
+    if !files.iter().any(|file| file.path == "bin/aplay") {
         println!(
-            "  {arch}: alsa-lib and aplay are not built here (`cargo xtask ports`), so aplay's \
-             boot is skipped"
+            "  {arch}: the alsa-lib and alsa-utils apps are not built here (`cargo xtask \
+             build-apps --app alsa-lib --app alsa-utils`), so aplay's boot is skipped"
         );
         return Ok(());
     }
-    files.extend(config);
     files.push(crate::ports::File {
         path: COUNTER_WAV.to_owned(),
         mode: 0o644,

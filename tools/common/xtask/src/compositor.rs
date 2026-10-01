@@ -304,8 +304,8 @@ struct Carried {
     busybox: Option<PathBuf>,
     /// zinc's bytes, which go to `/bin/zinc` with `/bin/zsh` beside them.
     zinc: Option<Vec<u8>>,
-    /// What `cargo xtask ports` built -- curl, git -- and the apps, when this machine
-    /// has them. `build` and `run` put them on every image they make; a
+    /// The apps -- the ported programs, curl, git and foot among them --
+    /// when this machine has them built. `build` and `run` put them on every image they make; a
     /// watched boot wants them for the same reason it wants the applets, and
     /// a gate boot's archive names none.
     ports: Vec<crate::ports::File>,
@@ -336,13 +336,13 @@ impl Carried {
     /// somebody who asked to look at the compositor did not ask to wait for a
     /// busybox to be built, and a screen with no shell is still the screen
     /// they wanted. Except under `--everything`, which is everything: there a
-    /// busybox or a port that is not built yet is built, and a build that
+    /// busybox or an app that is not built yet is built, and a build that
     /// fails stops the run.
     ///
     /// # Errors
     ///
     /// A `--init` that names no file, a zinc that will not build, or under
-    /// `--everything` a busybox or a port that will not.
+    /// `--everything` a busybox or an app that will not.
     fn wanted(arch: Arch, args: &Args) -> Result<Self> {
         let asked = crate::optional_program(arch, args)?;
         let busybox = match asked {
@@ -362,16 +362,11 @@ impl Carried {
                 println!("    `cargo xtask busybox` builds one, or --init <PATH> names one");
             }
         }
-        let mut ports = if args.everything {
-            crate::ports::everything(arch)?
-        } else {
-            crate::ports::installed(arch)?
-        };
-        if !ports.is_empty() {
-            println!("  {} ported files in /bin and /etc", ports.len());
-        }
-        // The apps, each installed from its package (`docs/APPS.md` §5).
-        ports.extend(crate::apps::installed(arch, args)?);
+        // The apps, each installed from its package (`docs/APPS.md` §5): the
+        // ported programs among them, curl and git, foot and the rest. Under
+        // `--everything` every app, one with no package built, and a build
+        // that fails stops the run.
+        let ports = crate::apps::installed(arch, args)?;
         Ok(Self {
             busybox,
             zinc: crate::zinc::build(arch)?,

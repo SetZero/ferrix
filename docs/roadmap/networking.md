@@ -348,7 +348,7 @@ landed. musl's `initgroups` tries an `AF_UNIX` connection to nscd before it
 reads `/etc/group`; `EOPNOTSUPP` is an error it gives up on, and `ENOENT` is
 one it falls back from.
 
-**Done — curl, built against ferrousli.** `src/user/system/linux/ferrousli/tools/ports/curl` builds
+**Done — curl, built against ferrousli.** The curl port, now the `curl` app, builds
 curl 8.22.0 over Mbed TLS 3.6.7 as a static x86-64 program against ferrousli,
 from sources pinned by checksum, with curl.se's extract of Mozilla's CA
 certificates. It linked with nothing missing from the library. `cargo xtask
@@ -419,7 +419,7 @@ cleared, the guest printed `verified 0` and `untrusted 60`, and `test-net`
 failed on that program.
 
 **Done — git, built against ferrousli.** `src/user/system/linux/ferrousli/tools/ports/zlib` builds
-zlib 1.3.2 and `src/user/system/linux/ferrousli/tools/ports/git` builds git 2.55.0 over it and over
+zlib 1.3.2 and the git port, now the `git` app, builds git 2.55.0 over it and over
 the curl port's libcurl and Mbed TLS. It is built without Perl, Python, Tcl,
 gettext and iconv, which the image does not have. Its Rust half is off too: cargo
 builds that for the host, against glibc. It uses git's own regex, because
@@ -472,7 +472,7 @@ both when started that small and after a resize, and still redraws after a
 key at full size.
 
 **Done — an SSH server, and a way in from the host.**
-`src/user/system/linux/ferrousli/tools/ports/sshdt` builds sshdt 0.4.2, an SSH server written in Rust
+The sshdt port, now the `sshdt` app, builds sshdt 0.4.2, an SSH server written in Rust
 (russh, tokio, and aws-lc underneath). It is built the way uutils is: the musl
 target, ferrousli in the C library's place, and aws-lc compiled with
 `ferrousli-cc`. It linked on the first try, with nothing undefined. sshdt was

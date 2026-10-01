@@ -99,7 +99,7 @@ fn colours(screen: &Image) -> usize {
 /// protocol and nothing about Ferrix. This is both at once: foot and every
 /// library it links -- libwayland-client, libxkbcommon, pixman, freetype,
 /// fontconfig, fcft -- built against ferrousli by
-/// `src/user/system/linux/ferrousli/tools/ports/foot`, started by the compositor on the guest,
+/// the foot app, started by the compositor on the guest,
 /// drawing text in a font the image carries.
 ///
 /// No picture is blessed: foot's text is foot's rendering of a font, and an
@@ -113,11 +113,11 @@ pub(crate) fn test_foot(args: &Args) -> Result<()> {
             println!("  {arch}: no virtio-gpu in QEMU's machine; skipped");
             continue;
         }
-        let ports = crate::ports::installed_port(arch, "foot")?;
+        let ports = crate::apps::taken(arch, &["foot"])?;
         if !ports.iter().any(|file| file.path == FOOT_PATH) {
             if arch == Arch::X86_64 {
                 return Err(Error::new(format!(
-                    "{arch}: foot is not built: `cargo xtask ports` builds it"
+                    "{arch}: foot is not built: `cargo xtask build-apps --app foot` builds it"
                 )));
             }
             println!("  {arch}: foot is ported to x86-64 only; skipped");
@@ -240,7 +240,7 @@ const VKGEARS_PATIENCE: Duration = Duration::from_secs(120);
 /// `test-vkgears`: Vulkan's gears on Ferrix, drawn by the host's GPU.
 ///
 /// `docs/GPU.md` §6.1's exit. vkgears is mesa-demos' own, and Mesa's Venus
-/// driver is linked into it (`src/user/system/linux/ferrousli/tools/ports/vkgears`): it opens the
+/// driver is linked into it (the vkgears app): it opens the
 /// render node, makes a Venus context and its rings in host memory mapped
 /// through the device's window, compiles nothing -- the SPIR-V goes to the
 /// host's Vulkan driver -- and fences each frame on a ring, polling the
@@ -253,10 +253,10 @@ const VKGEARS_PATIENCE: Duration = Duration::from_secs(120);
 /// kernel did not stop while it did.
 pub(crate) fn test_vkgears(args: &Args) -> Result<()> {
     let arch = Arch::X86_64;
-    let ports = crate::ports::installed_port(arch, "vkgears")?;
+    let ports = crate::apps::taken(arch, &["vkgears"])?;
     if !ports.iter().any(|file| file.path == VKGEARS_PATH) {
         return Err(Error::new(format!(
-            "{arch}: vkgears is not built: `cargo xtask ports` builds it"
+            "{arch}: vkgears is not built: `cargo xtask build-apps --app vkgears` builds it"
         )));
     }
     let programs = Programs::build(arch)?;

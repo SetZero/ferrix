@@ -25,6 +25,8 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 set -- --arch "$1"
 # shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
 . "$here/../../system/linux/ferrousli/tools/ports/common.sh"
+# One build of btop at a time: every checkout's shares its work directory.
+lock_port btop
 # x86-64 only so far: another architecture needs libcxx built for it first.
 [ "$arch" = x86_64 ] || fail "btop is built for x86_64 only so far, not for $arch"
 

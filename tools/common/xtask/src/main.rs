@@ -278,7 +278,7 @@ COMMANDS:
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     uutils        Build uutils/coreutils against ferrousli (x86_64), the utilities replacing busybox's
-    ports         Build the programs ported onto ferrousli (x86_64: curl, git, sshdt, foot and the libraries apps build on; Arm: curl, git), which images carry
+    ports         Build the libraries ported onto ferrousli that apps build against (x86_64: libcxx, zlib; Arm: zlib); the ported programs are apps
     apps          List the apps in src/user/apps, each checked against its app.toml (docs/APPS.md)
     check-apps    check's steps for the apps alone: each app's formatting, clippy, tests and folder
     build-apps    Build every app's package, or --app's, for --arch: scripts too, which run and
@@ -729,7 +729,7 @@ fn test_vfs(args: &Args) -> Result<()> {
             &natives,
             shell.as_deref(),
             &utilities,
-            &ports::installed(arch)?,
+            &apps::ported(arch, args)?,
         )?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
         if let Err(error) = qemu::test_vfs(arch, carried, &image, &kernel, args) {
@@ -772,9 +772,9 @@ fn test_net(args: &Args) -> Result<()> {
     let mut failed = Vec::new();
     for arch in args.arches()? {
         let program = program_for(init, arch)?;
-        // The ports ride along where they are built, and the programs that
-        // exercise them are added when they do.
-        let ports = ports::installed(arch)?;
+        // The ported programs ride along where they are built, and the
+        // programs that exercise them are added when they do.
+        let ports = apps::ported(arch, &args)?;
         let curl = ports.iter().any(|file| file.path == "bin/curl");
         let git = ports.iter().any(|file| file.path == "usr/bin/git");
         let programs = net::commands(&servers, curl, git);
@@ -864,7 +864,7 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let shell = zinc::build(arch)?;
     let utilities = uutils::carried(arch)?;
-    let mut ports = ports::installed(arch)?;
+    let mut ports = apps::ported(arch, args)?;
     ports.extend(rustc::default_links(args));
     ports.extend(service);
     let initramfs = initramfs::build_with_utilities(
@@ -893,8 +893,7 @@ fn build_init_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
         )));
     }
     let utilities = uutils::carried(arch)?;
-    let mut carried = ports::installed(arch)?;
-    carried.extend(rustc::default_links(args));
+    let mut carried = rustc::default_links(args);
     carried.extend(init::carried(arch)?);
     // `--auth-seed`: authd, its seeds and the accounts it needs.
     carried.extend(auth::with_seeds(arch, args)?);
@@ -941,7 +940,7 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<flash::BoardFiles> {
         &natives,
         shell.as_deref(),
         &utilities,
-        &ports::installed(arch)?,
+        &apps::ported(arch, args)?,
     )?;
     Ok(flash::BoardFiles {
         loader,

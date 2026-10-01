@@ -3,9 +3,11 @@
 # ferrousli with Mesa's Venus driver linked into it: Vulkan in the guest,
 # executed by the host's GPU through virtio-gpu (docs/GPU.md §6.1).
 #
-#     tools/ports/vkgears/build.sh [--arch x86_64]    # from src/user/system/linux/ferrousli/
+#     build.sh <arch> <out>     # as an app's script is run (docs/APPS.md §3.1)
 #
-# Installs, under $FERRIX_PORTS (see ../common.sh):
+# and copies what app.toml installs into <out>.
+#
+# Installs, under $FERRIX_PORTS (see ferrousli's tools/ports/common.sh):
 #   <arch>/bin/vkgears
 #
 # A Vulkan program links against a loader, which opens a driver with dlopen.
@@ -67,9 +69,16 @@
 # compositor, rather than handed over as a GPU buffer (docs/GPU.md §6.1).
 set -euo pipefail
 
+[ $# -eq 2 ] || { echo "usage: build.sh <arch> <out>" >&2; exit 2; }
+out=$2
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../common.sh
-. "$here/../common.sh"
+# ferrousli's port toolkit: pinned downloads, the release library, and the
+# compilers that build against it. It reads `--arch <name>` first.
+set -- --arch "$1"
+# shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
+. "$here/../../system/linux/ferrousli/tools/ports/common.sh"
+# One build of vkgears at a time: every checkout's shares its work directory.
+lock_port vkgears
 
 [ "$arch" = x86_64 ] || fail "vkgears is x86-64 only: Venus needs a KVM host (docs/GPU.md §6.1)"
 
@@ -341,3 +350,10 @@ step "install"
 mkdir -p "$prefix/bin"
 install -m 755 -s --strip-program="$STRIP" "$work/vkgears" "$prefix/bin/vkgears"
 file "$prefix/bin/vkgears"
+
+step "the app's files"
+# What app.toml installs, copied out of the prefix the ports share, links
+# kept as links.
+rm -rf "$out"
+mkdir -p "$out"
+(cd "$prefix" && cp -a --parents bin/vkgears "$out")

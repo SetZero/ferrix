@@ -195,7 +195,7 @@ pub(crate) fn test_restart(args: &Args) -> Result<()> {
     // A program holding the card when its driver dies: `src/user/system/linux/compositor/blank`
     // sets a mode, shows a buffer and waits, as a compositor's card stays open.
     let blank = crate::display::build_blank(arch, false)?;
-    let mut carried = ports::installed(arch)?;
+    let mut carried = crate::apps::ported(arch, args)?;
     carried.push(carry(BLANK, &blank)?);
     // What shows a key arriving on a restarted keyboard.
     if kinds.contains(&Kind::Input) {

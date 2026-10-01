@@ -5,9 +5,11 @@
 # client on Ferrix's compositor, proving the client libraries a browser
 # needs for a fraction of a browser's cost.
 #
-#     tools/ports/foot/build.sh [--arch <arch>]    # from src/user/system/linux/ferrousli/
+#     build.sh <arch> <out>     # as an app's script is run (docs/APPS.md §3.1)
 #
-# Installs, under $FERRIX_PORTS (see ../common.sh):
+# and copies what app.toml installs into <out>.
+#
+# Installs, under $FERRIX_PORTS (see ferrousli's tools/ports/common.sh):
 #   <arch>/bin/foot, <arch>/bin/footclient
 #   <arch>/etc/fonts/fonts.conf, fontconfig's configuration
 #   <arch>/usr/share/fonts/dejavu/DejaVuSansMono*.ttf, the only font
@@ -45,9 +47,16 @@
 #   * documentation, tests, and every tool the libraries ship.
 set -euo pipefail
 
+[ $# -eq 2 ] || { echo "usage: build.sh <arch> <out>" >&2; exit 2; }
+out=$2
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../common.sh
-. "$here/../common.sh"
+# ferrousli's port toolkit: pinned downloads, the release library, and the
+# compilers that build against it. It reads `--arch <name>` first.
+set -- --arch "$1"
+# shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
+. "$here/../../system/linux/ferrousli/tools/ports/common.sh"
+# One build of foot at a time: every checkout's shares its work directory.
+lock_port foot
 
 # name version file url sha256
 SOURCES=(
@@ -257,3 +266,10 @@ for face in DejaVuSansMono DejaVuSansMono-Bold DejaVuSansMono-Oblique DejaVuSans
 done
 file "$prefix/bin/foot"
 run_built "$prefix/bin/foot" --version
+
+step "the app's files"
+# What app.toml installs, copied out of the prefix the ports share, links
+# kept as links.
+rm -rf "$out"
+mkdir -p "$out"
+(cd "$prefix" && cp -a --parents bin/foot bin/footclient etc/fonts/fonts.conf usr/share/fonts/dejavu "$out")

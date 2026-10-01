@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use crate::args::Args;
 use crate::paths::Arch;
-use crate::{Error, Result, cargo, fat, init, initramfs, native, ports, qemu, uutils, zinc};
+use crate::{Error, Result, cargo, fat, init, initramfs, native, qemu, uutils, zinc};
 
 /// What the getty prints as it gives the console a session: `Ferrix <host>
 /// on /dev/console`.
@@ -249,7 +249,7 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
     }
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    let mut carried = ports::installed(arch)?;
+    let mut carried = crate::apps::ported(arch, args)?;
     carried.extend(init::carried(arch)?);
     let archive =
         initramfs::build_with_utilities(None, &natives, Some(&bytes), &utilities, &carried)?;

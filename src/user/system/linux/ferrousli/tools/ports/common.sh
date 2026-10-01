@@ -1,9 +1,13 @@
-# What every port under tools/ports/ shares, sourced by each build.sh:
-# pinned downloads, ferrousli's release library, and the compilers that build
-# a program against it and nothing else.
+# What every port shares, sourced by each build.sh: the libraries' under
+# tools/ports/ and the ported programs', which are apps (docs/APPS.md):
+# pinned downloads, ferrousli's release library, and the compilers that
+# build a program against it and nothing else.
 #
 #     tools/ports/<port>/build.sh                  # from src/user/system/linux/ferrousli/: x86-64
 #     tools/ports/<port>/build.sh --arch armv7a    # or aarch64
+#
+# An app's build.sh, run as `build.sh <arch> <out>`, sets `--arch <arch>`
+# before sourcing this.
 #
 # A port builds a static program against musl's headers in include/, crt1.o
 # and libferrousli.a, the way tools/busybox/build.sh builds busybox. x86-64 is
@@ -31,6 +35,16 @@ step() { printf '\n== %s\n' "$*"; }
 fail() {
     echo "${0##*/}: $*" >&2
     exit 1
+}
+
+# Hold port $1's lock until the script exits. Every checkout's build of a
+# port shares its work directory under $builds, which the build empties
+# first, so a second build at once would delete the first's objects under
+# it; the second waits instead.
+lock_port() { # name
+    mkdir -p "$builds"
+    exec 9> "$builds/$1.lock"
+    flock 9 || fail "could not lock $builds/$1.lock"
 }
 
 # The architecture: `--arch <name>` first on the port's command line, which

@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use crate::args::Args;
 use crate::paths::Arch;
-use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, uutils, zinc};
+use crate::{Error, Result, cargo, fat, initramfs, native, qemu, uutils, zinc};
 
 /// How long to wait for the answer to one line.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -86,7 +86,7 @@ pub(crate) fn test_sysfs(args: &Args) -> Result<()> {
     let utilities = uutils::carried(arch)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    let carried = ports::installed(arch)?;
+    let carried = crate::apps::ported(arch, args)?;
     let archive = initramfs::build_with_utilities(
         Some(&shell),
         &natives,

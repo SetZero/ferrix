@@ -3,8 +3,8 @@
 //! `run-compositor --ssh 2222` forwards the host's `127.0.0.1:2222` to the
 //! guest's port 22 and starts `sshdt` there from the compositor's own
 //! `exec-once`, so `ssh -p 2222 root@127.0.0.1` reaches the guest as soon as
-//! it is up. The server is the one `cargo xtask ports` builds
-//! (`src/user/system/linux/ferrousli/tools/ports/sshdt`); without it the forward leads nowhere and
+//! it is up. The server is the sshdt app (`cargo xtask build-apps --app
+//! sshdt`); without it the forward leads nowhere and
 //! the boot says so.
 //!
 //! # Who may log in
@@ -110,7 +110,7 @@ pub(crate) fn with_server(config: String, args: &Args, carried: &mut Vec<File>) 
     };
     if !carried.iter().any(|file| file.path == SERVER_PATH) {
         println!("  ssh: no sshdt in the image, so 127.0.0.1:{port} leads nowhere");
-        println!("    `cargo xtask ports` builds it");
+        println!("    `cargo xtask build-apps --app sshdt` builds it");
         return Ok(config);
     }
     let home = std::env::home_dir()
@@ -247,13 +247,13 @@ fn named_keys(named: &[String]) -> Result<Vec<String>> {
 ///
 /// # Errors
 ///
-/// No `sshdt` built for `arch` (`cargo xtask ports` builds it), or a key
+/// No `sshdt` built for `arch` (`cargo xtask build-apps --app sshdt`), or a key
 /// `ssh-keygen` could not make.
 pub(crate) fn test_server(arch: crate::paths::Arch) -> Result<(Vec<File>, String)> {
-    let mut files = crate::ports::installed_port(arch, "sshdt")?;
+    let mut files = crate::apps::taken(arch, &["sshdt"])?;
     if !files.iter().any(|file| file.path == SERVER_PATH) {
         return Err(Error::new(format!(
-            "no sshdt built for {arch}: `cargo xtask ports` builds it"
+            "no sshdt built for {arch}: `cargo xtask build-apps --app sshdt` builds it"
         )));
     }
     let home = std::env::home_dir()

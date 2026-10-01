@@ -239,6 +239,78 @@ pub(crate) fn named(arch: Arch, args: &Args) -> Result<Vec<ports::File>> {
     install_selected(arch, args, false)
 }
 
+/// The script apps built for `arch` -- the ported programs, curl and git
+/// and the rest -- from the packages built last, less any `--app` names:
+/// what a test's image carries beside its program, as it carried every port
+/// that was built. None is built here; one that is not built, or whose
+/// dependencies are not, is left out with a line saying so.
+///
+/// # Errors
+///
+/// A package that does not read, or a set that does not install.
+pub(crate) fn ported(arch: Arch, args: &Args) -> Result<Vec<ports::File>> {
+    let apps: Vec<App> = discover()?
+        .into_iter()
+        .filter(|app| {
+            app.recipe.build == Build::Script
+                && app.builds_for(arch)
+                && !args.apps.iter().any(|name| name == app.name())
+        })
+        .collect();
+    let mut built: Vec<&App> = Vec::new();
+    let mut packages = Vec::new();
+    for app in &apps {
+        let path = package_path(app, arch);
+        let missing = app
+            .recipe
+            .package
+            .depends
+            .iter()
+            .find(|dependency| !built.iter().any(|done| done.name() == dependency.name));
+        match (path.is_file(), missing) {
+            (true, None) => {
+                packages.push(read(&path)?);
+                built.push(app);
+            }
+            (true, Some(dependency)) => println!(
+                "  {} is left out: it needs {}, which is not built for {arch}",
+                app.name(),
+                dependency.name
+            ),
+            (false, _) => println!(
+                "  {} is not built for {arch}: `cargo xtask build-apps --arch {arch} --app {}`",
+                app.name(),
+                app.name()
+            ),
+        }
+    }
+    install(&packages)
+}
+
+/// The apps `names`, from the packages built last for `arch`, installed
+/// together: for a test that boots a program an app is, as test-audio boots
+/// ALSA's, given every app it needs. One that is not built is said and left
+/// out, and the test finds it missing.
+///
+/// # Errors
+///
+/// A name that is no app, a package that does not read, or a set that does
+/// not install.
+pub(crate) fn taken(arch: Arch, names: &[&str]) -> Result<Vec<ports::File>> {
+    let apps = discover()?;
+    let mut packages = Vec::new();
+    for name in names {
+        let app = apps
+            .iter()
+            .find(|app| app.name() == *name)
+            .ok_or_else(|| Error::new(format!("there is no app `{name}` in {PLACE}")))?;
+        if let Some(path) = package(app, arch, false, Fresh::UnlessScript)? {
+            packages.push(read(&path)?);
+        }
+    }
+    install(&packages)
+}
+
 fn install_selected(arch: Arch, args: &Args, defaults: bool) -> Result<Vec<ports::File>> {
     // `--everything` is everything: a script app with no package is built,
     // and a build that fails stops the run.
@@ -263,7 +335,7 @@ fn install_selected(arch: Arch, args: &Args, defaults: bool) -> Result<Vec<ports
 /// Whether a package is built for the asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Fresh {
-    /// Always: `build-apps` and `test-apps`.
+    /// Always: `build-apps`.
     Always,
     /// Unless the app is built by a script, which is a download and minutes
     /// of C that no image starts on its own, as no image starts a port: the
@@ -475,15 +547,9 @@ fn gathered(app: &App, arch: Arch, out: &Path) -> Result<Built> {
             Source::Build => out.join(&spec.from),
             Source::Folder => app.dir.join(&spec.from),
         };
-        if spec.tree {
-            ports::read_entry(&from, &spec.to, spec.mode, true, &mut files)?;
-        } else {
-            files.push(ports::File {
-                path: spec.to.clone(),
-                mode: spec.mode,
-                content: ports::Content::Bytes(read(&from)?),
-            });
-        }
+        // A file is taken as it is, a symbolic link as a link (git's
+        // `bin/git`); a tree, with everything in it.
+        ports::read_entry(&from, &spec.to, spec.mode, spec.tree, &mut files)?;
     }
     if app.recipe.package.abi == Abi::Native {
         for file in &files {
@@ -753,6 +819,32 @@ fn script(apps: &[App]) -> String {
     script
 }
 
+/// The apps of `apps` that `wanted` picks, and every app those depend on,
+/// in `apps`' order.
+fn with_dependencies(apps: Vec<App>, wanted: impl Fn(&App) -> bool) -> Vec<App> {
+    let mut names: Vec<String> = apps
+        .iter()
+        .filter(|app| wanted(app))
+        .map(|app| app.name().to_owned())
+        .collect();
+    let mut at = 0;
+    while let Some(name) = names.get(at).cloned() {
+        at += 1;
+        let depends = apps
+            .iter()
+            .filter(|app| app.name() == name)
+            .flat_map(|app| app.recipe.package.depends.iter());
+        for dependency in depends {
+            if !names.contains(&dependency.name) {
+                names.push(dependency.name.clone());
+            }
+        }
+    }
+    apps.into_iter()
+        .filter(|app| names.iter().any(|name| name == app.name()))
+        .collect()
+}
+
 /// `cargo xtask test-apps`: one boot that runs every app's smoke checks.
 ///
 /// # Errors
@@ -760,14 +852,17 @@ fn script(apps: &[App]) -> String {
 /// A build that fails, or a check whose line did not come.
 pub(crate) fn test_apps(args: &Args) -> Result<()> {
     for arch in args.arches()? {
-        let apps: Vec<App> = discover()?
-            .into_iter()
-            .filter(|app| app.builds_for(arch) && !app.recipe.smoke.is_empty())
-            .collect();
+        let apps = with_dependencies(
+            discover()?
+                .into_iter()
+                .filter(|app| app.builds_for(arch))
+                .collect(),
+            |app| !app.recipe.smoke.is_empty(),
+        );
         let mut packages = Vec::new();
         let mut tested = Vec::new();
         for app in apps {
-            if let Some(path) = package(&app, arch, args.release, Fresh::Always)? {
+            if let Some(path) = package(&app, arch, args.release, Fresh::UnlessBuilt)? {
                 packages.push(read(&path)?);
                 tested.push(app);
             }

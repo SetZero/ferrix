@@ -1,21 +1,13 @@
-//! Programs ported onto ferrousli beside busybox: built by the scripts in
-//! `src/user/system/linux/ferrousli/tools/ports/`, installed under `~/.local/share/ferrix/ports/ferrousli`
-//! (or `$FERRIX_PORTS`), and carried by every image that carries a busybox.
+//! The libraries ported onto ferrousli that apps build against: built by
+//! the scripts in `src/user/system/linux/ferrousli/tools/ports/`, installed
+//! under `~/.local/share/ferrix/ports/ferrousli` (or `$FERRIX_PORTS`).
 //!
-//! Each port installs into `<arch>/` there with the layout it has on the
-//! guest, so `x86_64/bin/curl` is `/bin/curl` and `x86_64/etc/ssl/certs/…` is
-//! `/etc/ssl/certs/…`. An image takes whichever of [`FILES`] are installed and
-//! says which are not: a port is a download and a C build of minutes, which
-//! `build` and `run` do not start on their own. `cargo xtask ports` does.
-//!
-//! x86-64 builds every port. AArch64 and ARMv7-A build the C ones git needs,
-//! [`ARM_PORTS`], cross-compiled with the target's gcc: the C++ runtime
-//! needs the target's g++, and sshdt's build names its Rust target.
-//!
-//! A port that is a program of its own belongs among the apps
-//! (`docs/APPS.md`), which xtask finds without a list; btop was the first to
-//! move. The ones here are those other code still names, and the libraries
-//! apps build against.
+//! The programs once ported here -- curl, git, sshdt, foot, vkgears, ALSA's
+//! library and utilities, btop -- are apps (`docs/APPS.md`) since
+//! 2026-10-01: each script is its app's `build.sh`, and an image carries
+//! them as packages. What is left is `cargo xtask ports`, which builds the
+//! libraries, and the reading of a built tree into an image's files
+//! ([`read_entry`]), which the apps' packages use.
 //!
 //! An entry is a file or a whole tree. A tree, such as git's
 //! `usr/libexec/git-core`, is walked in name order so the archive is the same
@@ -27,12 +19,8 @@
 //! The scripts need a Linux host with gcc and the kernel's UAPI headers, as
 //! `build.sh` for busybox does. On Windows they run in WSL's default
 //! distribution, as a script app's `build.sh` does, and the ports are
-//! installed in its home and read from there (`crate::wsl::home`). There is
-//! no native Windows build of them yet.
-//!
-//! `run-compositor --everything` carries every port, so it builds them when
-//! one is missing ([`everything`]) rather than saying so and booting
-//! without it.
+//! installed in its home (`crate::wsl::home`). There is no native Windows
+//! build of them yet.
 
 use std::path::{Path, PathBuf};
 
@@ -40,29 +28,16 @@ use crate::paths::Arch;
 use crate::{Error, Result};
 
 /// The ports `cargo xtask ports` builds, in order, each a directory of
-/// `src/user/system/linux/ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
-/// the btop app links against, and installs nothing an image carries. `sshdt` is Rust
-/// rather than C, built the way uutils is, and needs cargo's crates.io.
-/// `foot` is the Wayland terminal `docs/CHROME.md` starts from, built with
-/// every library it links and the one font it draws with. `vkgears` is
-/// Vulkan's gears with Mesa's Venus driver linked into it (`docs/GPU.md`
-/// §6.1), and links libcxx's runtime. `alsa-lib` is ALSA's client library,
-/// static, and `alsa-utils` the aplay and speaker-test built on it
-/// (`docs/AUDIO.md`, U1).
-const PORTS: &[&str] = &[
-    "curl",
-    "libcxx",
-    "zlib",
-    "git",
-    "sshdt",
-    "foot",
-    "vkgears",
-    "alsa-lib",
-    "alsa-utils",
-];
+/// `src/user/system/linux/ferrousli/tools/ports/` holding a `build.sh`: the
+/// libraries apps build against, which install nothing an image carries.
+/// `libcxx` is the C++ runtime the btop app links; `zlib` is what git links.
+/// The apps that need one build it first when it is not there, so this is
+/// for building them ahead.
+const PORTS: &[&str] = &["libcxx", "zlib"];
 
-/// The ports AArch64 and ARMv7-A build, in order: git and what it links.
-const ARM_PORTS: &[&str] = &["curl", "zlib", "git"];
+/// The ports AArch64 and ARMv7-A build: zlib, for git. The C++ runtime needs
+/// the target's g++.
+const ARM_PORTS: &[&str] = &["zlib"];
 
 /// The ports `arch` builds and carries.
 fn ports_for(arch: Arch) -> &'static [&'static str] {
@@ -72,152 +47,6 @@ fn ports_for(arch: Arch) -> &'static [&'static str] {
         ARM_PORTS
     }
 }
-
-/// Whether an [`Installed`] entry is one path or everything beneath it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Kind {
-    /// One file, or one symbolic link.
-    File,
-    /// A directory and everything in it.
-    Tree,
-}
-
-/// A file or tree a port installs, and where it goes in the initramfs.
-pub(crate) struct Installed {
-    /// The path in the archive, which is also its path under `x86_64/`.
-    pub(crate) path: &'static str,
-    /// Its permissions, for a [`Kind::File`] that is not a link.
-    pub(crate) mode: u32,
-    /// One path or a tree.
-    pub(crate) kind: Kind,
-    /// The port that installs it, named when it is missing.
-    port: &'static str,
-}
-
-/// Every file the ports install that an image carries.
-pub(crate) const FILES: &[Installed] = &[
-    Installed {
-        path: "bin/curl",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "curl",
-    },
-    Installed {
-        path: "etc/ssl/certs/ca-certificates.crt",
-        mode: 0o644,
-        kind: Kind::File,
-        port: "curl",
-    },
-    Installed {
-        path: "usr/libexec/ferrix/ssl_server2",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "curl",
-    },
-    Installed {
-        path: "usr/share/ferrix/tls-test/server5.crt",
-        mode: 0o644,
-        kind: Kind::File,
-        port: "curl",
-    },
-    Installed {
-        path: "usr/share/ferrix/tls-test/server5.key",
-        mode: 0o644,
-        kind: Kind::File,
-        port: "curl",
-    },
-    Installed {
-        path: "usr/share/ferrix/tls-test/test-ca2.crt",
-        mode: 0o644,
-        kind: Kind::File,
-        port: "curl",
-    },
-    Installed {
-        path: "bin/git",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "git",
-    },
-    Installed {
-        path: "usr/bin/git",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "git",
-    },
-    Installed {
-        path: "usr/libexec/git-core",
-        mode: 0o755,
-        kind: Kind::Tree,
-        port: "git",
-    },
-    Installed {
-        path: "usr/share/git-core",
-        mode: 0o755,
-        kind: Kind::Tree,
-        port: "git",
-    },
-    Installed {
-        path: "bin/sshdt",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "sshdt",
-    },
-    Installed {
-        path: "bin/foot",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "foot",
-    },
-    Installed {
-        path: "bin/footclient",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "foot",
-    },
-    Installed {
-        path: "etc/fonts/fonts.conf",
-        mode: 0o644,
-        kind: Kind::File,
-        port: "foot",
-    },
-    Installed {
-        path: "usr/share/fonts/dejavu",
-        mode: 0o755,
-        kind: Kind::Tree,
-        port: "foot",
-    },
-    Installed {
-        path: "bin/vkgears",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "vkgears",
-    },
-    Installed {
-        path: "bin/aplay",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "alsa-utils",
-    },
-    Installed {
-        path: "bin/arecord",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "alsa-utils",
-    },
-    Installed {
-        path: "bin/speaker-test",
-        mode: 0o755,
-        kind: Kind::File,
-        port: "alsa-utils",
-    },
-    // alsa-lib's configuration, where the ports' alsa-lib looks for it.
-    Installed {
-        path: "usr/share/ferrousli/alsa",
-        mode: 0o755,
-        kind: Kind::Tree,
-        port: "alsa-lib",
-    },
-];
 
 /// What an installed path is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,7 +59,7 @@ pub(crate) enum Content {
     Directory,
 }
 
-/// A path of [`FILES`] that is installed, with what is there.
+/// A path an image carries, with what is there: a file, a link or a directory.
 #[derive(Debug, Clone)]
 pub(crate) struct File {
     pub(crate) path: String,
@@ -329,102 +158,6 @@ fn root() -> Result<PathBuf> {
     .ok_or_else(|| Error::new("no home directory to find the ports under; set FERRIX_PORTS"))
 }
 
-/// Where `file` is installed for `arch` beneath `root`.
-fn installed_path(root: &Path, arch: Arch, file: &Installed) -> PathBuf {
-    file.path
-        .split('/')
-        .fold(root.join(arch.name()), |dir, name| dir.join(name))
-}
-
-/// The installed files for `arch`, for an image to carry, and a line naming
-/// the ports that are not there, of those `arch` builds.
-pub(crate) fn installed(arch: Arch) -> Result<Vec<File>> {
-    installed_where(arch, |port| ports_for(arch).contains(&port))
-}
-
-/// The installed files of one port for `arch`, for a boot that wants that
-/// program and not the megabytes of the others, and the same line when it is
-/// not there.
-pub(crate) fn installed_port(arch: Arch, port: &str) -> Result<Vec<File>> {
-    installed_where(arch, |wanted| {
-        wanted == port && ports_for(arch).contains(&port)
-    })
-}
-
-/// `--everything`'s ports: [`installed`], but the ports `arch` builds are
-/// built first when one is missing, and a build that fails, or a port still
-/// missing after it, stops the run. `--everything` is everything.
-///
-/// # Errors
-///
-/// A build that fails, or a port its build did not install.
-pub(crate) fn everything(arch: Arch) -> Result<Vec<File>> {
-    let missing = missing(arch)?;
-    if missing.is_empty() {
-        return installed(arch);
-    }
-    println!(
-        "  not built yet: {}; --everything carries every port, so building them",
-        missing.join(", ")
-    );
-    build(arch)?;
-    let missing = self::missing(arch)?;
-    if !missing.is_empty() {
-        return Err(Error::new(format!(
-            "`cargo xtask ports` for {arch} did not install {}",
-            missing.join(", ")
-        )));
-    }
-    installed(arch)
-}
-
-/// The ports `arch` builds of which a file is not installed.
-fn missing(arch: Arch) -> Result<Vec<&'static str>> {
-    let root = root()?;
-    let mut missing: Vec<&str> = Vec::new();
-    for file in FILES
-        .iter()
-        .filter(|file| ports_for(arch).contains(&file.port))
-    {
-        if std::fs::symlink_metadata(installed_path(&root, arch, file)).is_err()
-            && !missing.contains(&file.port)
-        {
-            missing.push(file.port);
-        }
-    }
-    Ok(missing)
-}
-
-/// The installed files of the ports `wanted` names.
-fn installed_where(arch: Arch, wanted: impl Fn(&str) -> bool) -> Result<Vec<File>> {
-    let root = root()?;
-    let mut files = Vec::new();
-    let mut missing: Vec<&str> = Vec::new();
-    for file in FILES.iter().filter(|file| wanted(file.port)) {
-        let path = installed_path(&root, arch, file);
-        if std::fs::symlink_metadata(&path).is_err() {
-            if !missing.contains(&file.port) {
-                missing.push(file.port);
-            }
-            continue;
-        }
-        read_entry(
-            &path,
-            file.path,
-            file.mode,
-            file.kind == Kind::Tree,
-            &mut files,
-        )?;
-    }
-    if !missing.is_empty() {
-        println!(
-            "  not built, so not in the image: {} (cargo xtask ports builds them)",
-            missing.join(", ")
-        );
-    }
-    Ok(files)
-}
-
 /// `cargo xtask ports`: run the `build.sh` of every port `arch` builds, in
 /// order, stopping at the first that fails.
 pub(crate) fn build(arch: Arch) -> Result<()> {
@@ -502,24 +235,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn installed_files_keep_their_guest_layout() {
-        let path = installed_path(Path::new("root"), Arch::X86_64, &FILES[1]);
-        assert_eq!(
-            path,
-            Path::new("root/x86_64/etc/ssl/certs/ca-certificates.crt")
-        );
-    }
-
-    #[test]
-    fn every_file_belongs_to_a_port_that_is_built() {
-        for file in FILES {
-            assert!(PORTS.contains(&file.port), "{}", file.path);
-            assert!(!file.path.ends_with('/'), "{}", file.path);
-            assert!(ferrix_cpio::is_safe_path(file.path), "{}", file.path);
-        }
-    }
-
-    #[test]
     fn a_tree_is_read_in_name_order_with_its_links_and_modes() {
         let dir = std::env::temp_dir().join(format!("xtask-ports-tree-{}", std::process::id()));
         let tree = dir.join("git-core");
@@ -548,17 +263,9 @@ mod tests {
     }
 
     #[test]
-    fn arm_builds_git_and_what_it_links_and_nothing_else() {
+    fn arm_builds_what_git_links_and_nothing_else() {
         for arch in [Arch::AArch64, Arch::Armv7a] {
-            let ports = ports_for(arch);
-            assert!(ports.contains(&"git"), "{arch}");
-            // git links zlib and libcurl, which must be built first.
-            let at = |port| ports.iter().position(|p| *p == port).unwrap();
-            assert!(at("zlib") < at("git") && at("curl") < at("git"), "{arch}");
-            for port in ["libcxx", "sshdt", "foot", "vkgears"] {
-                assert!(!ports.contains(&port), "{arch} {port}");
-            }
-            assert!(ports.iter().all(|port| PORTS.contains(port)), "{arch}");
+            assert_eq!(ports_for(arch), ["zlib"], "{arch}");
         }
         assert_eq!(ports_for(Arch::X86_64), PORTS);
     }

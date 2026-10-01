@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Builds aplay and speaker-test from alsa-utils 1.2.16, static against
-# ferrousli and tools/ports/alsa-lib (docs/AUDIO.md, U1).
+# ferrousli and the alsa-lib app's library (docs/AUDIO.md, U1).
 #
-#     tools/ports/alsa-utils/build.sh [--arch <arch>]    # from src/user/system/linux/ferrousli/
+#     build.sh <arch> <out>     # as an app's script is run (docs/APPS.md §3.1)
 #
-# Needs tools/ports/alsa-lib built first. Installs, under $FERRIX_PORTS (see
-# ../common.sh):
+# and copies what app.toml installs into <out>.
+#
+# Needs the alsa-lib app built first, which app.toml's depends sees to.
+# Installs, under $FERRIX_PORTS (see ferrousli's tools/ports/common.sh):
 #   <arch>/bin/aplay           aplay, and arecord as a link to it
 #   <arch>/bin/speaker-test
 #
@@ -19,9 +21,16 @@
 # rest (alsactl, amixer, the UCM and topology tools) nothing U1 asks for.
 set -euo pipefail
 
+[ $# -eq 2 ] || { echo "usage: build.sh <arch> <out>" >&2; exit 2; }
+out=$2
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../common.sh
-. "$here/../common.sh"
+# ferrousli's port toolkit: pinned downloads, the release library, and the
+# compilers that build against it. It reads `--arch <name>` first.
+set -- --arch "$1"
+# shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
+. "$here/../../system/linux/ferrousli/tools/ports/common.sh"
+# One build of alsa-utils at a time: every checkout's shares its work directory.
+lock_port alsa-utils
 
 ALSA_UTILS_VERSION=1.2.16
 ALSA_UTILS_TARBALL=alsa-utils-$ALSA_UTILS_VERSION.tar.bz2
@@ -31,7 +40,7 @@ ALSA_UTILS_SHA256=092399d5e8749a1d5e188e393157521cec4b75693b60ebb79bbce728cff223
 work=$builds/alsa-utils
 src=$ports/src
 
-[ -f "$prefix/lib/libasound.a" ] || fail "no $prefix/lib/libasound.a: build tools/ports/alsa-lib first"
+[ -f "$prefix/lib/libasound.a" ] || fail "no $prefix/lib/libasound.a: build the alsa-lib app first"
 
 step "sources"
 mkdir -p "$src" "$work"
@@ -69,3 +78,10 @@ install -m 0755 "$build/speaker-test/speaker-test" "$prefix/bin/speaker-test"
 "$STRIP" "$prefix/bin/aplay" "$prefix/bin/speaker-test"
 ls -l "$prefix/bin/aplay" "$prefix/bin/speaker-test"
 run_built "$prefix/bin/aplay" --version
+
+step "the app's files"
+# What app.toml installs, copied out of the prefix the ports share, links
+# kept as links.
+rm -rf "$out"
+mkdir -p "$out"
+(cd "$prefix" && cp -a --parents bin/aplay bin/arecord bin/speaker-test "$out")

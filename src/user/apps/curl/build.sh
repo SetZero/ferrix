@@ -2,9 +2,11 @@
 # Builds curl 8.22.0 with mbedTLS 3.6.7 as a static program against
 # ferrousli, and fetches the CA certificates it verifies servers with.
 #
-#     tools/ports/curl/build.sh [--arch <arch>]    # from src/user/system/linux/ferrousli/
+#     build.sh <arch> <out>     # as an app's script is run (docs/APPS.md §3.1)
 #
-# Installs, under $FERRIX_PORTS (see ../common.sh):
+# and copies what app.toml installs into <out>.
+#
+# Installs, under $FERRIX_PORTS (see ferrousli's tools/ports/common.sh):
 #   <arch>/bin/curl
 #   <arch>/etc/ssl/certs/ca-certificates.crt
 #   <arch>/usr/libexec/ferrix/ssl_server2, Mbed TLS's test server, with its
@@ -26,9 +28,16 @@
 #   * a CA directory: one bundle, where Alpine and Debian also put it.
 set -euo pipefail
 
+[ $# -eq 2 ] || { echo "usage: build.sh <arch> <out>" >&2; exit 2; }
+out=$2
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../common.sh
-. "$here/../common.sh"
+# ferrousli's port toolkit: pinned downloads, the release library, and the
+# compilers that build against it. It reads `--arch <name>` first.
+set -- --arch "$1"
+# shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
+. "$here/../../system/linux/ferrousli/tools/ports/common.sh"
+# One build of curl at a time: every checkout's shares its work directory.
+lock_port curl
 
 CURL_VERSION=8.22.0
 CURL_TARBALL=curl-$CURL_VERSION.tar.gz
@@ -135,3 +144,10 @@ for f in server5.crt server5.key test-ca2.crt; do
 done
 file "$prefix/bin/curl"
 run_built "$prefix/bin/curl" --version
+
+step "the app's files"
+# What app.toml installs, copied out of the prefix the ports share, links
+# kept as links.
+rm -rf "$out"
+mkdir -p "$out"
+(cd "$prefix" && cp -a --parents bin/curl etc/ssl/certs/ca-certificates.crt usr/libexec/ferrix/ssl_server2 usr/share/ferrix/tls-test "$out")

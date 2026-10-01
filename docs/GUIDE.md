@@ -225,7 +225,7 @@ host's `127.0.0.1:<host>` and opens each connection to the guest's `<guest>`,
 as slirp's `hostfwd` does. It turns `--net` on. With it, you can reach the
 guest over SSH. Every x86-64 image with a busybox carries
 [sshdt](https://crates.io/crates/sshdt), an SSH server written in Rust, once
-`cargo xtask ports` has built it. Start it in the guest, then connect from the host:
+`cargo xtask build-apps --app sshdt` has built it. Start it in the guest, then connect from the host:
 
 ```
 cargo xtask run --arch x86_64 --init ferrousli --forward 2222:22
@@ -256,9 +256,9 @@ byte-for-byte reproducible.
 run Linux programs. On Windows those steps run in WSL's default distribution,
 which needs rustup and `build-essential` installed inside it; the first step
 says so if they are missing. So do `cargo xtask ports` and an app's
-`build.sh`: the ports install under WSL's home, where xtask reads them
-through `\\wsl.localhost`, and `run-compositor --everything` builds every
-one that is missing, and a missing busybox, rather than booting without it.
+`build.sh`: the ports install under WSL's home, and `run-compositor
+--everything` builds every app that is missing, and a missing busybox,
+rather than booting without it.
 
 ### A busybox shell
 

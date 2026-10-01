@@ -60,7 +60,7 @@ what is left:
 **Done, 2026-09-24: a foreign toolkit client inside the guest** (§6).
 `foot` 1.24.0, a real Wayland terminal nobody here wrote, runs on Ferrix's
 compositor and draws a program's output in the image's font. It is built
-by `src/user/system/linux/ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
+by the foot port, now the `foot` app, against ferrousli with libffi 3.5.2,
 wayland 1.24.0, wayland-protocols 1.45, libxkbcommon 1.11.0, pixman 0.46.4,
 freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
@@ -502,7 +502,7 @@ guest proves the client story end to end for a fraction of a browser's cost,
 and it is on the browser's path rather than beside it.
 
 **Done, 2026-09-24.** `cargo xtask ports` builds foot and the ten libraries
-under it statically against ferrousli (`src/user/system/linux/ferrousli/tools/ports/foot`), and
+under it statically against ferrousli (the foot port, now the `foot` app), and
 `cargo xtask test-foot` boots the compositor with foot running `hyprctl
 version`. foot finds DejaVu Sans Mono through fontconfig, lays out a 7x13
 grid, starts four render threads and draws the three lines, which came
