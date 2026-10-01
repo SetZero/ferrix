@@ -92,9 +92,8 @@ fn ask(reader: &Process, path: &str, kind: Kind) -> Result<Result<usize, Errno>,
     let mut page = page_for(reader)?;
     let process = registry::find(reader.pid()).ok_or("the /proc reader is gone")?;
     userns::acting_as(&process, || match kind {
-        Kind::File => {
-            crate::fs::namespace_check::read_file(&mut page, path.as_bytes()).map(|got| got.map(|bytes| bytes.len()))
-        }
+        Kind::File => crate::fs::namespace_check::read_file(&mut page, path.as_bytes())
+            .map(|got| got.map(|bytes| bytes.len())),
         Kind::Link => {
             let at = staged(&mut page, path.as_bytes())?;
             Ok(by_number(

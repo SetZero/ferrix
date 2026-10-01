@@ -1026,12 +1026,9 @@ fn may_inspect(pid: u32) -> Result<()> {
 /// [`may_inspect`] guards: the links that reach into its tree, and the files
 /// that describe its memory and mounts.
 fn is_private(index: usize) -> bool {
-    PER_PROCESS.get(index).is_some_and(|entry| {
-        matches!(
-            entry.name,
-            b"root" | b"cwd" | b"exe" | b"maps"
-        )
-    })
+    PER_PROCESS
+        .get(index)
+        .is_some_and(|entry| matches!(entry.name, b"root" | b"cwd" | b"exe" | b"maps"))
 }
 
 /// The live process with this pid, or `ENOENT`: a directory a program is
