@@ -18,12 +18,18 @@
 //! step, and the unprivileged step that sets no-new-privs first must fail on
 //! that step. A check that could not fail would pass those builds too.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::args::Args;
 use crate::paths::{self, Arch};
-use crate::sem::{boot, build_test, says, status};
-use crate::{Error, Result};
+use crate::ports::{Content, File};
+use crate::sem::{build_test, says, status};
+use crate::{Error, Result, cargo, fat, initramfs, native, qemu, shell};
+
+/// Where the image carries the program as a file too: booted as init it is
+/// built into the kernel and has no file of its own, and bubblewrap's step
+/// `execve`s it. The guest program names the same path.
+const CARRIED_AT: &str = "/bin/seccomp-test";
 
 /// The lines a working run prints, in order.
 const STEPS: &[&str] = &[
@@ -150,4 +156,28 @@ pub(crate) fn test_seccomp(args: &Args) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Boot `program` as init, with the image carrying it at [`CARRIED_AT`] as
+/// well, and return the serial lines from the kernel's success marker on.
+fn boot(arch: Arch, program: &Path, args: &Args) -> Result<Vec<String>> {
+    let bytes = std::fs::read(program)
+        .map_err(|error| Error::new(format!("reading {}: {error}", program.display())))?;
+    let loader = cargo::build_loader(arch, args.release)?;
+    let kernel = cargo::build_kernel_with_init(arch, args.release, program, shell::SCRIPT)?;
+    let natives = native::build(arch, args.release)?;
+    let carried = [File {
+        path: CARRIED_AT.to_string(),
+        mode: 0o755,
+        content: Content::Bytes(bytes),
+    }];
+    let archive = initramfs::build(None, &natives, None, &carried)?;
+    let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
+    let lines = qemu::watch_then(arch, &image, &kernel, args, shell::EXITED, |_| Ok(()))?;
+    Ok(lines
+        .iter()
+        .position(|line| line.contains(qemu::SUCCESS_MARKER))
+        .and_then(|at| lines.get(at..))
+        .unwrap_or_default()
+        .to_vec())
 }

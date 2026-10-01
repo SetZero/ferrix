@@ -1198,6 +1198,9 @@ fn strict() -> Step {
     }
 }
 
+/// Where `test-seccomp` carries this program as a file, for **bwrap**'s exec.
+const CARRIED_AT: &str = "/bin/seccomp-test";
+
 /// The argument that makes the program the filtered child of **bwrap**.
 const CHILD: &str = "--filtered-child";
 
@@ -1218,9 +1221,9 @@ fn filtered_child() -> c_int {
 
 /// **bwrap**: no-new-privs, `prctl(PR_SET_SECCOMP, 2, &prog)` and `execve`.
 fn bwrap() -> Step {
-    let path = std::env::current_exe().map_err(|e| format!("no path of this program: {e}"))?;
-    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-        .map_err(|_| "a path with a NUL".to_string())?;
+    // Not `/proc/self/exe`: booted as init, this program is built into the
+    // kernel, and `test-seccomp` carries it as this file for the exec.
+    let path = std::ffi::CString::new(CARRIED_AT).map_err(|_| "a NUL".to_string())?;
     let argument = std::ffi::CString::new(CHILD).map_err(|_| "a NUL".to_string())?;
     let child = fork_with(|| {
         if no_new_privs().is_err() {
