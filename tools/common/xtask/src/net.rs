@@ -640,18 +640,7 @@ pub(crate) fn commands(servers: &Servers, curl: bool, git: bool) -> Vec<Command>
             status: 0,
             expect: Expect::Lines(leak_argv(vec![format!("{digest} {BIG_BYTES}")])),
         },
-        // How fast: the guest's own clock around a download it throws away.
-        Command {
-            argv: leak_argv(vec![
-                "sh".to_owned(),
-                "-c".to_owned(),
-                format!(
-                    "a=$(cut -d' ' -f1 /proc/uptime);                      wget -q -O /dev/null http://10.0.2.2:{http}{SPEED_PATH};                      b=$(cut -d' ' -f1 /proc/uptime); echo \"speed {SPEED_BYTES} bytes $a $b\""
-                ),
-            ]),
-            status: 0,
-            expect: Expect::Shaped(&["speed *"]),
-        },
+        speed_command(http),
         // A datagram out and its answer back, which TCP's success does not
         // imply: the two take different paths through the stack.
         Command {
@@ -688,6 +677,23 @@ pub(crate) fn commands(servers: &Servers, curl: bool, git: bool) -> Vec<Command>
         commands.push(git_command(http));
     }
     commands
+}
+
+/// How fast: the guest's own clock around a download it throws away.
+fn speed_command(http: u16) -> Command {
+    Command {
+        argv: leak_argv(vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            format!(
+                "a=$(cut -d' ' -f1 /proc/uptime); \
+                 wget -q -O /dev/null http://10.0.2.2:{http}{SPEED_PATH}; \
+                 b=$(cut -d' ' -f1 /proc/uptime); echo \"speed {SPEED_BYTES} bytes $a $b\""
+            ),
+        ]),
+        status: 0,
+        expect: Expect::Shaped(&["speed *"]),
+    }
 }
 
 /// Who owns a connection, as `lsof` and Steam's client ask it: the

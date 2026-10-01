@@ -50,7 +50,7 @@
 //! five times the bytes; sixteen in flight, 0.21 MB/s, a quarter of the time
 //! on the timer; eight, 3.4 to 3.8 MB/s with the timer at 200 ms and 4.3 to
 //! 4.4 MB/s at 20 ms. The host fetched the same file at 23 MB/s. With the
-//! driver's ring and queue at 128 entries (2026-10-01, x86_64 under KVM, three
+//! driver's ring and queue at 128 entries (2026-10-01, `x86_64` under KVM, three
 //! runs each of a 32 MiB download): 8 in flight 3.6 to 12.4 MB/s, 16 5.5 to
 //! 14.3, 24 10.8 to 15.5, and 44 (the guest's whole window) collapses again.
 //!
