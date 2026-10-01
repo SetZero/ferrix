@@ -93,7 +93,7 @@ pub(crate) fn may_access(caller: &Process, target: &Process, real: bool) -> bool
                 .all(|&id| id == gid);
         (same, Arc::clone(&held.user_ns))
     });
-    (same && attributes::get(target).dumpable)
+    (same && !target.attributes_pending() && attributes::get(target).dumpable)
         || userns::capable_over(&caps_holder, &namespace, userns::CAP_SYS_PTRACE)
 }
 

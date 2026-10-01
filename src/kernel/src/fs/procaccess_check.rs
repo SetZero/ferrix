@@ -196,6 +196,23 @@ fn readers(
         &changed,
         "a process that changed its ids stayed dumpable",
     )?;
+    // A child findable before its attributes are given is not dumpable yet:
+    // the window refuses, and the same process settled is read.
+    let newborn = target(1000, false)?;
+    newborn.await_attributes();
+    refused(
+        tally,
+        user,
+        &newborn,
+        "a process read before its attributes were given was dumpable",
+    )?;
+    newborn.settle_attributes();
+    allowed(
+        tally,
+        user,
+        &newborn,
+        "a process whose attributes were given was still refused",
+    )?;
     refused(
         tally,
         user,
@@ -356,7 +373,12 @@ fn fdinfo(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     tally.ok(
         by_number(
             &jailed,
-            Syscall::Newfstatat,
+            // ARMv7-A has only the 64-bit form's other name.
+            if cfg!(target_arch = "arm") {
+                Syscall::Fstatat64
+            } else {
+                Syscall::Newfstatat
+            },
             [AT_FDCWD as u64, root, page.buffer(), 0, 0, 0],
         ),
         "/ could not be statted in a jail whose process ended",

@@ -172,13 +172,16 @@ pub(crate) fn update<R>(process: &Process, change: impl FnOnce(&mut Attributes) 
 pub(crate) fn inherit(parent: &Process, child: &Process) {
     let from = get(parent);
     let defaults = Attributes::default();
-    if (from.no_new_privs, from.dumpable) == (defaults.no_new_privs, defaults.dumpable) {
-        return;
+    if (from.no_new_privs, from.dumpable) != (defaults.no_new_privs, defaults.dumpable) {
+        update(child, |a| {
+            a.no_new_privs = from.no_new_privs;
+            a.dumpable = from.dumpable;
+        });
     }
-    update(child, |a| {
-        a.no_new_privs = from.no_new_privs;
-        a.dumpable = from.dumpable;
-    });
+    // Until here a reader of the child saw it as not dumpable
+    // ([`Process::attributes_pending`]), so the window between its
+    // publication and this line refuses rather than leaks.
+    child.settle_attributes();
 }
 
 /// Decide dumpability for a program `execve` has just started, as Linux's
