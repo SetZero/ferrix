@@ -1424,7 +1424,7 @@ each stopping the boot with `smallns self-check failed: <message>`
 | an IPC namespace ends with its last holder | a new one is leaked | an IPC namespace outlived its last holder |
 | `CLONE_NEWIPC` excludes `CLONE_SYSVSEM` | the test off | CLONE_NEWIPC with CLONE_SYSVSEM was not refused EINVAL |
 | no new namespace for a thread | the test off | CLONE_NEWUTS with CLONE_THREAD was not refused EINVAL |
-| pid and network stay `EINVAL` | `CLONE_NEWNET` in `unshare`'s mask | unshare(CLONE_NEWNET) was not refused |
+| pid stays `EINVAL` | `CLONE_NEWPID` allowed in `namespaces_asked` | clone with CLONE_NEWPID was not refused |
 | B1 a native child takes its creator's UTS, IPC, cgroup and network namespaces | `load_native` does not copy the proxy | `mount namespace self-check failed: a native child's UTS, IPC, cgroup or network namespace was not its creator's` |
 | C1 a `cgroup.procs` write is judged in the opener's namespace | `write_to` asks the writer's (`acting()`) | a descriptor opened inside a cgroup namespace moved a process out of it after its writer left |
 | C1 `CLONE_INTO_CGROUP` stays inside the creator's root | the namespace test in `clone_target` off | CLONE_INTO_CGROUP started a child outside its creator's cgroup namespace |

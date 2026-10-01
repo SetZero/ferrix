@@ -38,8 +38,6 @@ use crate::syscall::process::{self, Process};
 use crate::syscall::userns;
 use crate::syscall::{fd, sem, system};
 
-/// `CLONE_NEWNET`, which does not exist yet.
-const CLONE_NEWNET: u64 = 0x4000_0000;
 /// `CLONE_NEWPID`, which does not exist yet.
 const CLONE_NEWPID: u64 = 0x2000_0000;
 
@@ -1296,22 +1294,16 @@ fn files_related(
 // Flags
 // ---------------------------------------------------------------------------
 
-/// Flags that cannot be given: pid and network namespaces do not exist, and a
-/// thread cannot have one of the small ones; `CLONE_NEWIPC` excludes
+/// Flags that cannot be given: pid namespaces do not exist (network ones do,
+/// and have their own line), and a thread cannot have one of the small ones; `CLONE_NEWIPC` excludes
 /// `CLONE_SYSVSEM`.
 fn flags(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     let root = maker()?;
     let asked = |flags: u64| family::namespaces_asked(&root, flags).map(|()| 0);
-    for (flag, what) in [
-        (CLONE_NEWNET, "clone with CLONE_NEWNET was not refused"),
-        (CLONE_NEWPID, "clone with CLONE_NEWPID was not refused"),
-    ] {
-        tally.refused(asked(flag), Errno::EINVAL, what)?;
-    }
     tally.refused(
-        unshare(&root, CLONE_NEWNET),
+        asked(CLONE_NEWPID),
         Errno::EINVAL,
-        "unshare(CLONE_NEWNET) was not refused",
+        "clone with CLONE_NEWPID was not refused",
     )?;
     tally.refused(
         asked(CLONE_NEWIPC | CLONE_SYSVSEM),
