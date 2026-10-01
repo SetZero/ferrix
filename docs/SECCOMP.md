@@ -1408,3 +1408,35 @@ Nine of
 Chrome's processes installed three distinct programs, of 657, 661 and 662
 instructions.
 
+**S1's review (certification consultant os-ad, 2026-10-01, after the fact:
+63b0e70c and 5fd9c1fb landed without one): OK with conditions.** Q3's terms
+are met: `forbid(unsafe_code)`; no allocation in `run` or `run_all`, only
+`verify`'s, through `try_reserve_exact`; `run` is total for a verified
+program, its loop bounded by the program's length, shifts masked, a division
+by an `X` of zero answering `KILL_THREAD` as Linux does; a host test for every
+rejection but `Invalid::NoMemory`; the fuzz target. Nothing in `src/kernel`
+uses the crate yet, so none of the following is reachable; each binds S2 or
+S3, and S3 does not land without them.
+
+* **`MAX_INSNS_PER_PATH` is `1 << 18`** (`lib.rs:44`), eight times Linux's
+  `(1 << 18) / sizeof(struct sock_filter)`, 32768, which §6 promises. Fix it,
+  enforce it at install with 4 more for each filter, and test the limit
+  (S3).
+* **`check_scratch` carries nothing from a `RET` to the next instruction**
+  (`verify.rs:327`), where Linux's `check_load_and_stores` carries the stored
+  words on. So `0 JEQ jt=2 jf=0; 1 ST M[0]; 2 JA 1; 3 RET; 4 LD M[0]; 5 RET A`
+  passes here and is refused by Linux. Not a safety matter, since scratch
+  words start at zero, but §3.1 rule 7 claims Linux's refusals. Fix both
+  checkers (`tests/naive/` makes the same choice, which is why `agree.rs`
+  cannot see it), with Linux's answer recorded by `oracle.c` (S3).
+* **`run_all` of no filters answers `ALLOW`.** Linux answers `KILL_PROCESS`
+  for a thread in filter mode with no filter. The hook must never run an
+  empty chain in filter mode, or must answer that case with a kill (S3).
+* **The per-call bound** -- 32768 steps, and the measured cost of a step --
+  goes into `docs/certification/MEMORY-AND-TIMING.md` under AoU-4 (S2).
+* **The chain walk** handed to `run_all` allocates nothing, takes no sleeping
+  lock and runs under no lock (S3).
+* Miri runs the crate's unit tests only (`--lib`), not `agree.rs` or
+  `chrome.rs`; out-of-range jumps are tested for `JEQ` alone of the
+  conditional jumps. Notes, not conditions.
+

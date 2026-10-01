@@ -1117,4 +1117,47 @@ How it differs from the design, and what is open:
   `--smp 2`; `test-shell`, `test-vfs` and `test-init` on x86_64; and, in the
   landing's final run, `test-shell`, `test-vfs` on both Arm targets and
   `test-init --arch all`. `carry-coverage` and `gen-coverage-justification
-  --check` run on the final rebase.
+  --check` run on the final rebase. *(Corrected by the review below: the
+  landed tree's run did not include the `test-shell` and `test-vfs` rows.)*
+
+**N4's review (certification consultant os-ad, 2026-10-01, after the fact:
+d171ffe5 landed without the OK this section asked for): OK with
+conditions.** Nothing found would have blocked it.
+
+* **The item.** Touched only by data and a check: FX-0888 in
+  `panic/catalog.rs`, `check_user_namespaces` in `stages_check.rs`, and
+  `pub(crate) mod userns` in `syscall/mod.rs`; the manifest adds
+  `syscall/userns.rs` to the load. No `unsafe` added, no upward reference.
+* **U1, U6, U8's call sites.** `privileged()` is an effective uid of 0 in the
+  first namespace; every `holds()` site asks one of the five honoured
+  capabilities; mount, `sethostname`, `mknod`, raw sockets, limits, time and
+  `kill` still need `privileged()`; U6 compares with `Namespace::root()`, the
+  top, as N3's review asked. The map files follow `map_write` and
+  `new_idmap_permitted`, stricter in two places.
+* **The gate, as run on the landed tree** (ed8188a2, whose tree the gate's
+  worktree held): `cargo xtask check`, the three boots at `--smp 2`, each
+  with the `userns` line (118 calls, 22 refusals), and `test-init --arch
+  all`, by os-7c; and `test-shell` and `test-vfs` on x86_64 with ferrousli's
+  busybox, by the review. Both Arm targets' `test-shell` and `test-vfs` are
+  queued on the same tree.
+
+What is owed, in `docs/BACKLOG.md` P2, with the next landing in
+`userns.rs`, `credentials.rs` or `fs/userns_check.rs` (N5 or NP at the
+latest):
+
+* **The `EROFS` check's negative control.** N3's review asked that the write
+  through a read-only bind of `/proc/sys` be refused by a check with a
+  negative control. The check exists (`fs/userns_check.rs`); none of the ten
+  controls is its.
+* **U8's claim.** `VULNERABILITY-ANALYSIS.md` says no `DAC_OVERRIDE` in a
+  child namespace "at all", but `vfs::Access::privileged` is a filesystem uid
+  of 0 with no namespace, as §2.2 says: a namespace kernel root made keeps
+  root's file override, where Linux refuses it over a file whose owner is not
+  mapped. No escalation, since the process was root. Restate the row and add
+  a 0600 read to `root_made`'s check, or make `Access` namespace-aware.
+* **`userns::ACTING`** answers for any task while a check runs, and the
+  check runs after the secondaries and devmgr have started. No other path
+  reaches it today; answer only when the current task is the check's.
+* **A quoted message.** The control "`privileged()` ignoring the namespace"
+  stops the boot at `userns_check.rs:326` (the host name), before the
+  message its row quotes.

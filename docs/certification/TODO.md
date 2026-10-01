@@ -46,7 +46,7 @@ python3 tools/common/check/check-item-boundary.py --report
 
 #### Arguments to re-apply at the next re-measure
 
-The discovery Finder landing (2026-09-30) moved lines that five coverage
+The discovery Finder landing (2026-09-30) moved lines that seven coverage
 arguments stood on, and `carry-coverage.py` dropped them: an argument may only
 stand on a line the last measurement found uncovered, and these lines have not
 been measured since they moved. Their reasons did not change. Until the next
@@ -56,13 +56,37 @@ with the text below, and delete this list.
 
 | Kind | Architectures | Was | Is now | Reason, verbatim |
 |---|---|---|---|---|
-| failure-path | x86_64, aarch64, armv7a | `main.rs:718`, `check_pci`'s `Err(problem) => fatal!(` | `main.rs:723-724`, `check_devices`' `Err(device::Stopped::Finder { name: "pci", why })` arm | The failure arm in `check_pci`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE10_PCI` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
+| failure-path | x86_64, aarch64, armv7a | `main.rs:718`, `check_pci`'s `Err(problem) => fatal!(` | `main.rs:724-725`, `check_devices`' `Err(device::Stopped::Finder { name: "pci", why })` arm | The failure arm in `check_pci`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE10_PCI` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
 | failure-path | x86_64, aarch64, armv7a | the same, reached through the walk | `discovery/pci.rs:544`, `self.failure = Some(failure);` in `pci::Enumeration::find` | As above: the PCI walk's failure, which `check_devices` halts on under `STAGE10_PCI`. |
-| failure-path | x86_64, aarch64, armv7a | `main.rs:790`, `check_devices`' `Err(problem) => fatal!(` | `main.rs:734`, `check_devices`' `Err(device::Stopped::Node(problem)) => fatal!(` | The failure arm in `check_devices`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE10_DEVICES` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
+| failure-path | x86_64, aarch64, armv7a | `main.rs:790`, `check_devices`' `Err(problem) => fatal!(` | `main.rs:735-736`, `check_devices`' `Err(device::Stopped::Node(problem)) => fatal!(` | The failure arm in `check_devices`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE10_DEVICES` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
 | absent-hardware | armv7a | `main.rs:763`, `if completed.before_fault {` | `discovery/pci.rs:598`, the same line in `pci::Enumeration::report` | When the device completed the out-of-domain write the unit faulted: the probe runs only through a translated domain, which ARMv7-A, leaving virt's SMMUv3 alone, never gives. |
 
 Line numbers are the tree's at the landing; the re-measure's report is what
 decides where each one goes.
+
+The landing also added two failure arms with no argument parked:
+`main.rs:727-728`, `Err(device::Stopped::Finder { name, why })` (a tree or
+board finder's failure), and `main.rs:731-732`, `Err(device::Stopped::Again)`
+(a second publish). Each is a failure arm under `STAGE10_DEVICES` like the
+third row; argue each with that row's reason at the re-measure, or they will
+show as needing a test.
+
+#### Files never measured
+
+Lines in these files count as **unmeasured, not needing a test**, until the
+next re-measure takes them in. The core ring's figures in README.md §2
+describe a tree without them.
+
+| File | Ring | Lines | Since |
+|---|---|---:|---|
+| `discovery/finder.rs`, `discovery/tree.rs`, `discovery/board.rs` | core | moved and new code of the Finder | cc4e14af |
+| `discovery/description.rs` | core | the ACPI-or-tree decision | fa4e88a6 |
+| `sched/trip.rs` | core | 448 | 5cc5ed38 |
+
+COVERAGE-RESIDUAL.md's unreached counts fell at 65639967 (x86-64 720 to
+683, AArch64 724 to 706, ARMv7-A 1,109 to 1,089) because moved lines left
+the measurement, not because a test reached them. Do not cite that fall as
+progress.
 
 ---
 

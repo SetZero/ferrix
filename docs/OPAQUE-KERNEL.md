@@ -416,6 +416,21 @@ host load, and goes to the certification consultant before it lands.
 
 **Where the branches stand (2026-10-01 wind-down).**
 
+- **The measurement** (step 1), landed as 5cc5ed38 without the consultant's
+  review. **After-the-fact review (os-ad, 2026-10-01): OK with conditions.**
+  It adds no `unsafe`, no `cfg` or feature, no native call and no upward
+  reference. Unarmed, a stamp point costs one relaxed load; armed, it takes no
+  lock, allocates nothing and fills at most 12 slots, and its numbers reach
+  only the console, so V-06 does not move. Owed, and accepted by os-35 for a
+  commit of its own on top of ring part B: (C1) `sched/trip.rs`'s 20 functions
+  are classed as check code, yet the hop check arms them on every default
+  boot, so an L.* requirement that the instrumentation is inert outside the
+  hop check, a check that `TRACING` is false after it and at the boot marker,
+  and a negative control (no `disarm`) stopping the boot on the check's own
+  message; (C2) `sched/trip.rs` was never measured
+  (`docs/certification/TODO.md` §0.2 now lists it); (C3) the traceability
+  text of `sched::trip::count` says it counts switches, which no `Count`
+  does.
 - **The ring, part A** (step 2), landed as b7cab053. The consultant's
   review asked that the ring task's 50 ms recheck stay as the liveness
   backstop, and it does. The landing's KVM boot counted 0.17 sleeps per
