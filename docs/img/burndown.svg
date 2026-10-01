@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="640" viewBox="0 0 880 640" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328">
 <title>Ferrix burndown</title>
 <rect width="880" height="640" fill="#ffffff"/>
-<text x="70.0" y="28.0" text-anchor="start" font-size="16" fill="#1f2328" font-weight="bold">Sized points remaining at the end of each day, from 09-26</text>
-<text x="70.0" y="46.0" text-anchor="start" font-size="12" fill="#656d76" font-weight="normal">442 points in the status table's sized, unfinished rows; unsized work (stages 20 and 21, the audio server, i386's I5) is outside it</text>
+<text x="70.0" y="28.0" text-anchor="start" font-size="16" fill="#1f2328" font-weight="bold">Sized points remaining at the end of each day, from 10-01</text>
+<text x="70.0" y="46.0" text-anchor="start" font-size="12" fill="#656d76" font-weight="normal">281 points in the status table's sized, unfinished rows; unsized work (stages 20 and 21, the audio server, i386's I5) is outside it</text>
 <line x1="70.0" y1="290.0" x2="810.0" y2="290.0" stroke="#d8dee4" stroke-width="1"/>
 <text x="62.0" y="294.0" text-anchor="end" font-size="12" fill="#656d76" font-weight="normal">0</text>
 <line x1="70.0" y1="244.0" x2="810.0" y2="244.0" stroke="#d8dee4" stroke-width="1"/>
@@ -15,37 +15,34 @@
 <text x="62.0" y="110.0" text-anchor="end" font-size="12" fill="#656d76" font-weight="normal">400</text>
 <line x1="70.0" y1="60.0" x2="810.0" y2="60.0" stroke="#d8dee4" stroke-width="1"/>
 <text x="62.0" y="64.0" text-anchor="end" font-size="12" fill="#656d76" font-weight="normal">500</text>
-<text x="70.0" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-26</text>
-<text x="152.2" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-27</text>
-<text x="234.4" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-28</text>
-<text x="316.7" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-29</text>
-<text x="398.9" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-30</text>
-<text x="481.1" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-01</text>
-<text x="563.3" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-02</text>
-<text x="645.6" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-03</text>
-<text x="727.8" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-04</text>
-<text x="810.0" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-05</text>
+<text x="70.0" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-01</text>
+<text x="152.2" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-02</text>
+<text x="234.4" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-03</text>
+<text x="316.7" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-04</text>
+<text x="398.9" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-05</text>
+<text x="481.1" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-06</text>
+<text x="563.3" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-07</text>
+<text x="645.6" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-08</text>
+<text x="727.8" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-09</text>
+<text x="810.0" y="308.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-10</text>
 <text x="18.0" y="175.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">points</text>
-<polyline points="70.0,86.7 152.2,129.0 234.4,171.3 316.7,213.6 398.9,256.0 465.0,290.0" fill="none" stroke="#0969da" stroke-width="2.5" stroke-linejoin="round"/>
-<circle cx="70.0" cy="86.7" r="3" fill="#0969da"/>
-<circle cx="152.2" cy="129.0" r="3" fill="#0969da"/>
-<circle cx="234.4" cy="171.3" r="3" fill="#0969da"/>
-<circle cx="316.7" cy="213.6" r="3" fill="#0969da"/>
-<circle cx="398.9" cy="256.0" r="3" fill="#0969da"/>
-<circle cx="465.0" cy="290.0" r="3" fill="#0969da"/>
+<polyline points="70.0,160.7 152.2,201.2 234.4,241.7 316.7,282.2 332.6,290.0" fill="none" stroke="#0969da" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="70.0" cy="160.7" r="3" fill="#0969da"/>
+<circle cx="152.2" cy="201.2" r="3" fill="#0969da"/>
+<circle cx="234.4" cy="241.7" r="3" fill="#0969da"/>
+<circle cx="316.7" cy="282.2" r="3" fill="#0969da"/>
+<circle cx="332.6" cy="290.0" r="3" fill="#0969da"/>
 <line x1="520.0" y1="68.0" x2="544.0" y2="68.0" stroke="#0969da" stroke-width="2.5"/>
-<text x="552.0" y="72.0" text-anchor="start" font-size="12" fill="#1f2328" font-weight="normal">92 a day, the running average: done 10-01</text>
-<polyline points="70.0,86.7 152.2,117.5 234.4,148.3 316.7,179.1 398.9,210.0 481.1,240.8 563.3,271.6 612.4,290.0" fill="none" stroke="#bf3989" stroke-width="2.5" stroke-linejoin="round"/>
-<circle cx="70.0" cy="86.7" r="3" fill="#bf3989"/>
-<circle cx="152.2" cy="117.5" r="3" fill="#bf3989"/>
-<circle cx="234.4" cy="148.3" r="3" fill="#bf3989"/>
-<circle cx="316.7" cy="179.1" r="3" fill="#bf3989"/>
-<circle cx="398.9" cy="210.0" r="3" fill="#bf3989"/>
-<circle cx="481.1" cy="240.8" r="3" fill="#bf3989"/>
-<circle cx="563.3" cy="271.6" r="3" fill="#bf3989"/>
-<circle cx="612.4" cy="290.0" r="3" fill="#bf3989"/>
+<text x="552.0" y="72.0" text-anchor="start" font-size="12" fill="#1f2328" font-weight="normal">88 a day, the running average: done 10-05</text>
+<polyline points="70.0,160.7 152.2,191.6 234.4,222.4 316.7,253.2 398.9,284.0 414.8,290.0" fill="none" stroke="#bf3989" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="70.0" cy="160.7" r="3" fill="#bf3989"/>
+<circle cx="152.2" cy="191.6" r="3" fill="#bf3989"/>
+<circle cx="234.4" cy="222.4" r="3" fill="#bf3989"/>
+<circle cx="316.7" cy="253.2" r="3" fill="#bf3989"/>
+<circle cx="398.9" cy="284.0" r="3" fill="#bf3989"/>
+<circle cx="414.8" cy="290.0" r="3" fill="#bf3989"/>
 <line x1="520.0" y1="86.0" x2="544.0" y2="86.0" stroke="#bf3989" stroke-width="2.5"/>
-<text x="552.0" y="90.0" text-anchor="start" font-size="12" fill="#1f2328" font-weight="normal">67 a day, estimated work, 09-24 to 09-26: done 10-03</text>
+<text x="552.0" y="90.0" text-anchor="start" font-size="12" fill="#1f2328" font-weight="normal">67 a day, estimated work, 09-24 to 09-26: done 10-06</text>
 <text x="70.0" y="350.0" text-anchor="start" font-size="16" fill="#1f2328" font-weight="bold">Points landed per day, and the running total</text>
 <text x="70.0" y="368.0" text-anchor="start" font-size="12" fill="#656d76" font-weight="normal">hatched: sized afterwards from git log, not estimated before the work started</text>
 <defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#54aeff"/><line x1="0" y1="0" x2="0" y2="6" stroke="#ffffff" stroke-width="2"/></pattern></defs>
@@ -64,69 +61,92 @@
 <line x1="70.0" y1="390.0" x2="810.0" y2="390.0" stroke="#d8dee4" stroke-width="1"/>
 <text x="62.0" y="394.0" text-anchor="end" font-size="12" fill="#656d76" font-weight="normal">300</text>
 <text x="818.0" y="594.0" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">0</text>
-<text x="818.0" y="565.4" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">200</text>
-<text x="818.0" y="536.9" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">400</text>
-<text x="818.0" y="508.3" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">600</text>
-<text x="818.0" y="479.7" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">800</text>
-<text x="818.0" y="451.1" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1000</text>
-<text x="818.0" y="422.6" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1200</text>
-<text x="818.0" y="394.0" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1400</text>
+<text x="818.0" y="571.8" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">200</text>
+<text x="818.0" y="549.6" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">400</text>
+<text x="818.0" y="527.3" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">600</text>
+<text x="818.0" y="505.1" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">800</text>
+<text x="818.0" y="482.9" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1000</text>
+<text x="818.0" y="460.7" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1200</text>
+<text x="818.0" y="438.4" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1400</text>
+<text x="818.0" y="416.2" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1600</text>
+<text x="818.0" y="394.0" text-anchor="start" font-size="12" fill="#bf3989" font-weight="normal">1800</text>
 <text x="18.0" y="490.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">a day</text>
 <text x="862.0" y="490.0" text-anchor="middle" font-size="12" fill="#bf3989" font-weight="normal">total</text>
-<rect x="80.2" y="502.7" width="36.4" height="87.3" rx="2" fill="#0969da"/>
-<text x="98.5" y="497.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">131</text>
-<text x="98.5" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-14</text>
-<rect x="137.2" y="567.3" width="36.4" height="22.7" rx="2" fill="#0969da"/>
-<text x="155.4" y="562.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">34</text>
-<text x="155.4" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-15</text>
-<rect x="194.1" y="546.0" width="36.4" height="44.0" rx="2" fill="#0969da"/>
-<text x="212.3" y="541.0" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">66</text>
-<text x="212.3" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-16</text>
-<rect x="251.0" y="447.3" width="36.4" height="142.7" rx="2" fill="#0969da"/>
-<text x="269.2" y="442.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">214</text>
-<text x="269.2" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-17</text>
-<rect x="307.9" y="556.7" width="36.4" height="33.3" rx="2" fill="url(#hatch)"/>
-<text x="326.2" y="551.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">50</text>
-<text x="326.2" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-18</text>
-<rect x="364.9" y="556.7" width="36.4" height="33.3" rx="2" fill="url(#hatch)"/>
-<text x="383.1" y="551.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">50</text>
-<text x="383.1" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-19</text>
-<rect x="421.8" y="553.3" width="36.4" height="36.7" rx="2" fill="url(#hatch)"/>
-<text x="440.0" y="548.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">55</text>
-<text x="440.0" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-20</text>
-<rect x="478.7" y="526.0" width="36.4" height="64.0" rx="2" fill="url(#hatch)"/>
-<text x="496.9" y="521.0" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">96</text>
-<text x="496.9" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-21</text>
-<rect x="535.6" y="576.7" width="36.4" height="13.3" rx="2" fill="url(#hatch)"/>
-<text x="553.8" y="571.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">20</text>
-<text x="553.8" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-22</text>
-<rect x="592.6" y="554.7" width="36.4" height="35.3" rx="2" fill="url(#hatch)"/>
-<text x="610.8" y="549.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">53</text>
-<text x="610.8" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-23</text>
-<rect x="649.5" y="524.0" width="36.4" height="66.0" rx="2" fill="#0969da"/>
-<rect x="649.5" y="506.0" width="36.4" height="18.0" rx="2" fill="url(#hatch)"/>
-<text x="667.7" y="501.0" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">126</text>
-<text x="667.7" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-24</text>
-<rect x="706.4" y="572.7" width="36.4" height="17.3" rx="2" fill="url(#hatch)"/>
-<text x="724.6" y="567.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">26</text>
-<text x="724.6" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-25</text>
-<rect x="763.3" y="521.3" width="36.4" height="68.7" rx="2" fill="#0969da"/>
-<rect x="763.3" y="404.7" width="36.4" height="116.7" rx="2" fill="url(#hatch)"/>
-<text x="781.5" y="399.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">278</text>
-<text x="781.5" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-26</text>
-<polyline points="98.5,571.3 155.4,566.4 212.3,557.0 269.2,526.4 326.2,519.3 383.1,512.1 440.0,504.3 496.9,490.6 553.8,487.7 610.8,480.1 667.7,462.1 724.6,458.4 781.5,418.7" fill="none" stroke="#bf3989" stroke-width="2.5" stroke-linejoin="round"/>
-<circle cx="98.5" cy="571.3" r="3" fill="#bf3989"/>
-<circle cx="155.4" cy="566.4" r="3" fill="#bf3989"/>
-<circle cx="212.3" cy="557.0" r="3" fill="#bf3989"/>
-<circle cx="269.2" cy="526.4" r="3" fill="#bf3989"/>
-<circle cx="326.2" cy="519.3" r="3" fill="#bf3989"/>
-<circle cx="383.1" cy="512.1" r="3" fill="#bf3989"/>
-<circle cx="440.0" cy="504.3" r="3" fill="#bf3989"/>
-<circle cx="496.9" cy="490.6" r="3" fill="#bf3989"/>
-<circle cx="553.8" cy="487.7" r="3" fill="#bf3989"/>
-<circle cx="610.8" cy="480.1" r="3" fill="#bf3989"/>
-<circle cx="667.7" cy="462.1" r="3" fill="#bf3989"/>
-<circle cx="724.6" cy="458.4" r="3" fill="#bf3989"/>
-<circle cx="781.5" cy="418.7" r="3" fill="#bf3989"/>
-<text x="773.5" y="410.7" text-anchor="end" font-size="12" fill="#bf3989" font-weight="bold">≈ 1199</text>
+<rect x="77.4" y="502.7" width="26.3" height="87.3" rx="2" fill="#0969da"/>
+<text x="90.6" y="497.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">131</text>
+<text x="90.6" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-14</text>
+<rect x="118.5" y="567.3" width="26.3" height="22.7" rx="2" fill="#0969da"/>
+<text x="131.7" y="562.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">34</text>
+<text x="131.7" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-15</text>
+<rect x="159.6" y="546.0" width="26.3" height="44.0" rx="2" fill="#0969da"/>
+<text x="172.8" y="541.0" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">66</text>
+<text x="172.8" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-16</text>
+<rect x="200.7" y="447.3" width="26.3" height="142.7" rx="2" fill="#0969da"/>
+<text x="213.9" y="442.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">214</text>
+<text x="213.9" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-17</text>
+<rect x="241.8" y="556.7" width="26.3" height="33.3" rx="2" fill="url(#hatch)"/>
+<text x="255.0" y="551.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">50</text>
+<text x="255.0" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-18</text>
+<rect x="283.0" y="556.7" width="26.3" height="33.3" rx="2" fill="url(#hatch)"/>
+<text x="296.1" y="551.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">50</text>
+<text x="296.1" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-19</text>
+<rect x="324.1" y="553.3" width="26.3" height="36.7" rx="2" fill="url(#hatch)"/>
+<text x="337.2" y="548.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">55</text>
+<text x="337.2" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-20</text>
+<rect x="365.2" y="526.0" width="26.3" height="64.0" rx="2" fill="url(#hatch)"/>
+<text x="378.3" y="521.0" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">96</text>
+<text x="378.3" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-21</text>
+<rect x="406.3" y="576.7" width="26.3" height="13.3" rx="2" fill="url(#hatch)"/>
+<text x="419.4" y="571.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">20</text>
+<text x="419.4" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-22</text>
+<rect x="447.4" y="554.7" width="26.3" height="35.3" rx="2" fill="url(#hatch)"/>
+<text x="460.6" y="549.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">53</text>
+<text x="460.6" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-23</text>
+<rect x="488.5" y="524.0" width="26.3" height="66.0" rx="2" fill="#0969da"/>
+<rect x="488.5" y="506.0" width="26.3" height="18.0" rx="2" fill="url(#hatch)"/>
+<text x="501.7" y="501.0" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">126</text>
+<text x="501.7" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-24</text>
+<rect x="529.6" y="572.7" width="26.3" height="17.3" rx="2" fill="url(#hatch)"/>
+<text x="542.8" y="567.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">26</text>
+<text x="542.8" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-25</text>
+<rect x="570.7" y="521.3" width="26.3" height="68.7" rx="2" fill="#0969da"/>
+<rect x="570.7" y="404.7" width="26.3" height="116.7" rx="2" fill="url(#hatch)"/>
+<text x="583.9" y="399.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">278</text>
+<text x="583.9" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-26</text>
+<rect x="611.8" y="476.7" width="26.3" height="113.3" rx="2" fill="url(#hatch)"/>
+<text x="625.0" y="471.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">170</text>
+<text x="625.0" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-27</text>
+<rect x="653.0" y="553.3" width="26.3" height="36.7" rx="2" fill="url(#hatch)"/>
+<text x="666.1" y="548.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">55</text>
+<text x="666.1" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-28</text>
+<rect x="694.1" y="572.0" width="26.3" height="18.0" rx="2" fill="url(#hatch)"/>
+<text x="707.2" y="567.0" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">27</text>
+<text x="707.2" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-29</text>
+<rect x="735.2" y="584.7" width="26.3" height="5.3" rx="2" fill="#0969da"/>
+<rect x="735.2" y="526.7" width="26.3" height="58.0" rx="2" fill="url(#hatch)"/>
+<text x="748.3" y="521.7" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">95</text>
+<text x="748.3" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">09-30</text>
+<rect x="776.3" y="561.3" width="26.3" height="28.7" rx="2" fill="url(#hatch)"/>
+<text x="789.4" y="556.3" text-anchor="middle" font-size="11" fill="#1f2328" font-weight="normal">43</text>
+<text x="789.4" y="608.0" text-anchor="middle" font-size="12" fill="#656d76" font-weight="normal">10-01</text>
+<polyline points="90.6,575.4 131.7,571.7 172.8,564.3 213.9,540.6 255.0,535.0 296.1,529.4 337.2,523.3 378.3,512.7 419.4,510.4 460.6,504.6 501.7,490.6 542.8,487.7 583.9,456.8 625.0,437.9 666.1,431.8 707.2,428.8 748.3,418.2 789.4,413.4" fill="none" stroke="#bf3989" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="90.6" cy="575.4" r="3" fill="#bf3989"/>
+<circle cx="131.7" cy="571.7" r="3" fill="#bf3989"/>
+<circle cx="172.8" cy="564.3" r="3" fill="#bf3989"/>
+<circle cx="213.9" cy="540.6" r="3" fill="#bf3989"/>
+<circle cx="255.0" cy="535.0" r="3" fill="#bf3989"/>
+<circle cx="296.1" cy="529.4" r="3" fill="#bf3989"/>
+<circle cx="337.2" cy="523.3" r="3" fill="#bf3989"/>
+<circle cx="378.3" cy="512.7" r="3" fill="#bf3989"/>
+<circle cx="419.4" cy="510.4" r="3" fill="#bf3989"/>
+<circle cx="460.6" cy="504.6" r="3" fill="#bf3989"/>
+<circle cx="501.7" cy="490.6" r="3" fill="#bf3989"/>
+<circle cx="542.8" cy="487.7" r="3" fill="#bf3989"/>
+<circle cx="583.9" cy="456.8" r="3" fill="#bf3989"/>
+<circle cx="625.0" cy="437.9" r="3" fill="#bf3989"/>
+<circle cx="666.1" cy="431.8" r="3" fill="#bf3989"/>
+<circle cx="707.2" cy="428.8" r="3" fill="#bf3989"/>
+<circle cx="748.3" cy="418.2" r="3" fill="#bf3989"/>
+<circle cx="789.4" cy="413.4" r="3" fill="#bf3989"/>
+<text x="781.4" y="405.4" text-anchor="end" font-size="12" fill="#bf3989" font-weight="bold">≈ 1589</text>
 </svg>

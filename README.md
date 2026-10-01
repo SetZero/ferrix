@@ -63,18 +63,26 @@ still being built. Ferrix is not ready as an everyday operating system.
 
 ## Boot Ferrix
 
-Install Rust and QEMU, then:
+Install Rust and QEMU. For the complete Ferrix desktop — the normal way to
+use it — fetch its Rust and Chrome volumes, then run `--everything`:
 
 ```sh
 git clone https://github.com/SetZero/ferrix.git
 cd ferrix
-cargo xtask run --arch x86_64
+tools/common/fetch/fetch-rustc-sysroot.sh
+tools/common/fetch/fetch-chrome.sh
+cargo xtask run-compositor --everything
 ```
 
-That opens a serial console. For the desktop, run `cargo xtask run-compositor`.
+`--everything` starts the desktop with accelerated graphics, clipboard support
+and Chrome, while making `rustc` and `cargo` available in its terminal. It
+combines the two fetched volumes into one data disk; the preparation is only
+needed again when you update either volume. To boot only a serial console
+instead, use `cargo xtask run --arch x86_64`.
+
 The [technical guide](docs/GUIDE.md#getting-started) covers firmware requirements,
-other architectures, Windows, graphics options and the extra downloads needed
-for Chrome and the Rust toolchain. Quit QEMU with `Ctrl-A`, then `x`.
+other architectures, Windows and graphics options. Quit QEMU with `Ctrl-A`,
+then `x`.
 
 ## Check the claims
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "img"
 
-TODAY = date(2026, 9, 26)
+TODAY = date(2026, 10, 1)
 
 # Points landed per day (docs/BACKLOG.md, *Velocity*). 09-18 to 09-23 were
 # sized afterwards from `git log`; 09-23 is what is left of that backfill.
@@ -35,30 +35,36 @@ LANDED = [
     (date(2026, 9, 24), 126),
     (date(2026, 9, 25), 26),
     (date(2026, 9, 26), 278),
+    (date(2026, 9, 27), 170),
+    (date(2026, 9, 28), 55),
+    (date(2026, 9, 29), 27),
+    (date(2026, 9, 30), 95),
+    (date(2026, 10, 1), 43),
 ]
 BACKFILLED = {date(2026, 9, d) for d in range(18, 24)}
-AFTERWARDS = {date(2026, 9, 24): 27, date(2026, 9, 25): 26, date(2026, 9, 26): 175}
+# 09-27 to 10-01 had almost no estimates before the work: N3's 8 and little else.
+AFTERWARDS = {date(2026, 9, 24): 27, date(2026, 9, 25): 26, date(2026, 9, 26): 175,
+              date(2026, 9, 27): 170, date(2026, 9, 28): 55, date(2026, 9, 29): 27,
+              date(2026, 9, 30): 87, date(2026, 10, 1): 43}
 
-# The status table's sized, unfinished rows after 2026-09-26's landings.
+# The status table's sized, unfinished rows after 2026-10-01's landings.
 REMAINING = [
     ("Client pages as texture backing", 8),
-    ("XWayland and the second pass", 48),
+    ("The second pass", 8),
     ("GC400, the rest", 21),
     ("Stage 13, the controllers' rest", 30),
-    ("Stage 15, init L10 and auth", 35),
-    ("Desktop clients' foundation", 21),
-    ("Pixel 7, a desktop in its VM", 17),
+    ("Stage 15, hyprlock's P1.5", 5),
     ("Chrome on the DK1", 50),
     ("Stage 14, real-time", 40),
     ("dmabuf and virgl", 48),
-    ("Stage 22, Steam's sized part", 24),
-    ("Stage 22, the rest (guess)", 100),
+    ("Stage 22, bubblewrap's rest", 13),
+    ("Stage 22, the rest (guess)", 58),
 ]
 SCOPE = sum(p for _, p in REMAINING)
 # The running average counts everything that landed; the second rate is only
 # what had an estimate before it started, 09-24 to 09-26, which is the rate
 # the sized scope above is burned at.
-RATES = [(92, "92 a day, the running average"),
+RATES = [(88, "88 a day, the running average"),
          (67, "67 a day, estimated work, 09-24 to 09-26")]
 FORECAST_RATE = 67
 
@@ -77,17 +83,21 @@ DONE = [
     ("cgroups P1, M1, S1 (28)", D(2026, 9, 26), D(2026, 9, 26)),
     ("Audio L1 to L7 (24)", D(2026, 9, 26), D(2026, 9, 26)),
     ("Chrome: zygote, speed, ferrousli", D(2026, 9, 26), D(2026, 9, 26)),
+    ("i386 ABI, I1 to I4 (42)", D(2026, 9, 26), D(2026, 9, 27)),
+    ("yserver, an X server (36)", D(2026, 9, 28), D(2026, 9, 29)),
+    ("Installer MVP", D(2026, 9, 28), D(2026, 9, 28)),
+    ("Namespaces N1 to N4, seccomp S1", D(2026, 9, 28), D(2026, 10, 1)),
+    ("Claude Code on Ferrix", D(2026, 9, 30), D(2026, 10, 1)),
 ]
 ACTIVE = [
     ("Stage 19, the rest (56 left)", D(2026, 9, 17)),
     ("Stage 20, self-hosting", D(2026, 9, 22)),
     ("Stage 13 cgroups (55 of 85)", D(2026, 9, 23)),
     ("Gears (50 of 71)", D(2026, 9, 24)),
-    ("Init L10, on a branch (6)", D(2026, 9, 26)),
     ("Chrome on ferrousli, a window", D(2026, 9, 24)),
     ("Certification findings", D(2026, 9, 25)),
     ("Audio: alsa-lib and a server", D(2026, 9, 26)),
-    ("i386 ABI, I1 on a branch", D(2026, 9, 26)),
+    ("Steam: launch-side workarounds", D(2026, 9, 27)),
     ("Desktop clients", D(2026, 9, 26)),
     ("Pixel 7: VM desktop, USB", D(2026, 9, 26)),
 ]
@@ -213,7 +223,7 @@ def burndown():
             '</pattern></defs>')
     n = len(LANDED)
     slot = (right - left) / n
-    bmax, cmax = 300, 1400
+    bmax, cmax = 300, 1800
     yb = lambda v: bottom - (bottom - top) * v / bmax
     yc = lambda v: bottom - (bottom - top) * v / cmax
     for v in range(0, bmax + 1, 50):
