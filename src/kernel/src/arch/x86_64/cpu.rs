@@ -165,7 +165,23 @@ pub(crate) fn enable_extended_state(allow_avx: bool) -> u64 {
         unsafe { write_xcr0(components) };
     }
     XSAVE_COMPONENTS.store(components, Ordering::Relaxed);
+    // `XSAVEOPT`, where the processor has it (leaf 0xD sub-leaf 1, EAX bit 0).
+    XSAVEOPT.store(
+        components != 0 && __cpuid_count(0xD, 1).eax & 1 != 0,
+        Ordering::Relaxed,
+    );
     components
+}
+
+/// Whether the switch may save with `XSAVEOPT`: see [`switch_saves_optimised`].
+static XSAVEOPT: AtomicBool = AtomicBool::new(false);
+
+/// Whether the switch saves a task's registers with `XSAVEOPT`, which skips
+/// writing a component in its initial state or unchanged since the `XRSTOR`
+/// that loaded it from the same area: for two programs that never touch the
+/// vector registers -- a native program is soft-float -- most of the save.
+pub(crate) fn switch_saves_optimised() -> bool {
+    XSAVEOPT.load(Ordering::Relaxed)
 }
 
 /// Load the boot processor's `XCR0` on this one, which took its `CR4` --

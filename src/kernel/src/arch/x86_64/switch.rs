@@ -345,9 +345,22 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
     // SAFETY: (CONTEXT) the caller switches tasks with interrupts masked, so these are
     // this processor's slots and the outgoing thread's.
     state.tls = unsafe { gdt::read_tls() };
-    // SAFETY: (CONTEXT) an area of the standard form's size for the enabled
-    // components, 64-byte aligned, which is what `XSAVE64` and `FXSAVE64` write.
-    unsafe { ferrix_fpu_save(&raw mut state.fpu, cpu::extended_state_components()) };
+    let components = cpu::extended_state_components();
+    if components != 0 && cpu::switch_saves_optimised() {
+        // `XSAVEOPT` here and only here: the area is the task's own, which
+        // the restore that loaded these registers read with `XRSTOR`, and
+        // nothing writes it while the task runs, so a component the
+        // processor finds unchanged since then is the same in the area. The
+        // signal paths' copies on the stack keep `XSAVE`, since a stack slot
+        // reused at the address an `XRSTOR` last read would look unchanged.
+        // SAFETY: (CONTEXT) the standard form's size for these components,
+        // 64-byte aligned; `OSXSAVE` is set and the processor has `XSAVEOPT`.
+        unsafe { core::arch::x86_64::_xsaveopt64((&raw mut state.fpu).cast::<u8>(), components) };
+    } else {
+        // SAFETY: (CONTEXT) an area of the standard form's size for the enabled
+        // components, 64-byte aligned, which is what `XSAVE64` and `FXSAVE64` write.
+        unsafe { ferrix_fpu_save(&raw mut state.fpu, components) };
+    }
     if let Some(left) = left_here() {
         *left.lock() = Some(Left::of(state));
     }
