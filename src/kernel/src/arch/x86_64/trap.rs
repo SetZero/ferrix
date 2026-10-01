@@ -643,6 +643,18 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
     println_unlogged!("  rip      {:#018x}  cs  {:#x}", frame.rip, frame.cs);
     println_unlogged!("  rsp      {:#018x}  ss  {:#x}", frame.rsp, frame.ss);
     println_unlogged!("  rflags   {:#018x}", frame.rflags);
+    if frame.vector == 8 {
+        let bottom = frame.rbp & !0xfff;
+        let mut at = frame.rbp;
+        while at < bottom + 0x4000 {
+            // SAFETY: DEBUG ONLY, read of the faulting task's own stack page range.
+            let word = unsafe { core::ptr::read_volatile(at as *const u64) };
+            if (0xffff_ffff_8000_0000..0xffff_ffff_c000_0000).contains(&word) {
+                println_unlogged!("  DBGSTACK {:#x} {:#x}", at - bottom, word);
+            }
+            at += 8;
+        }
+    }
     println_unlogged!("  rax {:#018x}  rbx {:#018x}", frame.rax, frame.rbx);
     println_unlogged!("  rcx {:#018x}  rdx {:#018x}", frame.rcx, frame.rdx);
     println_unlogged!("  rsi {:#018x}  rdi {:#018x}", frame.rsi, frame.rdi);
