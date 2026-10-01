@@ -656,7 +656,6 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
             at = next;
         }
     }
-    }
     println_unlogged!("  rax {:#018x}  rbx {:#018x}", frame.rax, frame.rbx);
     println_unlogged!("  rcx {:#018x}  rdx {:#018x}", frame.rcx, frame.rdx);
     println_unlogged!("  rsi {:#018x}  rdi {:#018x}", frame.rsi, frame.rdi);
