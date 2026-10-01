@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::time::Duration;
 
-use super::{Config, Kind, UnitError};
+use super::{Config, UnitError};
 use crate::Warnings;
 use crate::exec::{self, Command};
 use crate::ini::{Assignment, Section};
@@ -659,52 +659,38 @@ fn directory_names(list: &mut Vec<String>, assignment: &Assignment, warnings: &m
 /// The service kind.
 pub(super) struct ServiceKind;
 
-impl Kind for ServiceKind {
-    fn unit_type(&self) -> UnitType {
-        UnitType::Service
-    }
-
-    fn section(&self) -> Option<&'static str> {
-        Some("Service")
-    }
-
-    fn needs_file(&self) -> bool {
-        true
-    }
-
-    fn parse(
-        &self,
-        _: &UnitName,
-        section: &Section,
-        warnings: &mut Warnings,
-    ) -> Result<Config, UnitError> {
-        let mut service = Service::default();
-        for assignment in &section.assignments {
-            let key = assignment.key.as_str();
-            if let Some(setter) = keys::find(&EXEC_KEYS, key)
-                .or_else(|| keys::find(&RUN_KEYS, key))
-                .or_else(|| keys::find(&CONTEXT_KEYS, key))
-            {
-                setter(&mut service, assignment, warnings);
-            } else if let Some(setter) = keys::find(&limits::KEYS, key) {
-                setter(&mut service.limits, assignment, warnings);
-            } else if let Some(setter) = keys::find(&KILL_KEYS, key) {
-                setter(&mut service.kill, assignment, warnings);
-            } else if SANDBOX_KEYS.contains(&key) {
-                warnings.at(
-                    assignment,
-                    format!(
-                        "{key}= needs namespaces and seccomp, which stage 13 has not built \
-                         yet (landing L13); the service runs without it."
-                    ),
-                );
-            } else {
-                keys::unknown(&section.name, assignment, warnings);
-            }
+/// The `[Service]` section, parsed and checked.
+pub(super) fn parse(
+    _: &UnitName,
+    section: &Section,
+    warnings: &mut Warnings,
+) -> Result<Config, UnitError> {
+    let mut service = Service::default();
+    for assignment in &section.assignments {
+        let key = assignment.key.as_str();
+        if let Some(setter) = keys::find(&EXEC_KEYS, key)
+            .or_else(|| keys::find(&RUN_KEYS, key))
+            .or_else(|| keys::find(&CONTEXT_KEYS, key))
+        {
+            setter(&mut service, assignment, warnings);
+        } else if let Some(setter) = keys::find(&limits::KEYS, key) {
+            setter(&mut service.limits, assignment, warnings);
+        } else if let Some(setter) = keys::find(&KILL_KEYS, key) {
+            setter(&mut service.kill, assignment, warnings);
+        } else if SANDBOX_KEYS.contains(&key) {
+            warnings.at(
+                assignment,
+                format!(
+                    "{key}= needs namespaces and seccomp, which stage 13 has not built \
+                     yet (landing L13); the service runs without it."
+                ),
+            );
+        } else {
+            keys::unknown(&section.name, assignment, warnings);
         }
-        check(&service)?;
-        Ok(Config::Service(Box::new(service)))
     }
+    check(&service)?;
+    Ok(Config::Service(Box::new(service)))
 }
 
 /// What systemd's `service_verify` refuses.
