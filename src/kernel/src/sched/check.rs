@@ -1390,3 +1390,20 @@ fn reap_while_held(me: &Task, here: usize, holders: u64) -> Result<(usize, u64),
     let reaped = super::reap();
     Ok((reaped, crate::fallible::stop_injecting()))
 }
+
+/// The seam's trip trace (`sched::trip`) is down, so that every stamp point
+/// and count on the scheduler's and the block ring's paths is one load that
+/// records nothing. Run right after the hop check's traced run lowers it,
+/// and again before the boot's success marker.
+///
+/// # Errors
+///
+/// The trace is still up.
+///
+/// Verifies: L.sched.3
+pub(crate) fn trip_trace_is_down() -> Result<(), &'static str> {
+    if super::trip::armed() {
+        return Err("the seam's trip trace is still up outside the hop check's traced run");
+    }
+    Ok(())
+}

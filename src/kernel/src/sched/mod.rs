@@ -61,6 +61,7 @@ use task::{DEAD, RUNNABLE};
 
 pub(crate) use check::before_start as check_before_start;
 pub(crate) use check::run as run_checks;
+pub(crate) use check::trip_trace_is_down as check_trip_trace_down;
 pub(crate) use queue::{MIN_SLICE_NS, SLICE_NS};
 pub(crate) use task::{Task, TaskId, UserThread};
 pub(crate) use wait::WaitQueue;

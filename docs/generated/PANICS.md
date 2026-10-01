@@ -92,6 +92,7 @@ Causes are listed most likely first.
 | [FX-1008](#fx-1008) | the log core did not serve the kernel log to a driver |
 | [FX-1009](#fx-1009) | a devmgr pid 1 started did not keep device authority to itself |
 | [FX-1010](#fx-1010) | two cores enabling neighbouring interrupt lines lost one's setting |
+| [FX-1011](#fx-1011) | the seam's trip trace was left up |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
@@ -2225,6 +2226,25 @@ silently; a lost edge bit is an MSI that never arrives (F-50).
 See: src/kernel/src/arch/arm_common/gicv2.rs rmw;
 src/kernel/src/arch/arm_common/gicv2/check.rs; docs/certification/FINDINGS.md
 F-50.
+
+<a id="fx-1011"></a>
+
+## FX-1011 — the seam's trip trace was left up
+
+`sched::trip` stamps a block-ring read's path and counts root writes,
+interprocessor interrupts and device interrupts, on the scheduler's and the
+block ring's own paths, but only while the trace is up: everywhere else each
+point is one load that records nothing. Stage 10's hop check raises it for its
+traced run and lowers it after, and the trace must be down then and when the
+boot ends. A trace left up keeps writing shared counters and stamps from every
+processor's switches and interrupts, work no requirement asks of those paths.
+
+1. `hop_check::depth_one` returned between `sched::trip::arm` and
+   `sched::trip::disarm`, or the disarm was removed.
+2. Something other than the hop check called `sched::trip::arm`.
+
+See: src/kernel/src/sched/trip.rs; src/kernel/src/sched/check.rs
+trip_trace_is_down; src/kernel/src/interfaces/block_ring/hop_check.rs depth_one.
 
 <a id="fx-1101"></a>
 

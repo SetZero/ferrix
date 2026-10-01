@@ -341,6 +341,7 @@ fn say_booted() {
         let translating = iommu::check_dma_faults();
         // And after it, since reading the faults is what records them.
         stages_check::check_audit_booted(translating);
+        stages_check::check_trip_trace_down();
         println!("{SUCCESS_MARKER} stages 1-12");
     } else {
         println!(

@@ -102,7 +102,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 6 | 4 | 3 | 291, 652, 1151 |
+| `main.rs` | `item` | 3 | 6 | 4 | 3 | 291, 653, 1152 |
 
 ---
 
@@ -142,7 +142,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1243, 1933 |
+| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1244, 1934 |
 | `sched/task.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---

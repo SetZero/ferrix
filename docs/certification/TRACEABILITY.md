@@ -15,15 +15,15 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 612 | 345 | 267 |
+| Low (`L.*`) | 613 | 346 | 267 |
 
-1191 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1193 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1191 |
+| Named by a low-level requirement | 1193 |
 | Accessors, covered by the requirement they serve | 579 |
-| Check code in a product file | 54 |
+| Check code in a product file | 53 |
 | Named by none | 599 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
@@ -68,9 +68,8 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 | `sched::trip::answered` | A stamp point of the seam's depth-1 trace (block_ring/trip_check.rs). Unarmed it loads TRACING and returns; only hop_check arms it. It sits where block_ring takes completions off the ring -- in the driver's port_queue, or in the ring task's tend -- under the disk's state lock, which is what keeps it in product code. |
 | `sched::trip::arm` | Raises the seam's depth-1 trace and zeroes its counts; its only caller is block_ring/hop_check.rs. |
 | `sched::trip::bell` | A stamp point of the seam's depth-1 trace, on the bell a reader rings the driver with after putting its command on the ring. Unarmed it loads TRACING and returns; only hop_check arms it. |
-| `sched::trip::count` | Counts switches, root writes, IPIs and device interrupts for the seam's trace, called on those product paths. Unarmed it loads TRACING and returns; only hop_check arms it, and only trip_check reads the counts. |
+| `sched::trip::count` | Counts, for the seam's trace, the four kinds Count names: a program's address-space root installed and one taken off (user/space.rs), an interprocessor interrupt sent (each architecture's IPI path), and a device interrupt delivered to a driver's line (object/interrupt.rs); it counts no switches: trip_check reads those from sched::summary. Called on those product paths. Unarmed it loads TRACING and returns; only hop_check arms it, and only trip_check reads the counts. |
 | `sched::trip::counted` | Reads the trace's counts for block_ring/trip_check.rs, its only caller. |
-| `sched::trip::disarm` | Lowers the seam's depth-1 trace; its only caller is block_ring/hop_check.rs. |
 | `sched::trip::done` | Ends a traced trip and hands its stamps to block_ring/trip_check.rs, its only caller through hop_check. |
 | `sched::trip::interrupt_queued` | A stamp point of the seam's depth-1 trace, in Line::fire before the packet is queued. Unarmed it loads TRACING and returns; only hop_check arms it. |
 | `sched::trip::issued` | A stamp point of the seam's depth-1 trace: the check calls a read. Its only caller is block_ring/hop_check.rs. |
@@ -495,6 +494,12 @@ Each system-level requirement, and the high-level requirements that name it as t
 |---|---|---|---|---|---|---|---|---|
 | `L.sched.1` | While any task waits on a processor's queue, CpuQueue::arm_timer shall arm the next decision no more than one configured slice away, however long a request the running task holds. | With an entity queued that is not eligible and the running one having yielded 600 times, so that its remaining request exceeds 100 slices, the queue's next decision is at most one slice away; with nothing queued there is none. | H.SCHED.2 | `sched::queue::CpuQueue::arm_timer` | `src/lib/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host test | host test | host test |
 | `L.sched.2` | A yield by the only task on a processor's queue shall leave its request unchanged. | After 600 yields with nothing else queued, the running entity's remaining slice is what it was before the first. | H.SCHED.2 | `sched::yield_now` | `src/lib/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host test | host test | host test |
+
+### Instrumentation
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.sched.3` | sched::trip::disarm shall lower the seam's trip trace, after which no stamp point or count of sched::trip shall record anything, and the trace shall be down whenever stage 10's hop check is not running its traced reads. | The trace reads down right after the hop check's traced run and again just before the boot's success marker; with the hop check's disarm skipped, the boot stops at the first of those with that check's own failure. | H.SCHED.2 | `sched::trip::disarm`, `sched::trip::armed` | `src/kernel/src/sched/check.rs::trip_trace_is_down` | not reached | not reached | not reached |
 
 ### Discovery
 
@@ -1350,6 +1355,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
 | `src/kernel/src/sched/check.rs::many_tasks` | kernel | L.x86_64.17 |
 | `src/kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
+| `src/kernel/src/sched/check.rs::trip_trace_is_down` | kernel | L.sched.3 |
 | `src/kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | kernel | L.claim.1, L.claim.5 |
 | `src/kernel/src/service_check.rs::a_claim_or_a_number_without_memory_is_refused` | kernel | L.claim.8 |
 | `src/kernel/src/service_check.rs::a_device_failure_names_its_node` | kernel | L.device.11 |

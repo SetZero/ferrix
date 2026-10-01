@@ -172,6 +172,7 @@ fn depth_one(disk: &dyn BlockDevice, sectors: u64) -> Result<(Run, Trace), &'sta
     sched::trip::arm();
     let device = traced_reads(disk, sectors, &mut samples, &mut trace);
     sched::trip::disarm();
+    sched::check_trip_trace_down()?;
     Ok((summary(samples, device?), trace))
 }
 

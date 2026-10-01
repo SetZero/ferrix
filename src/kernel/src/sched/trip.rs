@@ -214,6 +214,12 @@ pub(crate) fn disarm() {
     }
 }
 
+/// Whether the trace is up: only between [`arm`] and [`disarm`], which the
+/// hop check's traced run alone calls.
+pub(crate) fn armed() -> bool {
+    TRACING.load(Ordering::Acquire)
+}
+
 /// What the trace has counted since [`arm`].
 pub(crate) fn counted() -> Counted {
     let mut counted = Counted::default();

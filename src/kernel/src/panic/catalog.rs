@@ -1671,6 +1671,27 @@ pub(crate) static STAGE10_DISTRIBUTOR: Explanation = Explanation {
           docs/certification/FINDINGS.md F-50",
 };
 
+/// For `check_trip_trace_down` in `stages_check.rs`, before the success
+/// marker, when `sched::check_trip_trace_down` fails.
+pub(crate) static STAGE10_TRIP_TRACE: Explanation = Explanation {
+    code: "FX-1011",
+    title: "the seam's trip trace was left up",
+    meaning: "`sched::trip` stamps a block-ring read's path and counts root writes, \
+              interprocessor interrupts and device interrupts, on the scheduler's and the \
+              block ring's own paths, but only while the trace is up: everywhere else each \
+              point is one load that records nothing. Stage 10's hop check raises it for its \
+              traced run and lowers it after, and the trace must be down then and when the \
+              boot ends. A trace left up keeps writing shared counters and stamps from every \
+              processor's switches and interrupts, work no requirement asks of those paths.",
+    causes: &[
+        "`hop_check::depth_one` returned between `sched::trip::arm` and `sched::trip::disarm`, \
+         or the disarm was removed.",
+        "Something other than the hop check called `sched::trip::arm`.",
+    ],
+    see: "src/kernel/src/sched/trip.rs; src/kernel/src/sched/check.rs trip_trace_is_down; \
+          src/kernel/src/interfaces/block_ring/hop_check.rs depth_one",
+};
+
 /// For `check_path_calls` in `stages_check.rs`, when `syscall::check::run_paths` fails.
 pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
     code: "FX-0820",
@@ -2696,6 +2717,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &LOG_CONTROL,
     &DEVMGR_BY_INIT,
     &STAGE10_DISTRIBUTOR,
+    &STAGE10_TRIP_TRACE,
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,

@@ -43,4 +43,25 @@ package FerrixSchedRequirements {
             attribute :>> unit = "sched::yield_now";
         }
     }
+
+    package Instrumentation {
+        doc /* src/kernel/src/sched/trip.rs: the seam's trip trace, whose stamp
+             * points and counts sit on the scheduler's switch path, its waits
+             * and the interrupt paths. Inert unless stage 10's hop check is
+             * running its traced reads, so that those paths do no work for it
+             * otherwise; H.SCHED.2's bound is measured with the trace down. */
+
+        requirement <'L.sched.3'> theTripTraceIsInertOutsideTheHopCheck : ItemLowLevel {
+            attribute :>> statement = "sched::trip::disarm shall lower the seam's trip
+                trace, after which no stamp point or count of sched::trip shall record
+                anything, and the trace shall be down whenever stage 10's hop check is
+                not running its traced reads.";
+            attribute :>> criterion = "The trace reads down right after the hop
+                check's traced run and again just before the boot's success marker;
+                with the hop check's disarm skipped, the boot stops at the first of
+                those with that check's own failure.";
+            attribute :>> parent = "H.SCHED.2";
+            attribute :>> unit = ("sched::trip::disarm", "sched::trip::armed");
+        }
+    }
 }

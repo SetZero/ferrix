@@ -1655,3 +1655,14 @@ pub(super) fn check_no_early_window_wraps(memory: &mut EarlyMemory) -> Result<()
     }
     Ok(())
 }
+
+/// The seam's trip trace is down as the boot ends (L.sched.3). Halts rather
+/// than returning.
+pub(super) fn check_trip_trace_down() {
+    if let Err(problem) = sched::check_trip_trace_down() {
+        fatal!(
+            catalog::STAGE10_TRIP_TRACE,
+            "end-of-boot self-check failed: {problem}"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "b6dfa699f50729614f8e931c90a52cf66abf31c34fa0ffe1229e2ad1460d82a8",
+  "digest": "7ba8bc9ff8ffb9f53f6b80ec461244f2bb94aea8e03b9a33cd5bccc7f5e98f7a",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -96,8 +96,8 @@
     }
   ],
   "summary": {
-    "packages": 103,
-    "elements": 5296,
+    "packages": 104,
+    "elements": 5302,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -31533,6 +31533,75 @@
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
                     "line": 43
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Instrumentation",
+          "qualifiedName": "FerrixSchedRequirements::Instrumentation",
+          "kind": "package",
+          "doc": "src/kernel/src/sched/trip.rs: the seam's trip trace, whose stamp points and counts sit on the scheduler's switch path, its waits and the interrupt paths. Inert unless stage 10's hop check is running its traced reads, so that those paths do no work for it otherwise; H.SCHED.2's bound is measured with the trace down.",
+          "source": {
+            "file": "docs/sysml/15-sched-requirements.sysml",
+            "line": 47
+          },
+          "children": [
+            {
+              "name": "theTripTraceIsInertOutsideTheHopCheck",
+              "qualifiedName": "FerrixSchedRequirements::Instrumentation::theTripTraceIsInertOutsideTheHopCheck",
+              "kind": "requirement",
+              "shortName": "L.sched.3",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 54
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Instrumentation::theTripTraceIsInertOutsideTheHopCheck",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"sched::trip::disarm shall lower the seam's trip trace, after which no stamp point or count of sched::trip shall record anything, and the trace shall be down whenever stage 10's hop check is not running its traced reads.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 58
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Instrumentation::theTripTraceIsInertOutsideTheHopCheck",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The trace reads down right after the hop check's traced run and again just before the boot's success marker; with the hop check's disarm skipped, the boot stops at the first of those with that check's own failure.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 62
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Instrumentation::theTripTraceIsInertOutsideTheHopCheck",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.2\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 63
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Instrumentation::theTripTraceIsInertOutsideTheHopCheck",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::trip::disarm\", \"sched::trip::armed\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 64
                   }
                 }
               ]
