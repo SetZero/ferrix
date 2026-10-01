@@ -86,8 +86,22 @@ pub(crate) fn read_entry(
     walk: bool,
     out: &mut Vec<File>,
 ) -> Result<()> {
-    let meta = std::fs::symlink_metadata(path)
-        .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+    // A link WSL wrote on a Windows drive, which Windows cannot open, is read
+    // in WSL: a script app's package, built there into this checkout.
+    let wsl_link = |error: std::io::Error, out: &mut Vec<File>| {
+        let target = crate::wsl::read_link(path)
+            .ok_or_else(|| Error::new(format!("reading {}: {error}", path.display())))?;
+        out.push(File {
+            path: name.to_owned(),
+            mode: 0o777,
+            content: Content::Link(target),
+        });
+        Ok(())
+    };
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) => return wsl_link(error, out),
+    };
     if meta.file_type().is_symlink() {
         // A link in WSL's home, where Windows reads the ports from, is read
         // there.
@@ -125,8 +139,10 @@ pub(crate) fn read_entry(
             )?;
         }
     } else {
-        let bytes = std::fs::read(path)
-            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => return wsl_link(error, out),
+        };
         let mode = if walk { mode_of(&bytes) } else { mode };
         out.push(File {
             path: name.to_owned(),

@@ -67,18 +67,29 @@ pub(crate) fn path(linux: &str) -> Option<PathBuf> {
     Some(PathBuf::from(format!(r"\\wsl.localhost\{name}\{relative}")))
 }
 
-/// The target of a symbolic link inside the default distribution, at a path
-/// [`path`] made. Windows sees such a link as a link, but `read_link` on it
-/// fails with "Incorrect function", so `readlink` reads it in WSL. `None`
-/// for any other path, or when that fails.
+/// The target of a symbolic link WSL made, read in WSL. Windows cannot read
+/// one: inside the default distribution, at a path [`path`] made, it is a
+/// link whose `read_link` fails with "Incorrect function"; on a Windows
+/// drive, where a script run in WSL wrote it, Windows cannot even open it
+/// ("Unsupported reparse point type"). `None` when it is no such link, or
+/// without WSL.
 pub(crate) fn read_link(windows: &Path) -> Option<String> {
     let name = default_distribution()?;
-    let rest = windows
-        .to_str()?
-        .strip_prefix(&format!(r"\\wsl.localhost\{name}\"))?;
+    let text = windows.to_str()?;
+    let text = text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(text)
+        .replace('/', r"\");
+    let (script, linux) = match text.strip_prefix(&format!(r"\\wsl.localhost\{name}\")) {
+        Some(rest) => (
+            "readlink -- \"$1\"",
+            format!("/{}", rest.replace('\\', "/")),
+        ),
+        None => ("readlink -- \"$(wslpath -u \"$1\")\"", text.clone()),
+    };
     let output = Command::new("wsl.exe")
-        .args(["--exec", "readlink", "--"])
-        .arg(format!("/{}", rest.replace('\\', "/")))
+        .args(["--exec", "sh", "-c", script, "sh"])
+        .arg(linux)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
