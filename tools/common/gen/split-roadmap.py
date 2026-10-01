@@ -71,6 +71,7 @@ INDEX_END = "<!-- End of the generated stage index. -->"
 SUFFIX_PAGES = [
     ("Where it stands, in full", "where-it-stands.md"),
     ("Status, estimates and forecast", "status.md"),
+    ("Open branches: where to pick up", "open-branches.md"),
     ("How this roadmap works", "about.md"),
     ("How to edit the roadmap", "HOW-TO-EDIT.md"),
 ]

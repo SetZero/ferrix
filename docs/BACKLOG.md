@@ -1087,6 +1087,10 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
 
 ## Branches that still hold unlanded work
 
+Every such branch on GitHub, grouped by line of work and with which one to
+resume from, is in `docs/roadmap/open-branches.md` (2026-10-01, os-5d).
+This section keeps the detail of the families below.
+
 The wind-downs of 2026-09-13, -14 and -17 surveyed every branch; what is
 left of them, each with its row above: `os-12/ports-autobuild` (the ports
 built when stale) and
