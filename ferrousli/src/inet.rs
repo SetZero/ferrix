@@ -596,8 +596,7 @@ pub unsafe extern "C" fn if_indextoname(index: c_uint, name: *mut c_char) -> *mu
         *slot = byte;
     }
     // SAFETY: the kernel reads and writes the request, a `struct ifreq`.
-    let ret =
-        unsafe { syscall::syscall3(nr::IOCTL, fd, SIOCGIFNAME, request.as_mut_ptr().addr()) };
+    let ret = unsafe { syscall::syscall3(nr::IOCTL, fd, SIOCGIFNAME, request.as_mut_ptr().addr()) };
     // SAFETY: `close` reads no memory.
     let _ = unsafe { syscall::syscall2(nr::CLOSE, fd, 0) };
     if let Err(error) = errno::decode(ret) {
@@ -613,7 +612,10 @@ pub unsafe extern "C" fn if_indextoname(index: c_uint, name: *mut c_char) -> *mu
     for (offset, &byte) in request.iter().take(IFNAMSIZ).enumerate() {
         ended |= byte == 0;
         // SAFETY: the caller passes `IF_NAMESIZE` writable bytes.
-        unsafe { name.wrapping_add(offset).write(if ended { 0 } else { byte as c_char }) };
+        unsafe {
+            name.wrapping_add(offset)
+                .write(if ended { 0 } else { byte as c_char })
+        };
     }
     name
 }
