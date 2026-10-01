@@ -198,6 +198,36 @@ need_wayland_scanner() { # version tarball
     echo "$(wayland-scanner --version 2>&1), from $dir"
 }
 
+# glslangValidator where the host has none: Ubuntu packages it apart
+# (glslang-tools), and installing that needs root. Built for the host with
+# its gcc, cmake and ninja from Khronos' 16.2.0 source, pinned by its sha256
+# as first downloaded on 2026-10-01, without the optimizer, which needs
+# SPIRV-Tools and which a compile to SPIR-V does not use. Puts it on PATH.
+GLSLANG_VERSION=16.2.0
+GLSLANG_URL=https://github.com/KhronosGroup/glslang/archive/refs/tags/$GLSLANG_VERSION.tar.gz
+GLSLANG_SHA256=01985335785c97906a91afe3cb5ee015997696181ec6c125bab5555602ba08e2
+need_glslang() {
+    command -v glslangValidator > /dev/null && return
+    local dir=$ports/glslang-$GLSLANG_VERSION
+    if [ ! -x "$dir/bin/glslangValidator" ]; then
+        step "glslang $GLSLANG_VERSION for this host, which has no glslangValidator"
+        command -v cmake > /dev/null || fail "no cmake on this host, which building glslang needs"
+        mkdir -p "$ports/src"
+        fetch "$GLSLANG_URL" "$ports/src/glslang-$GLSLANG_VERSION.tar.gz" sha256sum "$GLSLANG_SHA256"
+        rm -rf "$dir"
+        mkdir -p "$dir/src"
+        tar -xzf "$ports/src/glslang-$GLSLANG_VERSION.tar.gz" -C "$dir/src" --strip-components=1
+        { CC=gcc CXX=g++ cmake -G Ninja -S "$dir/src" -B "$dir/build" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$dir" \
+            -DENABLE_OPT=OFF -DGLSLANG_TESTS=OFF -DGLSLANG_ENABLE_INSTALL=ON \
+            -DENABLE_GLSLANG_BINARIES=ON -DBUILD_SHARED_LIBS=OFF \
+            && ninja -C "$dir/build" -j"$jobs" install; } > "$dir/build.log" 2>&1 \
+            || fail "glslang $GLSLANG_VERSION did not build; the log is $dir/build.log"
+    fi
+    export PATH=$dir/bin:$PATH
+    echo "glslangValidator $GLSLANG_VERSION, from $dir"
+}
+
 # Build ferrousli in the release profile and set $lib and $crt1.
 build_ferrousli() {
     step "ferrousli, release"

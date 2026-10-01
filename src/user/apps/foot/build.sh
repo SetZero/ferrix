@@ -89,7 +89,7 @@ for line in "${SOURCES[@]}"; do
 done
 
 # A meson and a wayland-scanner of the versions these want, fetched or
-# built where the host's are missing or others (../common.sh).
+# built where the host's are missing or others (the port toolkit's common.sh).
 need_meson 1.6.1
 need_wayland_scanner 1.24.0 "$src/wayland-1.24.0.tar.xz"
 for tool in meson ninja bison pkg-config wayland-scanner; do

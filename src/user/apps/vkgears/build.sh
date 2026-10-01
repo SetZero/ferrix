@@ -29,10 +29,10 @@
 #   plugins it leaves them to the compositor;
 #   mesa-demos 9.0.0, for vkgears.
 #
-# The build host needs ninja, bison, pkg-config, expat, python3 with mako,
-# and glslangValidator. Meson 1.4.0 or newer and wayland-scanner 1.24.0, the
-# library's own version, are the host's when it has them, and otherwise
-# fetched or built for it.
+# The build host needs ninja, bison, pkg-config, expat, cmake and python3
+# with mako. Meson 1.4.0 or newer, wayland-scanner 1.24.0, the library's own
+# version, and glslangValidator are the host's when it has them, and
+# otherwise fetched or built for it.
 #
 # Patched, in patches/:
 #   * vkgears-seat.patch: vkgears asked the seat for a keyboard whether or not
@@ -109,10 +109,12 @@ for line in "${SOURCES[@]}"; do
     echo "$name $version"
 done
 
-# A meson and a wayland-scanner of the versions these want, fetched or
-# built where the host's are missing or others (../common.sh).
+# A meson, a wayland-scanner and a glslangValidator of the versions these
+# want, fetched or built where the host's are missing or others (the port
+# toolkit's common.sh).
 need_meson 1.4.0
 need_wayland_scanner 1.24.0 "$src/wayland-1.24.0.tar.xz"
+need_glslang
 for tool in meson ninja bison pkg-config wayland-scanner glslangValidator python3; do
     command -v "$tool" > /dev/null || fail "no $tool on this host, which the build needs"
 done
