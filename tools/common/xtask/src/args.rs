@@ -181,6 +181,11 @@ pub(crate) struct Args {
     /// kernel option no flag here names: `ferrix.fbcon`, which the Pixel 7's
     /// loader passes, is one a QEMU boot has to be able to ask for too.
     pub(crate) kernel_options: Vec<String>,
+    /// Not a flag: set by `test-compositor` for every boot of an architecture
+    /// after its first, whose images then carry `ferrix.checks=skip`. The
+    /// first boot runs the self-checks on the compositor's machine, and
+    /// `test-boot` runs them on every row (`docs/TEST-TIME.md`, C2).
+    pub(crate) checks_skipped: bool,
     /// `--interpreter`, a dynamic linker `test-shell` carries in the initramfs
     /// at the path `--init`'s `PT_INTERP` names. `{arch}` is replaced as it is
     /// in `--init`.

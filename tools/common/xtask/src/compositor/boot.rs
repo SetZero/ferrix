@@ -164,7 +164,7 @@ pub(super) fn judged_image(
 ) -> Result<(PathBuf, PathBuf)> {
     let (loader, kernel, initramfs) =
         build_parts(arch, programs, &undithered(config), carried, args)?;
-    let init = crate::init::command_line();
+    let init = command_line(args);
     let command_line = match words {
         Some(words) => format!("{} {words}\n", init.trim_end()),
         None => init,
@@ -442,10 +442,23 @@ pub(super) fn build_image(
     let (loader, kernel, initramfs) = build_parts(arch, programs, config, carried_too, args)?;
     // The kernel as well as the image: the watcher symbolises a panic's
     // addresses out of it.
-    let command_line = crate::init::command_line();
+    let command_line = command_line(args);
     let image =
         crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, Some(&command_line))?;
     Ok((image, kernel))
+}
+
+/// Init's command line, with `ferrix.checks=skip` after it when
+/// [`Args::checks_skipped`] says this boot is not its architecture's first.
+/// No gate or report counts a compositor boot as the self-checks' evidence:
+/// that is `test-boot`'s, on every row.
+fn command_line(args: &Args) -> String {
+    let init = crate::init::command_line();
+    if args.checks_skipped {
+        format!("{} ferrix.checks=skip\n", init.trim_end())
+    } else {
+        init
+    }
 }
 
 /// [`build_image`] for a desktop: the same image, carrying `defaults` --

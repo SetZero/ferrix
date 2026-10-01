@@ -40,8 +40,9 @@ const STAGE5_CHECKED: &str = "  stage 5  ";
 /// --compositor` build, which carries [`DESKTOP_DEFAULTS`] and so skips the
 /// kernel's self-checks.
 ///
-/// Every other boot here runs them, and so does every other row; this one is
-/// what keeps the skipping honest in both directions. The kernel must say it
+/// An architecture's first boot here runs them, and so does every other row;
+/// the boots after the first skip them as this one does, but nothing in them
+/// asks why. This one is what keeps the skipping honest in both directions. The kernel must say it
 /// skipped them, end in the unchecked marker and never the success one, and
 /// print no check's line; and what the checks would have come with must
 /// still be there without them -- the root, `devmgr` and the card, the seat

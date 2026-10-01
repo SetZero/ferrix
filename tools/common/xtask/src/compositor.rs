@@ -279,9 +279,21 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             test_gpu(arch, &programs, args)?;
             continue;
         }
+        // The first boot runs the kernel's self-checks on this machine, with
+        // its card, input and seat; each one after it skips them, since the
+        // same checks on the same machine would say the same thing again,
+        // at 8 to 10 s a boot under emulation (`docs/TEST-TIME.md`, C2).
+        // What a boot is judged on comes from its place here, never from the
+        // flag that built its image, so an image that skipped when it should
+        // not have cannot pass for one that was meant to.
+        let mut boot_args = args.clone();
+        let mut first = true;
         for (name, boot) in BOOTS {
             if wanted(args, name) {
-                boot(arch, &programs, args)?;
+                boot(arch, &programs, &boot_args)?;
+                judge_checks(arch, name, first)?;
+                first = false;
+                boot_args.checks_skipped = true;
             }
         }
     }
@@ -431,6 +443,40 @@ const BOOTS: [(&str, Boot); 33] = [
     ("fuzzel-user", test_fuzzel_user),
     ("everything-desktop", test_everything_desktop),
 ];
+
+/// The boot that always skips the self-checks, whatever its place: the
+/// desktop's own image, which carries `DESKTOP_DEFAULTS`.
+const ALWAYS_UNCHECKED: &str = "desktop";
+
+/// Whether the boot `name` just made ran the kernel's self-checks as it was
+/// meant to, read from its serial log: an architecture's `first` boot must
+/// end them with `FERRIX-BOOT-OK`, so a boot meant to be checked can never
+/// skip them unseen, and each one after it with `FERRIX-BOOT-UNCHECKED`. A
+/// self-check that fails panics, which ends the boot as a failure before
+/// this is reached.
+fn judge_checks(arch: Arch, name: &str, first: bool) -> Result<()> {
+    let log = paths::build_dir(arch).join("serial.log");
+    let said = std::fs::read_to_string(&log)
+        .map_err(|error| Error::new(format!("reading {}: {error}", log.display())))?;
+    let skipped = !first;
+    let (want, other) = if skipped || name == ALWAYS_UNCHECKED {
+        (crate::qemu::UNCHECKED_MARKER, crate::qemu::SUCCESS_MARKER)
+    } else {
+        (crate::qemu::SUCCESS_MARKER, crate::qemu::UNCHECKED_MARKER)
+    };
+    if !said.contains(want) || said.contains(other) {
+        return Err(Error::new(format!(
+            "{arch}: the {name} boot was meant to end `{want}` and did not, \
+             so it {} the kernel's self-checks.\n  Serial output is in {}",
+            if skipped { "did not skip" } else { "skipped" },
+            log.display()
+        )));
+    }
+    if !skipped && name != ALWAYS_UNCHECKED {
+        println!("  {arch}: {name} ran the kernel's self-checks; the boots after it skip them");
+    }
+    Ok(())
+}
 
 /// Whether `--boot` asked for this one.
 fn wanted(args: &Args, name: &str) -> bool {
