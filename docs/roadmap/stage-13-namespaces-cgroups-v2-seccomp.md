@@ -246,7 +246,6 @@ Linux):
 | `stage13-np`, `stage13-fdinfo` | `/proc`'s private links by `ptrace_may_access`, dumpable cleared by id changes, `/proc/<pid>/fdinfo` | boot check written; last run failed on a real bug now fixed, not re-run. Overlaps `main`'s own `credentials_changed` |
 | `stage13-n5` | unprivileged mounting: `may_mount` by owner, `tmpfs` alone, locked copies, detach-don't-pin, sysctls | `mountperm` line booted on x86_64, four controls fired; other gates not run |
 | `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
-| `stage13-timens` | time namespace | agent had not reported |
 | `stage13-cgctl` | M2's reclaim and `memory.high`, `cgroup.freeze`, `cpu.max` with `cpu.stat`, the `io` controller (`io.stat`, `io.max`) | reclaim, freeze and cpu booted; the io check stopped at its last line (a quota-slot count, a fix written, not booted); no full boot, no `test-shell`/`test-vfs`, no negative control run |
 | `stage13-s3` | seccomp S3 to S5 | S3 built and booting, not gated; S4 and S5 not started |
 | `stage13-container` | `cargo xtask test-container`, the exit criterion as a program | written, never run |
@@ -301,6 +300,22 @@ the namespace ends. Abstract unix names are per namespace. The `netns` boot line
 (FX-0893) and 30 negative controls prove it on x86_64 and the tables are
 charged (three more `kmem` fills); `docs/NETNS.md` has the design, the
 controls and what is open.
+
+**Done -- time namespace (built 2026-09-30, finished 2026-10-01):**
+`unshare(CLONE_NEWTIME)` (the flag is inside `CSIGNAL`, so only `unshare`
+and, later, `setns` reach it) gives the caller's children a namespace of
+two offsets, for `CLOCK_MONOTONIC` (and its raw and coarse forms) and
+`CLOCK_BOOTTIME`; `/proc/<pid>/timens_offsets` writes them once, before a
+process is made in it, in Linux's order of refusals; `ns/time` and
+`ns/time_for_children` name the two references a process holds. Clock
+reads, `sysinfo`, `/proc/uptime`, `times` and the absolute deadlines of
+`clock_nanosleep`, `timerfd_settime` and `FUTEX_WAIT_BITSET` shift and
+unshift by the caller's offsets. A process in such a namespace maps a
+second vDSO object whose functions all make the system call. The `timens`
+boot line (FX-0910) proves it, with a negative control per rule, and the
+`kmem` line fills time namespaces (F-37). `timer_create` does not exist
+here, so it has nothing to shift; `setns` is the small-namespaces
+landing's (`docs/NAMESPACES.md` §12.1 has what is and is not built).
 
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,
