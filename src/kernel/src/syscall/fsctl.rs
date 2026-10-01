@@ -636,7 +636,8 @@ pub(crate) fn sys_mount(
         // Linux's tmpfs root is `1777` and the mounter's: a user's own tmpfs
         // is one it can make a directory in, which bubblewrap does for its
         // new root. `mode=`, `uid=` and `gid=` are not read.
-        let (uid, gid) = process.with_credentials(|held| (held.user.filesystem, held.group.filesystem));
+        let (uid, gid) =
+            process.with_credentials(|held| (held.user.filesystem, held.group.filesystem));
         filesystem.root().set_attributes(&SetAttributes {
             permissions: Some(0o1777),
             uid: Some(uid),
