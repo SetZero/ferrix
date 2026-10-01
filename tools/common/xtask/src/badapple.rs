@@ -608,12 +608,12 @@ fn show(arch: Arch, lines: &[String]) {
 
 /// Put Bad Apple!! on the `run-compositor --everything` desktop: the player,
 /// the video and the song, an entry a launcher lists, and `SUPER M` to start
-/// it. A machine that has not fetched the video gets a desktop without it,
-/// and is told how to have it.
+/// it. A machine that has not fetched the video fetches it first.
 ///
 /// # Errors
 ///
-/// A fetched video that fails its check, or a player that does not build.
+/// A fetch that fails, a fetched video that fails its check, or a player
+/// that does not build.
 pub(crate) fn on_the_desktop(
     arch: Arch,
     config: String,
@@ -623,11 +623,21 @@ pub(crate) fn on_the_desktop(
     if !args.everything || crate::display::target(arch).is_none() {
         return Ok(config);
     }
+    // `--everything` is everything: a video not fetched yet is fetched, and
+    // a fetch that fails stops the run.
     if !media_dir()?.join(SOURCE).is_file() {
-        println!(
-            "  {arch}: no Bad Apple!! on this desktop: tools/common/fetch/fetch-badapple.sh fetches it"
-        );
-        return Ok(config);
+        let script = paths::workspace_root().join("tools/common/fetch/fetch-badapple.sh");
+        println!("  everything: fetching with {}", script.display());
+        let status = Command::new("bash")
+            .arg(&script)
+            .stdin(Stdio::null())
+            .status()
+            .map_err(|error| Error::new(format!("running {}: {error}", script.display())))?;
+        if !status.success() {
+            return Err(Error::new(format!(
+                "fetch-badapple.sh: {status}; --everything needs what it fetches"
+            )));
+        }
     }
     let inputs = inputs(None)?;
     ports.extend(inputs.files);
