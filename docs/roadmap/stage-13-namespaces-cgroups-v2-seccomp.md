@@ -318,3 +318,5 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+
+**State, 2026-10-01 wind-down (os-7c), not landed:** seccomp S4 (TRAP) on stage13-s4. The consultant (ae46f413) ruled OK IF. Conditions 1, 2 and 5 are written (WIP 94bbced90: one message per site, control t7 for a restart, the signalfd BACKLOG row). Still owed: controls t2-t7 FIRED; the full rows on the hash that lands after S3; carry-coverage after the final rebase. check PASSED on 5e0ba9792 and t1 FIRED there.
