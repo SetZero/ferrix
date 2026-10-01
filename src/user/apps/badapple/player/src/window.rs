@@ -15,15 +15,15 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use bav::Video;
 use compositor_toolkit::{Client, Event, SurfaceId, ToplevelOptions};
-use media_bav::Video;
 use media_pcm::RATE;
 
-use crate::args::Options;
-use crate::clock::Clock;
 use crate::linux::{Progress, fail, finish, last_frame, say, start_song};
-use crate::scale::Fit;
-use crate::step::{Step, Stepper};
+use badapple::args::Options;
+use badapple::clock::Clock;
+use badapple::scale::Fit;
+use badapple::step::{Step, Stepper};
 
 /// The size asked for, twice the video's: a tiling compositor gives its own.
 const ASKED: (u32, u32) = (1024, 768);

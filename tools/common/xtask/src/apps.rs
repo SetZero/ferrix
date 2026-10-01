@@ -128,6 +128,21 @@ pub(crate) fn discover() -> Result<Vec<App>> {
     Ok(apps)
 }
 
+/// The folder of the app named `name`: for a system gate that builds an app
+/// its own way (`test-badapple`'s negative control), and finds it by its
+/// name, never its path (rule 1).
+///
+/// # Errors
+///
+/// No app of that name, or a manifest that does not read.
+pub(crate) fn folder(name: &str) -> Result<PathBuf> {
+    discover()?
+        .into_iter()
+        .find(|app| app.name() == name)
+        .map(|app| app.dir)
+        .ok_or_else(|| Error::new(format!("there is no app `{name}` in {PLACE}")))
+}
+
 /// `cargo xtask apps`: every app, and whether its manifest reads.
 pub(crate) fn list() -> Result<()> {
     let apps = discover()?;
@@ -516,7 +531,7 @@ fn package_record(bytes: &[u8]) -> Result<Record> {
 }
 
 /// Cargo's variable for `target`'s linker: `CARGO_TARGET_<TRIPLE>_LINKER`.
-fn linker_variable(target: &str) -> String {
+pub(crate) fn linker_variable(target: &str) -> String {
     format!(
         "CARGO_TARGET_{}_LINKER",
         target.to_ascii_uppercase().replace('-', "_")

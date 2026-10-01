@@ -2,8 +2,8 @@
 
 The customer's order of 2026-09-26: Ferrix plays **Bad Apple!! with its
 sound**, and runs **Doom, written in Rust**. Both are Linux programs on
-Ferrix's Linux ABI, in `src/user/system/linux/media/` (and `userland/doom/` for Doom),
-and both stand on what stages 17 and 22 built: `/dev/dri/card0`'s dumb
+Ferrix's Linux ABI -- Bad Apple!! the `badapple` app (`docs/APPS.md`),
+Doom in `userland/doom/` -- and both stand on what stages 17 and 22 built: `/dev/dri/card0`'s dumb
 buffers (`docs/DISPLAY.md`), `/dev/snd` (`docs/AUDIO.md`) and
 `/dev/input/eventN` (`docs/INPUT.md`). Neither needs anything new from the
 kernel.
@@ -26,14 +26,18 @@ kernel.
 
 ## 2. Bad Apple!!
 
-`src/user/system/linux/media/` is a cargo workspace of its own:
+The player is the `badapple` app, opt-in (`--app badapple`), a cargo
+workspace of its own that plays through two crates of the system's
+`src/user/system/linux/media/`, which the sound server shares:
 
-| Crate | What |
-|---|---|
-| `bav` | `.bav`, the video format, and `bav-pack`, the host's converter |
-| `resample` | Rational polyphase resampling (44.1 kHz → 48 kHz is 160/147) |
-| `pcm` | Playback through `/dev/snd`, as alsa-lib's `hw` plugin drives it |
-| `badapple` | The player |
+| Crate | Where | What |
+|---|---|---|
+| `bav` | the app | `.bav`, the video format, and `bav-pack`, the host's converter |
+| `player` | the app | The player, `badapple`: its arithmetic a library the host tests |
+| `resample` | media | Rational polyphase resampling (44.1 kHz → 48 kHz is 160/147) |
+| `pcm` | media | Playback through `/dev/snd`, as alsa-lib's `hw` plugin drives it |
+
+Until 2026-10-01 the player and `bav` were in the media workspace too.
 
 **The video is converted on the host.** No H.264 decoder written in Rust
 could run on Ferrix, and a shadow play needs few of H.264's tools. `bav-pack`

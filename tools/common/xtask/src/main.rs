@@ -191,7 +191,7 @@ COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
     run-compositor  Boot src/user/system/linux/compositor/hyprix as init with a virtio-gpu, on a screen this host can show
-    run-badapple  Boot src/user/system/linux/media/badapple as init: all of Bad Apple!! in a window, heard on this host's sound server (tools/common/fetch/fetch-badapple.sh first)
+    run-badapple  Boot the badapple app's player as init: all of Bad Apple!! in a window, heard on this host's sound server (tools/common/fetch/fetch-badapple.sh first)
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     everything-volume  Make run-compositor --everything's volume from the fetched ones (on Windows, in WSL)
@@ -212,7 +212,7 @@ COMMANDS:
     test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
     test-input    Boot src/user/system/linux/compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
     test-audio    Boot src/user/system/linux/compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
-    test-badapple Boot src/user/system/linux/media/badapple as init, play 30 s of Bad Apple!!, and require the held frame on the screen, the song in QEMU's wav file, and the two in step
+    test-badapple Boot the badapple app's player as init, play 30 s of Bad Apple!!, and require the held frame on the screen, the song in QEMU's wav file, and the two in step
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
     test-pty      Boot src/user/system/linux/compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen

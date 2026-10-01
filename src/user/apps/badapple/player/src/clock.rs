@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 /// The furthest the clock runs on from the card's last word. The sound
 /// thread speaks after every write, a period or so apart; if it goes quiet
 /// for longer, the card has stalled and the picture should wait for it.
-pub(crate) const COAST: Duration = Duration::from_millis(100);
+pub const COAST: Duration = Duration::from_millis(100);
 
 /// Where the song is, shared by the thread that plays it and the one that
 /// shows the picture.
 #[derive(Debug)]
-pub(crate) struct Clock {
+pub struct Clock {
     start: Instant,
     rate: u32,
     heard: Mutex<Heard>,
@@ -30,7 +30,7 @@ struct Heard {
 impl Clock {
     /// A clock for a song at `rate` frames a second, which follows the card
     /// until told otherwise.
-    pub(crate) fn new(rate: u32) -> Self {
+    pub fn new(rate: u32) -> Self {
         Self {
             start: Instant::now(),
             rate,
@@ -49,7 +49,7 @@ impl Clock {
     }
 
     /// The card says the speaker has played `played` frames.
-    pub(crate) fn played(&self, played: u64) {
+    pub fn played(&self, played: u64) {
         let now = self.start.elapsed();
         let mut heard = self.heard();
         if played > 0 {
@@ -59,7 +59,7 @@ impl Clock {
     }
 
     /// There is no card, or it went away: keep time by the wall from here.
-    pub(crate) fn follow_the_wall(&self) {
+    pub fn follow_the_wall(&self) {
         let now = self.start.elapsed();
         let mut heard = self.heard();
         if heard.card {
@@ -70,7 +70,7 @@ impl Clock {
     }
 
     /// Microseconds into the song.
-    pub(crate) fn micros(&self) -> u64 {
+    pub fn micros(&self) -> u64 {
         let now = self.start.elapsed();
         let heard = *self.heard();
         let base = heard.played * 1_000_000 / u64::from(self.rate.max(1));
@@ -82,7 +82,7 @@ impl Clock {
 /// Where the song is, `since` after the card said `base` microseconds: the
 /// card's word plus the time since, which runs on at most [`COAST`] while
 /// the card is the clock and without bound once the wall is.
-pub(crate) fn position(base: u64, since: Duration, card: bool) -> u64 {
+pub fn position(base: u64, since: Duration, card: bool) -> u64 {
     let since = if card { since.min(COAST) } else { since };
     base + u64::try_from(since.as_micros()).unwrap_or(u64::MAX / 2)
 }

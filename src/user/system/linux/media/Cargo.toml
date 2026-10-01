@@ -1,14 +1,15 @@
-# Media on Ferrix: a video player, the pieces a game's sound needs, and the
-# PulseAudio-protocol server (docs/AUDIO.md, U2).
+# Media on Ferrix: the pieces a program's sound needs, and the
+# PulseAudio-protocol server (docs/AUDIO.md, U2). Bad Apple!!'s player, which
+# was the first to use them, is the `badapple` app (docs/APPS.md).
 #
 # A workspace of its own, as the compositor and zinc are: Linux user programs
 # built with std, speaking only the Linux ABI, cross-built for the initramfs
-# (tools/common/xtask/src/badapple.rs). The pure crates -- the video format and the
-# resampler -- build and are tested on any host; the one that holds a device
-# (`pcm`) builds only for Linux.
+# (tools/common/xtask/src/audio.rs). The pure crate -- the resampler -- builds
+# and is tested on any host; the one that holds a device (`pcm`) builds only
+# for Linux.
 [workspace]
 resolver = "3"
-members = ["badapple", "bav", "pa-tone", "pcm", "pulse-server", "pulsed", "resample"]
+members = ["pa-tone", "pcm", "pulse-server", "pulsed", "resample"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,8 +19,8 @@ rust-version = "1.97"
 license = "MIT"
 publish = false
 
-# The compositor's discipline: a panic in the player ends init, and with it the
-# machine, so the ways of reaching one are denied.
+# The compositor's discipline: a panic in a program run as init ends init,
+# and with it the machine, so the ways of reaching one are denied.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
@@ -55,8 +56,8 @@ doc_markdown = "warn"
 
 [profile.dev]
 overflow-checks = true
-# The player keeps time with the sound card; unoptimised, decoding a second of
-# AAC takes longer than a second and the gate would test the machine.
+# Sound keeps time with the card; unoptimised, resampling a second of it can
+# take longer than a second, and a gate would test the machine.
 opt-level = 2
 
 [profile.release]

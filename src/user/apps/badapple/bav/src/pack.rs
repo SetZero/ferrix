@@ -10,7 +10,7 @@
 use std::io::{Read as _, Write as _};
 use std::process::ExitCode;
 
-use media_bav::{Encoder, Picture, Video};
+use bav::{Encoder, Picture, Video};
 
 fn main() -> ExitCode {
     match run() {

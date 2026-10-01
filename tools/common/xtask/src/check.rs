@@ -652,8 +652,8 @@ fn adbd(root: &std::path::Path) -> Result<()> {
 }
 
 /// The media workspace's gates: `src/user/system/linux/media/` is a workspace of its own,
-/// as the init is. On by default, since they are seconds: the video format,
-/// the resampler and the player's arithmetic are tested on the host.
+/// as the init is. On by default, since they are seconds: the resampler is
+/// tested on the host.
 fn media(root: &std::path::Path) -> Result<()> {
     let dir = root.join("src/user/system/linux/media");
     let in_media = |arguments: &[&str]| {
@@ -667,7 +667,7 @@ fn media(root: &std::path::Path) -> Result<()> {
     if cfg!(windows) {
         step("media: WSL", || {
             crate::wsl::require_toolchain(
-                "the player is a Linux program, with Linux's system calls",
+                "the sound server is a Linux program, with Linux's system calls",
             )
         })?;
     }

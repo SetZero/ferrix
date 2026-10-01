@@ -4,7 +4,7 @@
 //! `/dev/dri/card0` and plays the song through `/dev/snd`, for `SECONDS` or
 //! to the end. The song is the original's AAC track, decoded here; the
 //! video is the original converted by the host into `.bav`
-//! (`src/user/system/linux/media/bav`), since there is no H.264 decoder in Rust to run.
+//! (this app's `bav`), since there is no H.264 decoder in Rust to run.
 //!
 //! **The sound card is the clock.** A thread decodes the song, converts it to
 //! the card's 48 kHz and writes it; the writes block while the card's buffer
@@ -19,11 +19,6 @@
 //! waits. On a desktop -- `WAYLAND_DISPLAY` set -- it is a window instead
 //! (`window.rs`), which ends the program when it is closed. Its lines start
 //! `badapple:`.
-
-mod args;
-mod clock;
-mod scale;
-mod step;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -43,6 +38,3 @@ fn main() {
 /// `/dev/snd`; elsewhere the program builds so its arithmetic is tested.
 #[cfg(not(target_os = "linux"))]
 fn main() {}
-
-#[cfg(test)]
-mod tests;

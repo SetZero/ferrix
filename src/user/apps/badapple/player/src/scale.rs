@@ -3,20 +3,20 @@
 
 use core::ops::Range;
 
-use media_bav::grey_of;
+use bav::grey_of;
 
 /// Where the picture goes on the screen, and which picture pixel each
 /// screen pixel shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Fit {
+pub struct Fit {
     /// Left edge on the screen.
-    pub(crate) x: usize,
+    pub x: usize,
     /// Top edge on the screen.
-    pub(crate) y: usize,
+    pub y: usize,
     /// Width on the screen.
-    pub(crate) width: usize,
+    pub width: usize,
     /// Height on the screen.
-    pub(crate) height: usize,
+    pub height: usize,
     source_width: usize,
     /// For each screen column of the picture, the picture's column.
     columns: Vec<usize>,
@@ -27,12 +27,7 @@ pub(crate) struct Fit {
 impl Fit {
     /// Fit a `width × height` picture to a `screen_width × screen_height`
     /// screen, keeping its shape.
-    pub(crate) fn new(
-        width: usize,
-        height: usize,
-        screen_width: usize,
-        screen_height: usize,
-    ) -> Self {
+    pub fn new(width: usize, height: usize, screen_width: usize, screen_height: usize) -> Self {
         let (width, height) = (width.max(1), height.max(1));
         // The larger scale that fits both ways: compare w'/w with h'/h
         // without dividing.
@@ -56,7 +51,7 @@ impl Fit {
 
     /// The screen rows, counted within the picture, that show picture rows
     /// `first..=last`.
-    pub(crate) fn screen_rows(&self, first: usize, last: usize) -> Range<usize> {
+    pub fn screen_rows(&self, first: usize, last: usize) -> Range<usize> {
         let start = self.rows.partition_point(|&row| row < first);
         let end = self.rows.partition_point(|&row| row <= last);
         start..end
@@ -64,19 +59,19 @@ impl Fit {
 
     #[cfg(test)]
     /// The picture row screen row `row` (counted within the picture) shows.
-    pub(crate) fn source_row(&self, row: usize) -> Option<usize> {
+    pub fn source_row(&self, row: usize) -> Option<usize> {
         self.rows.get(row).copied()
     }
 
     #[cfg(test)]
     /// The picture column screen column `column` shows.
-    pub(crate) fn source_column(&self, column: usize) -> Option<usize> {
+    pub fn source_column(&self, column: usize) -> Option<usize> {
         self.columns.get(column).copied()
     }
 
     /// Draw screen rows `rows` (counted within the picture) of `shades` into
     /// an `XRGB8888` buffer whose rows are `pitch` bytes apart.
-    pub(crate) fn draw(
+    pub fn draw(
         &self,
         shades: &[u8],
         pixels: &mut [u8],

@@ -15,7 +15,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-use crate::clock::Clock;
+use badapple::clock::Clock;
 
 /// What playing the song came to.
 #[derive(Clone, Copy, Debug, Default)]

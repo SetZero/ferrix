@@ -38,8 +38,8 @@ const ASKED: [(&str, &[&str]); 2] = [("SUPER C", &["meta_l", "c"]), ("SUPER W", 
 /// otherwise be a new argument in every signature between here and
 /// A gate's compositor image for a client built elsewhere: the compositor
 /// and its own programs, `config` as `/etc/hyprland.conf`, and `files`
-/// carried beside them. `src/user/system/linux/media`'s Bad Apple!! window
-/// (`crate::badapple`) is such a client.
+/// carried beside them. The `badapple` app's window (`crate::badapple`) is
+/// such a client.
 pub(crate) fn client_image(
     arch: Arch,
     config: &str,

@@ -7,15 +7,15 @@ use std::sync::atomic::AtomicBool;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use media_bav::Video;
+use bav::Video;
 use media_pcm::RATE;
 
-use crate::args::{Options, parse, unshell};
-use crate::clock::Clock;
-use crate::scale::Fit;
 use crate::screen::Screen;
 use crate::sound;
-use crate::step::{Shown, Step, Stepper};
+use badapple::args::{Options, parse, unshell};
+use badapple::clock::Clock;
+use badapple::scale::Fit;
+use badapple::step::{Shown, Step, Stepper};
 
 pub(crate) fn say(text: &str) {
     let mut out = std::io::stdout();
@@ -109,7 +109,7 @@ pub(crate) fn finish(song: &mut Song, shown: Shown) {
 }
 
 /// The frames to show: all of them, or the first `seconds`' worth.
-pub(crate) fn last_frame(options: &Options, header: &media_bav::Header) -> u32 {
+pub(crate) fn last_frame(options: &Options, header: &bav::Header) -> u32 {
     options.seconds.map_or(header.frames, |seconds| {
         let limit = u64::from(seconds) * u64::from(header.rate_num) / u64::from(header.rate_den);
         header.frames.min(u32::try_from(limit).unwrap_or(u32::MAX))
@@ -125,7 +125,7 @@ pub(crate) struct Progress {
 }
 
 impl Progress {
-    pub(crate) fn new(header: &media_bav::Header) -> Self {
+    pub(crate) fn new(header: &bav::Header) -> Self {
         let every = (u32::from(header.rate_num) * 10 / u32::from(header.rate_den).max(1)).max(1);
         Self { every, next: every }
     }

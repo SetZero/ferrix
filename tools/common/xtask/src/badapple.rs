@@ -2,8 +2,8 @@
 //! speaker, and both found again -- the picture in a screendump, the song in
 //! the file QEMU wrote of what the sound card played.
 //!
-//! `src/user/system/linux/media/badapple` runs as init with a virtio-gpu and a
-//! virtio-snd whose far end is QEMU's `wav` backend. It decodes the song's
+//! The `badapple` app's player (docs/APPS.md) runs as init with a virtio-gpu
+//! and a virtio-snd whose far end is QEMU's `wav` backend. It decodes the song's
 //! AAC track itself, converts it to 48 kHz and plays it; it shows the video,
 //! converted by the host into `.bav`, frame by frame by the sound card's
 //! clock. After [`SECONDS`] it holds the last frame it showed and says which.
@@ -38,6 +38,9 @@ use crate::display::{DEVICE_ID, Image, Qmp, free_port, parse_ppm};
 use crate::paths::{self, Arch};
 use crate::qemu::Watching;
 use crate::{Error, Result};
+
+/// The app the player and the video format are, found by its name.
+const APP: &str = "badapple";
 
 /// What the player prints once the song and the screen are open.
 const READY: &str = "badapple: ready";
@@ -121,15 +124,21 @@ fn io(path: &Path) -> impl Fn(std::io::Error) -> Error + '_ {
     move |error| Error::new(format!("{}: {error}", path.display()))
 }
 
+/// Where the app's builds for this gate go: beside its packages, never the
+/// system's target directory.
+fn target_dir(flavour: &str) -> PathBuf {
+    paths::target_dir().join("apps").join(APP).join(flavour)
+}
+
 /// Build `bav-pack` for the host.
 fn pack_tool() -> Result<PathBuf> {
-    let target_dir = paths::target_dir().join("media").join("host");
+    let target_dir = target_dir("host");
     let program = target_dir.join("release").join("bav-pack");
     crate::builds::Build::cargo(
-        "cargo build (src/user/system/linux/media, bav-pack) for the host",
-        paths::workspace_root().join("src/user/system/linux/media"),
+        format!("cargo build ({APP}, bav-pack) for the host"),
+        crate::apps::folder(APP)?,
     )
-    .args(["build", "--release", "-p", "media-bav", "--bin", "bav-pack"])
+    .args(["build", "--release", "-p", "bav", "--bin", "bav-pack"])
     .env("CARGO_TARGET_DIR", &target_dir)
     .output(&program)
     .run()?;
@@ -196,30 +205,42 @@ fn prepared(dir: &Path, source: &Path, tool: &Path) -> Result<(PathBuf, PathBuf)
     Ok((video, song))
 }
 
-/// Build `src/user/system/linux/media/badapple` for `arch`, with the negative control or
-/// without.
+/// The flags a player is built with for `arch`: a static program at a fixed
+/// address, as every app's (`apps.rs`), and on ARMv7-A for the Cortex-A7.
+///
+/// That core is the one ARMv7-A core Ferrix runs on: the DK1's, and the one
+/// QEMU is given (`qemu.rs`). The target's own baseline has no NEON and
+/// sixteen double registers, so every loop over pixels was scalar; this core
+/// has NEON, thirty-two registers (which the kernel saves for a program on a
+/// core that has them) and hardware divide. Hard float too, unlike the
+/// soft-float target an app package is built for: a player mixes and
+/// resamples its sound in floating point.
+fn player_flags(arch: Arch) -> String {
+    match arch {
+        Arch::Armv7a => format!("{} -C target-cpu=cortex-a7", crate::zinc::RUSTFLAGS),
+        Arch::X86_64 | Arch::AArch64 => crate::zinc::RUSTFLAGS.to_owned(),
+    }
+}
+
+/// Build the app's player for `arch`, with the negative control or without.
 fn build_player(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target = crate::display::target(arch)
         .ok_or_else(|| Error::new(format!("{arch} has no user-space target for badapple")))?;
     let flavour = if negative { "negative" } else { "plain" };
-    let target_dir = paths::target_dir()
-        .join("media")
-        .join(format!("badapple-{flavour}"));
-    println!("  building src/user/system/linux/media/badapple ({flavour}) for {target}");
+    let target_dir = target_dir(flavour);
+    println!("  building {APP}'s player ({flavour}) for {target}");
     let program = target_dir.join(target).join("release").join("badapple");
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (src/user/system/linux/media/badapple, {flavour}) --target {target}"),
-        paths::workspace_root().join("src/user/system/linux/media"),
+        format!("cargo build ({APP}, {flavour}) --target {target}"),
+        crate::apps::folder(APP)?,
     )
-    .args([
-        "build",
-        "--release",
-        "-p",
-        "media-badapple",
-        "--target",
-        target,
-    ])
+    .args(["build", "--release", "-p", "badapple", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
+    // The app has no `.cargo/config.toml` (docs/APPS.md §3.1): the flags,
+    // and rust-lld, which with the musl targets' own C runtime is the whole
+    // toolchain on any host.
+    .env("RUSTFLAGS", player_flags(arch))
+    .env(&crate::apps::linker_variable(target), "rust-lld")
     .output(&program);
     if negative {
         build = build.args(["--features", "negative-control"]);
@@ -610,7 +631,12 @@ pub(crate) fn on_the_desktop(
     }
     let inputs = inputs(None)?;
     ports.extend(inputs.files);
-    ports.push(player_file(&build_player(arch, false)?)?);
+    // `--everything` installs every app, this one included, so the player
+    // is usually there already, from its package; replacing it would make
+    // the package's record wrong. Only `--no-apps` leaves it to be built.
+    if !ports.iter().any(|file| file.path == GUEST_PLAYER) {
+        ports.push(player_file(&build_player(arch, false)?)?);
+    }
     ports.push(crate::ports::File {
         path: GUEST_ENTRY.to_owned(),
         mode: 0o644,

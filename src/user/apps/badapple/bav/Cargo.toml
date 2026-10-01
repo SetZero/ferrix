@@ -1,5 +1,5 @@
 [package]
-name = "media-bav"
+name = "bav"
 description = "A grey-scale run-length video format: what a shadow-art video such as Bad Apple!! compresses to"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [lib]
-name = "media_bav"
+name = "bav"
 path = "src/lib.rs"
 
 # The host half: grey frames from ffmpeg on standard input, a `.bav` file out.
@@ -16,6 +16,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "bav-pack"
 path = "src/pack.rs"
-
-[lints]
-workspace = true

@@ -251,42 +251,47 @@ paths its own diff adds; every active session was told so. Gated by the
 full `check` with zinc, ferrousli's tests and six x86-64 boots, less one
 ferrousli test that calls `sync(2)` on the host (BACKLOG).
 
+2026-10-01: Bad Apple!!'s player is the `badapple` app, the customer's
+choice of 2026-09-30 over leaving `src/user/system/linux/media/` to its
+owner. The player and `bav` (its video format and the host's converter,
+used by nothing else) are one workspace of two crates, `player` and `bav`,
+playing through media's `pcm` and `resample` and the compositor's `drm` and
+`toolkit` by relative path; the sound server and what it shares stay in the
+system. The player's arithmetic is a library now, so its tests run as the
+app's host tests. `xtask/src/badapple.rs` keeps its own builds -- the
+negative control, `bav-pack` for the host, and on ARMv7-A the hard-float,
+Cortex-A7 player an app package does not get -- and finds the folder with
+`apps::folder("badapple")`, never its path. The app is opt-in; its smoke
+check starts it from a shell with nothing to play. Since `--everything`
+installs every app, the desktop takes the package's player and
+`on_the_desktop` builds one only when no app is installed: on ARMv7-A that
+is the soft-float build, which `test-badapple` does not boot. Gated by
+`check`, `test-apps` and `test-badapple` on all three architectures.
+
 What is left, in order, for the next session:
 
-1. **Bad Apple!!'s player** -- the customer's choice, 2026-09-30, over
-   leaving `src/user/system/linux/media/` to its owner. `badapple` and
-   `bav` (its video format and the host's converter, used by nothing else)
-   become one app, a workspace of two crates, depending on media's `pcm`
-   and `resample` and the compositor's `drm` and `toolkit` by relative
-   path, as a native app depends on the runtime; `pulsed` and what it
-   shares stay in the system. `xtask/src/badapple.rs` keeps its
-   negative-control build and the host's `bav-pack`, and finds the folder
-   by the app's name rather than its path, so rule 1 holds; so must
-   `docs/MEDIA.md`, which is reworded to name the app, not its folder.
-   `test-badapple` is the gate.
-2. **Launcher entries**, claimed from os-ff's list of what the
+1. **Launcher entries**, claimed from os-ff's list of what the
    `--everything` desktop's launcher lacks. Each app ships
    `usr/share/applications/<name>.desktop`, and an icon under
    `usr/share/icons/hicolor/scalable/apps/`, as `[[package.files]]` in its
    own folder: btop with `Terminal=true`, ferrofetch with a hold. fuzzel
    reads that directory itself, so `xtask/src/fuzzel.rs` needs no change,
    and the fuzzel boot's `fuzzel: 3 entries` stays, since the test boot
-   carries no apps. With it, the customer's rule "`--everything` IS
-   EVERYTHING": under `--everything`, `installed` takes every app, not
-   only the `default` ones, a script app builds through WSL on a Windows
-   host rather than being skipped, and a failed build stops the run.
-3. **The other ports**: curl, git, foot, vkgears, alsa-lib and alsa-utils,
+   carries no apps. The other half, the customer's rule "`--everything` IS
+   EVERYTHING", landed as 211bc0e5: every app, a script app built through
+   WSL on Windows. badapple's `.desktop` file, which `badapple.rs`'s
+   `on_the_desktop` still writes, moves into the package then; it keeps the
+   video, the song and `SUPER M`.
+2. **The other ports**: curl, git, foot, vkgears, alsa-lib and alsa-utils,
    and sshdt. Each is named by a system test (`test-net`'s TLS files,
    `test-compositor`'s foot and vkgears, `test-audio`'s ALSA, `test-ssh`'s
    sshdt), so those tests ask for the app by name, as they asked for the
    port. Libraries only built against -- zlib, libcxx -- stay ports; the
    `depends` a port has at install time (alsa-utils on alsa-lib's
    configuration, git on curl's certificates) go into `app.toml`.
-4. **The package manager** (§7), on `ferrix-pkg`: `pkg list`, `info`,
+3. **The package manager** (§7), on `ferrix-pkg`: `pkg list`, `info`,
    `install` of a local `.fxpkg` and `remove`, first-party, and a
    `test-pkg` boot that installs, runs and removes an app.
 
-Not done here: the root checkout's `main` was left at c1bd87fb, before
-the rename, because another session had staged changes there, some at the
-old paths; moving the ref under them would have made their next commit a
-revert of the rename.
+The root checkout's `main`, left at c1bd87fb on 2026-09-30 because another
+session had staged changes there, has since been moved past the rename.

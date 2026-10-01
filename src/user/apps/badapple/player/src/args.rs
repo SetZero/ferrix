@@ -2,13 +2,13 @@
 
 /// The command line.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Options {
+pub struct Options {
     /// The `.bav` file.
-    pub(crate) video: String,
+    pub video: String,
     /// The song: an MP4 audio file.
-    pub(crate) song: String,
+    pub song: String,
     /// Stop after this many seconds, rather than at the end.
-    pub(crate) seconds: Option<u32>,
+    pub seconds: Option<u32>,
 }
 
 /// The arguments meant, from `argv` less the program name.
@@ -17,7 +17,7 @@ pub(crate) struct Options {
 /// (`src/kernel/src/init.rs`), so `-i` alone is nothing asked for and a script
 /// is split into the arguments it names: one a line when it has a newline,
 /// otherwise at whitespace. The rule is `compositor_evecho::init::unshell`'s.
-pub(crate) fn unshell(args: &[String]) -> Vec<String> {
+pub fn unshell(args: &[String]) -> Vec<String> {
     match args.split_first() {
         Some((first, rest)) if first == "-i" && rest.is_empty() => Vec::new(),
         Some((first, rest)) if first == "-c" => rest.iter().flat_map(|s| split(s)).collect(),
@@ -39,7 +39,7 @@ fn split(script: &str) -> Vec<String> {
 }
 
 /// Read `VIDEO SONG [SECONDS]`.
-pub(crate) fn parse(args: &[String]) -> Result<Options, String> {
+pub fn parse(args: &[String]) -> Result<Options, String> {
     match args {
         [video, song] => Ok(Options {
             video: video.clone(),
