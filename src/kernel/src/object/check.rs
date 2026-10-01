@@ -217,6 +217,19 @@ pub(crate) fn run() -> Result<Report, &'static str> {
          packet put back, a registration passed over, a cycle walk meeting one end twice, a \
          delivery to a line nobody holds"
     );
+    let domains = object::domain_check::run()?;
+    if domains.hardened {
+        crate::console::println!(
+            "  domain   {} switches inside one speculation domain skipped the barrier, {} out of \
+             one kept it: none across domains, none by a mover, a leaver or a sharer",
+            domains.skipped,
+            domains.kept
+        );
+    } else {
+        crate::console::println!(
+            "  domain   not checked: built --mitigations off, no switch decides a barrier"
+        );
+    }
     let formatted = object::format_check::run()?;
     crate::console::println!(
         "  format   {formatted} errors and objects formatted for a diagnostic, each under its \
