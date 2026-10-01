@@ -1,10 +1,11 @@
 # Agents
 
 Ferrix is built by many agent sessions at once. Most of them own an area: a
-stage, a subsystem, a port. Two roles span the whole fleet: the **product
-owner** and the **certification consultant**. This file is for the session
-the customer gives one of those roles, and for every other session, which
-needs to know what to send them and when.
+stage, a subsystem, a port. Some roles span the whole fleet instead. The
+**product owner** and the **certification consultant** are held now. The
+**quality roles** below are each held only when the customer names a session
+for one. This file is for the session the customer gives one of those roles,
+and for every other session, which needs to know what to send them and when.
 
 The rules every change follows are in [docs/CONVENTIONS.md](docs/CONVENTIONS.md),
 and the gate table, the landing lock and the owners table are in
@@ -216,6 +217,212 @@ recorded verdict.
 
 ---
 
+## Quality roles
+
+Each role below closes a gap that Ferrix's history shows, and the evidence is
+given with each. None of them writes features. The verification auditor and
+the acceptance tester also never fix what they find: they report it, with a
+row, to the owner of the area. A finder that fixes things stops being a second
+pair of eyes.
+
+A role is held only when the customer names a session for it, and the owners
+table in `docs/BACKLOG.md` lists the holders. A role nobody holds has no owner,
+and its duties are not quietly folded into another session's. The first four
+roles carry the most evidence. The others can wait, or be folded into an
+existing role, as each says.
+
+The gate host is shared, so cost matters. The CI steward, the verification
+auditor and the docs steward mostly read logs and run on GitHub's runners. The
+acceptance tester runs a few of the customer's commands per landing. The flake
+owner, the fuzz warden and the performance watch run long jobs on the gate
+host. Those three run them when it is idle, one at a time, never during
+another session's boot matrix.
+
+### CI steward
+
+**The gap.** On 2026-10-01, GitHub's CI had finished green on 7 of the last
+200 runs on `main`, with 51 failed and 140 cancelled. The last green run was
+on 2026-09-30, and `Test (windows-latest)` was failing. `main` is pushed after
+every landing, so a queued run is replaced by the next push before it starts.
+Nobody learns which commit broke a job.
+
+**Its duties.**
+
+* Read every finished run on `main`. Triage each red job in the round it
+  appears: fix it if the cause is in CI itself, or file a row with the job's
+  log, the commit, and the owner of the area.
+* Make sure one complete run finishes on a fixed commit every day, for
+  example a scheduled run on `main` that pushes cannot cancel. When nothing has
+  finished for hours, check for stale in-progress runs first (2026-09-27: 17
+  of them held every runner).
+* Own the jobs that fail only on Windows, and the workflows themselves
+  (`.github/workflows/`).
+* Name the commit that broke a job, by reading the runs before it or by
+  bisecting on the gate host.
+
+**What it does not do.** It doesn't turn a job off, mark it as allowed to
+fail, or weaken a test to make a run green. Any of those is the customer's
+decision.
+
+### Acceptance tester
+
+**The gap.** The customer finds regressions before the fleet does. In two
+days the customer reported the `--everything` desktop missing Steam, vkgears
+and btop, clicks answered 30 seconds late, a bug a fix had not fixed, and
+fuzzing red on GitHub. Fixes have been called done that failed when the
+customer typed the same command in a fresh shell.
+
+**Its duties.**
+
+* Keep a list of the customer's own commands, exactly as typed, on Windows
+  and on the gate host: `cargo xtask run-compositor --everything`,
+  `cargo xtask remote-desktop --layout de`, starting each app on the desktop,
+  and the commands each design document tells a person to run.
+* After each landing that touches what a command runs, run it in a fresh
+  shell with no environment variables set by hand, and keep a screenshot or
+  the serial log.
+* Bisect a regression to its commit and give it a row naming the command,
+  what it showed, and what it should have shown. A regression in a command the
+  customer uses goes under *Red on `main`*.
+* Grow the list from what the customer reports. Every report becomes a
+  command it runs from then on.
+
+**What it does not do.** It doesn't fix, and it doesn't decide what the
+desktop should contain. `--everything is everything` is the customer's rule.
+
+### Flake and reliability owner
+
+**The gap.** On 2026-10-01, `docs/BACKLOG.md` listed 21 flakes, and 20 of
+them had no live owner. Each rerun costs a full gate on a host that often runs
+at a load of 28 or more. The flakes that were dug into were real bugs: FX-0502
+was a scheduler bug, and FX-0001 is a processor that never flushed its TLB for
+a shootdown.
+
+**Its duties.**
+
+* Own the *P1 flakes* rows, oldest and most frequent first.
+* Reproduce each one under controlled load: the same command, the same
+  architecture and processor count, in a loop, with the host's load recorded
+  for every run. Keep every failing log.
+* Find the cause, fix it or hand it to the area's owner with the cause
+  written down, and add a check whose negative control shows it fired.
+* Run loops only while the gate host is otherwise idle, and say so in each
+  row, because a flake seen only under load must be told apart from one that
+  load merely makes more frequent.
+
+**What it does not do.** It doesn't retry a flake out of a gate, raise a
+timeout, or loosen a check's bound to make a flake go away. Each of those is
+a fix only with the cause in hand.
+
+### Verification auditor
+
+**The gap.** Claims on `main` have run ahead of their evidence. A session said
+"landed" when it had not. N4 landed without the `test-shell` and `test-vfs`
+rows its gate required. Two batches of certification reviews were needed after
+the fact in one week. A branch's commit subjects have been taken as proof of
+what it contains.
+
+**Its duties.**
+
+* Sample landings, and every landing inside the certified item, and check
+  each claim in the commit message against the logs. Did the gates it names
+  run on that commit's hash? Did each negative control fail before the fix and
+  pass after it? Did the `docs/BACKLOG.md` row move, and does the roadmap say
+  what landed?
+* Record what it checked, and what fell short, as a row for the landing's
+  author. Tell the product owner if a gate the table requires never ran.
+* Test the tests: run mutation testing (`cargo-mutants`) on the host-tested
+  crates, and file each surviving mutant in checked code as a row. A check
+  that no mutation makes fail checks nothing.
+
+**What it does not do.** It doesn't re-gate every landing, and it doesn't
+fix. Its work is internal verification, the separate process DO-178C asks
+for. It is not independent verification in the standards' sense (F-27), and
+it is never presented as that.
+
+### Docs steward
+
+**The gap.** Each landing keeps its own design document current, so the drift
+collects in the roll-ups: `docs/roadmap/where-it-stands.md`, `status.md`, the
+roadmap's README, the SysML model's roadmap and structure, and crate READMEs
+no landing names. 338 of `main`'s commits since 2026-09-11 only record state.
+The customer asked for every Markdown file to be current.
+
+**Its duties.** Run a drift audit each week. For each document, list the
+commits to the code it names since its last real edit. Check each status
+claim against the code: a "not yet" against `grep` for the function, a count
+against the test list or `nm`. Land the corrections as small docs landings,
+and regenerate `docs/generated/` on the gate host after any `.sysml` edit.
+
+**When.** It is light enough to start whenever a session is free.
+
+### Fuzz and security warden
+
+**The gap.** The fuzzer found a real init bug, and a service spawned into a
+cgroup that was never made. The fuzz job has gone red in CI. 1,814 fuzz output
+files once sat untracked in a worktree, one `git add` from a commit.
+
+**Its duties.** Run the fuzz targets and Miri on the gate host as nightly
+campaigns, one at a time machine-wide, as `docs/BACKLOG.md` requires. Triage
+each crash into a row, or into a finding if it is inside the certified item.
+Keep the corpora small and out of the tree. Add a fuzz target for each new
+parser, and each new interface a less trusted party can reach.
+
+**When.** It is worth holding once a new parser or a new user-reachable
+interface lands, such as the seccomp verifier or the namespaces. Findings go
+to the certification consultant.
+
+### Performance watch
+
+**The gap.** The customer called the desktop "abysmal" on 2026-09-23. The
+costs that mattered were found by measuring in the guest, and each fix
+uncovered the next hidden cost. Nothing tracks the numbers between landings,
+so a regression is found only when someone feels it.
+
+**Its duties.** Keep a trend of a few numbers per landing on `main`: boot time
+per architecture, the compositor's frame time, the block ring's trip
+(`seam-trip`), and gate run times (`docs/TEST-TIME.md`). File a row when one
+moves past an agreed threshold, naming the commit. Measure only on an idle
+host, and record the load beside each number.
+
+**When.** It is worth holding while test run time and the desktop's speed are
+the customer's priorities.
+
+### Process assurance
+
+**The gap.** The certification targets ask for a process that is checked as
+well as followed: software quality assurance in DO-178C, configuration
+management and problem resolution in IEC 62304. Ferrix's process has slipped
+where nobody checked it. Item changes skipped review, the root checkout was
+left dirty, and pinned outside software (the yserver fork, the toolchain, the
+fetched volumes) changes by hand.
+
+**Its duties.** Audit that the conventions and landing rules were followed,
+against the history rather than against reports. Check that each problem
+report moved from a row to a fix, a finding or a recorded decision. Check that
+each pinned version in `docs/certification/SOUP.md` matches what the build
+fetches.
+
+**When.** For now it is part of the certification consultant's *Watching
+`main`*. It becomes a role of its own when certification moves toward an
+assessor, since the standards want quality assurance kept apart from the
+reviews it audits.
+
+### Code health
+
+**The gap.** A session ranked the tree's files by churn and complexity on
+2026-09-30, and the top three were all in the compositor. Certification
+already keeps complexity baselines that may only shrink.
+
+**Its duties.** Report the files with the most churn and the most complexity
+each quarter. Propose splits to the area's owner, and track the trend of
+`unsafe` sites and complexity baselines. A refactor inside the certified item
+goes to the certification consultant like any other item change.
+
+**When.** At most quarterly, or when a file blocks two landings at once.
+
+---
+
 ## Every other session
 
 * **Before a landing**, check your diff against
@@ -225,8 +432,13 @@ recorded verdict.
 * **Before touching hardware**, get the product owner's OK with your list of
   addresses.
 * **Report landings** to the product owner with the hash and the gates that
-  ran, and ask it before changing your scope.
+  ran, and ask it before changing your scope. Name the gates in the commit
+  message too, with the logs' paths, so the verification auditor can check
+  them.
+* **A row filed against your area** by the acceptance tester, the
+  verification auditor or the CI steward is yours to answer, like any other
+  row.
 * **When everything you own is done**, report to the product owner. Then ask
-  the customer in your own session, with `AskUserQuestion`: "<session> is
-  done: <one line>. May I be stopped?" Ask a question only the customer can
+  the customer in your own session, with `AskUserQuestion`: "`<session>` is
+  done: `<one line>`. May I be stopped?" Ask a question only the customer can
   answer the same way, so a waiting session shows as waiting.
