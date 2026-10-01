@@ -202,8 +202,21 @@ fn fetched(volume: fn() -> Result<PathBuf>, script: &str) -> Result<PathBuf> {
         .join("tools/common/fetch")
         .join(script);
     println!("  everything: fetching with {}", path.display());
-    let status = Command::new("bash")
-        .arg(&path)
+    // On Windows the scripts run in WSL, which is where `volume` looks for
+    // what they make (`crate::wsl`), and `bash` there cannot open a Windows
+    // path: the script is named relative to the checkout.
+    let mut command = if cfg!(windows) {
+        crate::wsl::bash(
+            &crate::paths::workspace_root(),
+            "exec bash \"tools/common/fetch/$1\"",
+            &[script],
+        )
+    } else {
+        let mut command = Command::new("bash");
+        let _ = command.arg(&path);
+        command
+    };
+    let status = command
         .stdin(std::process::Stdio::null())
         .status()
         .map_err(|error| Error::new(format!("running {}: {error}", path.display())))?;

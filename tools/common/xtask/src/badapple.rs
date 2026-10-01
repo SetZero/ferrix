@@ -625,11 +625,25 @@ pub(crate) fn on_the_desktop(
     }
     // `--everything` is everything: a video not fetched yet is fetched, and
     // a fetch that fails stops the run.
-    if !media_dir()?.join(SOURCE).is_file() {
+    let dir = media_dir()?;
+    if !dir.join(SOURCE).is_file() {
         let script = paths::workspace_root().join("tools/common/fetch/fetch-badapple.sh");
         println!("  everything: fetching with {}", script.display());
-        let status = Command::new("bash")
-            .arg(&script)
+        // On Windows `bash` is WSL's, which cannot open a Windows path: the
+        // script runs there by its path in the checkout, and writes where
+        // this looks, as WSL names it.
+        let mut command = if cfg!(windows) {
+            crate::wsl::bash(
+                &paths::workspace_root(),
+                "FERRIX_BADAPPLE=\"$(wslpath -u \"$1\")\" exec bash tools/common/fetch/fetch-badapple.sh",
+                &[&dir.to_string_lossy()],
+            )
+        } else {
+            let mut command = Command::new("bash");
+            let _ = command.arg(&script);
+            command
+        };
+        let status = command
             .stdin(Stdio::null())
             .status()
             .map_err(|error| Error::new(format!("running {}: {error}", script.display())))?;
