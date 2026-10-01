@@ -361,6 +361,16 @@ opt-level = 2
 # kernel makes a panic report a list of hex numbers.
 strip = "none"
 debug = true
+
+# `--release --iterate`: the release kernel for someone changing it and booting
+# it again, not for a gate. Thin LTO over sixteen units relinks a one-line edit
+# in seconds where fat LTO over one unit took two to three minutes
+# (docs/TEST-TIME.md, C4). The code differs from release, so a gate, a
+# benchmark that is reported, and CI build `release`.
+[profile.iterate]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
 # **Deliberately on**, which is the opposite of Starling's choice and for the
 # opposite reason. Starling is a long-lived server where an abort is an outage;
 # here a wrapped page count or frame number silently corrupts memory and the
