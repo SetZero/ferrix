@@ -142,6 +142,62 @@ fetch_clang() {
     [ -x "$clang_bin/clang++" ] || fail "$LLVM_RELEASE has no bin/clang++"
 }
 
+# Meson from its own release where the host has none, or one older than the
+# version given: Ubuntu 24.04's is 1.3.2, and fontconfig 2.17 wants 1.6.1.
+# Meson is Python and runs from its unpacked tree, so this needs no root.
+# Pinned by its sha256 as first downloaded on 2026-10-01. Puts a `meson` on
+# PATH that runs it.
+MESON_VERSION=1.10.1
+MESON_URL=https://github.com/mesonbuild/meson/releases/download/$MESON_VERSION/meson-$MESON_VERSION.tar.gz
+MESON_SHA256=c42296f12db316a4515b9375a5df330f2e751ccdd4f608430d41d7d6210e4317
+need_meson() { # minimum-version
+    local have
+    have=$(meson --version 2> /dev/null || true)
+    if [ -n "$have" ] && printf '%s\n%s\n' "$1" "$have" | sort -V -C; then
+        return
+    fi
+    local dir=$ports/meson tree=$ports/meson/meson-$MESON_VERSION
+    if [ ! -f "$tree/meson.py" ]; then
+        step "meson $MESON_VERSION, since the host's is ${have:-missing} and this wants $1"
+        mkdir -p "$ports/src" "$dir"
+        fetch "$MESON_URL" "$ports/src/meson-$MESON_VERSION.tar.gz" sha256sum "$MESON_SHA256"
+        rm -rf "$tree"
+        tar -xzf "$ports/src/meson-$MESON_VERSION.tar.gz" -C "$dir"
+    fi
+    mkdir -p "$dir/bin"
+    printf '#!/bin/sh\nexec python3 %s/meson.py "$@"\n' "$tree" > "$dir/bin/meson"
+    chmod +x "$dir/bin/meson"
+    export PATH=$dir/bin:$PATH
+    echo "meson $(meson --version), from $tree"
+}
+
+# wayland-scanner of the version given, where the host's is another: the code
+# it generates has to match the library it is built with, and Ubuntu 24.04's
+# is 1.22.0. Built for the host from that wayland's own tarball, which the
+# caller has fetched, scanner only, against the host's expat; needs meson
+# (need_meson) first. Puts it on PATH, and its wayland-scanner.pc where a
+# cross build's meson looks for the build machine's: wayland's own meson
+# finds the scanner through pkg-config, not PATH.
+need_wayland_scanner() { # version tarball
+    local want=$1 tarball=$2 have
+    have=$(wayland-scanner --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+    [ "$have" = "$want" ] && return
+    local dir=$ports/wayland-scanner-$want
+    if [ ! -x "$dir/bin/wayland-scanner" ]; then
+        step "wayland-scanner $want for this host, whose is ${have:-missing}"
+        rm -rf "$dir"
+        mkdir -p "$dir/src"
+        tar -xJf "$tarball" -C "$dir/src" --strip-components=1
+        { CC=gcc meson setup "$dir/build" "$dir/src" --prefix="$dir" --libdir=lib \
+            -Dlibraries=false -Ddocumentation=false -Dtests=false -Ddtd_validation=false \
+            && ninja -C "$dir/build" install; } > "$dir/build.log" 2>&1 \
+            || fail "wayland-scanner $want did not build; the log is $dir/build.log"
+    fi
+    export PATH=$dir/bin:$PATH
+    export PKG_CONFIG_PATH_FOR_BUILD=$dir/lib/pkgconfig${PKG_CONFIG_PATH_FOR_BUILD:+:$PKG_CONFIG_PATH_FOR_BUILD}
+    echo "$(wayland-scanner --version 2>&1), from $dir"
+}
+
 # Build ferrousli in the release profile and set $lib and $crt1.
 build_ferrousli() {
     step "ferrousli, release"

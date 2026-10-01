@@ -33,9 +33,9 @@
 #   gperf 3.3, a build-time tool fontconfig generates a hash with, built for
 #   the host.
 #
-# The build host needs meson, ninja, bison, pkg-config and wayland-scanner
-# 1.24.0, the same version as the library: wayland's own scanner is a host
-# tool, and this script builds only its libraries.
+# The build host needs ninja, bison, pkg-config and expat. Meson 1.6.1 or
+# newer and wayland-scanner 1.24.0, the same version as the library, are the
+# host's when it has them, and otherwise fetched or built for it.
 #
 # What is built without, and why:
 #   * harfbuzz and utf8proc: fcft's text shaping and foot's grapheme
@@ -68,7 +68,7 @@ SOURCES=(
     "freetype 2.14.1 freetype-2.14.1.tar.xz https://download.savannah.gnu.org/releases/freetype/freetype-2.14.1.tar.xz 32427e8c471ac095853212a37aef816c60b42052d4d9e48230bab3bdf2936ccc"
     "expat 2.7.3 expat-2.7.3.tar.xz https://github.com/libexpat/libexpat/releases/download/R_2_7_3/expat-2.7.3.tar.xz 71df8f40706a7bb0a80a5367079ea75d91da4f8c65c58ec59bcdfbf7decdab9f"
     "gperf 3.3 gperf-3.3.tar.gz https://ftp.gnu.org/gnu/gperf/gperf-3.3.tar.gz fd87e0aba7e43ae054837afd6cd4db03a3f2693deb3619085e6ed9d8d9604ad8"
-    "fontconfig 2.17.1 fontconfig-2.17.1.tar.xz https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.17.1.tar.xz 9f5cae93f4fffc1fbc05ae99cdfc708cd60dfd6612ffc0512827025c026fa541"
+    "fontconfig 2.17.1 fontconfig-2.17.1.tar.xz https://gitlab.freedesktop.org/api/v4/projects/fontconfig%2Ffontconfig/packages/generic/fontconfig/2.17.1/fontconfig-2.17.1.tar.xz 9f5cae93f4fffc1fbc05ae99cdfc708cd60dfd6612ffc0512827025c026fa541"
     "tllist 1.1.0 tllist-1.1.0.tar.gz https://codeberg.org/dnkl/tllist/archive/1.1.0.tar.gz 0e7b7094a02550dd80b7243bcffc3671550b0f1d8ba625e4dff52517827d5d23"
     "fcft 3.3.2 fcft-3.3.2.tar.gz https://codeberg.org/dnkl/fcft/archive/3.3.2.tar.gz 22bcf73f51480ad48110a52cb26f93180d125929ac6b29bef67545fc36967479"
     "foot 1.24.0 foot-1.24.0.tar.gz https://codeberg.org/dnkl/foot/archive/1.24.0.tar.gz e86cf92895f16bbd3f02c6bae706717790f5a7a686bc37182d715a3defe73349"
@@ -88,11 +88,13 @@ for line in "${SOURCES[@]}"; do
     echo "$name $version"
 done
 
+# A meson and a wayland-scanner of the versions these want, fetched or
+# built where the host's are missing or others (../common.sh).
+need_meson 1.6.1
+need_wayland_scanner 1.24.0 "$src/wayland-1.24.0.tar.xz"
 for tool in meson ninja bison pkg-config wayland-scanner; do
     command -v "$tool" > /dev/null || fail "no $tool on this host, which the build needs"
 done
-scanner=$(wayland-scanner --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-[ "$scanner" = 1.24.0 ] || fail "wayland-scanner is $scanner, not the library's 1.24.0"
 
 build_ferrousli
 make_compilers
