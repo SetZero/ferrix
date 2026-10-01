@@ -419,9 +419,53 @@ First runs, main ac7b1ca0, at load 10 to 17: slot 2's first `check`, from
 an empty target dir, 338 s; a warm `check` on the next branch 152 s; a
 control through `test-boot --arch x86_64 --accel kvm` 44 s. None waited.
 
+**Deadlock, 2026-10-01 21:15.** A run held to one slot (`GATE_SLOT=3`,
+`cs-sshdt`) took a ticket but never waits its turn, and slot 3 is not used
+under 50 GB free; holding the oldest ticket, it stopped every run behind it
+with all three slots free (20 waiting at 21:28, 43 GB free). The fix, not
+installed: such a run's ticket says `(slot N only)` and `head_of_queue`
+passes over a live ticket that ends so (eight lines). Until
+then, either free space above 50 GB, or end that one run.
+
 The phase's owner keeps the slots. When the pool winds down, the owner
 deletes `gate-slot-2` and `gate-slot-3` with their target dirs, by exact
 name; slot 1 stays the stage-13 queue's, and its owner keeps or deletes it.
+
+### The Windows host as a gate (2026-10-01, not usable yet)
+
+To take load off nazuna, `check` ran cold on the Windows PC, in fresh
+worktrees `win-slot-1` (367047688) and `win-slot-2` (main 020dc9b2). The
+compositor's, zinc's and ferrousli's steps run there in WSL's Ubuntu,
+whose cargo target dirs are `~/.cache/ferrix/target/<worktree path>`.
+Neither run finished:
+
+| Run | Ended | After | Why |
+|---|---|---|---|
+| win-slot-1 | `compositor: tests`, `rustdoc` for `compositor-anim` | 425 s | `Input/output error (os error 5)` starting the program; the step alone passed afterwards |
+| win-slot-2 | `compositor: tests`, two waybar tests | 380 s | `Read-only file system (os error 30)` writing under `/tmp` |
+
+Both were the host, not the code: C: had 0 bytes free. WSL's disk is a
+file on C: (`ext4.vhdx`, 366 GB that day, beside Docker's 226 GB) that
+grows with every target dir and never shrinks on its own; when it could
+not grow, ext4 saw write errors and remounted itself `emergency_ro`.
+Recovery: 33 GB of Visual Studio installer leftovers in `%TEMP%` and the
+pip and npm caches deleted; Ubuntu stopped; the disk attached bare to
+another distribution and `e2fsck -f -n` run on it, which found it clean.
+Prepared for the user, not yet confirmed run: deleting the build caches
+of 34 worktrees that no longer exist (19 GB), then `diskpart compact
+vdisk`.
+
+The steps that did finish, slowest first (win-slot-2, cold): tests
+126.9 s, compositor tests 61.7 s, the audits at once 59.2 s (the
+architecture document the longest), documentation 33.7 s, doc tests
+20.3 s, compositor clippy 15.5 s, host clippy 15.3 s; every other step
+under 12 s. Slot 2 on nazuna takes 338 s for the whole of a cold `check`.
+
+Before the Windows host takes gates: a cap on its target dirs, or the
+WSL disk moved off C:, and a disk guard as `gate.sh`'s (A2) that refuses
+a run with C: under 20 GB; then a cold and a warm `check` measured to
+the end. Not done: a retry when WSL fails to start a program, which
+would also hide a real failure, so it waits until the disk is ruled out.
 
 ## Next
 
