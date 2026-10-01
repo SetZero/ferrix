@@ -34,6 +34,18 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
   The claim they serve is drafted as a proposal in
   `docs/certification/CLAIM.md`.
 
+* **Speculation domains** (2026-10-01, bf9efba95, `docs/OPAQUE-KERNEL.md`
+  §9). A job marked at its creation, by the holder of MANAGE on its parent,
+  is one speculation domain. A switch between two programs born in it skips
+  `IBPB`, and every other switch keeps the barrier. It was reviewed by the
+  certification consultant, and its check has eight negative controls. It
+  landed ahead of its full gate on the customer's word, and the evidence
+  still owed is a row in `docs/BACKLOG.md`. With the round-trip changes still
+  on `os-ipc/zircon-trip`, a native channel round trip inside a domain takes
+  2.8 to 3.0 us with every mitigation on, down from 37 us. Under a
+  microsecond needs those changes landed, then PCIDs, a direct switch and a
+  shorter system-call path.
+
 * **Steam signs in and shows its store** on the `--everything` desktop,
   its 64-bit side on ferrousli (2026-09-30, `docs/STEAM.md` §5), and
   `cargo xtask test-steam-store` gates it with a test account, signing in

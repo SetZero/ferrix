@@ -241,6 +241,7 @@ session's name in its owner cell in your first landing.
 | the customer | Owner: scope, priorities, decisions, what is stable enough for `main` |
 | os-db | Product owner (`AGENTS.md`), named by the customer 2026-10-01; the previous one was the gate host's bridge session of 2026-09-28 and 29, whose handover is `~/.local/share/ferrix/po-2026-09-29/HANDOVER.md` |
 | os-ad | Certification consultant (`AGENTS.md`), named by the customer 2026-10-01; its ledger is `~/.local/share/ferrix/cert-consultant/reviews.md` |
+| os-86 | The native channel round trip and speculation domains (`docs/OPAQUE-KERNEL.md` §9), as os-c7 before the 2026-10-01 restart. The domain landed as bf9efba95. **Wound down 2026-10-01**; its branches are under *Branches that still hold unlanded work* |
 | os-db | Verification auditor (`AGENTS.md`), named by the customer 2026-10-01 while it also held the product owner's seat; its ledger is `~/.local/share/ferrix/verification-audit/ledger.md`, and its rows are *Verification audit* below |
 | ferrix-2c | Fleet coordinator: landing order, the landing lock, shared hot files, unblocking, pushes. Named ferrix-f6 after the 2026-09-27 restart; the fleet **wound down 2026-09-27** with everything finished on `main` and every unfinished branch pushed to GitHub (`docs/roadmap/where-it-stands.md`, *Where we left off*) |
 | ferrix-15 | The init (`docs/INIT.md`), L13 parked; F-21b's audit record, closed 2026-09-27. **Wound down 2026-09-27**, handover in `~/.local/share/ferrix/ferrix-15/HANDOVER.md`. Parked: W-8 boot 21b on branch `boot-21b` (full gate green on cf13918f; left: ferrix-20's diff review, H.BOOT.15 is new, a rebase with carry and re-count, H.BOOT.14 as a parent of L.aarch64.44-46, the L.boot.35 control), then 21c (devmgr). Not committed: the devmgr=init coverage boot, one `Gate::new("test-init", "init", false)` line in `tools/common/xtask/src/coverage.rs`'s SUITE (passes under drcov on the Arm pair in 141 s and 132 s; needs ferrix-20's OK) |
@@ -343,6 +344,7 @@ certified item's `core` or `item` ring.
 | **`render/**` in the load ring of `tools/common/data/certification-item.json` matches no file.** c21abe11 meant to replace all seven interface cores' patterns with `interfaces/**`, and replaced six | open |
 | **Ten item landings on 2026-09-30 moved `main` outside the landing lock**: 1384e6e6; the discovery series c21abe11, aa78061e, f8ab2970, d5896c75, fa4e88a6, c2477dc1, cc4e14af and 2be909b3; 318987db, which went in inside another session's 39-second take; and bce1fc14 and 8f7801de. The lock log's `main` field reads the gate host's `main`, which moves only when a lander pushes it there, so its hashes do not show what landed on the Windows checkout | the product owner |
 | **37 code and xtask landings since 2026-09-30 name no gate in their message**, among them ferrousli's loader stack, whose row in the gate table asks for Debian's dynamic busybox twice. Nothing required the gates in the message until `AGENTS.md` (2026-10-01). Those loader landings are the next audit | os-db (auditor) |
+| **bf9efba95 (speculation domains) landed ahead of its full gate**, on the customer's word (Decisions, 2026-10-01). Logs are `~/.local/share/ferrix/logs/queue/<tag>.log` on the gate host, and `fleet/gate.sh`'s INDEX holds each verdict. At the wind-down these were in: all eight controls, `osc7-sd4-c1` to `-c8`, `FIRED (panic)`; `osc7-sd4-check`, `-build`, `-boot-x86-kvm`, `-boot-x86` (which ran under KVM, not TCG), `-boot-a64` and `-boot-a32` PASSED on 96f0d28c8, the tree before the rebase; `osc7-sd5-check` PASSED on 9c04ac274; and `osc7-land-check`, `-boot-kvm`, `-boot-tcg` and `-boot-a64` PASSED on bf9efba95 itself. Still owed, queued by `~/ferrix-logs/osc7-sd4-row.sh` and still running on the gate host at the wind-down: `osc7-sd4-boot-a32-2`, `-shell`, `-threads`, `-vfs-ferrousli` and `-vfs-musl`. A control reading DID NOT FIRE, or any row failing, is red on `main`: tell the product owner and the consultant, and fix forward | the product owner |
 
 ## The path to the goal, in order
 
@@ -463,6 +465,7 @@ log path and commit; a new sighting is added to its row the day it is seen.
 | Zero-copy block reads: pin the page-cache pages themselves as the block ring's buffers, removing the data-VMO and scratch copies of stage 11's first read path (ARCHITECTURE §3) Re-costed against the seam measured, 1 (2026-09-27): the two copies are about a microsecond of a 4 KiB read's 300 us round trip under KVM, so this row saves under 1% until the hop and the depth-32 stall are cut | open |
 | **Done 2026-09-27:** the block ring's depth-32 stall. It was not a missed wake-up: instrumentation showed every slow read waiting in `ferrix_block`'s queue while the ring task ran, passed over by the one-way elevator until `mq-deadline`'s 500 ms read expiry, a spinning disk's setting. Ring disks now use `Config::fast_device()`, a 25 ms read expiry. Depth-32 p99 went from 112–228 ms to 28–35 ms under KVM, with the median unchanged at 2–3 ms. A host test is the negative control: a read behind the elevator starves under the default and is bounded under the new config. Logs and the instrumentation patch are in `~/.local/share/ferrix/logs/stall/` on example | ferrix-55b |
 | Cut the trip to ring 3: a 4 KiB disk read through the block ring and its driver costs 300 to 844 us on x86-64 under KVM against stock Linux's 27 to 48 us, which is an estimated 17 to 56% of a cold `rustc` run (`docs/OPAQUE-KERNEL.md`, *The verdict of S0*). The depth-32 stall is fixed; next, find where the time goes (the driver's `device_ticks` splits off the device's share), PCIDs so a switch keeps the TLB, then remeasure with `cargo xtask bench-seam` and the `seam` boot line, aiming for within twice Linux's per trip. It pays off whatever is decided about the opaque kernel. **Advanced 2026-09-30 (os-35):** the trace landed (5cc5ed38, `seam-trip` and `seam-count`). Baseline, KVM at two processors: p50 230 us; per read 13 switches, 2.4 roots written, 3.2 IPIs, no recheck rescue, 60 to 85% of wakes on another processor. What found it, the eleven-step plan, and which branch holds each step: `docs/OPAQUE-KERNEL.md` § 8 | open |
+| A native channel round trip under a microsecond (`docs/OPAQUE-KERNEL.md` §9, the customer's goal of 2026-10-01). On `main`: the speculation domain (bf9efba95), which removes `IBPB` between two programs of one marked job. On `os-ipc/zircon-trip`, WIP and not reviewed: `bench-ipc`, the lazy timer and the decision at a call's end, the sync wake, `channel_write_read` (0x1013) and the clock; §9.4 lists what to cherry-pick and what to drop. Measured p50 on one processor under KVM: 37 us on `main` before, 6.5 us on the branch, and 2.8 to 3.0 us inside a domain, all with mitigations on. Left for under 1 us: land the branch's items with their two owed checks (items 3 and 4); PCIDs; a direct switch from caller to callee; and a shorter system-call path (464 ns floor). Wound down 2026-10-01 by os-86 | open |
 | F-45 on the driver's side of the block ring. The new `ferrix-driver` ring (`src/user/system/native/driver/src/block.rs`, since 31b16d72) reads and writes the ring's shared u32 indices a byte at a time, through its trait's default methods. The kernel can then see a torn `comp_tail` and end the ring as corrupt. The kernel's side was made whole-word by `os-35/ipc-ring` part A. Found by os-35 on 2026-10-01 | open |
 | Only four block commands fit in flight: the ring's data VMO is 512 KiB in four 128 KiB regions, so depth 32 queues behind four. Allocating the data VMO by page, or regions sized to the request, would lift it. Seen by `os-35/ipc-ring` part A, where a region now stays reserved until the reader has copied it out | open |
 | The trace's Linux side: `bench-seam` prints a mean only; a static per-read `clock_gettime` + `pread(O_DIRECT)` program for p50/p99 on x86-64 and AArch64, the same hops from ftrace (`block_rq_issue`, `block_rq_complete`, `irq_handler_entry`, `sched_wakeup`, `sched_switch`), and a host-side count of VM exits per read with `trace-cmd` between port-0x80 markers (`docs/OPAQUE-KERNEL.md` § 8) | open |
@@ -715,6 +718,13 @@ The roadmap's *Burndown* lists that scope.
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
 
+* **2026-10-01 (customer)** **The speculation domain lands ahead of its full
+  gate.** os-c7 (os-86 after the restart) asked whether to wait for the last
+  controls and rows. The customer answered "speculatively merge what you
+  have", and in the same session gave its word for the push to `origin`.
+  It landed as bf9efba95. The consultant (os-bd) recorded it in its ledger as
+  landed ahead of its evidence. What was still running is a row under
+  *Verification audit*.
 * **2026-10-01 (customer)** **The barrier between programs is skipped only
   inside a speculation domain, and a domain is a job marked at its
   creation.** Asked by os-c7, whose native round trip is 6.5 us with every
@@ -1106,3 +1116,15 @@ certification consultant (os-9f) before it lands.
 
   Part A, the MSI-X masking, landed as 1dcc433f, and the ring's part A as
   b7cab053, both on 2026-10-01.
+
+os-86's wind-down on 2026-10-01 (it was os-c7 before the restart), the channel
+round trip (`docs/OPAQUE-KERNEL.md` §9). The speculation domain landed as
+bf9efba95. Each branch below is local on the Windows checkout and on GitHub.
+- `os-ipc/zircon-trip` (a1379b25b, "WIP:"). The round trip's other changes,
+  based on a `main` from before the domain landed. §9.4 says which of its
+  commits to cherry-pick onto `main` and which to drop. Its review goes to the
+  certification consultant.
+- `os-ipc/prof` (41bdef2ca) and `os-ipc/prof2` (4b5be585c), timing builds
+  that print a round trip's spans. They must never land.
+- `os-ipc/spec-domain` (bf9efba95) is on `main`, and `os-ipc/winddown` is
+  this record. Both can be deleted.

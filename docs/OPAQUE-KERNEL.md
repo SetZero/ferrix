@@ -505,13 +505,23 @@ count of VM exits (`trace-cmd` on nazuna) are not written.
 
 ## 9. The channel round trip, and speculation domains (2026-10-01, os-c7)
 
-**Design reviewed by the certification consultant (os-ad, 2026-10-01): OK to build with the amendments in §9.3a. No code for the domain
-exists yet.** The customer's decision is in `docs/BACKLOG.md`, Decisions,
-2026-10-01 (2c0e37214).
+**The speculation domain is on `main` since bf9efba95 (2026-10-01).** Its
+design and its code were reviewed by the certification consultant (os-ad,
+§9.3a and §9.3b). It landed ahead of its full gate on the customer's word;
+evidence: `fleet/gate.sh` INDEX tags `osc7-sd4-c1` to `-c8` (the controls,
+each `FIRED (panic)`), `osc7-sd4-check`, `-build`, `-boot-*`, `-shell`,
+`-threads`, `-vfs-*` on 96f0d28c8, the same tree before its rebase, and
+`osc7-land-check`, `-boot-kvm`, `-boot-tcg`, `-boot-a64` on bf9efba95 itself.
+What of that was still running at the wind-down is a row in
+`docs/BACKLOG.md`, *Verification audit*. The customer's decision is in
+`docs/BACKLOG.md`, Decisions, 2026-10-01 (2c0e37214). The rest of the round
+trip work (§9.1's figures, §9.4) is not on `main`: it is WIP on branch
+`os-ipc/zircon-trip`.
 
 ### 9.1 Where the round trip stands
 
-`cargo xtask bench-ipc` boots a native client and a native echo server
+`cargo xtask bench-ipc`, on branch `os-ipc/zircon-trip` and not yet on
+`main`, boots a native client and a native echo server
 (`/sbin/ipc-bench`) and times 20,000 round trips of eight bytes. That is the
 figure an IPC design is quoted by, and it has no device in it.
 
@@ -824,8 +834,30 @@ These are reviewed separately, once rebased and gated, as the consultant asked.
 6. **The clock.** `now_nanos` uses two exact 64-bit divisions in place of one
    128-bit division.
 
-After the domain, the round trip is 2.6 us. What is left before it is under a
-microsecond:
+With the domain, a round trip between two members of one domain is 2.8 to
+3.0 us p50 with every mitigation on (`bench-ipc`'s `domain-call`, one
+processor under KVM), against 2.6 us with mitigations off. What is left before
+it is under a microsecond:
 - PCIDs, so a switch does not flush the user half;
 - a direct switch from caller to callee;
 - the system call's own path, at 464 ns for a native call that does not sleep.
+
+**Where the branch stands (wind-down, 2026-10-01, os-86, which was os-c7).**
+`os-ipc/zircon-trip` (a1379b25b, on GitHub) is based on a `main` from before
+the domain landed. Its domain commits (54509856e to 09afb2ddf) are an early
+version and are superseded by `main`'s. The work still to land is its other
+eight commits:
+- 937b75972, `bench-ipc`;
+- 5b300da82, item 1 and 2;
+- 54ff92c2a, the sync wake;
+- 169c39374, item 4;
+- 82ee2fa44, item 6;
+- dfedadeae, item 3;
+- 15ae15cc3, item 5, to drop;
+- a1379b25b, XSAVEOPT, which made no difference, to drop.
+
+To resume, cherry-pick the six that stay onto `main`, then write the two owed
+checks with their controls (items 3 and 4), gate, and send it to the
+certification consultant. `os-ipc/prof` and `os-ipc/prof2` are timing builds
+(spans printed at the shell's exit). They exist to find costs and must never
+land. The per-span figures they gave are the ones in §9.1 and the list above.
