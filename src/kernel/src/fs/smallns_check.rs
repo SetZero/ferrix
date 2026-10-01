@@ -29,6 +29,8 @@ use ferrix_vfs::Errno;
 use crate::fs::mount_check::{Page, Report as Counts, Tally, by_number, close, open, page_for};
 use crate::fs::namespace_check::{read_file, read_link, unshare};
 use crate::fs::nsfs::{NS_GET_NSTYPE, NS_GET_OWNER_UID, NS_GET_PARENT, NS_GET_USERNS};
+use crate::fs::cgroupfs;
+use crate::object::process::Host;
 use crate::syscall::family;
 use crate::syscall::namespace::{CLONE_NEWNS, CLONE_NEWUSER};
 use crate::syscall::nsproxy::{CLONE_NEWCGROUP, CLONE_NEWIPC, CLONE_NEWUTS};
@@ -644,6 +646,7 @@ fn cgroup_in(
     cgroup_mounted(actor, page, tally)?;
     cgroup_moves(actor, page, tally, &whole)?;
     cgroup_clone(actor, &stranger)?;
+    cgroup_opened_inside(actor, page, tally, &whole, &inside, home)?;
     // Back where it began, so the cgroups can be taken down.
     tally.ok(
         setns(actor, home, 0),
@@ -723,6 +726,94 @@ fn cgroup_moves(
         move_into(actor, page, &whole("/a/cgroup.procs"), actor)?,
         "a process in a cgroup namespace could not move back to its root",
     )
+}
+
+/// The three ways a process gets into a cgroup are judged in the namespace of
+/// whoever holds the descriptor they go through (`docs/NAMESPACES.md` §12):
+/// a `cgroup.procs` opened inside a namespace and written after leaving it
+/// (Linux's CVE-2021-4197 class: the opener's namespace), a directory
+/// descriptor kept from outside a namespace and given to `CLONE_INTO_CGROUP`,
+/// and the same descriptor to native `job_for_cgroup`.
+///
+/// The actor is in a cgroup namespace rooted at `/a`; `/c` is outside it.
+fn cgroup_opened_inside(
+    actor: &Arc<Process>,
+    page: &mut Page<'_>,
+    tally: &mut Tally<'_>,
+    whole: &dyn Fn(&str) -> Vec<u8>,
+    inside: &Arc<Process>,
+    home: usize,
+) -> Result<(), &'static str> {
+    let procs = got(
+        tally,
+        as_caller(actor, || open(page, &whole("/c/cgroup.procs"), O_WRONLY, 0))?,
+        "a cgroup.procs outside the namespace could not be opened by root",
+    )?;
+    let outside_dir = got(
+        tally,
+        as_caller(actor, || open(page, &whole("/c"), O_RDONLY, 0))?,
+        "a cgroup directory outside the namespace could not be opened by root",
+    )?;
+    let inside_dir = got(
+        tally,
+        as_caller(actor, || open(page, &whole("/a/b"), O_RDONLY, 0))?,
+        "a cgroup directory inside the namespace could not be opened by root",
+    )?;
+    // CLONE_INTO_CGROUP: a descriptor of a cgroup outside the root is refused.
+    let file = fd::file(actor, i32::try_from(outside_dir).map_err(|_| "descriptor too large")?)
+        .map_err(|_| "a descriptor just opened was not there")?;
+    tally.refused(
+        cgroupfs::clone_target(&file, actor, &actor.job()).map(|_| 0),
+        Errno::ENOENT,
+        "CLONE_INTO_CGROUP started a child outside its creator's cgroup namespace",
+    )?;
+    drop(file);
+    let file = fd::file(actor, i32::try_from(inside_dir).map_err(|_| "descriptor too large")?)
+        .map_err(|_| "a descriptor just opened was not there")?;
+    tally.ok(
+        cgroupfs::clone_target(&file, actor, &actor.job()).map(|_| 0),
+        "CLONE_INTO_CGROUP was refused inside the creator's cgroup namespace",
+    )?;
+    drop(file);
+    // Native job_for_cgroup: no write rights over a cgroup outside the root.
+    // Rights::MANAGE, as a register.
+    let manage: u64 = 1 << 6;
+    tally.refused(
+        as_caller(actor, || {
+            cgroupfs::job_for_cgroup(&**actor as &dyn Host, &[outside_dir as u64, manage, 0, 0, 0, 0])
+        })?,
+        Errno::EACCES,
+        "a MANAGE handle was given for a cgroup outside the caller's cgroup namespace",
+    )?;
+    tally.ok(
+        as_caller(actor, || {
+            cgroupfs::job_for_cgroup(&**actor as &dyn Host, &[inside_dir as u64, manage, 0, 0, 0, 0])
+        })?,
+        "a MANAGE handle was refused for a cgroup inside the caller's cgroup namespace",
+    )?;
+    // The opener's namespace: the actor leaves it, and writes through the
+    // descriptor it opened inside. It is still a move out of the root.
+    tally.ok(
+        setns(actor, home, 0),
+        "setns into the first cgroup namespace failed",
+    )?;
+    page.reset();
+    let at = page.put_bytes(format!("{}
+", inside.pid()).as_bytes())?;
+    let len = format!("{}
+", inside.pid()).len() as u64;
+    let written = as_caller(actor, || {
+        call(page.process, Syscall::Write, [procs as u64, at, len, 0, 0, 0])
+    })?;
+    tally.refused(
+        written,
+        Errno::ENOENT,
+        "a descriptor opened inside a cgroup namespace moved a process out of it after its writer left",
+    )?;
+    close(page.process, procs);
+    close(page.process, outside_dir);
+    close(page.process, inside_dir);
+    Ok(())
 }
 
 /// The creator's cgroup is the clone's namespace root: the clone, in the

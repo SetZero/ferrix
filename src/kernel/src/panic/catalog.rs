@@ -2129,7 +2129,8 @@ pub(crate) static STAGE13_MOUNT_NAMESPACES: Explanation = Explanation {
         "`sys_umount2` does not act on the mount on top of `.`, or does not write out every \
          filesystem of a detached subtree.",
         "`launch::load_native` starts a native child in the first namespace's root rather \
-         than its creator's context.",
+         than its creator's context, or in the first UTS, IPC and cgroup namespaces rather \
+         than its creator's.",
     ],
     see: "src/kernel/src/fs/namespace_check.rs; src/kernel/src/syscall/namespace.rs; \
           src/kernel/src/syscall/fsctl.rs; src/kernel/src/syscall/launch.rs; \

@@ -244,12 +244,21 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0xF800_0000);
 /// kernel's own self-checks drive system calls on behalf of a process of their
 /// own, and a procfs file they open or write has to know whose ids to judge.
 /// Always `None` outside [`acting_as`].
-static ACTING: SpinLock<Option<Arc<crate::syscall::process::Process>>> = SpinLock::new(None);
+///
+/// With the id of the task that set it, so that it answers only for that
+/// task: another thread asking meanwhile, an interrupt's work or a second
+/// check, is not made to act as the check's process.
+static ACTING: SpinLock<Option<(Arc<crate::syscall::process::Process>, Option<u64>)>> =
+    SpinLock::new(None);
 
 /// The process making the call: the running task's, or the one a boot check is
 /// acting as.
 pub(crate) fn acting() -> Option<Arc<crate::syscall::process::Process>> {
-    crate::syscall::process::current().or_else(|| ACTING.lock().clone())
+    crate::syscall::process::current().or_else(|| {
+        let slot = ACTING.lock();
+        let (process, task) = slot.as_ref()?;
+        (*task == crate::sched::current_id()).then(|| Arc::clone(process))
+    })
 }
 
 /// Run `body` with `process` as [`acting`]'s answer when no task is running.
@@ -272,7 +281,7 @@ pub(crate) fn acting_as<R>(
         if slot.is_some() {
             return Err("acting_as was nested, or a check left it set");
         }
-        *slot = Some(Arc::clone(process));
+        *slot = Some((Arc::clone(process), crate::sched::current_id()));
     }
     let answer = body();
     *ACTING.lock() = None;
