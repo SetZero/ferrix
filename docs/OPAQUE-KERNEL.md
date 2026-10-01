@@ -505,7 +505,7 @@ count of VM exits (`trace-cmd` on nazuna) are not written.
 
 ## 9. The channel round trip, and speculation domains (2026-10-01, os-c7)
 
-**For the certification consultant's design review. No code for the domain
+**Design reviewed by the certification consultant (os-ad, 2026-10-01): OK to build with the amendments in §9.3a. No code for the domain
 exists yet.** The customer's decision is in `docs/BACKLOG.md`, Decisions,
 2026-10-01 (2c0e37214).
 
@@ -628,6 +628,77 @@ check's own message:
 - the domain compare answering always true, which fails case 2;
 - the MANAGE test removed, which fails case 4;
 - the move not clearing the domain, which fails case 3.
+
+### 9.3a The consultant's amendments (os-ad, 2026-10-01, design review of 54509856e)
+
+The verdict was **OK to build**, with these three amendments.
+
+**(A1) A rise in privilege leaves the domain.** A member that ran a set-id
+program would otherwise keep its domain, and its peers could then attack the
+privileged program by branch-target injection. Linux's conditional `IBPB`
+keys on exactly this. So a process leaves its domain for good, its own and
+its space's, when it stops being dumpable, by any route:
+- an `execve` that changes its effective or filesystem ids (`exec_dumpable`);
+- a later change of those ids (`credentials_changed`);
+- `prctl(PR_SET_DUMPABLE, 0)`.
+
+Every one of these routes passes through `syscall::attributes::update`.
+Dumpability and credentials are the personality's, so the core offers a
+one-way `Process::leave_speculation_domain`. The personality calls it from
+there whenever a process ends up not dumpable. That is a downward call.
+
+Owed with it:
+- **Check case 5:** a member that execs a set-id file, and one that clears
+  dumpable, each switched with a member, issue one barrier each way.
+- **Control 4:** `leave_speculation_domain` made a no-op.
+
+**(A2) What the skip leaves out, and what it keeps.** The skip removes only the
+*predictor invalidation*:
+- x86-64: `IBPB`;
+- AArch64: `SMCCC_ARCH_WORKAROUND_1`;
+- ARMv7-A: `BPIALL`, or `ICIALLU` with `ACTLR.IBE`.
+
+x86-64's 32-entry return-stack refill stays at every switch of address space,
+in a domain or not. It is a few hundred cycles where `IBPB` costs about
+2 us, and keeping it removes any question of whether a defence of the kernel
+leans on it.
+
+Why the invalidation can go without weakening the kernel, on every family in
+the reference configuration: a program enters the kernel through its own
+system calls, faults and interrupts with no switch of address space in
+between. Anything it can train into a predictor against the kernel, it can
+therefore use against the kernel from its own entries, where no switch
+barrier has ever stood. The kernel is defended at entry instead, and that is
+unchanged:
+- x86-64: enhanced IBRS, AutoIBRS or IBRS-always-on, `STIBP`, and the entry
+  hardening of SPECULATION.md §3;
+- AArch64: the Spectre-BHB loop on every vector entry from EL0, and the
+  `CSV2` that SPECULATION.md §4 relies on;
+- ARMv7-A: SPECULATION.md §5.
+
+A barrier at a switch separates the program that ran from the program that
+runs next, and nothing else. SPECULATION.md §3's table changes in one row,
+*Spectre v2, program → program*, whose `IBPB` becomes "when the processor
+switches to another program's address space outside its speculation domain".
+`STIBP`, the refill and every program → kernel row are unchanged, and the row
+says so.
+
+**(A3) Two more check cases.**
+- **Case 6:** two processes in different domains sharing one space
+  (`CLONE_VM` without `CLONE_THREAD`). The space's domain is zero, so its
+  switch with a member issues the barrier.
+- **Case 7:** a job created marked inside a marked job is a domain of its own,
+  not its parent's. A switch between the two jobs' processes issues the
+  barrier.
+
+Items 3 and 4 of §9.4: the arguments are accepted, and the checks and
+controls listed there are owed with those landings. For 4, that includes a
+failing 0x1013 leaving registers 2 to 4 exactly as sent.
+
+When this lands, §9 carries this review as its "where it stands" verdict.
+The code goes back to the consultant with the check's logs and each of the
+four controls' logs, each showing its marker and the check's own
+`FERRIX-PANIC`.
 
 ### 9.4 The rest of the branch, for its own review
 
