@@ -1116,10 +1116,32 @@ fn kill() -> Step {
         if created != 0 {
             return 3;
         }
-        say("seccomp: kill: joining the killed thread");
-        // SAFETY: joins the thread made above.
-        let _ = unsafe { libc::pthread_join(thread, std::ptr::null_mut()) };
-        say("seccomp: kill: joined");
+        // Not joined: musl's join waits for the thread to have said it exited,
+        // which a thread its filter killed never does (glibc waits for the
+        // kernel to clear the thread id, and would return). Its death is read
+        // from the kernel instead: tgkill with signal 0 answers ESRCH once the
+        // thread is gone.
+        let _ = thread;
+        let start = std::time::Instant::now();
+        loop {
+            let tid = KILLED_TID.load(Ordering::Acquire);
+            if tid != 0 {
+                let (answer, error) = call3(
+                    libc::SYS_tgkill as c_long,
+                    std::process::id() as c_long,
+                    c_long::from(tid),
+                    0,
+                );
+                if answer == -1 && error == libc::ESRCH {
+                    break;
+                }
+            }
+            if start.elapsed() > std::time::Duration::from_secs(5) {
+                return 4;
+            }
+            // SAFETY: yields the processor.
+            let _ = unsafe { libc::sched_yield() };
+        }
         // This thread has no filter: the call runs.
         if call0(GETPPID).0 < 0 {
             return 5;
@@ -1129,15 +1151,20 @@ fn kill() -> Step {
     match reap(child) {
         0 => Ok(()),
         3 => Err("a thread could not be made".into()),
+        4 => Err("a thread its filter killed was still there after five seconds".into()),
         5 => Err("a thread killed by its filter took the process's calls with it".into()),
         BY_SIGSYS => Err("a thread killed by its filter ended its whole process".into()),
         other => Err(format!("the process of a killed thread ended with {other}")),
     }
 }
 
+/// The id of the thread its own filter kills.
+static KILLED_TID: AtomicI32 = AtomicI32::new(0);
+
 /// A thread that installs `KILL_THREAD` for `getppid` for itself alone and
 /// makes the call.
 extern "C" fn dies_by_its_filter(_argument: *mut c_void) -> *mut c_void {
+    KILLED_TID.store(to_i32(call0(GETTID).0), Ordering::Release);
     if install(&answering(&[(GETPPID, RET_KILL_THREAD)]), 0).0 == 0 {
         let _ = call0(GETPPID);
     }
