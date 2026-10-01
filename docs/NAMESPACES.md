@@ -708,6 +708,7 @@ of the task whose call makes it, kept inside what it pays for:
 |---|---|---|
 | user namespace, with its two maps | `CLONE_NEWUSER` | at creation; the maps are inline, written once |
 | mount namespace | `CLONE_NEWNS` | at creation |
+| time namespace, with its two offsets | `CLONE_NEWTIME` | at creation; the offsets are inline (§12.1) |
 | a copied mount | `CLONE_NEWNS` copying the tree | each, as `mount` already charges one |
 | a bind mount, and each copy `MS_REC` makes | `mount(MS_BIND)` | each (the existing mount charge) |
 | a map file's opener record | `open` of `uid_map`/`gid_map` | with the open's rendered snapshot, already charged |
@@ -1491,3 +1492,147 @@ boot check and a control in the `netns` line (FX-0893); `CLONE_NEWNET` is no
 longer `EINVAL` through `clone`, `clone3` and `unshare`; and a network namespace
 is created, configured and ended under the owner rule of §2.2, charged to the
 creating job as §5 asks (three more fills in `kmem_check`).
+
+  --check` run on the final rebase.
+
+### 12.1 The time namespace (2026-09-30, branch `stage13-timens`)
+
+The eighth namespace, `CLONE_NEWTIME` (0x80), after `time_namespaces(7)`. It
+shifts two clocks, `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME`, by an offset each,
+for the processes in it. Nothing else moves: `CLOCK_REALTIME`, `CLOCK_TAI` and
+the CPU-time clocks read as they do outside.
+
+**The object.** `syscall/timens.rs`: a `TimeNamespace` holds its owning user
+namespace (the creator's, for `CAP_SYS_TIME` over it), an id for
+`/proc/<pid>/ns/time` (Linux's `0xEFFFFFFA` for the first), two signed
+nanosecond offsets behind one spin lock, a `frozen` flag, and a `Charge` (F-37,
+§5). The first namespace has zero offsets, is frozen, and is never charged.
+Each `Process` holds two references, `time` (the namespace it is in) and
+`time_for_children`, under one lock of its own, taken alone. Both start as the
+first's; `fork` and `clone` give the child the parent's `time_for_children`
+for both, and freeze it (Linux's `timens_on_fork`); `exec` changes nothing.
+
+**Reaching it.** `CLONE_NEWTIME` lies inside `CSIGNAL`, so `clone` reads it as
+an exit signal and `clone3` refuses `CSIGNAL`, as Linux does: only `unshare`
+(and, when the small-namespaces plumbing lands, `setns`) can make or join one.
+`unshare(CLONE_NEWTIME)` needs `CAP_SYS_ADMIN` in the caller's user namespace
+(`EPERM`), creates a namespace owned by it, and sets `time_for_children` only:
+the caller stays where it was, `ns/time` unchanged and `ns/time_for_children`
+new. With `CLONE_NEWUSER` the user namespace is made and entered first, so the
+time namespace is owned by it and its creator holds the capability there.
+`setns` will do `TimeNamespace::join` (set `time_for_children`, after
+`capable_over(creds, ns.owner, CAP_SYS_ADMIN)` and over the caller's own user
+namespace); the machinery is the small-namespaces landing's.
+
+**The offsets file.** `/proc/<pid>/timens_offsets` reads and writes the
+namespace the process makes *children* in (`time_for_children`), as Linux's
+`proc_timens_set_offset` does, in Linux's order: parse
+(`monotonic|boottime <secs> <nsecs>`, at most two lines, `nsecs` below 10^9,
+`EINVAL`), `CAP_SYS_TIME` over the owner by the opener and by the writer
+(`EPERM`), range (`ERANGE`: seconds within +-9223372036 and the clock plus its
+offset within 0 to half that), then `EACCES` once frozen. The brief for this
+work says `EPERM` after the first process; Linux says `EACCES` and this follows
+Linux. The first namespace is frozen, so it is always `EACCES`.
+
+**Where each clock read applies them**, found by `grep now_nanos
+realtime_nanos Clock:: CLOCK_MONOTONIC CLOCK_BOOTTIME TIMER_ABSTIME` over
+`src/kernel/src`; every other `now_nanos` is the kernel's own deadline on the
+host clock and stays unshifted:
+
+| Site | Shift |
+|---|---|
+| `time::sys_clock_gettime` | add, for MONOTONIC, MONOTONIC_RAW, MONOTONIC_COARSE (monotonic offset) and BOOTTIME (boottime offset) |
+| `time::sys_clock_nanosleep`, `TIMER_ABSTIME` | subtract, same four (the two sleepable ones); relative sleeps are unshifted |
+| `syscall/timerfd.rs` `timerfd_settime`, `TFD_TIMER_ABSTIME` | subtract by the caller's offsets; the timer keeps host deadlines; `gettime` reports time left and is unshifted |
+| `futex` `FUTEX_WAIT_BITSET` without `FUTEX_CLOCK_REALTIME` | subtract the monotonic offset (Linux's `timens_ktime_to_host(CLOCK_MONOTONIC)`) |
+| `procfs::render::uptime`, `system::sys_sysinfo` | add the boottime offset |
+| `time::sys_times` | add the boottime offset (Linux does not; a program reading `times` beside `/proc/uptime` should agree) |
+| `/proc/stat` `btime`, `/proc/<pid>/stat` `starttime` | subtract / add the boottime offset, as Linux's `timens_sub_boottime` |
+| `clock_getres` | none (a resolution) |
+| `timer_create`, `mq_timedreceive` | not implemented here; nothing to shift |
+
+An offset is added by the caller's own namespace, read once per call (the
+process's `time`, not `time_for_children`). A result below zero reads zero.
+
+**The vDSO.** The fast path reads the kernel's time page, which is one page
+shared by all processes, so a process in a shifted namespace must not map it.
+Linux gives such a process its own vvar page. Here the simplest correct choice:
+a second object, built on first need, whose data page says `MODE_SYSCALL` (the
+mode the image already has for a counter the code cannot read) over the same
+image; every function in it makes its system call, where the shift applies.
+Only processes in a non-first time namespace pay for the system call; nothing
+in the image changes, so the certified code page is untouched. `exec` maps the
+variant when the process's namespace is not the first. A `fork` whose child's
+namespace differs from its parent's (the usual `unshare; fork` with no `exec`
+between) replaces the child's copy of the mapping at the same address before it
+can run (`AddressSpace::replace_shared_code`, which unmaps and maps again); a
+`CLONE_VFORK` child shares its parent's space, so it keeps the parent's view
+until its `exec`, which maps its own (refusing it would break every
+`posix_spawn`; Linux too leaves such sharers with whichever page faulted in
+first). On aarch64 and ARMv7-A
+the image holds only the signal trampoline and no clock function, so there is
+no fast path to bypass and no variant is built. An i386 program maps no vDSO
+(`docs/I386.md` §2) and always enters the kernel, where the shift is applied
+at the width of its call.
+
+**F-37.** One `Charge::arc::<TimeNamespace>()` at creation, to the job of the
+task asking, `ENOMEM` past the limit; the `kmem` line gains a fill.
+
+**Checks.** The `timens` boot line (FX-0910, `fs/timens_check.rs`), through
+the system-call layer: a shifted `clock_gettime` per clock, unshifted REALTIME,
+the file's every refusal, the frozen rule, a forked child in the namespace,
+the two `ns` links, absolute `clock_nanosleep` and `timerfd_settime`,
+`/proc/uptime` and `sysinfo`, and the vDSO variant's mode word. Each with a
+negative control, listed in the commit that adds it.
+
+**Built (2026-10-01, wound down, branch `stage13-timens`, not landed).**
+Everything above is built except what is listed as not below. The `timens`
+line (FX-0910, `fs/timens_check.rs`) passes on x86_64, AArch64 and ARMv7-A
+(`--smp 2`), `test-shell` and `test-vfs` with the static busybox pass on
+x86_64; `cargo xtask check` and `test-init` were not run, and the Arm
+`test-shell` and `test-vfs` were not run.
+
+Negative controls run, each stopping the boot with the check's own message:
+the first namespace's offsets writable ("the first time namespace's offsets
+were written"; the first version of this control, `frozen: false` in
+`first()`, did not fire, because the first fork of any process freezes the
+first namespace as well, so it now skips the frozen test for the first
+namespace's id), `unshare` moving the caller's own reference ("unshare(CLONE_NEWTIME)
+moved the caller's own clocks"), nanoseconds past a second accepted ("an offset
+with nanoseconds past a second was accepted"), a third line accepted ("three
+lines were accepted"), an unknown clock name accepted ("an offset for
+CLOCK_REALTIME was accepted"), the range test off ("an offset that makes a
+clock negative was accepted").
+
+Controls written and **not run** (`timens_controls.py` in the worker's
+scratchpad, not committed): freezing skipped in `Held::for_fork`; a child's
+own namespace not its parent's `time_for_children`; `CLOCK_BOOTTIME` taking
+the monotonic offset; `CLOCK_MONOTONIC_RAW` unshifted; `CLOCK_REALTIME`
+shifted; `times`, `sysinfo` and `/proc/uptime` each unshifted;
+`clock_nanosleep`, `timerfd_settime` and `FUTEX_WAIT_BITSET` each not
+converted; `CAP_SYS_TIME` not honoured; the opener and the writer each
+dropped from the capability test; `CAP_SYS_ADMIN` not needed to create; the
+vDSO swap skipped; the variant's mode not `MODE_SYSCALL`; the charge
+dropped. Those rules have checks and no evidence that their checks fire.
+
+Not built, and differences from Linux:
+
+* No real program proof. busybox's `unshare` has no `--time`, so no
+  `test-vfs` row could make a namespace; the exec path's choice of vDSO
+  (`vdso::map_into` with `is_shifted`) has no check at all.
+* `timer_create` and `mq_timedreceive` do not exist here, so nothing is
+  shifted for them. `setns` is the small-namespaces landing's.
+* `EACCES`, not `EPERM`, for a write after a process is in the namespace
+  (Linux's `frozen_offsets`; the brief said `EPERM`).
+* `times` is shifted by the boot-time offset; Linux does not shift it.
+* A multi-threaded process's `unshare(CLONE_NEWTIME)` moves the whole
+  process's children, not one thread's; threads share a `Process` here.
+* A `CLONE_VFORK` child keeps its parent's vDSO view until `exec`.
+* `CAP_SYS_TIME` joins `userns::HONOURED` (a change to a rule of §4 U8's
+  list); the certification consultant has not seen it.
+* Edits to the core ring: `user/space.rs` (`replace_shared_code`, and a
+  hint for `map_shared_code`), plus data in `panic/catalog.rs`,
+  `stages_check.rs` and `syscall/mod.rs`. Not reviewed.
+* `docs/generated` was not regenerated (the panic catalog's FX-0910 is
+  missing from `PANICS.md`, so the catalog gate fails until it is).
+
