@@ -204,6 +204,15 @@ with calls 0 to 449; a fuzz target; Miri in CI. S2 to S6 (the core hook,
 filters, `TRAP`, `TSYNC`, the guest test) are designed in `docs/SECCOMP.md`
 and not landed.
 
+**Done -- S1's review conditions on the crate (2026-10-01):** the consultant's
+after-the-fact review of S1 found `MAX_INSNS_PER_PATH` eight times too large, a
+scratch-word rule that carried nothing from a `RET` (Linux carries its running
+set on), and `run_all` of no filters answering `ALLOW`. The path limit is
+Linux's 32768 with `fits_path`/`path_cost` and a host test of both ends,
+`check_scratch` is `check_load_and_stores` line for line, held with the naive
+checker to six programs carrying the real Linux 7.0 verifier's answer
+(`oracle.c --accept`), and an empty chain answers `KILL_PROCESS`.
+
 **Where stage 13 stands (2026-10-01).** The exit criterion -- an unprivileged
 user namespace runs a pid 1 under a memory limit with a scoped OOM kill and a
 seccomp filter that blocks a call -- is **not met**: pid namespaces and the
