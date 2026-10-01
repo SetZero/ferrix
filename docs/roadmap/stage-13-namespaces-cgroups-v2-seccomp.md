@@ -325,3 +325,5 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+
+**State at wind-down (2026-10-01, os-ae):** `stage13-timens` (ead8586b2, on stage13-netns) builds and boots x86_64 with the native child given the creator's time namespace and vDSO; its gate (ae24-*) and 26 controls (ae-tn-c01..c26) were running, c01, c03-c07 FIRED, c02 and c08 stop at the native-child check first (rerun with that message); not reviewed by the consultant; lands after netns.
