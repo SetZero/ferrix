@@ -23,6 +23,12 @@ export LD_LIBRARY_PATH=$S/ubuntu12_32:$S/ubuntu12_32/panorama:$STEAM_RUNTIME_LIB
 export STEAM_RUNTIME_STEAMRT=/steam/steamrt STEAM_RUNTIME_SCOUT=/steam/scout
 export STEAMSCRIPT=$S/steam.sh
 export PATH=$RT/amd64/bin:$RT/amd64/usr/bin:$RT/usr/bin:$PATH
+# With an argument, a steam:// address (`test-steam-game`'s game-watch.sh):
+# hand it to the running client, as a second `steam` does, before anything
+# below takes the running client's place (its pid file).
+if [ $# -gt 0 ]; then
+    exec $S/ubuntu12_32/steam "$@"
+fi
 mkdir -p $HOME/.steam/sdk32 $HOME/.steam/sdk64
 ln -sfn $S $HOME/.steam/steam
 ln -sfn $S $HOME/.steam/root

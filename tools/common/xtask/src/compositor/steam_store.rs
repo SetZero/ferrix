@@ -69,6 +69,8 @@ use crate::ports::{Content, File};
 use crate::qemu::Watching;
 use crate::{Error, Result};
 
+mod game;
+
 /// The watcher of hyprix's windows.
 const WATCH: &[u8] = include_bytes!("../../../steam/store-watch.sh");
 
@@ -616,27 +618,48 @@ fn ppm(image: &Image) -> Vec<u8> {
     bytes
 }
 
-/// `cargo xtask test-steam-store`.
+/// `cargo xtask test-steam-store`, and `test-steam-game`, which goes on from
+/// the store to a game ([`game`]).
 ///
 /// # Errors
 ///
 /// When a volume is missing, the image cannot be built, the boot fails, or
 /// a step is not met; never with the account in the message.
-pub(crate) fn test_steam_store(args: &Args) -> Result<()> {
+pub(crate) fn test_steam_store(command: &str, args: &Args) -> Result<()> {
+    boot(args, command == "test-steam-game")
+}
+
+/// Boot the desktop's Steam and drive it to its store, and with `game` on
+/// to a game installed from it and started (`test-steam-game`).
+fn boot(args: &Args, game: bool) -> Result<()> {
     let arch = Arch::X86_64;
     let file = account_file();
     let account = match &file {
         Some(path) => read_account(path)?,
         None => None,
     };
+    if game && account.is_none() {
+        return Err(Error::new(format!(
+            "test-steam-game signs in with the Steam test account, and there is no account \
+             file at {}: put the account's name and password there, one a line, mode 0600, \
+             with Steam Guard off (docs/STEAM.md §1)",
+            file.map_or_else(
+                || "~/.config/ferrix/steam-test-account".to_owned(),
+                |file| file.display().to_string()
+            )
+        )));
+    }
     let args = everything_args(args)?;
     let programs = Programs::build(arch)?;
-    let (config, mut carried) = desktop(arch, config(), SCREEN, false, Backdrop::Any, &args)?;
+    let (config, mut carried) = desktop(arch, config(game), SCREEN, false, Backdrop::Any, &args)?;
     carried.ports.push(File {
         path: WATCH_PATH.to_owned(),
         mode: 0o644,
         content: Content::Bytes(WATCH.to_vec()),
     });
+    if game {
+        carried.ports.push(game::watcher());
+    }
     on_ferrousli(&carried.ports)?;
     let (image, kernel) =
         build_desktop_image(arch, &programs, &config, carried, &args, DESKTOP_DEFAULTS)?;
@@ -647,7 +670,7 @@ pub(crate) fn test_steam_store(args: &Args) -> Result<()> {
         qmp_port: Some(port),
         ..args.clone()
     };
-    let shots = paths::build_dir(arch).join("steam-store");
+    let shots = paths::build_dir(arch).join(if game { "steam-game" } else { "steam-store" });
     let _ = std::fs::remove_dir_all(&shots);
     std::fs::create_dir_all(&shots)
         .map_err(|error| Error::new(format!("making {}: {error}", shots.display())))?;
@@ -675,7 +698,12 @@ pub(crate) fn test_steam_store(args: &Args) -> Result<()> {
             shots: &shots,
             typed: false,
         };
-        verdict = Some(gate.drive(account.as_ref(), file.as_deref(), args.timeout));
+        let drove = gate.drive(account.as_ref(), file.as_deref(), args.timeout);
+        verdict = Some(if game {
+            drove.and_then(|()| gate.game())
+        } else {
+            drove
+        });
         Ok(())
     };
     let ran = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook);
@@ -733,16 +761,23 @@ fn everything_args(args: &Args) -> Result<Args> {
     Ok(args)
 }
 
-/// The desktop's configuration: the watcher, then what `run-compositor
-/// --everything` adds for Chrome on ferrousli but its window, for yserver
-/// and for Steam, in its order.
-fn config() -> String {
+/// The desktop's configuration: the watcher, and with `game`
+/// `test-steam-game`'s, then what `run-compositor --everything` adds for
+/// Chrome on ferrousli but its window, for yserver and for Steam, in its
+/// order.
+fn config(game: bool) -> String {
     format!(
         "# Written into the initramfs by `cargo xtask test-steam-store` (docs/STEAM.md): the\n\
          # --everything desktop's Steam, with a watcher of hyprix's windows.\n\
          exec-once = /bin/busybox sh /{WATCH_PATH}\n\
+         # Without the 3D card hyprix composites in software, and its blur behind Steam's\n\
+         # translucent windows took 19 of every 23 ms of a frame, two of the guest's four\n\
+         # processors (2026-10-01): what the gate judges is Steam, not the blur.\n\
+         decoration {{\n    blur {{\n        enabled = false\n    }}\n}}\n\
+         {}\
          # As `run-compositor --everything` adds them for Chrome on ferrousli, less its window.\n\
          {}{}\n{}\n{}",
+        if game { game::EXEC_ONCE } else { "" },
         crate::chrome::DESKTOP_ENV,
         crate::chrome::window_library_path(true),
         crate::yserver::desktop_config(),
@@ -1033,11 +1068,14 @@ impl Gate<'_, '_> {
     /// 2026-09-30 a correct name and password failed here with 420 red
     /// pixels while Steam mailed the account a code. The connection log's
     /// answers are the way to tell the two apart, so the message carries
-    /// them.
+    /// them. Red counts only while the window still has its fields: once
+    /// Steam has taken the sign-in, the window says "Loading user data"
+    /// over game art, whose reds counted 2232 pixels on 2026-10-01.
     fn still_asking(&mut self, window: &Listed, after: Duration) -> Result<()> {
         let (screen, kept) = self.dump("after-sign-in")?;
         let red = error_red(&screen, window);
-        if red >= REFUSED {
+        let fields = field_at(&screen, window.place((PROBE_X, NAME_AT.1)));
+        if red >= REFUSED && fields {
             return Err(Error::new(format!(
                 "Steam did not take the sign-in: {}s after Sign in its sign-in window shows red \
                  ({red} pixels) and still has its fields; the connection log's answers {:?}. \
@@ -1051,7 +1089,7 @@ impl Gate<'_, '_> {
                 kept.display()
             )));
         }
-        if after < GUARD_AFTER || field_at(&screen, window.place((PROBE_X, NAME_AT.1))) {
+        if after < GUARD_AFTER || fields {
             return Ok(());
         }
         Err(Error::new(format!(
