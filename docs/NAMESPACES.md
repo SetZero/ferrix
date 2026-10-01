@@ -812,7 +812,7 @@ after the final rebase; the consultant's OK on the diff before each
 | N2 | Binds: directory, subtree, file, socket; `MS_REC`; `MNT_DETACH` of a subtree, detached top without a parent; propagation no-ops; the kernel-wide dentry cache, rename lock and mount ids; mutable parents under the table lock | the tree bwrap builds, in the first namespace | boot checks: binds, detach, `readlink` = `mountinfo` | 6 |
 | N3 | Mount namespaces: `ns` in the fs context, per-mount namespace, crossing by the mount's table, copy on `clone`/`unshare(CLONE_NEWNS)` from root, teardown, `pivot_root` (with `"."`, `"."`), `chroot_fs_refs`, the recorded root and `root_disk`'s line, `/proc/<pid>/ns/mnt`, `mount-max`, F-37's mount-namespace fill; native children inherit the creator's namespace, root and cwd (§2.5) | **root bwrap works: `test-steam-bootstrap`'s check passes as root** | boot checks: privacy, bwrap-as-root sequence; `test-bwrap` as root | 8 |
 | N4 | User namespaces: `UserNamespace`, `CLONE_NEWUSER` and its refusals, `privileged()` in the first namespace only, `ns_capable`, cap sets, `capget`/`capset`/`PR_CAPBSET_*` in a child, `execve`'s recomputation and U7, the map files and `setgroups`, `/proc/<pid>/ns/user`, the sysctls, ids at the boundary, `status`'s `Cap*`; F-37's fill; audit's uid is the kernel id (§2.5) | U1 to U9 | boot checks: maps, the U rules, id sites, the audit record | 8 |
-| NP | procfs by `ptrace_may_access` (M8): `root`, `cwd`, `exe`, `fd/*` and `fd`'s listing, `maps`, `mountinfo`, `ns/*` (dumpable is cleared by a set-id `execve` since 2026-09-30); closes the `proc_fd_link` row of `docs/BACKLOG.md` and the "procfs honouring `PR_SET_DUMPABLE`" part of `docs/AUTH.md`'s phase 2 | M8 | boot checks of §8's M8 line | 3 |
+| NP | procfs by `ptrace_may_access` (M8): `root`, `cwd`, `exe`, `fd/*` and `fd`'s listing, `fdinfo`, `maps`, `ns/*` (`mountinfo` is not guarded, as on Linux) (dumpable is cleared by a set-id `execve` since 2026-09-30); closes the `proc_fd_link` row of `docs/BACKLOG.md` and the "procfs honouring `PR_SET_DUMPABLE`" part of `docs/AUTH.md`'s phase 2 | M8 | boot checks of §8's M8 line | 3 |
 | N5 | Unprivileged mounting: `may_mount` by `ns_capable`, M2's types and forced flags, M3's locking on copy, M4, M5, the lock's move on `pivot_root` | **bwrap as uid 1000 works** | boot checks: M1 to M5; `test-bwrap` as uid 1000 | 6 |
 | N6 | `test-steam-bootstrap` as uid 1000 (§11) without the set-aside: the image gets what bwrap's sandbox execs (`/usr/bin/true`, a static busybox under `/usr`, since the volume's libraries are links into `/data` that dangle inside the sandbox); the checker must exit 0 | the customer's end point | `test-steam-bootstrap --arch x86_64` | 3 |
 | N7 | pressure-vessel on Ferrix: `_v2-entry-point` running the §1 probe in the steamrt64 container, as uid 1000; whatever it needs beyond namespaces is filed as rows (hard links on btrfs, `F_OFD_SETLK`, the host `/usr` layout it copies graphics drivers from) | the container `steamwebhelper` runs in | a probe script in `test-steam-bootstrap` | 3, plus what it finds |
@@ -1449,3 +1449,23 @@ each stopping the boot with `smallns self-check failed: <message>`
 The namespace files' fill in `kmem_check` has no control: the detached mount
 the VFS charges bounds it, and the inode's few bytes do not change the count
 a job makes. That is a gap in the evidence, not in the code's charge.
+
+**NP built (2026-09-30, os-7c).** `credentials::may_access`
+is Linux's `ptrace_may_access`: a process always, a caller whose filesystem ids
+(its real ones for `get_robust_list`) are every one of the target's real,
+effective and saved ids when the target is dumpable, and a caller with
+`CAP_SYS_PTRACE` over the target's user namespace -- root in the first
+namespace, the namespace's owner from outside, nothing from a child
+namespace into a process it does not own. `/proc/<pid>/root`, `cwd`, `exe`,
+`fd` and `fdinfo` (their listings and links), `maps` and `ns/*` ask
+it and are refused `EACCES`; `get_robust_list` of another process's thread is
+`EPERM`, closing the gap the review of f16ab27a named. Dumpability is cleared
+by a change of ids through `attributes::credentials_changed` (the no-new-privs
+landing's); `PR_SET_DUMPABLE` sets it again, as bubblewrap does after it
+drops its ids. The `procacc` line (FX-0894) proves the refusals for a same-uid
+reader, for root and for root inside a user namespace, and that a process that
+changed its ids is refused until it sets dumpable. A set-id `execve` clearing
+dumpable is `attributes::exec_dumpable`'s, which the boot harness cannot drive
+with a real set-id file; AUTH.md's P2.1 names the rest. The check lists the
+`fd` and `fdinfo` directories, reads `maps`, and reads and follows the entries
+under `fd` and `fdinfo`; `mountinfo` and `mounts` are not guarded, as on Linux.
