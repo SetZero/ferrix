@@ -1028,11 +1028,7 @@ pub(super) fn check_kernel_memory() {
     println!(
         "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
          {} descriptors in flight, {} epoll registrations, {} eventfds, {} regions of one \
-<<<<<<< HEAD
-         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts, {} user, {} UTS, {} IPC and {} cgroup namespaces and {} namespace files, and \
-=======
-         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts, {} user namespaces and {} seccomp filters, and \
->>>>>>> 26faafa78 (WIP S3: boot checks)
+         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts, {} user, {} UTS, {} IPC and {} cgroup namespaces and {} namespace files, {} seccomp filters, and \
          was refused one more of each -- \
          ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged \
          came back",
@@ -1049,14 +1045,11 @@ pub(super) fn check_kernel_memory() {
         report.namespaces,
         fs::kmem_check::TREE,
         report.user_namespaces,
-<<<<<<< HEAD
         report.uts_namespaces,
         report.ipc_namespaces,
         report.cgroup_namespaces,
         report.namespace_files,
-=======
         report.filters,
->>>>>>> 26faafa78 (WIP S3: boot checks)
     );
 }
 
