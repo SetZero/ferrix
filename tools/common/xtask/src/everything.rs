@@ -17,7 +17,9 @@
 //! trees are Debian 13's: where they hold the same path it is the same
 //! package's file, byte for byte (281 of them on 2026-09-26). So this makes
 //! a third volume out of the two trees, linked rather than copied, and
-//! makes it again whenever either image is newer than it. Two files at one
+//! makes it again whenever either image is newer than it. Every image it
+//! makes is checked with `btrfs check` before it is used, and made again
+//! from copies when an old `mkfs.btrfs` wrote the links wrongly ([`broken`]). Two files at one
 //! path that differ stop it, naming the path, rather than one quietly
 //! winning -- with one exception, [`newer_runtime`] and [`newer_soname`]: a library whose newer build
 //! runs everything built against the older, where the newer is kept and the
@@ -71,7 +73,8 @@ const STEAM_SPARE_MIB: u64 = 4096;
 /// # Errors
 ///
 /// When a volume's fetch fails, the trees disagree about a file, or
-/// `mkfs.btrfs` cannot make the image.
+/// `mkfs.btrfs` cannot make the image, or `btrfs check` finds the one it
+/// made from copies broken too.
 pub(crate) fn volume() -> Result<PathBuf> {
     if cfg!(windows) {
         return volume_in_wsl();
@@ -110,6 +113,51 @@ pub(crate) fn volume() -> Result<PathBuf> {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let _ = std::fs::remove_file(&stamp);
+    let mut size = make(&directory, &trees, spare, &image, Files::Linked)?;
+    if let Some(why) = broken(&image)? {
+        println!(
+            "  everything: btrfs check finds {} broken ({why}): this host's mkfs.btrfs writes \
+             hard-linked files wrongly, as btrfs-progs 6.6 does; making it again from copies",
+            image.display()
+        );
+        size = make(&directory, &trees, spare, &image, Files::Copied)?;
+        if let Some(why) = broken(&image)? {
+            let _ = std::fs::remove_file(&image);
+            return Err(Error::new(format!(
+                "mkfs.btrfs made {} broken, from copies too: btrfs check says {why}",
+                image.display()
+            )));
+        }
+    }
+    std::fs::write(&stamp, sources)
+        .map_err(|error| Error::new(format!("writing {}: {error}", stamp.display())))?;
+    println!(
+        "  everything: {} ({size} MiB), btrfs check clean",
+        image.display()
+    );
+    Ok(image)
+}
+
+/// How the merged tree holds the trees' files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Files {
+    /// Hard links into the trees: one file system, and no second copy.
+    Linked,
+    /// Copies: for an `mkfs.btrfs` that writes hard links wrongly.
+    Copied,
+}
+
+/// Merge `trees` into `directory`'s `tree`, holding their files as `files`
+/// says, and make `image` of it with `spare` MiB of room; give its size in
+/// MiB.
+fn make(
+    directory: &Path,
+    trees: &[&PathBuf],
+    spare: u64,
+    image: &Path,
+    files: Files,
+) -> Result<u64> {
     let tree = directory.join("tree");
     if tree.exists() {
         std::fs::remove_dir_all(&tree)
@@ -118,13 +166,12 @@ pub(crate) fn volume() -> Result<PathBuf> {
     create_dir(&tree)?;
     let mut bytes = 0u64;
     for from in trees {
-        bytes += merge(from, &tree)?;
+        bytes += merge(from, &tree, files)?;
     }
 
     let size = bytes.div_ceil(1 << 20) + spare;
-    let _ = std::fs::remove_file(&stamp);
-    let _ = std::fs::remove_file(&image);
-    let file = std::fs::File::create(&image)
+    let _ = std::fs::remove_file(image);
+    let file = std::fs::File::create(image)
         .map_err(|error| Error::new(format!("creating {}: {error}", image.display())))?;
     file.set_len(size << 20)
         .map_err(|error| Error::new(format!("sizing {}: {error}", image.display())))?;
@@ -133,21 +180,62 @@ pub(crate) fn volume() -> Result<PathBuf> {
         .arg("-q")
         .arg("--rootdir")
         .arg(&tree)
-        .arg(&image)
+        .arg(image)
         .status()
         .map_err(|error| Error::new(format!("running mkfs.btrfs: {error}")))?;
     if !status.success() {
         // A half-made image would be taken as made next time.
-        let _ = std::fs::remove_file(&image);
+        let _ = std::fs::remove_file(image);
         return Err(Error::new(format!(
             "mkfs.btrfs {}: {status}",
             image.display()
         )));
     }
-    std::fs::write(&stamp, sources)
-        .map_err(|error| Error::new(format!("writing {}: {error}", stamp.display())))?;
-    println!("  everything: {} ({size} MiB)", image.display());
-    Ok(image)
+    Ok(size)
+}
+
+/// What `btrfs check --readonly` finds wrong with `image`: its first line
+/// that is not progress, or nothing when it is clean.
+///
+/// btrfs-progs 6.6 (Ubuntu 24.04's, so WSL's) makes an image from a tree of
+/// hard links whose linked files name directories the image does not have:
+/// "link count wrong", "unresolved ref dir". The guest then reads `I/O
+/// error` for those directories -- `/data/steam` and `/data/home` on
+/// 2026-10-01 -- and nothing said why. 6.17 makes the same tree clean.
+fn broken(image: &Path) -> Result<Option<String>> {
+    let output = Command::new("btrfs")
+        .args(["check", "--readonly"])
+        .arg(image)
+        .output()
+        .map_err(|error| {
+            Error::new(format!(
+                "running btrfs check, from btrfs-progs as mkfs.btrfs is: {error}"
+            ))
+        })?;
+    if output.status.success() {
+        return Ok(None);
+    }
+    let said = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    // Its first lines are progress ("Opening filesystem to check..."); the
+    // first that names a fault says why.
+    let lines: Vec<&str> = said
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('['))
+        .collect();
+    let first = lines
+        .iter()
+        .find(|line| {
+            ["error", "wrong", "unresolved", "corrupt", "fail"]
+                .iter()
+                .any(|fault| line.to_ascii_lowercase().contains(fault))
+        })
+        .or(lines.last())
+        .copied()
+        .unwrap_or("no reason given")
+        .to_owned();
+    Ok(Some(format!("{}: {first}", output.status)))
 }
 
 /// Each volume merged, as its image and the tree beside it, in the order
@@ -298,7 +386,7 @@ fn directory() -> Result<PathBuf> {
 /// that added: a file hard-linked (copied where it cannot be), a symbolic
 /// link made again with its target. A path already there from the other
 /// tree must be the same file or the same link.
-fn merge(from: &Path, into: &Path) -> Result<u64> {
+fn merge(from: &Path, into: &Path, files: Files) -> Result<u64> {
     let mut bytes = 0u64;
     let entries = std::fs::read_dir(from)
         .map_err(|error| Error::new(format!("reading {}: {error}", from.display())))?;
@@ -343,7 +431,7 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
                 Ok(_) => {}
                 Err(_) => create_dir(&target)?,
             }
-            bytes += merge(&source, &target)?;
+            bytes += merge(&source, &target, files)?;
         } else {
             if let Ok(there) = std::fs::symlink_metadata(&target) {
                 if !there.is_file() {
@@ -365,13 +453,13 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
                         say_kept(&target, "the later volume's, the newer runtime");
                         // Its bytes were counted when the other copy came.
                         remove(&target)?;
-                        link_or_copy(&source, &target)?;
+                        link_or_copy(&source, &target, files)?;
                         continue;
                     }
                     None => return Err(clash(&target)),
                 }
             }
-            link_or_copy(&source, &target)?;
+            link_or_copy(&source, &target, files)?;
             // Rounded up to a block, as the file system will store it.
             bytes += kind.len().div_ceil(4096) * 4096;
         }
@@ -401,9 +489,10 @@ fn remove(path: &Path) -> Result<()> {
     std::fs::remove_file(path).map_err(|error| Error::new(format!("{}: {error}", path.display())))
 }
 
-/// Hard-link `source` at `target`, or copy it where a link cannot be made.
-fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
-    if std::fs::hard_link(source, target).is_err() {
+/// Hard-link `source` at `target`, or copy it where a link cannot be made
+/// or `files` says copies.
+fn link_or_copy(source: &Path, target: &Path, files: Files) -> Result<()> {
+    if files == Files::Copied || std::fs::hard_link(source, target).is_err() {
         let _ = std::fs::copy(source, target)
             .map_err(|error| Error::new(format!("{}: {error}", target.display())))?;
     }
@@ -606,6 +695,26 @@ mod tests {
 
     const LIB: &str = "usr/lib/x86_64-linux-gnu";
 
+    /// Linked, a merged file is the tree's own, two names for one file;
+    /// copied, it is a file of its own, which is what an `mkfs.btrfs` that
+    /// writes hard links wrongly is given.
+    #[test]
+    fn copied_files_have_one_name() {
+        use std::os::unix::fs::MetadataExt;
+        let path = format!("{LIB}/libz.so.1");
+        let from = tree("copied-from", &[(&path, b"zlib")], &[]);
+        for (files, names) in [(Files::Linked, 2), (Files::Copied, 1)] {
+            let into = tree(&format!("copied-into-{files:?}"), &[], &[]);
+            create_dir(&into).unwrap();
+            let _ = merge(&from, &into, files).unwrap();
+            let merged = std::fs::metadata(into.join(&path)).unwrap();
+            assert_eq!(merged.nlink(), names, "{files:?}");
+            assert_eq!(std::fs::read(into.join(&path)).unwrap(), b"zlib");
+            let _ = std::fs::remove_dir_all(&into);
+        }
+        let _ = std::fs::remove_dir_all(&from);
+    }
+
     #[test]
     fn a_newer_version_is_read_from_the_string_table() {
         let table = b"\0GLIBC_2.2.5\0GCC_3.0\0GCC_14.0.0\0GCC_4.2.0\0";
@@ -639,8 +748,8 @@ mod tests {
         );
         let into = tree("runtime-into", &[], &[]);
         create_dir(&into).unwrap();
-        let _ = merge(&rustc, &into).unwrap();
-        let _ = merge(&chrome, &into).unwrap();
+        let _ = merge(&rustc, &into, Files::Linked).unwrap();
+        let _ = merge(&chrome, &into, Files::Linked).unwrap();
         // A tie goes to the rustc volume's; a later version wins either way.
         assert!(
             std::fs::read(into.join(&libgcc))
@@ -670,8 +779,8 @@ mod tests {
         let yserver = tree("printers-yserver", &[(printers, b"gcc 14")], &[]);
         let into = tree("printers-into", &[], &[]);
         create_dir(&into).unwrap();
-        let _ = merge(&rustc, &into).unwrap();
-        let _ = merge(&yserver, &into).unwrap();
+        let _ = merge(&rustc, &into, Files::Linked).unwrap();
+        let _ = merge(&yserver, &into, Files::Linked).unwrap();
         assert_eq!(std::fs::read(into.join(printers)).unwrap(), b"gcc 16");
         for root in [rustc, yserver, into] {
             let _ = std::fs::remove_dir_all(root);
@@ -687,8 +796,10 @@ mod tests {
         let chrome_z = tree("clash-file-chrome", &[(&libz, b"two")], &[]);
         let into_z = tree("clash-file-into", &[], &[]);
         create_dir(&into_z).unwrap();
-        let _ = merge(&rustc_z, &into_z).unwrap();
-        let error = merge(&chrome_z, &into_z).unwrap_err().to_string();
+        let _ = merge(&rustc_z, &into_z, Files::Linked).unwrap();
+        let error = merge(&chrome_z, &into_z, Files::Linked)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("libz.so.1.3.1"), "{error}");
 
         let odd = format!("{LIB}/libfoo.so.1");
@@ -700,8 +811,10 @@ mod tests {
         );
         let into = tree("clash-link-into", &[], &[]);
         create_dir(&into).unwrap();
-        let _ = merge(&rustc, &into).unwrap();
-        let error = merge(&chrome, &into).unwrap_err().to_string();
+        let _ = merge(&rustc, &into, Files::Linked).unwrap();
+        let error = merge(&chrome, &into, Files::Linked)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("libfoo.so.1"), "{error}");
         // A GCC runtime whose name says it is one but that names no version.
         let libgcc = format!("{LIB}/libgcc_s.so.1");
@@ -709,8 +822,8 @@ mod tests {
         let chrome_gcc = tree("clash-gcc-chrome", &[(&libgcc, b"none here")], &[]);
         let into_gcc = tree("clash-gcc-into", &[], &[]);
         create_dir(&into_gcc).unwrap();
-        let _ = merge(&rustc_gcc, &into_gcc).unwrap();
-        assert!(merge(&chrome_gcc, &into_gcc).is_err());
+        let _ = merge(&rustc_gcc, &into_gcc, Files::Linked).unwrap();
+        assert!(merge(&chrome_gcc, &into_gcc, Files::Linked).is_err());
         for root in [
             rustc, chrome, into, rustc_gcc, chrome_gcc, into_gcc, rustc_z, chrome_z, into_z,
         ] {
