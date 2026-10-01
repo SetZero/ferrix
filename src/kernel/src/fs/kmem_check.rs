@@ -161,12 +161,16 @@ fn fill_and_empty<T>(
     let (held, refused) = as_task_of(&job, || fill(&mut make));
     let made = held.len();
     let outcome = judge(&job, refused, made);
+    crate::console::println!("  kmem     DBG {name}: made {made} refused {refused:?} job {} sibling {}", used(&job, Resource::Kernel), used(&sibling, Resource::Kernel));
     let other = as_task_of(&sibling, || make(made.saturating_add(1)));
+    crate::console::println!("  kmem     DBG {name}: sibling made {} job {} sibling {}", other.is_ok(), used(&job, Resource::Kernel), used(&sibling, Resource::Kernel));
     let sibling_charged = used(&sibling, Resource::Kernel) != 0;
     let other_made = other.is_ok();
     drop(other);
     drop(held);
+    crate::console::println!("  kmem     DBG {name}: dropped job {} sibling {}", used(&job, Resource::Kernel), used(&sibling, Resource::Kernel));
     clean(made.saturating_add(2));
+    crate::console::println!("  kmem     DBG {name}: cleaned job {} sibling {}", used(&job, Resource::Kernel), used(&sibling, Resource::Kernel));
     if let Err(problem) = outcome {
         crate::console::println!("  kmem     {name}: {problem} after {made}");
         return Err(problem);
