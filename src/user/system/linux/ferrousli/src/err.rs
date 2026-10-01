@@ -130,4 +130,4 @@ va::variadic!(warn, 1, vwarn);
 va::variadic!(warnx, 1, vwarnx);
 va::variadic!(err, 2, verr);
 va::variadic!(errx, 2, verrx);
-va::variadic!(error, 3, verror);
+va::variadic!(weak error, 3, verror);

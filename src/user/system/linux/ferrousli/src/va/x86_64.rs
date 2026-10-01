@@ -182,12 +182,23 @@ impl VaList<'_> {
 /// `variadic!(name, named, target)`: `name` is the C name, `named` the number
 /// of named arguments (0 to 5, all integers or pointers), and `target` a
 /// function `unsafe extern "C" fn(named..., VaListArg) -> R`.
+///
+/// `variadic!(weak name, ...)` defines `name` weak, for a name outside C
+/// and POSIX that programs define for themselves: git has its own `error`,
+/// and a static link takes the program's over a weak one rather than
+/// failing on two.
 macro_rules! variadic {
+    (weak $name:ident, $named:tt, $target:path) => {
+        #[cfg(not(test))]
+        $crate::va::variadic!(@thunk ".weak ", stringify!($name), $named, $target);
+        #[cfg(test)]
+        $crate::va::variadic!(@thunk ".weak ", concat!("ferrousli_test_", stringify!($name)), $named, $target);
+    };
     ($name:ident, $named:tt, $target:path) => {
         #[cfg(not(test))]
-        $crate::va::variadic!(@thunk stringify!($name), $named, $target);
+        $crate::va::variadic!(@thunk ".globl ", stringify!($name), $named, $target);
         #[cfg(test)]
-        $crate::va::variadic!(@thunk concat!("ferrousli_test_", stringify!($name)), $named, $target);
+        $crate::va::variadic!(@thunk ".globl ", concat!("ferrousli_test_", stringify!($name)), $named, $target);
     };
     (@register 0) => { "%rdi" };
     (@register 1) => { "%rsi" };
@@ -195,11 +206,11 @@ macro_rules! variadic {
     (@register 3) => { "%rcx" };
     (@register 4) => { "%r8" };
     (@register 5) => { "%r9" };
-    (@thunk $label:expr, $named:tt, $target:path) => {
+    (@thunk $binding:expr, $label:expr, $named:tt, $target:path) => {
         core::arch::global_asm!(
             concat!(".pushsection .text.ferrousli_va.", $label, ",\"ax\",@progbits"),
             ".p2align 4",
-            concat!(".globl ", $label),
+            concat!($binding, $label),
             concat!(".type ", $label, ",@function"),
             concat!($label, ":"),
             // The save area at 0(%rsp), the structure at 176(%rsp), the

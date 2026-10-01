@@ -112,12 +112,23 @@ impl VaList<'_> {
 /// `variadic!(name, named, target)`: `name` is the C name, `named` the number
 /// of named arguments (0 to 5, all integers or pointers), and `target` a
 /// function `unsafe extern "C" fn(named..., VaListArg) -> R`.
+///
+/// `variadic!(weak name, ...)` defines `name` weak, for a name outside C
+/// and POSIX that programs define for themselves: git has its own `error`,
+/// and a static link takes the program's over a weak one rather than
+/// failing on two.
 macro_rules! variadic {
+    (weak $name:ident, $named:tt, $target:path) => {
+        #[cfg(not(test))]
+        $crate::va::variadic!(@thunk ".weak ", stringify!($name), $named, $target);
+        #[cfg(test)]
+        $crate::va::variadic!(@thunk ".weak ", concat!("ferrousli_test_", stringify!($name)), $named, $target);
+    };
     ($name:ident, $named:tt, $target:path) => {
         #[cfg(not(test))]
-        $crate::va::variadic!(@thunk stringify!($name), $named, $target);
+        $crate::va::variadic!(@thunk ".globl ", stringify!($name), $named, $target);
         #[cfg(test)]
-        $crate::va::variadic!(@thunk concat!("ferrousli_test_", stringify!($name)), $named, $target);
+        $crate::va::variadic!(@thunk ".globl ", concat!("ferrousli_test_", stringify!($name)), $named, $target);
     };
     // After the pushes, the saved r0 is at sp + 16 and the caller's stack
     // arguments at sp + 32; the list is in r12.
@@ -127,12 +138,12 @@ macro_rules! variadic {
     (@pass 3) => { "mov r3, r12" };
     (@pass 4) => { "str r12, [sp]" };
     (@pass 5) => { "ldr r4, [sp, #32]\n str r4, [sp]\n str r12, [sp, #4]" };
-    (@thunk $label:expr, $named:tt, $target:path) => {
+    (@thunk $binding:expr, $label:expr, $named:tt, $target:path) => {
         core::arch::global_asm!(
             concat!(".pushsection .text.ferrousli_va.", $label, ",\"ax\",%progbits"),
             ".p2align 2",
             ".arm",
-            concat!(".globl ", $label),
+            concat!($binding, $label),
             concat!(".type ", $label, ",%function"),
             concat!($label, ":"),
             "push {{r0-r3}}",
