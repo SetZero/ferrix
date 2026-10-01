@@ -255,7 +255,7 @@ Linux):
 |---|---|---|
 | `stage13-np`, `stage13-fdinfo` | **landed 2026-10-01** | see below |
 | `stage13-n5` | **landed 2026-10-01** | see N5 in `docs/NAMESPACES.md` §12 |
-| `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
+| `stage13-bwrap-user` | **landed 2026-10-01** | `test-bwrap` runs bubblewrap's four lists and the pressure-vessel-shaped container as root and as uid 1000. The uid 1000 run had failed with "Creating newroot failed: Permission denied": a new `tmpfs` was 0755 and root's; it is now `1777` and the mounter's, as Linux's is, with a `mountperm` case |
 | `stage13-netns` | network namespaces, veth pairs, per-namespace stacks | boots on three architectures, `test-shell`, `test-vfs`, `test-net`, 30 controls; `check` not run |
 | `stage13-timens` | time namespace | agent had not reported |
 | `stage13-cgctl` | M2's reclaim and `memory.high`, `cgroup.freeze`, `cpu.max` with `cpu.stat`, the `io` controller (`io.stat`, `io.max`) | reclaim, freeze and cpu booted; the io check stopped at its last line (a quota-slot count, a fix written, not booted); no full boot, no `test-shell`/`test-vfs`, no negative control run |

@@ -1505,6 +1505,9 @@ an unmount or detach of a locked mount alone `EINVAL`, a bind without
 `MS_REC` over locked mounts `EINVAL`. Removing or renaming a name another
 namespace has a mount on takes that mount off, as Linux does since 3.18, so
 an unprivileged mount pins nothing against its owner.
+A new `tmpfs` is `1777` and owned by the mounter's filesystem ids, as Linux's
+is (landing `stage13-bwrap-user`), which is what lets bubblewrap make its new
+root as uid 1000; `mode=`, `uid=` and `gid=` are not read.
 `/proc/sys/user/max_user_namespaces` reads the limit. The `mountperm` line
 (FX-0900) drives every rule as uid 1000 and as the owner of a user namespace,
 and the `mounts` line now also shows a bind of a `ro,nosuid,nodev,noexec`
