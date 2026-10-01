@@ -1,7 +1,7 @@
 # Status, estimates and forecast
 
 *Rows reviewed 2026-09-30; the velocity, the burndown and the Gantt are
-still the count of 2026-09-26.* Over the four days of the
+the count of 2026-10-01.* Over the four days of the
 points era that the fleet ran, 2026-09-14 to -17, about 445 points landed:
 131, 34, 66 and 214, which is ≈ 111 a calendar day and ≈ 150 a day the fleet
 was running, with 8–10 sessions, 15–20 points a session-day, and 21 points a
@@ -14,7 +14,11 @@ lines of Rust. Counted again on 2026-09-26, the total is ≈ 1,200 points in
 13 calendar days (≈ 92 a day): 2026-09-25, a day of one or two sessions on
 the certification audit, landed ≈ 26, and 2026-09-26, with about twelve
 sessions, ≈ 278, of which 103 had been estimated before the work started
-and the rest were sized afterwards from `git log`. That is historical
+and the rest were sized afterwards from `git log`. Counted again on
+2026-10-01, 2026-09-27 to -30 and the day's landings so far add ≈ 390,
+nearly all sized afterwards (≈ 170, 55, 27, 95 and 43; N3's 8 is nearly the
+only estimate made before), which makes ≈ 1,590 points in 18 calendar days
+(≈ 88 a day), and ≈ 78 a day over the last five. That is historical
 velocity, not a current schedule. The table records the state now.
 Stages 12 to 16 were sized in words before points existed; their points are
 first guesses rather than an owner's estimate and are replaced when a session
@@ -59,25 +63,24 @@ sizes them.
 
 ## Burndown
 
-Scope is the table's sized, unfinished rows on 2026-09-26, after the day's
-landings: client pages 8, XWayland and the second pass 48, dmabuf and virgl
-48, the GC400's remaining 21 of 32, Chrome on the DK1 50, stage 13's rest 30,
-stage 15's 35 (init's L10 6, and authentication's P0 2 and phase 1 27),
-the desktop clients' foundation 21, a desktop in the Pixel 7's VM 17,
-stage 14 40 and stage 22's 124 (bubblewrap 13, alsa-lib 3, Venus 8, and the
-guess of 100 for the 32-bit ABI and Proton) -- **≈ 442 points**. The
+Scope is the table's sized, unfinished rows on 2026-10-01: client pages 8,
+the second pass 8, dmabuf and virgl 48, the GC400's remaining 21 of 32,
+Chrome on the DK1 50, stage 13's rest 30, stage 15's hyprlock P1.5 5,
+stage 14 40 and stage 22's 71 (bubblewrap's rest 13, and the guess of 100
+less the 42 the 32-bit ABI's I1 to I4 spent, 58) -- **≈ 281 points**. The
 unsized rows (stage 20, stage 21, the audio server, Chrome's window on
-ferrousli, the desktop clients' own programs, the Pixel's USB driver) are
-outside it, so the chart shows when the *sized* work ends, not when the
-roadmap does. Scope has grown as often as it has shrunk: since 2026-09-24,
-97 points of it landed (init 45, cgroups 28, sound 24), sound's server and
-its 3 points went out of it to be sized, and 67 were added
-(authentication, the clients' foundation, the Pixel's desktop), so the
-chart is a forecast from today, not a history.
+ferrousli, the desktop clients' own programs, the Pixel's USB driver, the
+installer's rest) are outside it, so the chart shows when the *sized* work
+ends, not when the roadmap does. Since 2026-09-26, 161 points left it: the
+X server 36 (as yserver, with the second pass's share), init's L10 6,
+authentication's phase 1 about 22, the clients' foundation 21, the Pixel's
+desktop 17, alsa-lib 3 and the 32-bit ABI's 42; nothing sized was added.
+The 67 a day below is not re-measured: there has been almost no estimated
+work to measure it on since 09-26, which is itself the finding.
 
-![Burndown: 442 sized points remaining from 2026-09-26, done 10-01 at 92 a day or 10-03 at 67 a day; below it, points landed per day from 09-14 to 09-26, about 1,200 in total](../img/burndown.svg)
+![Burndown: 281 sized points remaining from 2026-10-01, done 10-05 at 88 a day or 10-06 at 67 a day; below it, points landed per day from 09-14 to 10-01, about 1,590 in total](../img/burndown.svg)
 
-In the upper chart the steeper line is the running average, 92 a day,
+In the upper chart the steeper line is the running average, 88 a day,
 which counts everything that landed. The shallower is 67 a day, only the
 work that was estimated before it started, 2026-09-24 to -26: that is the
 rate the sized scope burns at, since the unsized work that lands beside it
@@ -85,7 +88,7 @@ rate the sized scope burns at, since the unsized work that lands beside it
 Neither allows for the qualification below: a step full of unknowns may
 take twice its estimate. The lower chart is what has landed, by day, and
 the running total; hatched is what was sized afterwards from `git log`, all
-of 09-18 to 09-23 and most of 09-25 and 09-26 (`docs/BACKLOG.md`,
+of 09-18 to 09-23 and most of 09-25 to 10-01 (`docs/BACKLOG.md`,
 *Velocity*).
 
 ## Gantt
@@ -97,7 +100,7 @@ the sized rows only. It is a sequence for reading the size of the work, not
 a plan: several of these would run side by side, and the order is the
 customer's to change.
 
-![Gantt: done work from 2026-09-13 to 09-26, eleven streams in progress, and the sized remainder as one queue at 67 points a day ending 10-03](../img/gantt.svg)
+![Gantt: done work from 2026-09-13 to 10-01, ten streams in progress, and the sized remainder as one queue at 67 points a day ending 10-06](../img/gantt.svg)
 
 Both charts are drawn by `tools/common/gen/gen-roadmap-charts.py`, which holds their
 numbers; change them there when the table or the velocity count changes, and

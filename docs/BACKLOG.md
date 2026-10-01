@@ -722,6 +722,29 @@ day over 2026-09-24 to -26, and that is the rate the roadmap's sized scope,
 ≈ 442 points, burns at: the unsized work beside it takes nothing off it.
 The roadmap's *Burndown* lists that scope.
 
+### Update, 2026-10-01
+
+Counted from 02afa6c8 to `ff5e45ef9`, the 441 commits of 2026-09-27 to
+2026-10-01, by the same rule. Almost nothing had an estimate before it
+started (N3's 8), so every row but that one is sized afterwards from `git log`,
+in clusters, on the same scale, and is soft.
+
+| day | sized afterwards | what |
+|---|---|---|
+| 2026-09-27 | ≈ 170 | the certification's requirements and traces (object/'s 103 low-level requirements, the item's 51 high-level, every unsafe site traced, F-21b's audit record, three architectures' coverage) ≈ 60; the i386 ABI's I2b to I4 ≈ 20; PulseAudio's server, waybar's drawing and alsa ≈ 25; the clipboard's vdagent and its gate ≈ 13; the Pixel's adb ≈ 13; the website and brand ≈ 8; the seam's bench, inotify, pidfds and the rest ≈ 31 |
+| 2026-09-28 | ≈ 55 | yserver's first half ≈ 25, the installer MVP 8, System V semaphores 3, Steam's bootstrapper 5, the test-time cuts and CI 5, mount flags 3, the namespace, installer and yserver designs 6 |
+| 2026-09-29 | ≈ 27 | yserver's second half 11, Steam's sign-in window 5, the layout move 3, the X clipboard 3, the rest 5 |
+| 2026-09-30 | ≈ 95 (8 estimated) | N2 and N3 ≈ 16, the Finder and `ferrix-driver`'s block move 13, seccomp S1 and its design 11, Claude Code's XSAVE, TUI and Zenbleed 13, hyprix's split into modules 13, ferrousli's glibc names for Steam, Mesa and Python 10, Steam's store gate 8, F-54 and F-55 4, the rest 7 |
+| 2026-10-01 | ≈ 43 | N4 user namespaces 8, S2 and the small namespaces 11, `pkg` 5, ferrousli's POSIX timers and Claude Code's gate 5, `--everything` building what it lacked 6, the apps 5, the roles and docs 3 |
+
+That is **≈ 390 points in five calendar days, ≈ 78 a day**, against the
+≈ 92 a day of the count before it. The running total is **≈ 1,590 points in 18
+calendar days, ≈ 88 a day**. The 67 a day measured on estimated work has no
+new data, because the work since 09-26 was not estimated first; the rule above
+was not kept, and the next count should say so again. The 09-26 tail after
+`02afa6c8` is in no count: the table above started at that commit, and its
+date column does not.
+
 ---
 
 ## Decisions
