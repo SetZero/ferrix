@@ -211,7 +211,7 @@ enum NamespaceKind {
 
 impl NamespaceKind {
     /// Every one, in the order `ns` lists them, with its name.
-    const ALL: [(NamespaceKind, &'static [u8]); 8] = [
+    const ALL: [(NamespaceKind, &'static [u8]); 10] = [
         (NamespaceKind::Mount, b"mnt"),
         (NamespaceKind::User, b"user"),
         (NamespaceKind::Uts, b"uts"),

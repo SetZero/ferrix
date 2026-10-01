@@ -594,6 +594,14 @@ boot check that tries the attack and must be refused (§8).
   exists to write. `capable_over` is unchanged, so neither capability reaches
   a file, a process or the first namespace's tables.
 
+  **And by one for time namespaces (2026-10-01):** `CAP_SYS_TIME` joins
+  `userns::HONOURED`, and its one site is `timens::write_offsets`, which asks
+  `capable_over` against the owner of the time namespace whose offsets are
+  written, for the opener and for the writer. Setting the clock
+  (`settimeofday`, `clock_settime`, `adjtimex`) still needs `privileged()`,
+  root of the first namespace, so fake root shifts its own namespace's
+  monotonic and boot-time clocks and never the machine's.
+
   **U7 and U8 are deliberate** (the customer, 2026-09-28, subject to the
   certification consultant's view): each refuses less than Linux allows,
   and nothing Steam, pressure-vessel or bwrap runs needs what they refuse.
