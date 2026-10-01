@@ -6,8 +6,10 @@ decisions were taken along the way. It exists because a dozen sessions work on
 the tree at once, and a decision that lives only in a message between two of
 them is a decision the third one reverts.
 
-The customer is the product owner and decides scope and priority; the fleet
-coordinator keeps the landing order. A session that lands a piece of this
+The customer decides scope and priority; the product owner session acts for
+the customer between the customer's words and keeps the landing order, and
+the certification consultant reviews changes to the certified item
+([AGENTS.md](../AGENTS.md) describes both roles). A session that lands a piece of this
 file updates its row in the same landing, the way it updates the stage's
 file under `docs/roadmap/` (and `status.md`'s status table when a row
 changes). When a row is done it is deleted, not struck through;
@@ -219,7 +221,9 @@ session's name in its owner cell in your first landing.
 
 | Session | Area |
 |---|---|
-| the customer | Product owner: priorities, decisions, what is stable enough for `main` |
+| the customer | Owner: scope, priorities, decisions, what is stable enough for `main` |
+| os-db | Product owner (`AGENTS.md`), named by the customer 2026-10-01; the previous one was the gate host's bridge session of 2026-09-28 and 29, whose handover is `~/.local/share/ferrix/po-2026-09-29/HANDOVER.md` |
+| os-ad | Certification consultant (`AGENTS.md`), named by the customer 2026-10-01; its ledger is `~/.local/share/ferrix/cert-consultant/reviews.md` |
 | ferrix-2c | Fleet coordinator: landing order, the landing lock, shared hot files, unblocking, pushes. Named ferrix-f6 after the 2026-09-27 restart; the fleet **wound down 2026-09-27** with everything finished on `main` and every unfinished branch pushed to GitHub (`docs/roadmap/where-it-stands.md`, *Where we left off*) |
 | ferrix-15 | The init (`docs/INIT.md`), L13 parked; F-21b's audit record, closed 2026-09-27. **Wound down 2026-09-27**, handover in `~/.local/share/ferrix/ferrix-15/HANDOVER.md`. Parked: W-8 boot 21b on branch `boot-21b` (full gate green on cf13918f; left: ferrix-20's diff review, H.BOOT.15 is new, a rebase with carry and re-count, H.BOOT.14 as a parent of L.aarch64.44-46, the L.boot.35 control), then 21c (devmgr). Not committed: the devmgr=init coverage boot, one `Gate::new("test-init", "init", false)` line in `tools/common/xtask/src/coverage.rs`'s SUITE (passes under drcov on the Arm pair in 141 s and 132 s; needs ferrix-20's OK) |
 | ferrix-55b | T0 of the live kernel update plan (cf265506, debe8998, 742fdaeb) and S0 of the opaque-kernel plan, both seam rows measured (d6974a66, c4c8b186); the plan is shelved by the customer (2026-09-27), so nothing further is owned here |
