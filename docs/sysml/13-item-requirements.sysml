@@ -914,6 +914,19 @@ package FerrixItemRequirements {
                 line).";
             attribute :>> parent = ("O.ISOLATE", "O.VALIDATE");
         }
+        requirement <'H.TRAP.17'> barrierOutsideASpeculationDomain : ItemHighLevel {
+            attribute :>> statement = "A switch between the address spaces of two
+                programs not in one speculation domain shall issue the predictor
+                barrier; a switch between two address spaces of one domain shall not.
+                A domain is a job marked at its creation by the holder of MANAGE on
+                its parent, and holds only the programs born in it that have not
+                left it.";
+            attribute :>> criterion = "The `domain` line: switches inside one
+                domain decide no barrier, and switches to and from no domain,
+                another domain, a domain inside it, a mover, a leaver and a sharer
+                decide one each way, on every architecture the suite boots.";
+            attribute :>> parent = "O.ISOLATE";
+        }
     }
 
     package Boot {

@@ -4,7 +4,8 @@
  *
  * ARMv7-A, the Cortex-A7 of the STM32MP157, has no requirements of its own
  * beyond these: what the system call path does for the filter the core asks
- * about every call (seccomp, `docs/SECCOMP.md` §3.3). The rest of the
+ * about every call (seccomp, `docs/SECCOMP.md` §3.3), and what its switch
+ * barrier does inside a speculation domain (`docs/OPAQUE-KERNEL.md` §9). The rest of the
  * architecture waits in the baseline with the other architectures' unwritten
  * rows. Ids are `L.armv7a.<n>`, flat through the architecture; the rules of
  * part 19 hold.
@@ -40,6 +41,20 @@ package FerrixArmv7aRequirements {
             attribute :>> parent = "H.TRAP.16";
             attribute :>> unit = ("arch::armv7a::audit_arch",
                 "arch::armv7a::syscall_rollback_value");
+        }
+    }
+
+    package Speculation {
+        requirement <'L.armv7a.3'> nothingInsideADomain : ItemLowLevel {
+            attribute :>> statement = "switch_barrier_in_domain shall issue nothing:
+                this architecture's switch barrier is BPIALL, or ICIALLU with
+                ACTLR.IBE, the predictor invalidation a speculation domain leaves
+                out, and no defence of the kernel is on the switch path.";
+            attribute :>> criterion = "Switches between two members of one marked
+                job decide no barrier and switches out of the domain decide one
+                each way (the `domain` line on an ARMv7-A boot).";
+            attribute :>> parent = "H.TRAP.17";
+            attribute :>> unit = "arch::armv7a::speculation::switch_barrier_in_domain";
         }
     }
 }

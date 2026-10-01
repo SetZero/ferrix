@@ -110,7 +110,7 @@ processor, read back on each (`arch/x86_64/speculation.rs`).
 |---|---|---|---|
 | Spectre v1 | clamps (§2); `lfence` after the conditional `swapgs` on interrupt entry; a program's registers zeroed on `SYSCALL` entry and on every trap from ring 3 | always | Intel SA-00088, CVE-2019-1125 (SWAPGS) |
 | Spectre v2, program → kernel | enhanced IBRS (Intel, `IBRS_ALL`), else AutoIBRS (AMD, `EFER.AIBRSE`), else IBRS on AMD parts that say it may be left on (`CPUID 0x8000_0008.EBX[16]`) | whichever the processor offers | Intel *Speculative Execution Side Channel Mitigations*; AMD *Software Techniques for Managing Speculation* |
-| Spectre v2, program → program | `IBPB` and a 32-entry return stack refill when a processor switches to another program's address space; `STIBP` unless enhanced IBRS already covers the sibling thread | `IBPB`/`STIBP` where offered; the refill always | as above; the refill also covers SpectreRSB |
+| Spectre v2, program → program | `IBPB` and a 32-entry return stack refill when a processor switches to another program's address space; between two programs of one speculation domain (a job marked at its creation, `docs/OPAQUE-KERNEL.md` §9) the refill alone, without `IBPB`; `STIBP` unless enhanced IBRS already covers the sibling thread; the program → kernel rows unchanged by the domain | `IBPB`/`STIBP` where offered; the refill always | as above; the refill also covers SpectreRSB |
 | Speculative store bypass | `SSBD`, through `IA32_SPEC_CTRL` or AMD's `VIRT_SPEC_CTRL` | unless `SSB_NO` | Intel SA-00115, AMD SSBD whitepaper |
 | MDS | `VERW` on every return to ring 3 | Intel, `MD_CLEAR`, no `MDS_NO` | Intel SA-00233 |
 | Meltdown, L1TF | **none** — reported | — | §6 |
@@ -120,8 +120,12 @@ processor, read back on each (`arch/x86_64/speculation.rs`).
 **Why these, and why always on.** Linux enables most of these conditionally —
 `SSBD` and `IBPB` only for programs that ask, by `prctl` or `seccomp`. The item
 cannot know which of its programs run a JIT or a sandbox, and its one claim is
-that none of them can read another. So `on` takes the strict form of each and
-the cost is measured (§8) rather than assumed.
+that none of them can read another outside its speculation domain. Every
+program is in none unless the integrator started it in a job marked one at
+its creation (`docs/OPAQUE-KERNEL.md` §9, AoU-14, V-07, the customer's
+decision of 2026-10-01), and leaves it for good by moving between jobs or by
+losing dumpability. So `on` takes the strict form of each and the cost is
+measured (§8) rather than assumed.
 
 **The switch barrier is per processor and per root.** `install_user_root`
 calls `speculation::entered_space`, which issues the barrier only when the
@@ -129,6 +133,17 @@ processor last ran a *different* address space: a thread returning after the
 idle loop or a kernel thread costs nothing. A root table freed and reused for a
 new process would look like the old one, so `prepare_user_root` wipes a new
 root from every processor's record first.
+
+**Inside a speculation domain the invalidation is left out, on every
+architecture.** Each processor also records the domain of the space it last
+ran, read as that space left it, and `entered_space` skips the predictor
+invalidation when the incoming space is in the same, non-zero domain: `IBPB`
+here, `ARCH_WORKAROUND_1` on AArch64 (§4), `BPIALL` or `ICIALLU` on ARMv7-A
+(§5). The return-stack refill stays at every switch. A program enters the
+kernel through its own calls, faults and interrupts with no switch in between,
+so no defence of the kernel can lean on the switch barrier, and every program
+→ kernel row above stands as it is (`docs/OPAQUE-KERNEL.md` §9.3a, A2). The
+`domain` boot line checks the rule.
 
 **No retpolines.** rustc 1.97.1 accepts
 `-C target-feature=+retpoline-indirect-calls` only with *"this was previously

@@ -55,8 +55,8 @@ pub(crate) struct Report {
 
 /// Run every case.
 ///
-/// Verifies: (rows to be numbered: H.spec domain, L.spec per architecture,
-/// L.object marking and membership; `docs/OPAQUE-KERNEL.md` §9.3)
+/// Verifies: H.TRAP.17, L.object.107, L.object.108, L.object.109, L.object.110,
+/// L.x86_64.126, L.aarch64.52, L.armv7a.3
 pub(crate) fn run() -> Result<Report, &'static str> {
     let mut report = Report {
         hardened: arch::HARDENED,
