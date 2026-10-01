@@ -67,21 +67,21 @@ ferrix_rt::entry!(main);
 const PAGE: usize = 4096;
 
 /// Entries in each of the net ring's two arrays, and slots in its data VMO.
-const ENTRIES: u32 = 32;
+const ENTRIES: u32 = 128;
 
 /// Bytes one net ring slot holds: a frame at the default MTU and its header,
 /// rounded to the alignment the ring asks for.
 const SLOT_BYTES: u32 = 2048;
 
-/// Bytes in the ring VMO: the header and 32 entries of each kind fit in a
-/// page with room to spare.
-const RING_BYTES: usize = PAGE;
+/// Bytes in the ring VMO: the header and 128 entries of each kind of 16 bytes
+/// take 4160 bytes, so two pages.
+const RING_BYTES: usize = 2 * PAGE;
 
 /// Pages in the net ring's data VMO: [`ENTRIES`] slots of [`SLOT_BYTES`].
 const DATA_PAGES: usize = ENTRIES as usize * SLOT_BYTES as usize / PAGE;
 
 /// The most descriptors each device queue is asked for.
-const QUEUE_SIZE: u16 = 64;
+const QUEUE_SIZE: u16 = 128;
 
 /// Pages of queue memory, per queue.
 const QUEUE_PAGES: usize = 2;
@@ -90,14 +90,14 @@ const QUEUE_PAGES: usize = 2;
 const AREA_PAGES: usize = 1;
 
 /// Pages of receive data: half the queue at the receive stride.
-const RECEIVE_PAGES: usize = 16;
+const RECEIVE_PAGES: usize = 32;
 
 /// Pages of transmit data: one slot per ring entry, so the serve loop can map
 /// a ring slot to a device offset by its index alone.
 const TRANSMIT_PAGES: usize = DATA_PAGES;
 
 /// The largest region any pin covers, which sizes the address array.
-const MAX_PAGES: usize = 32;
+const MAX_PAGES: usize = 64;
 
 /// Bookkeeping slots the device library needs: twice each queue.
 const SLOTS: usize = QUEUE_SIZE as usize * 2;

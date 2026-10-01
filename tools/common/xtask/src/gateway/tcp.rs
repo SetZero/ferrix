@@ -45,11 +45,14 @@
 //!   milliseconds and a lost segment's timer is the connection standing still.
 //!
 //! What each is worth, in `cargo xtask run-compositor --everything` under WHPX
-//! on 2026-09-30, a 4 MB download in the guest: the whole window in flight and
+//! on 2026-09-30 (with the driver's 16 receive slots), a 4 MB download in the guest: the whole window in flight and
 //! every duplicate acknowledgment resending all of it, 0.33 MB/s, having sent
 //! five times the bytes; sixteen in flight, 0.21 MB/s, a quarter of the time
 //! on the timer; eight, 3.4 to 3.8 MB/s with the timer at 200 ms and 4.3 to
-//! 4.4 MB/s at 20 ms. The host fetched the same file at 23 MB/s.
+//! 4.4 MB/s at 20 ms. The host fetched the same file at 23 MB/s. With the
+//! driver's ring and queue at 128 entries (2026-10-01, x86_64 under KVM, three
+//! runs each of a 32 MiB download): 8 in flight 3.6 to 12.4 MB/s, 16 5.5 to
+//! 14.3, 24 10.8 to 15.5, and 44 (the guest's whole window) collapses again.
 //!
 //! # Forwarded connections
 //!
@@ -111,11 +114,11 @@ const RETRANSMIT: Duration = Duration::from_millis(20);
 const REDIAL: Duration = Duration::from_millis(200);
 
 /// The most segments one connection has unacknowledged at once: what the
-/// guest can hold. Ferrix's network driver keeps receive buffers posted for
-/// every connection at once; more than this in flight on one of them and
+/// guest can hold. Ferrix's network driver keeps 64 receive slots posted for
+/// every connection at once, since 2026-10-01 (it was 16); more than this in flight on one of them and
 /// the rest are dropped before the guest sees them, which the numbers at the
 /// top of this file measure.
-pub(super) const MAX_IN_FLIGHT: usize = 8;
+pub(super) const MAX_IN_FLIGHT: usize = 24;
 
 /// How many acknowledgments of the same byte, with nothing new in them, mean a
 /// segment was lost: RFC 5681's three.
