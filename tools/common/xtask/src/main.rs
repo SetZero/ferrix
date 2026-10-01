@@ -100,6 +100,7 @@ mod init_file;
 mod initramfs;
 mod input;
 mod installer;
+mod ipc;
 mod jobs;
 mod kaslr;
 mod keyboard;
@@ -229,6 +230,8 @@ COMMANDS:
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-init     Boot /sbin/init as pid 1, type at the shell its getty gives, and require its session, a failing
                   service's restart budget, a service's cgroup, and a shutdown btrfs check finds clean
+    bench-ipc     Boot --init's shell and time a channel round trip between two native processes
+                  (/sbin/ipc-bench): the floor of a native call and the trip, in nanoseconds
     bench-seam    Boot a stock Linux kernel on the same QEMU machine and time a 4 KiB O_DIRECT read of the pattern disk at depths 1 and 32: the in-kernel reference for the seam boot line (tools/common/fetch/fetch-linux-reference.sh first)
     test-auth     Boot init with authd, type at the shell its getty gives, and require each refusal of
                   docs/AUTH.md: a wrong password, an unknown account, a user naming another, the throttle
@@ -573,7 +576,7 @@ fn run() -> Result<()> {
         "test-init" => init::test_init(&args),
         "test-auth" => auth::test_auth(&args),
         "test-restart" => restart::test_restart(&args),
-        "bench-seam" => seam::bench_seam(&args),
+        "bench-seam" | "bench-ipc" => bench(command, &args),
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-install" => installer::test_install(&args),
         "test-threads" | "test-sem" | "test-shm" => sem::run(command, &args),
@@ -976,13 +979,23 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<flash::BoardFiles> {
     })
 }
 
+/// The boot benchmarks: the seam's disk read against Linux's (`bench-seam`),
+/// and a channel round trip between two native processes (`bench-ipc`).
+fn bench(command: &str, args: &Args) -> Result<()> {
+    if command == "bench-ipc" {
+        ipc::bench_ipc(args)
+    } else {
+        seam::bench_seam(args)
+    }
+}
+
 /// The program `init` names for `arch`, with `{arch}` replaced by its name,
 /// refused unless it is a file.
 ///
 /// `ferrousli` is not a path: it names the busybox `cargo xtask busybox`
 /// installs, built first when it is missing or older than ferrousli. Nor is
 /// `blank`, the compositor's first program, which is built here.
-fn program_for(init: &str, arch: Arch) -> Result<PathBuf> {
+pub(crate) fn program_for(init: &str, arch: Arch) -> Result<PathBuf> {
     if init == busybox::INIT_NAME {
         return busybox::program(arch);
     }
