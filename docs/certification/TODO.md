@@ -82,11 +82,53 @@ describe a tree without them.
 | `discovery/finder.rs`, `discovery/tree.rs`, `discovery/board.rs` | core | moved and new code of the Finder | cc4e14af |
 | `discovery/description.rs` | core | the ACPI-or-tree decision | fa4e88a6 |
 | `sched/trip.rs` | core | 448 | 5cc5ed38 |
+| the lines S2's hook added to `trap.rs` and the four system-call entries | core | the hook and `trap::ask` | 6f47bbd2f |
+| the lines the speculation domain added to `arch/*/speculation.rs`, `user/space.rs`, `object/{process,job}.rs` | core | the switch rule, the marking and leaving | bf9efba95 |
 
 COVERAGE-RESIDUAL.md's unreached counts fell at 65639967 (x86-64 720 to
 683, AArch64 724 to 706, ARMv7-A 1,109 to 1,089) because moved lines left
 the measurement, not because a test reached them. Do not cite that fall as
 progress.
+
+#### Where the reviews stand (consultant's wind-down, 2026-10-01)
+
+The certification consultant (os-ad, then os-bd after a restart) reviewed
+every change to the item on 2026-10-01 before it landed, and audited `main`
+back to the N3 review for changes that had skipped review. Each verdict and
+condition is in the ledger on the gate host,
+`~/.local/share/ferrix/cert-consultant/reviews.md`, whose `HANDOVER.md`
+lists the open queue. On `main` they are recorded here:
+- `docs/NAMESPACES.md` §12, for N4, smallns and the native-child rule;
+- `docs/SECCOMP.md` §12, for S1 and S2;
+- `docs/OPAQUE-KERNEL.md` §8 and §9, for the trip trace and the speculation
+  domain;
+- `docs/CLAUDE-CODE.md`, for the XSAVE and Zenbleed controls re-run;
+- `docs/BACKLOG.md` P2, for what N4 and the discovery Finder owe.
+
+**Landed ahead of its evidence.** The speculation domain (bf9efba95)
+landed, on the customer's word, before six of its eight negative controls,
+its release build, its five boots, `test-shell`, `test-threads` and
+`test-vfs` had finished. Until their gate.sh INDEX lines read
+`control: FIRED (panic)` and `run: PASSED`, cite the domain's checks only
+by the check itself, not as shown to fire. A failure is red on `main`.
+
+**Reviewed, not landed** (their authors hold the conditions):
+
+| Branch | Verdict | What it waits on |
+|---|---|---|
+| `stage13-s3` (seccomp filters) | cleared on evidence | the `s3f-*` gate rows and the 19 `s3c-k*` controls |
+| `stage13-s4` | design OK with conditions | L.trap.8 reserved; native calls fail closed; a restart-code case |
+| `stage13-cgctl` | fixes accepted | its gate and 18 controls |
+| `stage13-netns` | OK with conditions | `IFLA_NET_NS_PID` through `pidns::find_in`; neighbour and reassembly charging or a VA residual; records; a gate.sh re-gate |
+| `stage13-fdinfo` (NP) | not yet | the ARMv7-A boot; the dumpable test after the capability path; the newborn child failing closed |
+| `os35/ipc-lazytlb`, `ipc-ring` | author gone | must carry the domain's switch hooks, and renumber ring B's L.object.106 |
+
+**How evidence is cited now.** A negative control counts when fleet/gate.sh
+says `control: FIRED (panic): <line>` or `FIRED (line, no panic)` with its
+`guest started:` line. A gate row counts when it says `run: PASSED` on the
+commit that lands, with the accelerator named. Requirement ids are reserved
+in `tools/common/data/requirement-reservations.json` before they are
+written (`docs/CONVENTIONS.md`).
 
 ---
 
