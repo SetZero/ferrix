@@ -881,7 +881,10 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
         match endpoint.read_small() {
             Ok(small) => {
                 let mut words = [0_u64; 3];
-                for (word, chunk) in words.iter_mut().zip(small.bytes.chunks_exact(size_of::<usize>())) {
+                for (word, chunk) in words
+                    .iter_mut()
+                    .zip(small.bytes.chunks_exact(size_of::<usize>()))
+                {
                     let mut raw = [0_u8; size_of::<usize>()];
                     raw.copy_from_slice(chunk);
                     *word = usize::from_ne_bytes(raw) as u64;

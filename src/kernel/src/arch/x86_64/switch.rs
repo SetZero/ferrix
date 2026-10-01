@@ -21,6 +21,7 @@ use core::arch::global_asm;
 
 use super::cpu;
 use super::gdt;
+use crate::sync::SpinLock;
 
 /// Bytes the switch pushes: six registers and the return address.
 const FRAME_BYTES: u64 = 7 * 8;
@@ -347,6 +348,71 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
     // SAFETY: (CONTEXT) an area of the standard form's size for the enabled
     // components, 64-byte aligned, which is what `XSAVE64` and `FXSAVE64` write.
     unsafe { ferrix_fpu_save(&raw mut state.fpu, cpu::extended_state_components()) };
+    if let Some(left) = left_here() {
+        *left.lock() = Some(Left::of(state));
+    }
+}
+
+/// What the outgoing program left in this processor's segment registers,
+/// thread-local slots and bases, as [`save_user_state`] read them: what
+/// [`restore_user_state`] need not write again when the incoming program
+/// wants the same.
+///
+/// # Why, and why it cannot go stale
+///
+/// Two native programs, or two threads of a Linux one, mostly want the same
+/// values -- no thread-local slots, null selectors, often the same bases --
+/// and writing them anyway is two MSR writes, three descriptor writes and
+/// four selector loads a switch: a third of what a switch between two
+/// programs costs once its address space is cheap. The record is made by the
+/// save and consumed by the next restore, and is good only in between: the
+/// two run back to back in one switch, with interrupts masked, and nothing
+/// else writes these registers there. A switch to a kernel thread, which
+/// restores nothing, forgets it ([`forget_left_state`]), so a later restore
+/// never compares against a record from an earlier switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Left {
+    /// `FS_BASE`.
+    thread_pointer: u64,
+    /// The program's `GS` base, in the shadow.
+    gs_base: u64,
+    /// `DS`, `ES`, `FS`, `GS`.
+    selectors: [u16; 4],
+    /// The thread-local descriptor slots.
+    tls: [u64; gdt::TLS_SLOTS],
+}
+
+impl Left {
+    /// What `state` says the processor holds, just after saving it.
+    fn of(state: &UserState) -> Left {
+        Left {
+            thread_pointer: state.thread_pointer,
+            gs_base: state.gs_base,
+            selectors: state.selectors,
+            tls: state.tls,
+        }
+    }
+}
+
+/// The most processors [`LEFT`] covers.
+const LEFT_PROCESSORS: usize = 256;
+
+/// Each processor's [`Left`], between a switch's save and its restore.
+static LEFT: [SpinLock<Option<Left>>; LEFT_PROCESSORS] =
+    [const { SpinLock::new(None) }; LEFT_PROCESSORS];
+
+/// This processor's slot in [`LEFT`].
+fn left_here() -> Option<&'static SpinLock<Option<Left>>> {
+    crate::smp::this_cpu().and_then(|cpu| LEFT.get(cpu.logical))
+}
+
+/// Forget what the outgoing program left: the processor is switching to a
+/// kernel thread, which restores nothing, so the next restore is not this
+/// switch's.
+pub(crate) fn forget_left_state() {
+    if let Some(left) = left_here() {
+        *left.lock() = None;
+    }
 }
 
 /// Load `state` onto this processor for the task about to run, and point the
@@ -357,17 +423,25 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
 /// (CONTEXT) The task `state` belongs to must be the one this processor is switching to,
 /// and `entry_stack` the top of its kernel stack.
 pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
-    // SAFETY: (CONTEXT) the caller switches with interrupts masked; the descriptors are
-    // ones `set_thread_area` built, or zero.
-    unsafe { gdt::write_tls(&state.tls) };
-    // SAFETY: (CONTEXT) each selector checked loadable against the slots just written.
-    unsafe {
-        load_selectors(
-            state.selectors,
-            &state.tls,
-            state.thread_pointer,
-            state.gs_base,
-        );
+    // What this switch's save found, if it made one: see `Left`.
+    let left = left_here().and_then(|left| left.lock().take());
+    let wanted = Left::of(state);
+    if left != Some(wanted) {
+        if left.is_none_or(|left| left.tls != wanted.tls) {
+            // SAFETY: (CONTEXT) the caller switches with interrupts masked; the
+            // descriptors are ones `set_thread_area` built, or zero.
+            unsafe { gdt::write_tls(&state.tls) };
+        }
+        // SAFETY: (CONTEXT) each selector checked loadable against the slots
+        // just written, or left as they were because they equal them.
+        unsafe {
+            load_selectors(
+                state.selectors,
+                &state.tls,
+                state.thread_pointer,
+                state.gs_base,
+            );
+        }
     }
     // SAFETY: (CONTEXT) an area this module initialised or `XSAVE64` wrote, so every
     // reserved bit `XRSTOR64` checks is clear.

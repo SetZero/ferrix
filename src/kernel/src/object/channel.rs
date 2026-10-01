@@ -205,7 +205,8 @@ impl Inbox {
                     handles: 0,
                 }));
             }
-            let mut bytes = fallible::try_filled(0_u8, small.len).map_err(|_| PopError::NoMemory)?;
+            let mut bytes =
+                fallible::try_filled(0_u8, small.len).map_err(|_| PopError::NoMemory)?;
             bytes.copy_from_slice(small.as_bytes());
             self.small = None;
             return Ok(Message {

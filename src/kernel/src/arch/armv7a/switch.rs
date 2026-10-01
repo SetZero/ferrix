@@ -434,3 +434,7 @@ pub(crate) unsafe fn reset_user_state() {
         unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(&fresh), u32::from(doubles == 32)) };
     }
 }
+
+/// Nothing to forget: this architecture's restore writes every register it
+/// restores, so it keeps no record of what a save found (x86-64's `Left`).
+pub(crate) fn forget_left_state() {}

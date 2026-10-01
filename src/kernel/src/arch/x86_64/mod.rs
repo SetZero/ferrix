@@ -1635,8 +1635,8 @@ pub(crate) fn service_interrupts(frame: &mut TrapFrame, handle: fn(u32)) {
 
 /// The context switch, and the stack layout a new task starts on.
 pub(crate) use switch::{
-    UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state,
-    set_thread_area, switch_to, thread_area,
+    UserState, forget_left_state, prepare_stack, reset_user_state, restore_user_state,
+    save_user_state, set_thread_area, switch_to, thread_area,
 };
 pub(crate) use syscall::{UserRegs, resume_user};
 

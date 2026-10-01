@@ -308,3 +308,7 @@ pub(crate) unsafe fn reset_user_state() {
     // SAFETY: (CONTEXT) loading zeroed user registers cannot affect the kernel.
     unsafe { ferrix_user_restore(core::ptr::from_ref(&fresh)) };
 }
+
+/// Nothing to forget: this architecture's restore writes every register it
+/// restores, so it keeps no record of what a save found (x86-64's `Left`).
+pub(crate) fn forget_left_state() {}

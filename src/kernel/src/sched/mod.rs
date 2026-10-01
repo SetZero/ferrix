@@ -686,7 +686,10 @@ fn mark_resched(cpu: usize) {
 /// round trip between two programs makes.
 fn resched_here(cpu: usize) {
     mark_resched(cpu);
-    if !IN_CALL.get(cpu).is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+    if !IN_CALL
+        .get(cpu)
+        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
         crate::timer::after(queue::MIN_ARM_NS);
     }
 }
@@ -2314,6 +2317,10 @@ fn switch_user_state(previous: &Arc<Task>, next: &Arc<Task>) {
         // SAFETY: (CONTEXT) `next` is the task this processor is switching to, and its
         // stack is its own and mapped for as long as the queue holds it.
         unsafe { arch::restore_user_state(state, entry_stack) };
+    } else {
+        // A kernel thread restores nothing, so the next restore here is
+        // another switch's, and must not trust what this one's save found.
+        arch::forget_left_state();
     }
 }
 

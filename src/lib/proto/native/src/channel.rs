@@ -89,7 +89,10 @@ impl Words {
         let mut padded = [0_u8; WRITE_READ_BYTES];
         padded.get_mut(..bytes.len())?.copy_from_slice(bytes);
         let mut words = [0_usize; 3];
-        for (word, chunk) in words.iter_mut().zip(padded.chunks_exact(size_of::<usize>())) {
+        for (word, chunk) in words
+            .iter_mut()
+            .zip(padded.chunks_exact(size_of::<usize>()))
+        {
             let mut raw = [0_u8; size_of::<usize>()];
             raw.copy_from_slice(chunk);
             *word = usize::from_ne_bytes(raw);

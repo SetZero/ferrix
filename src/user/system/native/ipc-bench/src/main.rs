@@ -268,7 +268,10 @@ fn start_server() -> Result<Channel<Kernel>, i32> {
         )
     }
     .map_err(|errno| {
-        say(format_args!("ipc-bench: opening the cgroup: errno {}", errno.0));
+        say(format_args!(
+            "ipc-bench: opening the cgroup: errno {}",
+            errno.0
+        ));
         6
     })?;
     let job = for_cgroup(

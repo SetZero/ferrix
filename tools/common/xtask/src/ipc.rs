@@ -24,10 +24,9 @@ echo "ipc-bench: exit $?"
 /// No `--init`, a build or boot that fails, or a benchmark that did not
 /// finish.
 pub(crate) fn bench_ipc(args: &Args) -> Result<()> {
-    let init = args
-        .init
-        .as_deref()
-        .ok_or_else(|| Error::new("bench-ipc needs --init, a static busybox for each architecture"))?;
+    let init = args.init.as_deref().ok_or_else(|| {
+        Error::new("bench-ipc needs --init, a static busybox for each architecture")
+    })?;
     for arch in args.arches()? {
         let program = crate::program_for(init, arch)?;
         let loader = cargo::build_loader(arch, args.release)?;

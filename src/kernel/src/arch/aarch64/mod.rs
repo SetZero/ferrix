@@ -1499,7 +1499,8 @@ pub(crate) fn service_interrupts(_frame: &mut TrapFrame, handle: fn(u32)) {
 
 /// The context switch, and the stack layout a new task starts on.
 pub(crate) use switch::{
-    UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
+    UserState, forget_left_state, prepare_stack, reset_user_state, restore_user_state,
+    save_user_state, switch_to,
 };
 
 /// Install a thread-local segment descriptor: i386's `set_thread_area`, which
