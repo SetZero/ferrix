@@ -2157,11 +2157,11 @@ pub(crate) static STAGE13_USER_NAMESPACES: Explanation = Explanation {
 pub(crate) static STAGE13_PROC_ACCESS: Explanation = Explanation {
     code: "FX-0894",
     title: "/proc let a process look into another's tree",
-    meaning: "`fs::procaccess_check::run` makes a dumpable process of uid 1000, one that cleared PR_SET_DUMPABLE, one of uid 2000 and one of root, and reads their /proc/<pid>/root, cwd, exe, fd and ns/* as uid 1000, as root and as root inside a user namespace. Linux's ptrace_may_access decides: the same user reads a dumpable process of its own, never a non-dumpable one or another user's; root reads all; root inside a namespace reads nothing of another uid. A refusal is EACCES. get_robust_list of a thread of another uid's process must be refused.",
+    meaning: "`fs::procaccess_check::run` makes a dumpable process of uid 1000, one that cleared PR_SET_DUMPABLE, one of uid 2000 and one of root, and reads their /proc/<pid>/root, cwd, exe, fd, fdinfo, maps, mountinfo and ns/*, and asks get_robust_list of their threads, as uid 1000, as root and as root inside a user namespace. Linux's ptrace_may_access decides: the same user reads a dumpable process of its own, never a non-dumpable one or another user's; root reads all; root inside a namespace reads nothing of another uid. A refusal is EACCES. get_robust_list of a thread of another uid's process must be refused.",
     causes: &[
         "`credentials::may_access` answers true for a caller that is neither the same user nor privileged over the target's user namespace.",
-        "`procfs::may_inspect` is skipped on a link, on the `fd` directory or on `maps`.",
-        "`exec` leaves a process dumpable after a set-id program.",
+        "`procfs::may_inspect` is skipped on a link, on the `fd` or `fdinfo` directory, or on `maps` or `mountinfo`.",
+        "`attributes::credentials_changed` is not called when a process changes the ids it acts as, so the process stays dumpable.",
     ],
     see: "src/kernel/src/fs/procaccess_check.rs; src/kernel/src/fs/procfs.rs; src/kernel/src/syscall/credentials.rs",
 };

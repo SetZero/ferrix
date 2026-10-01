@@ -26,7 +26,6 @@ use ferrix_vfs::Errno;
 
 use crate::fs::mount_check::{Page, Report as Counts, Tally, by_number, page_for};
 use crate::fs::namespace_check::{staged, unshare};
-use crate::syscall::credentials;
 use crate::syscall::namespace::CLONE_NEWUSER;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
@@ -105,6 +104,17 @@ fn looks(
         }
     })?;
     Ok(answer)
+}
+
+/// What `reader` is told when it reads `path`, a file: the open's refusal, or
+/// how much it read.
+fn reads(reader: &Process, path: &str) -> Result<Result<usize, Errno>, &'static str> {
+    let mut page = page_for(reader)?;
+    let process = registry::find(reader.pid()).ok_or("the /proc reader is gone")?;
+    let answer = userns::acting_as(&process, || {
+        crate::fs::namespace_check::read_file(&mut page, path.as_bytes())
+    })??;
+    Ok(answer.map(|bytes| bytes.len()))
 }
 
 /// Where the page's reads land.
@@ -207,12 +217,20 @@ fn allowed(
         ("root", false),
         ("cwd", false),
         ("fd", true),
+        ("fdinfo", true),
         ("ns/mnt", false),
     ] {
         let path = format!("/proc/{}/{name}", target.pid());
         let answer = looks(reader, &path, directory)?;
         tally.report.calls += 1;
         if answer == Err(Errno::EACCES) {
+            return Err(what);
+        }
+    }
+    for name in ["maps", "mountinfo"] {
+        let path = format!("/proc/{}/{name}", target.pid());
+        tally.report.calls += 1;
+        if reads(reader, &path)? == Err(Errno::EACCES) {
             return Err(what);
         }
     }
@@ -231,32 +249,51 @@ fn refused(
         ("cwd", false),
         ("exe", false),
         ("fd", true),
+        ("fdinfo", true),
         ("ns/mnt", false),
         ("ns/user", false),
     ] {
         let path = format!("/proc/{}/{name}", target.pid());
         tally.refused(looks(reader, &path, directory)?, Errno::EACCES, what)?;
     }
+    for name in ["maps", "mountinfo"] {
+        let path = format!("/proc/{}/{name}", target.pid());
+        tally.refused(reads(reader, &path)?, Errno::EACCES, what)?;
+    }
     Ok(())
 }
 
-/// `get_robust_list`'s permission, on the credentials: a thread of another
-/// uid's process is refused, a same-uid dumpable one is not.
+/// `get_robust_list`'s permission, through the system call: a thread of
+/// another uid's process is `EPERM`, a same-uid dumpable one is answered, and
+/// so is the caller's own.
 fn robust_lists(
     tally: &mut Tally<'_>,
     user: &Process,
     dumpable: &Process,
     other: &Process,
 ) -> Result<(), &'static str> {
-    tally.report.calls += 2;
-    if !credentials::may_access(user, dumpable, true) {
-        return Err("get_robust_list was refused a thread of a same-uid dumpable process");
-    }
-    if credentials::may_access(user, other, true) {
-        return Err("get_robust_list was allowed a thread of another uid's process");
-    }
-    tally.report.refusals += 1;
-    Ok(())
+    let page = page_for(user)?;
+    let (head, size) = (page.buffer(), page.buffer() + 16);
+    let ask = |target: &Process| {
+        by_number(
+            user,
+            Syscall::GetRobustList,
+            [u64::from(target.pid()), head, size, 0, 0, 0],
+        )
+    };
+    tally.ok(
+        ask(dumpable),
+        "get_robust_list was refused a thread of a same-uid dumpable process",
+    )?;
+    tally.ok(
+        by_number(user, Syscall::GetRobustList, [0, head, size, 0, 0, 0]),
+        "get_robust_list was refused the caller's own thread",
+    )?;
+    tally.refused(
+        ask(other),
+        Errno::EPERM,
+        "get_robust_list was allowed a thread of another uid's process",
+    )
 }
 
 /// `/proc/<pid>/fdinfo` (`docs/SECCOMP.md` R4): a file per open descriptor with
