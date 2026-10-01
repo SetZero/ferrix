@@ -309,3 +309,5 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+
+**State, 2026-10-01 wind-down (os-7c), not landed:** stage13-s3-onmain is S3 rebased onto 21f580cad (range-diff all '='). Its six re-gate rows were queued and then stopped by the wind-down order, so none ran.
