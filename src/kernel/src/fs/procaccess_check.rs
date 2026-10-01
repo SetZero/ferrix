@@ -19,6 +19,7 @@
 //!   own, with the real ids.
 
 use alloc::format;
+use alloc::sync::Arc;
 
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{AT_FDCWD, O_DIRECTORY, O_RDONLY};
@@ -29,6 +30,7 @@ use crate::fs::namespace_check::{staged, unshare};
 use crate::syscall::namespace::CLONE_NEWUSER;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
+use crate::syscall::thread::Thread;
 use crate::syscall::userns;
 
 /// `PR_SET_DUMPABLE`.
@@ -268,10 +270,19 @@ fn refused(
 /// so is the caller's own.
 fn robust_lists(
     tally: &mut Tally<'_>,
-    user: &Process,
-    dumpable: &Process,
-    other: &Process,
+    user: &Arc<Process>,
+    dumpable: &Arc<Process>,
+    other: &Arc<Process>,
 ) -> Result<(), &'static str> {
+    // The processes a check makes have no thread listed; each needs one to be asked about.
+    let mut threads = alloc::vec::Vec::new();
+    for process in [user, dumpable, other] {
+        let thread = Thread::leader(process)
+            .and_then(crate::fallible::try_arc)
+            .map_err(|_| "no memory for a check's thread")?;
+        process.add_thread(&thread);
+        threads.push(thread);
+    }
     let page = page_for(user)?;
     let (head, size) = (page.buffer(), page.buffer() + 16);
     let ask = |target: &Process| {
@@ -286,7 +297,7 @@ fn robust_lists(
         "get_robust_list was refused a thread of a same-uid dumpable process",
     )?;
     tally.ok(
-        by_number(user, Syscall::GetRobustList, [0, head, size, 0, 0, 0]),
+        ask(user),
         "get_robust_list was refused the caller's own thread",
     )?;
     tally.refused(
