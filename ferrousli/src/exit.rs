@@ -49,6 +49,14 @@ static EXTRA_LEN: AtomicUsize = AtomicUsize::new(0);
 /// How many entries `EXTRA` has room for.
 static EXTRA_CAP: AtomicUsize = AtomicUsize::new(0);
 
+/// `quick_exit` has a separate handler stack. ISO C requires room for at
+/// least 32 registrations; keeping those slots static also means registration
+/// cannot fail because the allocator is unavailable during shutdown.
+static QUICK_LOCK: SpinLock = SpinLock::new();
+static QUICK_FUNCS: [AtomicPtr<()>; CAPACITY] =
+    [const { AtomicPtr::new(null_mut()) }; CAPACITY];
+static QUICK_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 /// Registers `func` to be called with `arg` at exit. `dso` names the module
 /// that registered it. With one module in a static program, it is not needed.
 ///
@@ -116,6 +124,44 @@ pub extern "C" fn atexit(func: Option<unsafe extern "C" fn()>) -> c_int {
         return -1;
     };
     __cxa_atexit(Some(call_plain), func as *mut c_void, null_mut())
+}
+
+/// Registers `func` on the stack used only by [`quick_exit`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn at_quick_exit(func: Option<unsafe extern "C" fn()>) -> c_int {
+    let Some(func) = func else {
+        return -1;
+    };
+    let _guard = QUICK_LOCK.lock();
+    let count = QUICK_COUNT.load(Ordering::Relaxed);
+    let Some(slot) = QUICK_FUNCS.get(count) else {
+        return -1;
+    };
+    slot.store(func as *mut (), Ordering::Relaxed);
+    QUICK_COUNT.store(count + 1, Ordering::Relaxed);
+    0
+}
+
+/// Takes the most recently registered quick-exit handler.
+fn take_quick() -> Option<unsafe extern "C" fn()> {
+    let _guard = QUICK_LOCK.lock();
+    let last = QUICK_COUNT.load(Ordering::Relaxed).checked_sub(1)?;
+    QUICK_COUNT.store(last, Ordering::Relaxed);
+    let func = QUICK_FUNCS.get(last)?.load(Ordering::Relaxed);
+    // SAFETY: only `at_quick_exit` stores pointers in this array, and every
+    // stored pointer has this function type.
+    Some(unsafe { transmute::<*mut (), unsafe extern "C" fn()>(func) })
+}
+
+/// Runs quick-exit handlers newest first, then terminates without flushing
+/// streams, running normal exit handlers, or running destructors.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn quick_exit(status: c_int) -> ! {
+    while let Some(func) = take_quick() {
+        // SAFETY: the program registered the callback for this purpose.
+        unsafe { func() };
+    }
+    _Exit(status)
 }
 
 /// Calls a handler `atexit` registered, which it passed as the argument.
