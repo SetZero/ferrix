@@ -1051,6 +1051,8 @@ fn synchronised(env: &Env) -> Result<usize, &'static str> {
         return Err("the threads of the TSYNC check were not all there");
     }
     Ok(count)
+}
+
 /// What `judge_thread` answers for a call a filter trapped.
 const TRAPPED: u32 = u32::MAX;
 
