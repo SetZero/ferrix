@@ -1274,8 +1274,10 @@ package FerrixObjectRequirements {
                 last root.";
             attribute :>> criterion = "Two members of one marked job switched both
                 ways on one processor decide 0 barriers; a member and a process of
-                no domain, and members of two marked jobs, decide 2 (the `domain`
-                line, cases 1 and 2).";
+                no domain, and members of two marked jobs, decide 2; a switch inside
+                the domain issues no invalidation; and a member installed after a
+                forgotten member's root decides 1 (the `domain` line, cases 1, 2 and
+                10).";
             attribute :>> parent = "H.TRAP.17";
             attribute :>> unit = ("arch::speculation::entered_space",
                 "arch::speculation::same_domain", "arch::speculation::left_space",
@@ -1293,7 +1295,8 @@ package FerrixObjectRequirements {
             attribute :>> criterion = "job_create with the option and a parent
                 handle without MANAGE answers ACCESS_DENIED, with an unknown bit
                 INVALID_ARGS, and neither adds a DOMAIN record; with MANAGE it adds
-                one (the `domain` line, case 4).";
+                one, naming the new job, its parent and its domain (the `domain`
+                line, case 4).";
             attribute :>> parent = ("H.TRAP.17", "H.OBJ.8");
             attribute :>> unit = ("syscall::native::job_create",
                 "object::job::Job::new_child_domain", "object::job::Job::new_child_in",
@@ -1309,7 +1312,9 @@ package FerrixObjectRequirements {
                 job's domain, and a member whose space a process of no domain shares
                 decides the barrier both ways with another member (the `domain`
                 line, case 6); a marked job inside a marked job is a domain of its
-                own (case 7).";
+                own (case 7); a child job of a marked job is in no domain, a member's
+                fork is a member, and a process moved into a marked job, its fork, and
+                a process that left before its birth are not (cases 9 and 10).";
             attribute :>> parent = "H.TRAP.17";
             attribute :>> unit = ("object::process::Process::new",
                 "object::process::Process::move_charged",
@@ -1321,13 +1326,18 @@ package FerrixObjectRequirements {
             attribute :>> statement = "A member shall leave its speculation domain
                 for good, and its address space with it, when it moves between jobs,
                 and when it stops being dumpable: a set-id execve, a change of
-                credentials, or PR_SET_DUMPABLE.";
+                credentials, or PR_SET_DUMPABLE; and every processor whose last space
+                was in the domain shall issue the barrier before the leave returns.";
             attribute :>> criterion = "A member moved out of its job, one whose
                 credentials changed and one made not dumpable each decide the
                 barrier both ways with a member left in the domain (the `domain`
-                line, cases 3 and 5).";
+                line, cases 3 and 5); a member that leaves makes this processor and one
+                running a thread in its space each decide the barrier before the
+                leave returns (case 8).";
             attribute :>> parent = "H.TRAP.17";
             attribute :>> unit = ("object::process::Process::leave_speculation_domain",
+                "object::process::Process::leave_speculation_domain_unstarted",
+                "arch::speculation::leaving_domain", "arch::speculation::serve_wanted_barrier",
                 "user::space::AddressSpace::leave_domain",
                 "syscall::attributes::update");
         }

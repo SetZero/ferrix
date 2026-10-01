@@ -187,7 +187,13 @@ holding it.
 enforce the **Address Space Separation SFP**: information flows between two
 processes only through an object both hold a handle to. No implicit flow
 through memory is permitted, since no physical frame is mapped into two address
-spaces unless a shared VMO says so.
+spaces unless a shared VMO says so. **The one exception is speculative: between two
+processes of one speculation domain** -- a job marked at its creation, whose
+members were born in it and have not left (`docs/OPAQUE-KERNEL.md` §9) -- **the
+predictor invalidation at a switch is left out**, so a flow through shared
+predictor state between them is not prevented. Every flow out of a domain is,
+and a process outside every domain, the default, has no such exception
+(AoU-14, V-07).
 
 **FDP_RIP.2** Full residual information protection. The TSF shall ensure that
 any previous information content is made unavailable upon **allocation** of a
@@ -197,11 +203,16 @@ physical frame to any object.
 
 **FMT_MSA.1** Management of security attributes. The TSF shall restrict the
 ability to *reduce* the **rights carried by a handle** to **the process holding
-it**. Rights may never be raised.
+it**. Rights may never be raised. And it shall restrict the ability to
+*set* **a job's speculation-domain mark** to **the holder of MANAGE on its
+parent, as the job is made**; the mark shall not be changed afterwards, and a
+process's membership shall only ever be lost (O.ISOLATE).
 
 **FMT_MSA.3** Static attribute initialisation. The TSF shall provide
 *restrictive* default values: a newly created process holds no handles other
-than those explicitly transferred to it.
+than those explicitly transferred to it. A new job is in no speculation domain unless
+made marked, a child job of a marked one included, and a process is in one
+only if born in its marked job (O.ISOLATE).
 
 ### FPT — protection of the TSF
 
@@ -254,8 +265,8 @@ action, the power action**; b) **the TOE's configuration at start-up:
 native call its handle's rights refused, a widening of rights refused, a
 charge a job's limit refused, a native process made, a job handle given for
 a cgroup, a device's control channel given, `devmgr` started through the
-starter, the starter and the audit handle given to pid 1, a job killed, a
-cgroup killed, an OOM kill, a device quiesced, a DMA fault an IOMMU
+starter, the starter and the audit handle given to pid 1, a job made one
+speculation domain, a job killed, a cgroup killed, an OOM kill, a device quiesced, a DMA fault an IOMMU
 reported, a limit set through a job's handle or a cgroup's file, and the
 switch of `/`**. The TSF shall record within each audit record: the date
 and time of the event -- **nanoseconds since boot on the TSF's counter** --,
@@ -360,7 +371,7 @@ nothing else is claimed to meet it.
 
 | Objective | SFRs |
 |---|---|
-| O.ISOLATE | FDP_IFC.1, FDP_IFF.1 |
+| O.ISOLATE | FDP_IFC.1, FDP_IFF.1, FMT_MSA.1 and FMT_MSA.3 (the speculation-domain mark) |
 | O.WXN | FDP_IFF.1 (refinement) |
 | O.CAPABILITY | FDP_ACC.1, FDP_ACF.1, FMT_MSA.1, FMT_MSA.3 |
 | O.DMA | FDP_ACF.1, FDP_IFF.1 |

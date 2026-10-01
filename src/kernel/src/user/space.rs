@@ -272,22 +272,19 @@ impl AddressSpace {
             SpaceError::BadRange
         })?;
 
-        let layout = SleepLock::new((), &crate::sync::SchedParker);
-        fallible::try_arc_cyclic(|me| AddressSpace {
-            root,
-            me: me.clone(),
-            cpus: CpuMask::new(),
-            flushes: Flushes::new(),
-            layout,
-            domain: AtomicU64::new(UNCLAIMED),
-            inner: SpinLock::new(Inner {
-                map,
-                objects: BTreeMap::new(),
-                files: BTreeMap::new(),
-                shadows: BTreeMap::new(),
-                next_id: 1,
-                native: BTreeSet::new(),
-            }),
+        fallible::try_arc_cyclic(|me| {
+            AddressSpace::assemble(
+                root,
+                me,
+                Inner {
+                    map,
+                    objects: BTreeMap::new(),
+                    files: BTreeMap::new(),
+                    shadows: BTreeMap::new(),
+                    next_id: 1,
+                    native: BTreeSet::new(),
+                },
+            )
         })
         .map_err(|_| {
             mm::deallocate_frames(root, 0);
@@ -399,6 +396,23 @@ impl AddressSpace {
         unsafe { arch::uninstall_user_root() };
         crate::sched::trip::count(crate::sched::trip::Count::RootUninstall);
         self.cpus.leave(cpu);
+    }
+}
+
+impl AddressSpace {
+    /// What [`AddressSpace::new`] and [`AddressSpace::fork`] make alike: a
+    /// space over `root` holding `inner`, on no processor, with no shootdown
+    /// begun, and claimed by no speculation domain yet.
+    fn assemble(root: Frame, me: &Weak<AddressSpace>, inner: Inner) -> AddressSpace {
+        AddressSpace {
+            root,
+            me: me.clone(),
+            cpus: CpuMask::new(),
+            flushes: Flushes::new(),
+            layout: SleepLock::new((), &crate::sync::SchedParker),
+            inner: SpinLock::new(inner),
+            domain: AtomicU64::new(UNCLAIMED),
+        }
     }
 }
 
@@ -888,26 +902,24 @@ impl AddressSpace {
         drop(inner);
         self.shoot(&cpus, &mut pages);
 
-        let child = fallible::try_arc_cyclic(|me| AddressSpace {
-            root,
-            me: me.clone(),
-            cpus: CpuMask::new(),
-            flushes: Flushes::new(),
-            layout: SleepLock::new((), &crate::sync::SchedParker),
-            domain: AtomicU64::new(UNCLAIMED),
-            inner: SpinLock::new(Inner {
-                map,
-                objects,
-                files,
-                shadows,
-                // Continued rather than restarted, so that an id means the
-                // same object in a parent and a child for as long as they
-                // share one. Two spaces may hand out the same id afterwards,
-                // which is fine: an id is only ever looked up in its own
-                // space's table.
-                next_id,
-                native,
-            }),
+        let child = fallible::try_arc_cyclic(|me| {
+            AddressSpace::assemble(
+                root,
+                me,
+                Inner {
+                    map,
+                    objects,
+                    files,
+                    shadows,
+                    // Continued rather than restarted, so that an id means the
+                    // same object in a parent and a child for as long as they
+                    // share one. Two spaces may hand out the same id afterwards,
+                    // which is fine: an id is only ever looked up in its own
+                    // space's table.
+                    next_id,
+                    native,
+                },
+            )
         })
         // Refused before the closure ran, so nothing owns the root but this:
         // it goes back here, and the rest the closure captured goes as it

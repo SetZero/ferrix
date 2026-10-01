@@ -25,7 +25,7 @@
 //! and the entry paths' extra instructions are assembled away. The reference
 //! configuration is the other setting.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sched::MAX_CPUS;
 
@@ -237,33 +237,110 @@ pub(crate) fn entered_space(root: u64) {
         return;
     }
     let cpu = this_cpu();
-    let (Some(last), Some(issued)) = (LAST_ROOT.get(cpu), SWITCH_BARRIERS.get(cpu)) else {
+    let Some(last) = LAST_ROOT.get(cpu) else {
         return;
     };
     // Taken, not read: a root installed without `entering_space` before it,
     // as a check may, is in no domain rather than the last one named here.
     let incoming = ENTERING_DOMAIN
         .get(cpu)
-        .map_or(0, |domain| domain.swap(0, Ordering::Relaxed));
+        .map_or(0, |domain| domain.swap(0, Ordering::SeqCst));
     let outgoing = LAST_DOMAIN
         .get(cpu)
-        .map_or(0, |domain| domain.swap(incoming, Ordering::Relaxed));
+        .map_or(0, |domain| domain.swap(incoming, Ordering::SeqCst));
     if last.swap(root, Ordering::Relaxed) == root {
         return;
     }
     // Inside one speculation domain the predictor invalidation is left out,
     // and the rest of the barrier, x86-64's return-stack refill, stays
-    // (`docs/OPAQUE-KERNEL.md` §9.3a, A2). Not counted: the count is of
-    // invalidations, which the domain check reads.
+    // (`docs/OPAQUE-KERNEL.md` §9.3a, A2). Not counted as a barrier: the
+    // count is of invalidations, which the domain check reads; the refill is
+    // counted apart.
     if same_domain(outgoing, incoming) {
-        machine::switch_barrier_in_domain(cpu);
+        if machine::switch_barrier_in_domain(cpu)
+            && let Some(refilled) = REFILLS_IN_DOMAIN.get(cpu)
+        {
+            let _ = refilled.fetch_add(1, Ordering::Relaxed);
+        }
         return;
     }
+    issue_barrier(cpu);
+}
+
+/// Issue the switch barrier on processor `cpu`, which is this one, and count
+/// it: the decision, and the invalidation if the processor has one.
+fn issue_barrier(cpu: usize) {
     if let Some(decided) = BARRIER_DECISIONS.get(cpu) {
         let _ = decided.fetch_add(1, Ordering::Relaxed);
     }
-    if machine::switch_barrier(cpu) {
+    if machine::switch_barrier(cpu)
+        && let Some(issued) = SWITCH_BARRIERS.get(cpu)
+    {
         let _ = issued.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// How many times each processor refilled its return stack at a switch
+/// inside a speculation domain, where the invalidation is left out: what the
+/// check reads to see that the rest of the barrier still ran there.
+static REFILLS_IN_DOMAIN: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// How many in-domain refills processor `logical` has made: see
+/// [`REFILLS_IN_DOMAIN`].
+pub(crate) fn refills_in_domain_on(logical: usize) -> u64 {
+    REFILLS_IN_DOMAIN
+        .get(logical)
+        .map_or(0, |refilled| refilled.load(Ordering::Relaxed))
+}
+
+/// Whether a switch inside a speculation domain still refills the return
+/// stack on this architecture, for the check: x86-64's does.
+pub(crate) const REFILL_IN_DOMAIN: bool = machine::REFILL_IN_DOMAIN;
+
+/// Processors asked to issue the barrier at once, by [`leaving_domain`].
+static BARRIER_WANTED: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
+
+/// A program has left speculation domain `domain` (`docs/OPAQUE-KERNEL.md`
+/// §9.3a, A1, and the consultant's F1): every processor whose last space was
+/// in it issues the barrier before the program runs on, this one at once and
+/// the others at the interrupt the caller's grace period sends
+/// ([`serve_wanted_barrier`], from `smp`'s interrupt handler).
+///
+/// Waiting for the next switch is not enough. A program that rises in
+/// privilege -- a set-id `execve` in place, a change of credentials -- goes
+/// on running in the same space, on a processor whose predictors its
+/// domain's other members trained a moment ago, and its other threads go on
+/// running on theirs. The space is already out of every domain when this
+/// runs, so a processor that installs it from now on issues the barrier at
+/// that switch; the ones that had it, or a member's, are found here.
+pub(crate) fn leaving_domain(domain: u64) {
+    if !HARDENED || domain == 0 {
+        return;
+    }
+    let online = crate::smp::count().max(1);
+    for (wanted, last) in BARRIER_WANTED.iter().zip(LAST_DOMAIN.iter()).take(online) {
+        if last.load(Ordering::SeqCst) == domain {
+            wanted.store(true, Ordering::SeqCst);
+        }
+    }
+    let saved = <super::Irq as ferrix_sync::IrqControl>::disable();
+    serve_wanted_barrier();
+    <super::Irq as ferrix_sync::IrqControl>::restore(saved);
+}
+
+/// Issue the barrier [`leaving_domain`] asked of this processor, if it did,
+/// and forget the domain it last ran. With interrupts masked: from the
+/// interrupt handler, or from `leaving_domain` itself.
+pub(crate) fn serve_wanted_barrier() {
+    let cpu = this_cpu();
+    if BARRIER_WANTED
+        .get(cpu)
+        .is_some_and(|wanted| wanted.swap(false, Ordering::SeqCst))
+    {
+        if let Some(last) = LAST_DOMAIN.get(cpu) {
+            last.store(0, Ordering::SeqCst);
+        }
+        issue_barrier(cpu);
     }
 }
 

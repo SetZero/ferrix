@@ -202,6 +202,10 @@ impl Bootstrap {
     }
 }
 
+/// A [`Process`]'s domain once it has left one, for good: see
+/// [`Process::leave_speculation_domain`]. Read as zero, no domain.
+const LEFT: u64 = u64::MAX;
+
 impl Process {
     /// A process over `space`, numbered `pid` -- which the caller has
     /// reserved with [`allocate`] or [`allocate_init`], or zero -- and
@@ -243,9 +247,13 @@ impl Process {
         })
     }
 
-    /// The speculation domain it is in: zero for none.
+    /// The speculation domain it is in: zero for none, which a process that
+    /// has left one is in for good.
     pub(crate) fn speculation_domain(&self) -> u64 {
-        self.domain.load(Ordering::Acquire)
+        match self.domain.load(Ordering::Acquire) {
+            LEFT => 0,
+            domain => domain,
+        }
     }
 
     /// Leave its speculation domain, for good, and take its space out of
@@ -256,10 +264,38 @@ impl Process {
     /// being dumpable -- a set-id `execve`, a change of credentials,
     /// `PR_SET_DUMPABLE` -- since a program that has risen in privilege must
     /// no longer share predictors with the programs it was born beside.
+    ///
+    /// **At once, not at the next switch** (the consultant's F1). A program
+    /// that rises in privilege goes on in the same space, an `execve` in
+    /// place, and its threads on the processors they are on, whose
+    /// predictors its domain's other members may have trained a moment ago.
+    /// So every processor that last ran a space of the domain issues the
+    /// barrier before this returns: this one at once, the others at the
+    /// interrupt of the grace period this waits for (`arch::leaving_domain`).
+    /// Leaving is rare -- a move between jobs, a loss of dumpability -- and
+    /// the wait is the one a grace period costs. Never with a lock held,
+    /// which no caller does: see `smp::synchronize`.
+    ///
+    /// Out for good: [`LEFT`], which a birth by [`Process::move_new_to`]
+    /// leaves as it is, so a process that left in the root job before it was
+    /// moved into the job it was made for (the consultant's F2: `inherit` of
+    /// a parent that is not dumpable, before `process_create` moves the
+    /// child) is never a member.
     pub(crate) fn leave_speculation_domain(&self) {
-        if self.domain.swap(0, Ordering::AcqRel) != 0 {
-            self.space.leave_domain();
+        let was = self.domain.swap(LEFT, Ordering::AcqRel);
+        self.space.leave_domain();
+        if was != 0 && was != LEFT {
+            crate::arch::leaving_domain(was);
+            crate::smp::synchronize();
         }
+    }
+
+    /// [`Process::leave_speculation_domain`] for a process that has never
+    /// run, whose space no processor has run in its name: out for good, with
+    /// no barrier to ask for. A fork's child, as `fork` makes it.
+    pub(crate) fn leave_speculation_domain_unstarted(&self) {
+        let _ = self.domain.swap(LEFT, Ordering::AcqRel);
+        self.space.leave_domain();
     }
 
     /// Whether its job's task limit refused it as it was made: a process
@@ -413,7 +449,10 @@ impl Process {
         // went, and joins none by moving in.
         if checked {
             let domain = to.domain();
-            if self.domain.load(Ordering::Acquire) != 0 || domain != 0 {
+            let held = self.domain.load(Ordering::Acquire);
+            // A process that left a domain before its birth, as one made not
+            // dumpable by its creator does, is out for good (F2).
+            if held != LEFT && (held != 0 || domain != 0) {
                 self.domain.store(domain, Ordering::Release);
                 self.space.set_birth_domain(domain);
             }

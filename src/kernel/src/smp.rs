@@ -556,6 +556,10 @@ fn on_ipi(_irq: u32) {
     if let Some(me) = this_cpu() {
         let _ = me.ipis.fetch_add(1, Ordering::Relaxed);
         service_tlb(me);
+        // A program that left its speculation domain may have asked this
+        // processor for the switch barrier, and waits for it in the grace
+        // period this interrupt answers below (`arch::leaving_domain`).
+        arch::serve_wanted_barrier();
         // Being here is the answer: an interrupt is never taken inside a
         // read-side section, so this processor is outside one, and was when
         // every grace period requested so far began waiting.

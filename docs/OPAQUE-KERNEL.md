@@ -700,6 +700,65 @@ The code goes back to the consultant with the check's logs and each of the
 four controls' logs, each showing its marker and the check's own
 `FERRIX-PANIC`.
 
+### 9.3b The consultant's code review (os-ad, 2026-10-01) and what changed
+
+The verdict on 5658e7c0c and 0ce13778f (rebased as 8527c9d12) was **changes
+required**. What each finding changed:
+
+- **F1, blocker: leaving must take effect at once.** A member that rose in
+  privilege kept its domain's predictor state until its next switch, because
+  an `execve` reuses the space in place and its other threads run on. Now
+  `Process::leave_speculation_domain` calls `arch::leaving_domain`, which asks
+  every processor whose last space was in the domain for the barrier. This
+  processor serves the request at once. Every other one serves it at the IPI
+  of the grace period the leave then waits for (`smp::synchronize`, and
+  `arch::serve_wanted_barrier` in `on_ipi`). A fork's child, which has never
+  run, leaves without the wait. **Case 8** checks both halves: a task parked
+  in the leaver's space on another processor, and this processor, each
+  decide the barrier before the leave returns.
+- **F2: "left" is a state, not zero.** `Process`'s domain becomes `LEFT`,
+  which a birth by `move_new_to` respects. A child that `inherit` made not
+  dumpable in the root job therefore stays out when `process_create` moves
+  it. **Case 9.**
+- **F3: the check covers what the rows claim.**
+  - **Case 10** checks: a child job of a marked job; a member's fork; a
+    process moved into a marked job and its fork; and a forgotten root,
+    after which the next member installed decides the barrier.
+  - Case 1 now also counts invalidations issued, which must be none, and
+    x86-64's in-domain refills, which must be one per switch (`REFILL_IN_DOMAIN`).
+  - Case 4 reads the `DOMAIN` record back: the job, its parent and its domain.
+  - *Read as it leaves* is case 8's.
+  - The set-id `execve` is not driven by the check. The decision point is
+    `syscall::attributes::update`, which is how N4 argued it, because every
+    route to "not dumpable" goes through it: `exec_dumpable` writes
+    `dumpable` there for a set-id `execve`, as do `credentials_changed` for
+    a change of ids, `PR_SET_DUMPABLE`, and `inherit`. Case 5 drives two of
+    them through `update` itself.
+- **F4:** `AddressSpace::new` and `fork` build their spaces through one
+  `assemble`, so `fork` is back under the complexity floor.
+- **F5:** the Security Target's FDP_IFC.1/FDP_IFF.1 SFP names the in-domain
+  exception. FMT_MSA.1 and FMT_MSA.3 cover the mark: set only by MANAGE on
+  the parent at creation, membership only ever lost, unmarked by default. Both
+  map to O.ISOLATE, and FAU_GEN.1 lists the `DOMAIN` event.
+- **F6: ordering with os-35's lazy TLB.** `os-35/ipc-lazytlb-land` replaces
+  `install` and `uninstall` with `switch_here`. Whichever of the two lands
+  second moves `left_space` and `entering_space` across. "Read as it leaves"
+  must then come from the space actually loaded on the processor, since a
+  kernel thread will no longer uninstall it. os-35 (os-49) was not running
+  when this was written; this paragraph is the note to it.
+- **F7: the window of a move.** A move between jobs made by another process
+  (a `cgroup.procs` write by the holder of MANAGE) is ordered with the moved
+  process's own running only by that holder's action. Since F1, though, the
+  move's leave makes every processor that last ran the domain issue the
+  barrier before the write returns. The moved process can still run in the
+  space between the write's start and its return, and so can the domain's
+  other members: the window is the length of one grace period, and it is the
+  MANAGE holder who opened it.
+- **F8:** `Job::new_child_in` is `bare_child` with a domain argument.
+- **F9:** MEMORY-AND-TIMING §2.2c gives the commit measured and the
+  benchmark's resolution: its percentiles are an eighth of a power of two,
+  so a p50 can read below the minimum.
+
 ### 9.4 The rest of the branch, for its own review
 
 These are reviewed separately, once rebased and gated, as the consultant asked.

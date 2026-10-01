@@ -506,7 +506,7 @@ impl Process {
         // (`docs/OPAQUE-KERNEL.md` §9.2). A child sent elsewhere by
         // `CLONE_INTO_CGROUP` is in that job's domain only if its parent is.
         if child.core.speculation_domain() != parent.core.speculation_domain() {
-            child.core.leave_speculation_domain();
+            child.core.leave_speculation_domain_unstarted();
         }
         // In `pid_ns` when `CLONE_NEWPID` made one, else where the parent's
         // children go. Numbered in every namespace from there up, so a

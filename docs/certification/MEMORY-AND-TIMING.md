@@ -436,9 +436,13 @@ Measured, not bounded, on branch `os-ipc/zircon-trip`, which carries what
 `docs/OPAQUE-KERNEL.md` §9.4 lists beside the domain: its `cargo xtask
 bench-ipc` times 20,000 round trips of an eight-byte message between two
 native processes, each side making one `channel_write_read` (0x1013), which
-that branch adds. The figures below were
-taken on x86-64 under KVM on nazuna, a Zen 5 host, at host loads of 7 to 15,
-built `--mitigations on`, at p50:
+that branch adds. The figures below were taken at commit 5658e7c0c of that
+branch, the domain's code before the review of §9.3b, on x86-64 under KVM on
+nazuna, a Zen 5 host, at host loads of 7 to 15, built `--mitigations on`, at
+p50. The benchmark keeps its counts in buckets an eighth of a power of two
+wide and reports a bucket's floor, so a percentile is good to about 12% and
+can read below the exact minimum it also prints (2,866 ns minimum against a
+2,789 ns p50, two processors, in a domain):
 
 | | one processor | two processors |
 |---|---|---|

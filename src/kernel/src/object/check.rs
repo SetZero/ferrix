@@ -221,9 +221,15 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     if domains.hardened {
         crate::console::println!(
             "  domain   {} switches inside one speculation domain skipped the barrier, {} out of \
-             one kept it: none across domains, none by a mover, a leaver or a sharer",
+             one kept it: none across domains, none by a mover, a leaver or a sharer; a leaver \
+             barriered at once here{}",
             domains.skipped,
-            domains.kept
+            domains.kept,
+            if domains.elsewhere {
+                " and where its thread ran"
+            } else {
+                ", on a machine with one processor"
+            }
         );
     } else {
         crate::console::println!(

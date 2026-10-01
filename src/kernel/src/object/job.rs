@@ -423,16 +423,19 @@ impl Job {
         })
     }
 
-    /// A job inside this one, with a quota inside this one's.
+    /// A job inside this one, with a quota inside this one's, that is
+    /// speculation domain `domain`, zero for none.
     fn bare_child(
         self: &Arc<Job>,
         name: Option<Box<str>>,
         budget: Budget,
+        domain: u64,
     ) -> Result<Arc<Job>, AllocError> {
         let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
         let quota = Quota::new(self.quota.as_ref())?;
         let mut child = Job::bare(Some(Arc::clone(self)), name, Some(quota), budget)?;
         child.charge = charge;
+        child.domain = domain;
         fallible::try_arc(child)
     }
 
@@ -465,12 +468,7 @@ impl Job {
 
     /// [`Job::new_child`] as speculation domain `domain`, zero for none.
     fn new_child_in(self: &Arc<Job>, domain: u64) -> Result<Arc<Job>, JobError> {
-        let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
-        let quota = Quota::new(self.quota.as_ref())?;
-        let mut bare = Job::bare(Some(Arc::clone(self)), None, Some(quota), Budget::Parents)?;
-        bare.charge = charge;
-        bare.domain = domain;
-        let child = fallible::try_arc(bare)?;
+        let child = self.bare_child(None, Budget::Parents, domain)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
@@ -498,7 +496,7 @@ impl Job {
     ) -> Result<Arc<Job>, JobError> {
         self.room_for_a_child()?;
         let name_held = fallible::try_boxed_str(name)?;
-        let child = self.bare_child(Some(name_held), budget)?;
+        let child = self.bare_child(Some(name_held), budget, 0)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
