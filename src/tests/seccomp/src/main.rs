@@ -1208,10 +1208,10 @@ const CHILD: &str = "--filtered-child";
 /// filtered, and its getppid refused.
 fn filtered_child() -> c_int {
     if status_field("Seccomp:").as_deref() != Some("2") {
-        return 2;
+        return 5;
     }
     if status_field("NoNewPrivs:").as_deref() != Some("1") {
-        return 3;
+        return 6;
     }
     if call0(GETPPID) != (-1, libc::EPERM) {
         return 4;
@@ -1236,7 +1236,8 @@ fn bwrap() -> Step {
         let argv = [path.as_ptr(), argument.as_ptr(), std::ptr::null()];
         // SAFETY: a NUL-terminated path and argument vector, alive for the call.
         let _ = unsafe { libc::execv(path.as_ptr(), argv.as_ptr()) };
-        5
+        // 100 and the errno, which fits in a status: Linux's are below 134.
+        100 + errno().min(155)
     })?;
     match reap(child) {
         0 => Ok(()),
@@ -1245,7 +1246,10 @@ fn bwrap() -> Step {
             "the exec'd program's getppid was not refused: the filter did not survive execve"
                 .into(),
         ),
-        2 | 5 => Err("the exec'd program did not find itself filtered".into()),
+        2 => Err("the filtered child could not set no-new-privs".into()),
+        5 => Err("the exec'd program did not find itself in filter mode".into()),
+        6 => Err("the exec'd program did not find no-new-privs set".into()),
+        failed @ 100..=255 => Err(format!("the filtered child's execve failed with errno {}", failed - 100)),
         other => Err(format!("the filtered child ended with {other}")),
     }
 }
