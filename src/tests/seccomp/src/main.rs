@@ -982,25 +982,12 @@ fn emulate() -> Step {
         if call0(GETPID).0 != std::process::id() as c_long {
             return 7;
         }
-        // `SIGSYS` blocked: a trap cannot be blocked, so the handler runs.
-        // SAFETY: a zeroed set, then one signal added, blocks that signal.
-        let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
-        // SAFETY: `set` is alive for the calls.
-        let _ = unsafe { libc::sigemptyset(&mut set) };
-        // SAFETY: as above.
-        let _ = unsafe { libc::sigaddset(&mut set, libc::SIGSYS) };
-        // SAFETY: as above.
-        let _ = unsafe { libc::sigprocmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
-        let (answer, _) = call3(GETPPID, 0, 0, 0);
-        if answer != EMULATED || HANDLED.load(Ordering::Acquire) != 2 {
-            return 8;
-        }
         // A trap inside the handler traps again (`SA_NODEFER`): the nested call
         // returns the value its own handler run wrote, and the outer call the
         // one the outer run wrote.
         NEST.store(true, Ordering::Release);
         let (answer, _) = call3(GETPPID, 0, 0, 0);
-        if HANDLED.load(Ordering::Acquire) != 4 || answer != EMULATED {
+        if HANDLED.load(Ordering::Acquire) != 3 || answer != EMULATED {
             return 9;
         }
         if NESTED_ANSWER.load(Ordering::Acquire) != to_i32(EMULATED) {
@@ -1014,7 +1001,6 @@ fn emulate() -> Step {
         4 => Err("the SIGSYS handler did not run once for the trapped call".into()),
         5 => Err("a trapped call did not return the result its handler wrote".into()),
         6 => Err("the filter's ERRNO for getuid did not hold".into()),
-        8 => Err("a trapped call with SIGSYS blocked did not run its handler".into()),
         9 => Err("a trap inside the handler did not trap again".into()),
         status @ 11..=18 => Err(format!(
             "the SIGSYS handler found its context wrong: condition {} of Chromium's five \
@@ -1026,8 +1012,42 @@ fn emulate() -> Step {
     }
 }
 
-/// **ignored**: with `SIGSYS` ignored the trap still ends the process.
+/// **ignored**: with `SIGSYS` ignored, or blocked though a handler is installed,
+/// a trapped call still ends the process by `SIGSYS`: Linux's
+/// `force_sig_info_to_task` resets a blocked or ignored `SIGSYS` to its default.
 fn ignored() -> Step {
+    let child = fork_with(|| {
+        if install_handler().is_err() || no_new_privs().is_err() {
+            return 2;
+        }
+        // SAFETY: a zeroed set, then one signal added, blocks that signal.
+        let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `set` is alive for the calls.
+        let _ = unsafe { libc::sigemptyset(&mut set) };
+        // SAFETY: as above.
+        let _ = unsafe { libc::sigaddset(&mut set, libc::SIGSYS) };
+        // SAFETY: as above.
+        let _ = unsafe { libc::sigprocmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
+        if install(&answering(&[(GETPPID, RET_TRAP | 1)]), 0).0 != 0 {
+            return 3;
+        }
+        let _ = call0(GETPPID);
+        4
+    })?;
+    match reap(child) {
+        BY_SIGSYS => {}
+        4 => return Err("a trapped call returned with SIGSYS blocked".into()),
+        other => {
+            return Err(format!(
+                "a blocked SIGSYS's child ended with {other}, not by SIGSYS"
+            ));
+        }
+    }
+    ignored_alone()
+}
+
+/// The ignored half of **ignored**.
+fn ignored_alone() -> Step {
     let child = fork_with(|| {
         // SAFETY: ignores the signal in this process.
         let _ = unsafe { libc::signal(libc::SIGSYS, libc::SIG_IGN) };
