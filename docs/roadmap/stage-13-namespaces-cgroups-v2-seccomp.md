@@ -302,6 +302,22 @@ the namespace ends. Abstract unix names are per namespace. The `netns` boot line
 charged (three more `kmem` fills); `docs/NETNS.md` has the design, the
 controls and what is open.
 
+**Time namespace (2026-09-30, built on `stage13-timens`, not landed):**
+`unshare(CLONE_NEWTIME)` (the flag is inside `CSIGNAL`, so only `unshare`
+and, later, `setns` reach it) gives the caller's children a namespace of
+two offsets, for `CLOCK_MONOTONIC` (and its raw and coarse forms) and
+`CLOCK_BOOTTIME`; `/proc/<pid>/timens_offsets` writes them once, before a
+process is made in it, in Linux's order of refusals; `ns/time` and
+`ns/time_for_children` name the two references a process holds. Clock
+reads, `sysinfo`, `/proc/uptime`, `times` and the absolute deadlines of
+`clock_nanosleep`, `timerfd_settime` and `FUTEX_WAIT_BITSET` shift and
+unshift by the caller's offsets. A process in such a namespace maps a
+second vDSO object whose functions all make the system call. The `timens`
+boot line (FX-0910) proves it, with a negative control per rule, and the
+`kmem` line fills time namespaces (F-37). `timer_create` does not exist
+here, so it has nothing to shift; `setns` is the small-namespaces
+landing's (`docs/NAMESPACES.md` §12.1 has what is and is not built).
+
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,
 `cpu.max` and `io`. `docs/CGROUPS.md` §7.1 says where each

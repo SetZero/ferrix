@@ -149,6 +149,11 @@ pub(crate) enum Content<T: 'static> {
     /// `docs/NAMESPACES.md` §2.2 (U2 to U4), judged against who opened the
     /// file and who writes it.
     IdMap(MapFile),
+    /// `/proc/<pid>/timens_offsets`: the offsets of the time namespace the
+    /// process makes children in, written once before a process is made in
+    /// it, judged against who opened the file and who writes
+    /// (`docs/NAMESPACES.md` §12.1).
+    TimeOffsets,
     /// `/proc/<pid>/fd`: a link per open descriptor.
     Descriptors,
     /// `/proc/<pid>/ns`: a link per namespace the process is in: `mnt`,
@@ -198,6 +203,10 @@ enum NamespaceKind {
     PidForChildren = 6,
     /// `net`.
     Net = 7,
+    /// `time`: the time namespace the process is in.
+    Time = 8,
+    /// `time_for_children`: the one its children are made in.
+    TimeForChildren = 9,
 }
 
 impl NamespaceKind {
@@ -211,6 +220,8 @@ impl NamespaceKind {
         (NamespaceKind::Pid, b"pid"),
         (NamespaceKind::PidForChildren, b"pid_for_children"),
         (NamespaceKind::Net, b"net"),
+        (NamespaceKind::Time, b"time"),
+        (NamespaceKind::TimeForChildren, b"time_for_children"),
     ];
 }
 
@@ -229,14 +240,14 @@ impl<T> Entry<T> {
     const fn takes_writes(&self) -> bool {
         matches!(
             self.content,
-            Content::File { write: Some(_), .. } | Content::IdMap(_)
+            Content::File { write: Some(_), .. } | Content::IdMap(_) | Content::TimeOffsets
         )
     }
 
     /// The kind of object this entry is.
     const fn kind(&self) -> FileType {
         match self.content {
-            Content::File { .. } | Content::IdMap(_) => FileType::Regular,
+            Content::File { .. } | Content::IdMap(_) | Content::TimeOffsets => FileType::Regular,
             Content::Link(_) => FileType::Symlink,
             Content::Descriptors
             | Content::Namespaces
@@ -408,7 +419,7 @@ static SYS_KERNEL: [Entry<Kernel>; 8] = [
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 18] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 19] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -446,6 +457,11 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 18] = [
         name: b"setgroups",
         permissions: 0o644,
         content: Content::IdMap(MapFile::Setgroups),
+    },
+    Entry {
+        name: b"timens_offsets",
+        permissions: 0o644,
+        content: Content::TimeOffsets,
     },
     Entry {
         name: b"oom_score_adj",
@@ -885,6 +901,20 @@ impl Node {
                     Snapshot::new(metadata, bytes, Some(writer), refusal, splices)
                         .map(|snapshot| Some(snapshot.only_at_start()))
                 }
+                Some(Content::TimeOffsets) => {
+                    let process = alive(pid)?;
+                    let namespace = process.time_namespace_for_children();
+                    let bytes = namespace.render_offsets();
+                    // Who opened it is judged at each write, beside who
+                    // writes, as a map file's are.
+                    let opener = crate::syscall::userns::acting()
+                        .map(|opener| opener.with_credentials(|held| held.clone()));
+                    let writer: Writer = Box::new(move |data| {
+                        render::write_time_offsets(&namespace, opener.as_ref(), data)
+                    });
+                    Snapshot::new(metadata, bytes, Some(writer), refusal, splices)
+                        .map(|snapshot| Some(snapshot.only_at_start()))
+                }
                 Some(Content::File { render, write }) => {
                     let process = alive(pid)?;
                     let bytes = render(&process)?;
@@ -1042,6 +1072,8 @@ fn namespace_location(pid: u32, kind: NamespaceKind) -> Result<Location> {
         NamespaceKind::Pid | NamespaceKind::PidForChildren => return Err(Errno::EOPNOTSUPP),
         // Followed before this is asked, through `net::netns_file`.
         NamespaceKind::Net => return Err(Errno::EINVAL),
+        // No nsfs kind for the time namespace yet: it is read, not opened.
+        NamespaceKind::Time | NamespaceKind::TimeForChildren => return Err(Errno::EINVAL),
     };
     fs::nsfs::location(fs::nsfs::Handle::of(&process, kind))
 }
@@ -1330,6 +1362,10 @@ impl Inode for Node {
                 render::pid_namespace(&*alive(pid)?, true)
             }
             Place::Namespace(pid, NamespaceKind::Net) => render::net_namespace(&*alive(pid)?),
+            Place::Namespace(
+                pid,
+                kind @ (NamespaceKind::Time | NamespaceKind::TimeForChildren),
+            ) => render::time_namespace(&*alive(pid)?, kind == NamespaceKind::TimeForChildren),
             _ => Err(Errno::EINVAL),
         }
     }
