@@ -1306,7 +1306,10 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         // Sign-extended, as Linux stores a compat call's result: a 32-bit
         // program reads `EAX`, and a 64-bit one issuing `int $0x80` reads
         // `-errno` in all of `RAX`.
-        Outcome::Return(value) => frame.rax = value as i64 as u64,
+        // `int $0x80` reaches no native call, so has no words to give back.
+        Outcome::Return(value) | Outcome::ReturnWords { value, .. } => {
+            frame.rax = value as i64 as u64;
+        }
         // `execve`: the registers belong to a program that no longer exists,
         // so they are replaced rather than returned into, in the new image's
         // mode.

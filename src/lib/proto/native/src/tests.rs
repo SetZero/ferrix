@@ -72,6 +72,10 @@ impl Syscall for &Recorder {
         let reply = self.replies.borrow_mut().pop_front();
         reply.map_or(0, |reply| reply(&mut raw))
     }
+
+    fn call_words(self, raw: Raw<'_>) -> Option<(usize, [usize; 3])> {
+        Some((self.call(raw), [0; 3]))
+    }
 }
 
 impl Recorder {
@@ -1077,6 +1081,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = channel::create(&sys);
     let _ = channel.write(b"");
     let _ = channel.read(&mut [], &mut []);
+    let _ = channel.write_read(None);
     let _ = port::create(&sys);
     let _ = port.queue(0, [0, 0]);
     let _ = port.wait(Deadline::Never);

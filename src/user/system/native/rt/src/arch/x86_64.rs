@@ -113,8 +113,16 @@ pub(crate) fn monotonic_nanos(nanos: &mut u64) -> usize {
 /// assignment -- which is the whole of what `asm!` is here, and what
 /// `tools/common/data/asm-allowlist.json` admits.
 fn trap(number: usize, args: [usize; 6]) -> usize {
+    trap_words(number, args).0
+}
+
+/// [`trap`], and the second, third and fourth argument registers as the call
+/// left them: where `channel_write_read` hands back the words of the message
+/// it received. Every other call leaves them as they went in.
+pub(crate) fn trap_words(number: usize, args: [usize; 6]) -> (usize, [usize; 3]) {
     let [a0, a1, a2, a3, a4, a5] = args;
     let result;
+    let (w0, w1, w2);
     // SAFETY: `raw` was built by `src/lib/proto/native`, which puts in a pointer
     // argument only the address of a slice `raw` borrows — shared if the
     // kernel reads it, exclusive if it writes — and `raw` outlives this trap.
@@ -126,9 +134,9 @@ fn trap(number: usize, args: [usize; 6]) -> usize {
             "syscall",
             inlateout("rax") number => result,
             in("rdi") a0,
-            in("rsi") a1,
-            in("rdx") a2,
-            in("r10") a3,
+            inlateout("rsi") a1 => w0,
+            inlateout("rdx") a2 => w1,
+            inlateout("r10") a3 => w2,
             in("r8") a4,
             in("r9") a5,
             lateout("rcx") _,
@@ -136,7 +144,7 @@ fn trap(number: usize, args: [usize; 6]) -> usize {
             options(nostack),
         );
     }
-    result
+    (result, [w0, w1, w2])
 }
 
 /// The processor's time-stamp counter, which ring 3 may read: the TSC, the

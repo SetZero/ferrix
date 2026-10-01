@@ -224,6 +224,17 @@ pub(crate) enum Outcome {
     /// Already encoded as Linux encodes it: a value in `-4095..=-1` is
     /// `-errno`, anything else is success.
     Return(isize),
+    /// [`Outcome::Return`], and three more words for the second, third and
+    /// fourth argument registers: a message `channel_write_read` hands back
+    /// in registers rather than through the program's memory. A call made
+    /// through an entry that has no such registers to give back answers the
+    /// value alone.
+    ReturnWords {
+        /// What goes in the return register, encoded as for `Return`.
+        value: isize,
+        /// The message's words, in register order.
+        words: [u64; 3],
+    },
     /// Discard the saved registers and begin executing at `entry` with `stack`.
     ///
     /// `execve`, and the child side of `clone`. Data rather than "the frame has

@@ -5,7 +5,7 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 
 use crate::call::{Call, Syscall};
-use crate::error::{Error, decode_unit};
+use crate::error::{Error, decode, decode_unit};
 use crate::handle::{Object, OwnedHandle, object_handle, register};
 
 /// A handle's width in a message's handle buffer.
@@ -60,7 +60,78 @@ pub fn create<S: Syscall>(sys: S) -> Result<(Channel<S>, Channel<S>), Error> {
     Ok((Channel::from_owned(first), Channel::from_owned(second)))
 }
 
+/// The most bytes [`Channel::write_read`] carries each way: three words.
+pub const WRITE_READ_BYTES: usize = nr::CHANNEL_WRITE_READ_BYTES;
+
+/// A message [`Channel::write_read`] received: its size, and its bytes in
+/// three words as they would lie in memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Words {
+    /// How many of the words' bytes are the message.
+    pub len: usize,
+    /// The words.
+    pub words: [usize; 3],
+}
+
+impl Words {
+    /// The words' bytes; the first [`Words::len`] are the message.
+    #[must_use]
+    pub fn bytes(&self) -> [u8; WRITE_READ_BYTES] {
+        let mut bytes = [0_u8; WRITE_READ_BYTES];
+        for (chunk, word) in bytes.chunks_exact_mut(size_of::<usize>()).zip(self.words) {
+            chunk.copy_from_slice(&word.to_ne_bytes());
+        }
+        bytes
+    }
+
+    /// `bytes` as three words, if they fit.
+    fn of(bytes: &[u8]) -> Option<[usize; 3]> {
+        let mut padded = [0_u8; WRITE_READ_BYTES];
+        padded.get_mut(..bytes.len())?.copy_from_slice(bytes);
+        let mut words = [0_usize; 3];
+        for (word, chunk) in words
+            .iter_mut()
+            .zip(padded.chunks_exact(size_of::<usize>()))
+        {
+            let mut raw = [0_u8; size_of::<usize>()];
+            raw.copy_from_slice(chunk);
+            *word = usize::from_ne_bytes(raw);
+        }
+        Some(words)
+    }
+}
+
 impl<S: Syscall> Channel<S> {
+    /// `channel_write_read`: send `send`, if given, at most
+    /// [`WRITE_READ_BYTES`] and no handles, then wait for the next message on
+    /// this end and receive it, both ways in registers. One call where a
+    /// round trip was a write, a wait and a read on each side.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TooBig`] for more than [`WRITE_READ_BYTES`] to send;
+    /// [`Error::BufferTooSmall`] for a message only [`Channel::read`] can
+    /// take; [`Error::PeerClosed`]; whatever a write is refused for;
+    /// [`Error::Unsupported`] where the way this handle makes calls cannot
+    /// read registers back ([`Syscall::call_words`]).
+    pub fn write_read(&self, send: Option<&[u8]>) -> Result<Words, Error> {
+        let (count, words) = match send {
+            Some(bytes) => (bytes.len(), Words::of(bytes).ok_or(Error::TooBig)?),
+            None => (nr::WRITE_READ_NOTHING, [0; 3]),
+        };
+        let [w0, w1, w2] = words;
+        let (value, back) = Call::new(nr::CHANNEL_WRITE_READ)
+            .value(register(self.handle()))
+            .value(count)
+            .value(w0)
+            .value(w1)
+            .value(w2)
+            .make_words(self.syscall())
+            .ok_or(Error::Unsupported)?;
+        let len = decode(value)?;
+        Ok(Words { len, words: back })
+    }
+
     /// `channel_write` of bytes alone.
     ///
     /// # Errors

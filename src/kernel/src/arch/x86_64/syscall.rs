@@ -520,6 +520,14 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
         Outcome::Return(value) => {
             frame.rax = value as u64;
         }
+        // The value in RAX, the words in the second, third and fourth
+        // argument registers, which `SYSRET`'s way out restores from here.
+        Outcome::ReturnWords { value, words } => {
+            frame.rax = value as u64;
+            frame.rsi = words[0];
+            frame.rdx = words[1];
+            frame.r10 = words[2];
+        }
         Outcome::Enter { entry, stack, abi } => enter_program(frame, entry, stack, abi),
     }
 

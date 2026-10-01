@@ -81,6 +81,199 @@ const LIMITS: Limits = Limits {
     max_queued: MAX_QUEUED,
 };
 
+/// The most bytes a message kept in an inbox's slot carries: what
+/// `channel_write_read` carries in registers.
+pub(crate) const SMALL_BYTES: usize = ferrix_native_abi::nr::CHANNEL_WRITE_READ_BYTES;
+
+/// A message of at most [`SMALL_BYTES`] and no handles, held in place.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Small {
+    /// The bytes, the first `len` of them meant.
+    pub(crate) bytes: [u8; SMALL_BYTES],
+    /// How many.
+    pub(crate) len: usize,
+}
+
+impl Small {
+    /// `bytes` held in place, if they fit.
+    pub(crate) fn of(bytes: &[u8]) -> Option<Small> {
+        let mut small = Small {
+            bytes: [0; SMALL_BYTES],
+            len: bytes.len(),
+        };
+        small.bytes.get_mut(..bytes.len())?.copy_from_slice(bytes);
+        Some(small)
+    }
+
+    /// The bytes meant.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.bytes.get(..self.len).unwrap_or_default()
+    }
+}
+
+/// What a side holds unread: its queue, and before it a slot for one small
+/// message.
+///
+/// # Why a slot
+///
+/// A queued message is a heap allocation for its bytes and room in the
+/// queue, made by the writer and freed by the reader: on a round trip
+/// between two programs, two of each. A small message without handles
+/// written while nothing else is queued -- a request, its answer -- goes in
+/// the slot instead, and is the head of the queue for everything that reads
+/// it. Nothing goes in the slot while the queue holds anything, so the slot
+/// is always the oldest message: the order a reader sees is the order the
+/// writers wrote.
+#[derive(Debug)]
+struct Inbox {
+    /// The slot, the head when it is full.
+    small: Option<Small>,
+    /// Everything after it.
+    queue: MessageQueue<Transfer>,
+}
+
+/// Why [`Inbox::pop_fitting`] gave nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PopError {
+    /// What the queue says.
+    Queue(ReceiveError),
+    /// The slot's message could not be given a buffer of its own; it stays.
+    NoMemory,
+}
+
+impl Inbox {
+    /// Nothing held.
+    fn new() -> Inbox {
+        Inbox {
+            small: None,
+            queue: MessageQueue::new(LIMITS),
+        }
+    }
+
+    /// Whether nothing is waiting.
+    fn is_empty(&self) -> bool {
+        self.small.is_none() && self.queue.is_empty()
+    }
+
+    /// Whether a write would be refused as full. The slot does not count: it
+    /// is used only while the queue is empty.
+    fn is_full(&self) -> bool {
+        self.queue.is_full()
+    }
+
+    /// Whether a message of this shape could ever be sent.
+    fn accepts(&self, bytes: usize, handles: usize) -> bool {
+        self.queue.accepts(bytes, handles)
+    }
+
+    /// Hold `bytes` in the slot, if they fit and nothing is waiting.
+    fn put_small(&mut self, bytes: &[u8]) -> bool {
+        if !self.is_empty() {
+            return false;
+        }
+        self.small = Small::of(bytes);
+        self.small.is_some()
+    }
+
+    /// The waiting messages' handles' carriers, oldest first: the queue's,
+    /// since the slot's message carries none.
+    fn iter(&self) -> impl Iterator<Item = &ChannelMessage> + '_ {
+        self.queue.iter()
+    }
+
+    /// Whether the oldest message waiting carries endpoints and fits, as
+    /// [`Endpoint::read`] asks before it takes it.
+    fn head_needs_topology(&self, byte_capacity: usize, handle_capacity: usize) -> bool {
+        self.small.is_none()
+            && self.queue.iter().next().is_some_and(|head| {
+                head.bytes.len() <= byte_capacity
+                    && head.handles.len() <= handle_capacity
+                    && carries_endpoints(head)
+            })
+    }
+
+    /// The oldest message, if it fits, as a queued one.
+    fn pop_fitting(
+        &mut self,
+        byte_capacity: usize,
+        handle_capacity: usize,
+    ) -> Result<ChannelMessage, PopError> {
+        if let Some(small) = self.small {
+            if small.len > byte_capacity {
+                return Err(PopError::Queue(ReceiveError::TooSmall {
+                    bytes: small.len,
+                    handles: 0,
+                }));
+            }
+            let mut bytes =
+                fallible::try_filled(0_u8, small.len).map_err(|_| PopError::NoMemory)?;
+            bytes.copy_from_slice(small.as_bytes());
+            self.small = None;
+            return Ok(Message {
+                bytes,
+                handles: Vec::new(),
+            });
+        }
+        self.queue
+            .pop_fitting(byte_capacity, handle_capacity)
+            .map_err(PopError::Queue)
+    }
+
+    /// The oldest message, if it is small and carries no handles, held in
+    /// place. A queued one is taken out of the queue and its buffer freed.
+    fn pop_small(&mut self) -> Result<Small, ReceiveError> {
+        if let Some(small) = self.small.take() {
+            return Ok(small);
+        }
+        let (bytes, handles) = self.queue.peek_sizes().ok_or(ReceiveError::Empty)?;
+        if bytes > SMALL_BYTES || handles != 0 {
+            return Err(ReceiveError::TooSmall { bytes, handles });
+        }
+        let message = self.queue.pop_fitting(SMALL_BYTES, 0)?;
+        Small::of(&message.bytes).ok_or(ReceiveError::TooSmall { bytes, handles })
+    }
+
+    /// Make room for one more queued message.
+    fn reserve(&mut self) -> Result<(), SendError> {
+        self.queue.reserve()
+    }
+
+    /// Queue a message after everything waiting.
+    fn push(&mut self, message: ChannelMessage) -> Result<(), (SendError, ChannelMessage)> {
+        self.queue.push(message)
+    }
+
+    /// Put a message taken by [`Inbox::pop_fitting`] back at the head.
+    ///
+    /// A writer may have filled the slot since, the queue being empty once
+    /// the message was out; that message is younger, so it moves into the
+    /// queue behind the one coming back.
+    fn unpop(&mut self, message: ChannelMessage) -> Result<(), ChannelMessage> {
+        if let Some(small) = self.small {
+            let Ok(mut bytes) = fallible::try_filled(0_u8, small.len) else {
+                return Err(message);
+            };
+            bytes.copy_from_slice(small.as_bytes());
+            let younger = Message {
+                bytes,
+                handles: Vec::new(),
+            };
+            if self.queue.unpop(younger).is_err() {
+                return Err(message);
+            }
+            self.small = None;
+        }
+        self.queue.unpop(message)
+    }
+
+    /// Take everything, as a side closes. The slot's message holds nothing
+    /// to free.
+    fn drain(&mut self) -> VecDeque<ChannelMessage> {
+        self.small = None;
+        self.queue.drain()
+    }
+}
+
 /// The most queued endpoints one send's cycle check may walk.
 ///
 /// A program can nest endpoints as deep as memory allows, and the walk runs
@@ -125,6 +318,9 @@ pub(crate) enum ReadError {
         /// How many handles it carries.
         handles: usize,
     },
+    /// The next message is held in place and there was no memory to give it
+    /// a buffer of its own. Still queued.
+    NoMemory,
 }
 
 /// Which of a channel's two sides an [`Endpoint`] is.
@@ -150,7 +346,7 @@ impl Side {
 #[derive(Debug)]
 struct Half {
     /// Messages written by the other side, waiting for this one to read them.
-    inbox: SpinLock<MessageQueue<Transfer>>,
+    inbox: SpinLock<Inbox>,
     /// Woken when this side's signals may have changed: a message arrived, the
     /// other side's queue gained room, or the other side closed.
     waiters: WaitQueue,
@@ -167,7 +363,7 @@ impl Half {
     /// An open side with nothing queued.
     fn new() -> Half {
         Half {
-            inbox: SpinLock::new(MessageQueue::new(LIMITS)),
+            inbox: SpinLock::new(Inbox::new()),
             waiters: WaitQueue::new(),
             observers: SpinLock::new(Observers::new()),
             closed: AtomicBool::new(false),
@@ -368,12 +564,8 @@ impl Endpoint {
             let was_full = inbox.is_full();
             // Decided under the same lock as the pop, so the message looked at
             // is the message taken.
-            let needs_topology = !topology_held
-                && inbox.iter().next().is_some_and(|head| {
-                    head.bytes.len() <= byte_capacity
-                        && head.handles.len() <= handle_capacity
-                        && carries_endpoints(head)
-                });
+            let needs_topology =
+                !topology_held && inbox.head_needs_topology(byte_capacity, handle_capacity);
             if needs_topology {
                 return Err(ReadError::NeedsTopology);
             }
@@ -386,12 +578,95 @@ impl Endpoint {
         }
         match taken {
             Ok(message) => Ok(message),
+            Err(PopError::Queue(ReceiveError::TooSmall { bytes, handles })) => {
+                Err(ReadError::TooSmall { bytes, handles })
+            }
+            Err(PopError::Queue(ReceiveError::Empty)) if peer_closed => Err(ReadError::PeerClosed),
+            Err(PopError::Queue(ReceiveError::Empty)) => Err(ReadError::Empty),
+            Err(PopError::NoMemory) => Err(ReadError::NoMemory),
+        }
+    }
+
+    /// Send `bytes`, at most [`SMALL_BYTES`] and no handles, held in the
+    /// peer's slot when nothing is waiting there and queued otherwise, and
+    /// wake the reader onto this processor where it is free.
+    ///
+    /// `channel_write_read`'s write: the round trip's half that allocates
+    /// nothing when the other side keeps up.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteFailure`], never `Take`.
+    pub(crate) fn write_small(&self, bytes: &[u8]) -> Result<(), WriteFailure<()>> {
+        let peer = self.peer();
+        let fired = {
+            let mut inbox = peer.inbox.lock();
+            // As `write`: under the lock the close empties the queue under.
+            if peer.is_closed() {
+                return Err(WriteFailure::PeerClosed);
+            }
+            if bytes.len() > SMALL_BYTES || !inbox.accepts(bytes.len(), 0) {
+                return Err(WriteFailure::TooBig);
+            }
+            if inbox.is_full() {
+                return Err(WriteFailure::Full);
+            }
+            if !inbox.put_small(bytes) {
+                inbox.reserve().map_err(|_| WriteFailure::NoMemory)?;
+                let mut queued =
+                    fallible::try_filled(0_u8, bytes.len()).map_err(|_| WriteFailure::NoMemory)?;
+                queued.copy_from_slice(bytes);
+                // NOALLOC: the room `reserve` made above.
+                inbox
+                    .push(Message {
+                        bytes: queued,
+                        handles: Vec::new(),
+                    })
+                    .map_err(|_| WriteFailure::NoMemory)?;
+            }
+            trigger(&mut peer.observers.lock(), Signals::READABLE)
+        };
+        // As `write`, after the lock.
+        if fired {
+            deliver(|| peer.observers.lock().next_fired());
+        }
+        peer.waiters.wake_all_with(crate::sched::Wake::Sync);
+        Ok(())
+    }
+
+    /// Take the next message if it is small and carries no handles, held in
+    /// place: `channel_write_read`'s read.
+    ///
+    /// # Errors
+    ///
+    /// [`ReadError::Empty`], [`ReadError::PeerClosed`], or
+    /// [`ReadError::TooSmall`] for a message only `channel_read` can take,
+    /// left where it was.
+    pub(crate) fn read_small(&self) -> Result<Small, ReadError> {
+        // Before the queue, for the reason `read` gives.
+        let peer_closed = self.peer_closed();
+        let (taken, was_full) = {
+            let mut inbox = self.own().inbox.lock();
+            let was_full = inbox.is_full();
+            (inbox.pop_small(), was_full)
+        };
+        if was_full && taken.is_ok() {
+            self.peer().waiters.wake_all();
+        }
+        match taken {
+            Ok(small) => Ok(small),
             Err(ReceiveError::TooSmall { bytes, handles }) => {
                 Err(ReadError::TooSmall { bytes, handles })
             }
             Err(ReceiveError::Empty) if peer_closed => Err(ReadError::PeerClosed),
             Err(ReceiveError::Empty) => Err(ReadError::Empty),
         }
+    }
+
+    /// Whether a message is waiting on this end, or nothing more will come:
+    /// what `channel_write_read`'s wait waits for.
+    pub(crate) fn readable_or_closed(&self) -> bool {
+        self.peer_closed() || !self.own().inbox.lock().is_empty()
     }
 
     /// Put back a message [`Endpoint::read`] took and the caller could not

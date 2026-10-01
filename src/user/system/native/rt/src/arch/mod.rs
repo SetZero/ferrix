@@ -36,11 +36,17 @@ mod armv7a;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::{call, counter, device_barrier, exit, linux, monotonic_nanos, nr, unlink};
+pub(crate) use aarch64::{
+    call, counter, device_barrier, exit, linux, monotonic_nanos, nr, trap_words, unlink,
+};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::{call, counter, device_barrier, exit, linux, monotonic_nanos, nr, unlink};
+pub(crate) use armv7a::{
+    call, counter, device_barrier, exit, linux, monotonic_nanos, nr, trap_words, unlink,
+};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::{call, counter, device_barrier, exit, linux, monotonic_nanos, nr, unlink};
+pub(crate) use x86_64::{
+    call, counter, device_barrier, exit, linux, monotonic_nanos, nr, trap_words, unlink,
+};
 
 // Public, where the rest is the crate's: `crate::linux` hands it on to
 // programs.

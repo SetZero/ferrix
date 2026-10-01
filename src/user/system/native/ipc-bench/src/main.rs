@@ -10,6 +10,9 @@
 //! bootstrap channel it is the server, and echoes every message back until
 //! the client closes its end.
 //!
+//! Then the same trip again with `channel_write_read`, one call a side and
+//! the message in registers (`call`).
+//!
 //! Before the round trips it times [`ROUNDS`] `object_wait_one`s on a signal
 //! already asserted, so the floor -- a native call that does not sleep -- is
 //! printed beside the trip. Times are the processor's counter (`ferrix_rt::counter`),
@@ -74,7 +77,11 @@ fn serve(channel: &Channel<Kernel>) -> i32 {
         match channel.read(&mut bytes, &mut handles) {
             Ok(received) => {
                 let len = received.bytes.min(bytes.len());
-                if channel.write(bytes.get(..len).unwrap_or_default()).is_err() {
+                let message = bytes.get(..len).unwrap_or_default();
+                if message == FAST {
+                    return serve_fast(channel);
+                }
+                if channel.write(message).is_err() {
                     return 31;
                 }
             }
@@ -89,6 +96,28 @@ fn serve(channel: &Channel<Kernel>) -> i32 {
             Err(ReadError::Failed(Error::PeerClosed)) => return 0,
             Err(_) => return 33,
         }
+    }
+}
+
+/// What the client sends to move the server to `channel_write_read`.
+const FAST: &[u8] = b"FAST";
+
+/// Echo with `channel_write_read`: one call per request, the answer to the
+/// last going out as the next comes in.
+fn serve_fast(channel: &Channel<Kernel>) -> i32 {
+    let mut received = match channel.write_read(None) {
+        Ok(words) => words,
+        Err(Error::PeerClosed) => return 0,
+        Err(_) => return 34,
+    };
+    loop {
+        let bytes = received.bytes();
+        let answer = bytes.get(..received.len).unwrap_or_default();
+        received = match channel.write_read(Some(answer)) {
+            Ok(words) => words,
+            Err(Error::PeerClosed) => return 0,
+            Err(_) => return 35,
+        };
     }
 }
 
@@ -123,6 +152,30 @@ fn client() -> Result<(), i32> {
     }
     let scale = clock.stop();
     trip.print("trip", scale);
+
+    // The same trip as one `channel_write_read` a side.
+    mine.write(FAST).map_err(|_| 23)?;
+    let mut call = Histogram::new();
+    for _ in 0..WARMUP {
+        call_trip(&mine, &message)?;
+    }
+    let clock = Clock::start();
+    for _ in 0..ROUNDS {
+        let before = ferrix_rt::counter().unwrap_or(0);
+        call_trip(&mine, &message)?;
+        call.add(ferrix_rt::counter().unwrap_or(0).wrapping_sub(before));
+    }
+    let scale = clock.stop();
+    call.print("call", scale);
+    Ok(())
+}
+
+/// One message there and back by `channel_write_read`, checked.
+fn call_trip(channel: &Channel<Kernel>, message: &[u8]) -> Result<(), i32> {
+    let back = channel.write_read(Some(message)).map_err(|_| 24)?;
+    if back.bytes().get(..back.len) != Some(message) {
+        return Err(25);
+    }
     Ok(())
 }
 

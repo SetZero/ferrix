@@ -469,6 +469,13 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
             }
             Ok(())
         }
+        // The value in X0, the words in X1 to X3.
+        Outcome::ReturnWords { value, words } => {
+            if let Some(registers) = frame.x.get_mut(..4) {
+                registers.copy_from_slice(&[value as u64, words[0], words[1], words[2]]);
+            }
+            Ok(())
+        }
         // `execve`: the registers belong to a program that no longer exists, so
         // they are replaced rather than returned into.
         Outcome::Enter { entry, stack, .. } => {

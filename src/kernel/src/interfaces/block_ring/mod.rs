@@ -537,7 +537,9 @@ fn receive_hello(control: &Endpoint) -> Option<object::channel::ChannelMessage> 
     loop {
         match control.read(CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, false) {
             Ok(message) => return Some(message),
-            Err(ReadError::Empty) => {}
+            // Nothing yet, or a message held in place there was no memory
+            // to hand over yet: look again until the deadline.
+            Err(ReadError::Empty | ReadError::NoMemory) => {}
             // A HELLO carries no channel, and nothing but a HELLO is
             // expected: the ring is over before it began.
             Err(ReadError::PeerClosed | ReadError::NeedsTopology | ReadError::TooSmall { .. }) => {
@@ -1750,7 +1752,7 @@ impl Serving<'_> {
                         return Some(Ending::Stopped);
                     }
                 }
-                Err(ReadError::Empty) => return None,
+                Err(ReadError::Empty | ReadError::NoMemory) => return None,
                 Err(
                     ReadError::PeerClosed | ReadError::NeedsTopology | ReadError::TooSmall { .. },
                 ) => {

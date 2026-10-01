@@ -452,6 +452,9 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         ),
         NativeCall::VmoGetSize => vmo_get_size(process, handle(a[0]), a[1]),
         NativeCall::ObjectWaitOne => object_wait_one(caller, handle(a[0]), a[1], a[2], a[3]),
+        // A program makes this call through `dispatch_write_read`, which
+        // hands the words back; a boot check here gets the count alone.
+        NativeCall::ChannelWriteRead => channel_write_read(caller, &a).map(|(count, _)| count),
         NativeCall::JobCreate
         | NativeCall::JobKill
         | NativeCall::JobSetLimit
@@ -776,6 +779,7 @@ fn channel_read(
             }
             Err(ReadError::Empty) => return Err(status::SHOULD_WAIT),
             Err(ReadError::PeerClosed) => return Err(status::PEER_CLOSED),
+            Err(ReadError::NoMemory) => return Err(status::NO_MEMORY),
         };
         let through = if topology.is_some() {
             UserCopy::Present
@@ -806,6 +810,109 @@ fn channel_read(
                 uaccess::fault_in_for_write(space, actual, size_of::<ReadActual>())
                     .map_err(fault)?;
             }
+        }
+    }
+}
+
+/// `channel_write_read` for a program, with its audit record as
+/// [`dispatch`] makes one: send up to three words from registers, then wait
+/// for the next message on the same end and answer it in registers. See
+/// [`NativeCall::ChannelWriteRead`].
+///
+/// # The round trip it replaces
+///
+/// A request and its answer used to be, on each side, a `channel_write`, an
+/// `object_wait_one` and a `channel_read`, the bytes copied in and out of the
+/// program's memory through a walk of its tables each way, and the message
+/// queued in a heap buffer. Here they are one call, the bytes never touch the
+/// program's memory, and a message the reader keeps up with is held in the
+/// inbox's slot ([`Endpoint::write_small`]). The writer's wake puts the
+/// reader on the writer's processor, and the writer's wait hands it the
+/// processor: the switch is the only thing between the two programs.
+///
+/// # Errors
+///
+/// As the call's documentation says.
+pub(crate) fn dispatch_write_read(
+    args: &SyscallArgs,
+    caller: &dyn Host,
+) -> Result<(usize, [u64; 3]), Errno> {
+    let answered = channel_write_read(caller, &args.args);
+    let plain = answered.map(|(count, _)| count);
+    record_call(
+        NativeCall::ChannelWriteRead,
+        args.number,
+        caller.core(),
+        &args.args,
+        &plain,
+    );
+    answered
+}
+
+/// [`dispatch_write_read`]'s answer, before the audit record.
+fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3]), Errno> {
+    let process = caller.core();
+    let count = usize::try_from(a[1]).unwrap_or(nr::WRITE_READ_NOTHING);
+    let count = if a[1] == u64::from(u32::MAX) && size_of::<usize>() == 4 {
+        nr::WRITE_READ_NOTHING
+    } else {
+        count
+    };
+    let sending = count != nr::WRITE_READ_NOTHING;
+    let needed = if sending {
+        Rights::READ | Rights::WRITE
+    } else {
+        Rights::READ
+    };
+    let endpoint = process.with_handles(|table| channel_in(table, handle(a[0]), needed))?;
+
+    if sending {
+        if count > nr::CHANNEL_WRITE_READ_BYTES {
+            return Err(status::TOO_BIG);
+        }
+        let mut bytes = [0_u8; nr::CHANNEL_WRITE_READ_BYTES];
+        for (chunk, word) in bytes.chunks_exact_mut(size_of::<usize>()).zip(&a[2..5]) {
+            // The word as the program held it: a `usize` in its registers,
+            // the low half of the register on a 32-bit processor.
+            chunk.copy_from_slice(&(*word as usize).to_ne_bytes());
+        }
+        endpoint
+            .write_small(bytes.get(..count).unwrap_or_default())
+            .map_err(|failure| match failure {
+                WriteFailure::PeerClosed => status::PEER_CLOSED,
+                WriteFailure::TooBig => status::TOO_BIG,
+                WriteFailure::Full => status::SHOULD_WAIT,
+                WriteFailure::NoMemory | WriteFailure::Take(()) => status::NO_MEMORY,
+            })?;
+    }
+
+    loop {
+        match endpoint.read_small() {
+            Ok(small) => {
+                let mut words = [0_u64; 3];
+                for (word, chunk) in words
+                    .iter_mut()
+                    .zip(small.bytes.chunks_exact(size_of::<usize>()))
+                {
+                    let mut raw = [0_u8; size_of::<usize>()];
+                    raw.copy_from_slice(chunk);
+                    *word = usize::from_ne_bytes(raw) as u64;
+                }
+                return Ok((small.len, words));
+            }
+            Err(ReadError::Empty) => {}
+            Err(ReadError::PeerClosed) => return Err(status::PEER_CLOSED),
+            Err(ReadError::TooSmall { .. } | ReadError::NeedsTopology) => {
+                return Err(status::BUFFER_TOO_SMALL);
+            }
+            Err(ReadError::NoMemory) => return Err(status::NO_MEMORY),
+        }
+        let _ = endpoint.waiters().wait_until_deadline(
+            || endpoint.readable_or_closed() || must_leave(caller),
+            u64::MAX,
+        );
+        if must_leave(caller) {
+            return Err(Errno::EINTR);
         }
     }
 }
