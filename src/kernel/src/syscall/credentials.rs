@@ -63,15 +63,16 @@ pub(crate) fn require_privilege(process: &Process) -> Result<(), Errno> {
 
 /// Linux's `ptrace_may_access`, for a process reading what another process
 /// keeps private (`docs/NAMESPACES.md` M8): its `/proc/<pid>/root`, `cwd`,
-/// `exe`, `fd`, `maps`, `mountinfo` and `ns/*`, and its robust-list head.
+/// `exe`, `fd`, `fdinfo`, `maps` and `ns/*`, and its robust-list head.
 ///
-/// Allowed for the process itself; for a caller whose filesystem user and group
-/// ids (its real ones when `real` asks, as `get_robust_list` does) are every one
-/// of the target's real, effective and saved ids, when the target is
-/// dumpable; and for a caller with `CAP_SYS_PTRACE` over the target's user
-/// namespace -- in the first namespace root, and from a child namespace
-/// nothing into a process its namespace does not own. A target that
-/// `execve`d a set-id program, or cleared `PR_SET_DUMPABLE`, is not dumpable.
+/// Allowed for the process itself; and for a caller either whose filesystem
+/// user and group ids (its real ones when `real` asks, as `get_robust_list`
+/// does) are every one of the target's real, effective and saved ids, or with
+/// `CAP_SYS_PTRACE` over the target's user namespace -- in the first
+/// namespace root, and from a child namespace nothing into a process its
+/// namespace does not own -- but, of a target that is not dumpable (it
+/// `execve`d a set-id program, changed its ids, or cleared `PR_SET_DUMPABLE`),
+/// only when it is privileged in the first namespace.
 pub(crate) fn may_access(caller: &Process, target: &Process, real: bool) -> bool {
     if core::ptr::eq(caller, target) {
         return true;
@@ -93,8 +94,15 @@ pub(crate) fn may_access(caller: &Process, target: &Process, real: bool) -> bool
                 .all(|&id| id == gid);
         (same, Arc::clone(&held.user_ns))
     });
-    (same && !target.attributes_pending() && attributes::get(target).dumpable)
-        || userns::capable_over(&caps_holder, &namespace, userns::CAP_SYS_PTRACE)
+    let capable = userns::capable_over(&caps_holder, &namespace, userns::CAP_SYS_PTRACE);
+    // Linux's `__ptrace_may_access`: the ids or the capability, and then, for
+    // a target that is not dumpable -- or not yet given its attributes -- the
+    // capability in the namespace its program was loaded in, which is the
+    // first one here: `privileged()`, whatever the target's own namespace
+    // makes of its owner. Otherwise a process that cleared `PR_SET_DUMPABLE` and
+    // made a namespace is readable by every process of its user.
+    let dumpable = !target.attributes_pending() && attributes::get(target).dumpable;
+    (same || capable) && (dumpable || caps_holder.privileged())
 }
 
 /// Linux's `check_same_owner`: whether `caller` may change `target`'s

@@ -1020,7 +1020,7 @@ fn is_private(index: usize) -> bool {
     PER_PROCESS.get(index).is_some_and(|entry| {
         matches!(
             entry.name,
-            b"root" | b"cwd" | b"exe" | b"maps" | b"mountinfo"
+            b"root" | b"cwd" | b"exe" | b"maps"
         )
     })
 }
