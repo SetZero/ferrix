@@ -259,6 +259,9 @@ pub(crate) fn entered_space(root: u64) {
         machine::switch_barrier_in_domain(cpu);
         return;
     }
+    if let Some(decided) = BARRIER_DECISIONS.get(cpu) {
+        let _ = decided.fetch_add(1, Ordering::Relaxed);
+    }
     if machine::switch_barrier(cpu) {
         let _ = issued.fetch_add(1, Ordering::Relaxed);
     }
@@ -269,6 +272,21 @@ pub(crate) fn entered_space(root: u64) {
 /// is no domain.
 fn same_domain(outgoing: u64, incoming: u64) -> bool {
     outgoing != 0 && outgoing == incoming
+}
+
+/// How many times each processor decided a switch needed the predictor
+/// barrier, whether or not it had one to issue: what the speculation domain
+/// check counts, since a processor the reference configuration runs without
+/// a barrier -- QEMU's Cortex-A72, with no `ARCH_WORKAROUND_1` -- issues
+/// none, and [`SWITCH_BARRIERS`] would then say nothing about the rule.
+static BARRIER_DECISIONS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// How many switches processor `logical` has decided needed the predictor
+/// barrier: see [`BARRIER_DECISIONS`].
+pub(crate) fn barrier_decisions_on(logical: usize) -> u64 {
+    BARRIER_DECISIONS
+        .get(logical)
+        .map_or(0, |decided| decided.load(Ordering::Relaxed))
 }
 
 /// The speculation domain of the space each processor last ran, read as
