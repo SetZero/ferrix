@@ -52,6 +52,9 @@ the plain `stage13-<part>` branch of each; the `-presquash`, `-hist`, `-v2`,
   not yet cleared: B1 armv7a `Newfstatat`, B2 dumpable bypass on the capability
   path, C1 the newborn window failing closed, C2-C5.
 - `stage13-container`: the exit criterion as one program, never run.
+- `stage13-timens`'s worktree held its work staged with a conflict in
+  `panic/catalog.rs` (FX-0907 beside FX-0910): take both, then regenerate
+  `docs/generated/PANICS.md` and the coverage JSONs that read it.
 
 Every namespace and seccomp branch got the same blocker once:
 `launch::load_native` must give a native child the creator's whole namespace
@@ -106,7 +109,7 @@ hold unlanded work*, says what each of these needs.
 - `os-35/ipc-lazytlb-on-ef206bb2`: lazy TLB, renumbered to L.user.108-110;
   needs regeneration on nazuna, the full row and the consultant. Ring B's
   L.object.106 now clashes with `stage13-cgctl` and must be renumbered.
-  `os-35/ipc-lazytlb-land` (local until this page) is the same change prepared
+  `os-35/ipc-lazytlb-land` is the same change prepared
   for landing; the other `ipc-lazytlb-*` branches are earlier states, and
   `-nc*`/`-rnc*` are negative-control copies.
 - `os-35/ipc-ring` (part B) and `os-35/ipc-wake` (sync wake, halt-poll, SGIs):
@@ -125,7 +128,7 @@ hold unlanded work*, says what each of these needs.
 | `os-35/ipc-ring-land` | 2026-10-01 | 2 | work | WIP: Hold the seam's trip trace down outside the hop check |
 | `os-35/ipc-ring` | 2026-10-01 | 2 | work | WIP: Take the block ring's task off the data path (os-35 part B) |
 | `os-35/ipc-lazytlb-on-ef206bb2` | 2026-10-01 | 1 | work | WIP: renumbered onto ef206bb2, generated docs not yet regenerated |
-| `os-35/ipc-lazytlb-land` | 2026-10-01 | 1 | work | Keep the last program's space loaded under kernel threads where SMAP or PAN refuses |
+| `os-35/ipc-lazytlb-land` | 2026-10-01 | 1 | work | Keep the last program's space loaded under kernel threads where SMAP or PAN refuses user p |
 | `backup/2026-10-01/os-35/ipc-lazytlb-land` | 2026-10-01 | 1 | snapshot | Keep the last program's space loaded under kernel threads where SMAP or PAN refuses user p |
 | `os-35/ipc-lazytlb-wip` | 2026-09-30 | 1 | history | WIP lazy TLB for kernel threads |
 | `os-35/ipc-lazytlb-rnc5` | 2026-09-30 | 2 | never land | NC5 scratch |
@@ -155,9 +158,11 @@ read its last section first.
 
 - `display-design`: the ring-3 virtio-gpu display driver design, a draft for
   review. `display-show` (snapshots only) followed it.
-- `clipboard-vdagent` and `wip/clipboard-vdagent-compositor-approach`: the
-  clipboard agent (`docs/CLIPBOARD.md` §8: the agent and the terminal are left).
-- `edid-home-fix` (local until this page), `wip/windows-home-edid-remote-fix`
+- `clipboard-vdagent` and `wip/clipboard-vdagent-compositor-approach`: two
+  implementations of the clipboard agent (`docs/CLIPBOARD.md` §8). Origin's
+  `clipboard-vdagent` is the `user/vport` one; the other is a
+  `compositor/vdagent` crate. Decide which to keep before resuming either.
+- `edid-home-fix`, `wip/windows-home-edid-remote-fix`
   and `backup/2026-10-01/wip-root-main`: HOME on Windows, carrying a monitor's
   EDID across machines, and the remote-desktop tool. They are the uncommitted
   changes still in the Windows root checkout on 2026-10-01 (README, BACKLOG,
@@ -166,8 +171,14 @@ read its last section first.
 - `hyprlock` and `hyprlock-full-4e813ac4`, `fuzzel-window-*`: the desktop
   clients (`docs/DESKTOP-CLIENTS.md`); hyprlock is on `main`, and these hold
   commits that are not: compare before resuming.
-- `guest-frame-time`: the scroll fix after the frame-time work
-  (`compositor-frame-time-state`).
+- `guest-frame-time` and `guest-frame-time-local`: diverged. The first has
+  six WIP commits on terminal and scroll rendering; the second is d33a86602,
+  a guest frame-cost fix (rounding and `memcmp` without the C library).
+  Both touch `compositor/render/exact.rs` and `compositor/term/*`; reconcile
+  by hand, never force-push one over the other.
+- `display-show` (snapshots only): its worktree's one uncommitted line turns
+  `compositor/blank`'s background blue against its comment; it reads as a
+  debug probe.
 - `dk1-console/tx-fix` and `dk1-test`: the STM32MP157 board's console and
   input; the board needs a human at it.
 
@@ -175,7 +186,7 @@ read its last section first.
 |---|---|---:|---|---|
 | `wip/windows-home-edid-remote-fix` | 2026-10-01 | 1 | snapshot | Find HOME on Windows, carry a monitor's EDID across machines, and let a newer remote-deskt |
 | `wip/clipboard-vdagent-compositor-approach` | 2026-10-01 | 1 | snapshot | Give the guest a clipboard agent, carried into the initramfs and started by hyprland |
-| `edid-home-fix` | 2026-10-01 | 2 | work | Start the README's desktop with --everything, and count the points of 09-27 to 1 |
+| `edid-home-fix` | 2026-10-01 | 2 | work | Start the README's desktop with --everything, and count the points of 09-27 to 10-01 |
 | `display-design` | 2026-10-01 | 1 | work | Draft the ring-3 virtio-gpu display driver design, for the product owner and kernel to rev |
 | `backup/2026-10-01/wip-root-main` | 2026-10-01 | 1 | snapshot | Backup of uncommitted work in ROOT (main) before a PC switch, 2026-10-01 |
 | `backup/2026-10-01/wip-display-show` | 2026-10-01 | 1 | snapshot | Backup of uncommitted work in display-show (detached) before a PC switch, 2026-10-01 |

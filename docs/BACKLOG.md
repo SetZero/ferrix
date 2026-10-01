@@ -1161,8 +1161,8 @@ listed below, and three needed a human call, also below.
   `memcmp` costing 30-40x glibc's in a guest). The two overlap in
   `compositor/render/exact.rs` and `compositor/term/*`, so neither a
   force-push nor a blind merge is safe. Left: whoever owns the current WIP
-  decides which stands and reconciles the files that overlap; `d33a86602`
-  is still only on this machine.
+  decides which stands and reconciles the files that overlap. `d33a86602`
+  is on GitHub as `guest-frame-time-local`.
 - `clipboard-vdagent`: also diverged under its own name — origin had landed
   a `user/vport`-based clipboard agent (`c7d7b93fe`, from the 2026-09-27
   wind-down) while this checkout independently built a `compositor/vdagent`
@@ -1206,10 +1206,10 @@ pushed rather than left only on this disk:
 - `os5d/gate-rows` was pushed and has since landed on `main` as `7afed6fdc`
   by another session.
 
-No other file duplicates this section's purpose: `docs/roadmap/status.md`
-and `docs/roadmap/where-it-stands.md` track stage progress and finished
-work, not which branches are still open, and every other mention of
-"unlanded branch" found while looking (`docs/AUTH.md`, `docs/CONVENTIONS.md`,
-`docs/OPAQUE-KERNEL.md`, `docs/POSIX-2024.md`) is a single reference to a
-specific branch, not a second tracking list. This section stays the one
-place branch state is recorded.
+`docs/roadmap/status.md` and `docs/roadmap/where-it-stands.md` track stage
+progress and finished work, not which branches are still open, and the other
+mentions of an unlanded branch (`docs/AUTH.md`, `docs/CONVENTIONS.md`,
+`docs/OPAQUE-KERNEL.md`, `docs/POSIX-2024.md`) each name one branch. The
+list of every open branch is `docs/roadmap/open-branches.md`, landed the same
+evening; this section keeps the detail of the families and the decisions
+above, and the page links here.
