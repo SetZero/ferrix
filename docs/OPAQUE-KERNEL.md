@@ -599,18 +599,23 @@ the same rule.
 
 ### 9.3 Requirements, checks and controls
 
-Proposed rows, numbered when they land:
-- **H.spec (new):** a switch between the address spaces of two programs not
+The rows, as numbered (os-ad, against main and the unlanded branches):
+- **H.TRAP.17:** a switch between the address spaces of two programs not
   in one speculation domain issues the predictor barrier. A switch between two
   address spaces of one domain does not.
-- **L.spec, each architecture:** `entered_space` skips the barrier only when
+- **L.object.113, with L.x86_64.126, L.aarch64.52 and L.armv7a.3 for each
+  architecture's in-domain barrier:** `entered_space` skips the barrier only when
   the root differs, and the outgoing and incoming domains are the same and
   non-zero, the outgoing one read as it leaves.
-- **L.object:** `job_create` marks a job only with `JOB_SPECULATION_DOMAIN` and
+- **L.object.114:** `job_create` marks a job only with `JOB_SPECULATION_DOMAIN` and
   only under the parent's MANAGE. It refuses any other option bit and writes
   the `DOMAIN` audit record. A child of a marked job is unmarked.
-- **L.object:** a process is in a domain only if it was made in the marked job
+- **L.object.115:** a process is in a domain only if it was made in the marked job
   and never moved. A move sets its domain, and its space's, to zero.
+- **L.object.116:** a member leaves for good, its space with it, on a move
+  between jobs and on losing dumpability, and every processor whose last
+  space was in the domain issues the barrier before the leave returns
+  (§9.3a A1, §9.3b F1).
 
 The check runs in stage 9, on every architecture, at two processors or more.
 It counts `switch_barriers_on` around pinned switches:
