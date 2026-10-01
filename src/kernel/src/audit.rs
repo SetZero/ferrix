@@ -79,7 +79,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub(crate) use ferrix_audit::{
     BOOTED, CGROUP_KILLED, CGROUP_LIMIT, CONFIG, CONTROL, Class, Config, DELEGATED, DEVMGR_STARTED,
-    DMA_FAULT, Event, JOB_KILLED, LIMIT, LIMIT_SET, NO_UID, OOM_KILLED, Outcome, POWER,
+    DMA_FAULT, DOMAIN, Event, JOB_KILLED, LIMIT, LIMIT_SET, NO_UID, OOM_KILLED, Outcome, POWER,
     PROCESS_MADE, QUIESCED, READER_GIVEN, RIGHTS, ROOT_SWITCHED, Record, STARTER_GIVEN, SUPPRESSED,
     WIDEN, saturated, target,
 };

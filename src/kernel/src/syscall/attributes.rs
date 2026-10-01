@@ -66,6 +66,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_sched::weight_of_nice;
 
+use crate::object::process::Host as _;
 use crate::sched::Task;
 use crate::syscall::credentials::{self, CAP_LAST_CAP};
 use crate::syscall::process::Process;
@@ -146,14 +147,27 @@ pub(crate) fn update<R>(process: &Process, change: impl FnOnce(&mut Attributes) 
     if !known {
         prune();
     }
-    let mut table = TABLE.lock();
-    let entry = table
-        .entry(pid)
-        .or_insert_with(|| (started, Attributes::default()));
-    if entry.0 != started {
-        *entry = (started, Attributes::default());
+    let (answer, dumpable) = {
+        let mut table = TABLE.lock();
+        let entry = table
+            .entry(pid)
+            .or_insert_with(|| (started, Attributes::default()));
+        if entry.0 != started {
+            *entry = (started, Attributes::default());
+        }
+        let answer = change(&mut entry.1);
+        (answer, entry.1.dumpable)
+    };
+    // A process that is not dumpable has risen in privilege, or asked to be
+    // treated as if it had: it leaves its speculation domain, for good, so
+    // that the programs it was born beside share no predictors with it
+    // (`docs/OPAQUE-KERNEL.md` §9.3a, A1). Every way to lose dumpability --
+    // a set-id `execve`, a change of credentials, `PR_SET_DUMPABLE`, a parent
+    // that was not -- comes through here. Outside the table's lock.
+    if !dumpable {
+        process.core().leave_speculation_domain();
     }
-    change(&mut entry.1)
+    answer
 }
 
 /// Give `child`, which `fork` (or a native `process_create`) has just made

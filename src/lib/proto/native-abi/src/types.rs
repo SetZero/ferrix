@@ -93,6 +93,12 @@ pub const JOB_CPU_WEIGHT: u64 = 3;
 /// for one.
 pub const UNLIMITED: u64 = u64::MAX;
 
+/// `job_create`'s option: make the new job one speculation domain, whose
+/// programs born in it share predictors with each other, so that a switch
+/// between two of them skips the predictor barrier (`docs/OPAQUE-KERNEL.md`
+/// §9.2). Only as the job is made; any other bit is `INVALID_ARGS`.
+pub const JOB_SPECULATION_DOMAIN: u64 = 1;
+
 /// [`crate::nr::NativeCall::AuditRead`]'s `which`: the high-value ring --
 /// grants, ends, device events, changes and the system's records.
 pub const AUDIT_HIGH: u64 = 0;

@@ -423,6 +423,14 @@ impl Process {
     ) -> Result<Process, AllocError> {
         let job = job.unwrap_or_else(|| parent.job());
         let mut child = Process::with_pid(space, object::process::allocate().unwrap_or(0), job)?;
+        // Born in its job's speculation domain only as the child of a member
+        // in that same domain: a process that moved into a marked job, or
+        // left its domain, has children outside it too
+        // (`docs/OPAQUE-KERNEL.md` §9.2). A child sent elsewhere by
+        // `CLONE_INTO_CGROUP` is in that job's domain only if its parent is.
+        if child.core.speculation_domain() != parent.core.speculation_domain() {
+            child.core.leave_speculation_domain();
+        }
         child.files = if share_files {
             Arc::clone(&parent.files)
         } else {

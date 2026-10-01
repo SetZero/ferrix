@@ -125,8 +125,26 @@ impl<S: Syscall> Job<S> {
     /// [`Error::AccessDenied`] without `MANAGE`; [`Error::BadState`] once
     /// this job has been killed; [`Error::NoMemory`], [`Error::NoHandles`].
     pub fn create_child(&self) -> Result<Job<S>, Error> {
+        self.create_with(0)
+    }
+
+    /// `job_create` with [`types::JOB_SPECULATION_DOMAIN`]: a job inside this
+    /// one that is one speculation domain, so that a switch between two of
+    /// its processes born in it skips the predictor barrier. For programs
+    /// that may read each other's memory, and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// As [`Job::create_child`].
+    pub fn create_speculation_domain(&self) -> Result<Job<S>, Error> {
+        self.create_with(types::JOB_SPECULATION_DOMAIN)
+    }
+
+    /// `job_create` with `options`.
+    fn create_with(&self, options: u64) -> Result<Job<S>, Error> {
         let value = Call::new(nr::JOB_CREATE)
             .value(register(self.handle()))
+            .value(usize::try_from(options).unwrap_or(usize::MAX))
             .make(self.syscall());
         let handle = decode_handle(value)?;
         Ok(Job::from_owned(OwnedHandle::from_raw(

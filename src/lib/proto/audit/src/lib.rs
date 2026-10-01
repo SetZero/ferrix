@@ -112,6 +112,12 @@ pub const STARTER_GIVEN: Event = Event::new(Class::Granted, 5);
 /// the kernel as subject: the target is pid 1.
 pub const READER_GIVEN: Event = Event::new(Class::Granted, 6);
 
+/// A job made one speculation domain by `job_create`, whose switches between
+/// its programs skip the predictor barrier (`docs/OPAQUE-KERNEL.md` §9.2):
+/// the target is the new job, the detail its parent's id, low word first,
+/// and the domain's number's low word.
+pub const DOMAIN: Event = Event::new(Class::Granted, 7);
+
 /// A job ended by `job_kill`: the target is the job.
 pub const JOB_KILLED: Event = Event::new(Class::Ended, 1);
 
@@ -187,7 +193,7 @@ pub mod power {
 }
 
 /// Every event this crate names, with its name.
-pub const NAMED: [(Event, &str); 22] = [
+pub const NAMED: [(Event, &str); 23] = [
     (START, "START"),
     (CONFIG, "CONFIG"),
     (BOOTED, "BOOTED"),
@@ -203,6 +209,7 @@ pub const NAMED: [(Event, &str); 22] = [
     (DEVMGR_STARTED, "DEVMGR_STARTED"),
     (STARTER_GIVEN, "STARTER_GIVEN"),
     (READER_GIVEN, "READER_GIVEN"),
+    (DOMAIN, "DOMAIN"),
     (JOB_KILLED, "JOB_KILLED"),
     (CGROUP_KILLED, "CGROUP_KILLED"),
     (OOM_KILLED, "OOM_KILLED"),

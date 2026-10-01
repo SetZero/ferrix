@@ -109,6 +109,11 @@ pub(crate) struct Process {
     /// Its bootstrap handle until it takes it: see [`Bootstrap`]. A lock of
     /// its own, taken after a handle table's and never before one.
     bootstrap: SpinLock<Bootstrap>,
+    /// The speculation domain it was born in and has not left, zero for
+    /// none (`docs/OPAQUE-KERNEL.md` §9.2): its job's as it is made or born
+    /// there ([`Process::move_new_to`]), and zero for good once it moves
+    /// between jobs or leaves ([`Process::leave_speculation_domain`]).
+    domain: AtomicU64,
 }
 
 /// Where a process's bootstrap handle waits for `process_bootstrap`
@@ -218,6 +223,10 @@ impl Process {
         let mut flipped = job::Flipped::new();
         job.count_in(&mut flipped);
         job::notify(flipped);
+        // As it is made in `job`, born in its domain, if it is one: its space
+        // says so too, and a space another domain already claimed is out.
+        let domain = job.domain();
+        space.claim_domain(domain);
         Ok(Process {
             space,
             pid,
@@ -230,7 +239,27 @@ impl Process {
             over_quota,
             exit,
             bootstrap: SpinLock::new(Bootstrap::Open),
+            domain: AtomicU64::new(domain),
         })
+    }
+
+    /// The speculation domain it is in: zero for none.
+    pub(crate) fn speculation_domain(&self) -> u64 {
+        self.domain.load(Ordering::Acquire)
+    }
+
+    /// Leave its speculation domain, for good, and take its space out of
+    /// every domain with it (`docs/OPAQUE-KERNEL.md` §9.2, §9.3a A1).
+    ///
+    /// One way only: nothing puts a process back. The core's move between
+    /// jobs calls it, and the personality calls it when a process stops
+    /// being dumpable -- a set-id `execve`, a change of credentials,
+    /// `PR_SET_DUMPABLE` -- since a program that has risen in privilege must
+    /// no longer share predictors with the programs it was born beside.
+    pub(crate) fn leave_speculation_domain(&self) {
+        if self.domain.swap(0, Ordering::AcqRel) != 0 {
+            self.space.leave_domain();
+        }
     }
 
     /// Whether its job's task limit refused it as it was made: a process
@@ -378,6 +407,19 @@ impl Process {
         };
         // Outside the lock: it may be the last reference to that job.
         drop(left);
+        // Its speculation domain (`docs/OPAQUE-KERNEL.md` §9.2): a process
+        // being made is born in the job it was made for, its space with it;
+        // a running one that moves leaves its domain for good, wherever it
+        // went, and joins none by moving in.
+        if checked {
+            let domain = to.domain();
+            if self.domain.load(Ordering::Acquire) != 0 || domain != 0 {
+                self.domain.store(domain, Ordering::Release);
+                self.space.set_birth_domain(domain);
+            }
+        } else {
+            self.leave_speculation_domain();
+        }
         job::notify(flipped);
         crate::sched::note_moved();
         Ok(())

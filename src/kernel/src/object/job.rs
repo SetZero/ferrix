@@ -117,6 +117,10 @@ static TREE: SpinLock<()> = SpinLock::new(());
 /// The next job's number.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// The next speculation domain's number: never zero, never reused
+/// (`docs/OPAQUE-KERNEL.md` §9.2).
+static NEXT_DOMAIN: AtomicU64 = AtomicU64::new(1);
+
 /// The root of the tree every process is in.
 static ROOT: Once<Arc<Job>> = Once::new();
 
@@ -188,6 +192,10 @@ pub(crate) struct Job {
     /// is made: its own id, or its parent's budget when its maker's own
     /// authority could have made it ([`Budget`]).
     audit_budget: u64,
+    /// The speculation domain it is, or zero for none
+    /// (`docs/OPAQUE-KERNEL.md` §9.2): set only as it is made, by
+    /// [`Job::new_child_domain`], and never changed.
+    domain: u64,
 }
 
 /// Whose audit budget a new job's refusals are charged to: decided by
@@ -411,6 +419,7 @@ impl Job {
             quota,
             charge: Charge::none(Resource::Objects),
             audit_budget,
+            domain: 0,
         })
     }
 
@@ -434,7 +443,34 @@ impl Job {
     ///
     /// [`JobError::Killed`], [`JobError::NoMemory`].
     pub(crate) fn new_child(self: &Arc<Job>) -> Result<Arc<Job>, JobError> {
-        let child = self.bare_child(None, Budget::Parents)?;
+        self.new_child_in(0)
+    }
+
+    /// [`Job::new_child`], made a speculation domain of its own: the switch
+    /// barrier between two of its processes born in it is skipped
+    /// (`docs/OPAQUE-KERNEL.md` §9.2). The caller has checked the authority,
+    /// MANAGE on this job, and writes the audit record.
+    ///
+    /// # Errors
+    ///
+    /// As [`Job::new_child`].
+    pub(crate) fn new_child_domain(self: &Arc<Job>) -> Result<Arc<Job>, JobError> {
+        self.new_child_in(NEXT_DOMAIN.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The speculation domain it is: zero for none.
+    pub(crate) fn domain(&self) -> u64 {
+        self.domain
+    }
+
+    /// [`Job::new_child`] as speculation domain `domain`, zero for none.
+    fn new_child_in(self: &Arc<Job>, domain: u64) -> Result<Arc<Job>, JobError> {
+        let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
+        let quota = Quota::new(self.quota.as_ref())?;
+        let mut bare = Job::bare(Some(Arc::clone(self)), None, Some(quota), Budget::Parents)?;
+        bare.charge = charge;
+        bare.domain = domain;
+        let child = fallible::try_arc(bare)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
