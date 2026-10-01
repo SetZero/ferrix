@@ -307,3 +307,4 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+- State 2026-10-01 wind-down, `stage13-n5` (on stage13-fdinfo): consultant pre-review B1 (plain remount needs privilege over the superblock owner) and C2 (bottom's flags locked) built and C1 (may_park before a namespace's write-out) built, not gated; C3 controls not run on this tip (earlier tip n5b: M2, M2 flags, M3 FIRED; M1 caught first by the userns check). Lands after NP; needs gates, controls and the consultant's verdict.
