@@ -453,17 +453,21 @@ fn fdinfo(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     process::kill(&child, 137);
     drop(child);
     let root = staged(&mut page, b"/")?;
-    tally.ok(
+    // `newfstatat`, or `fstatat64` where that is the only form (ARMv7-A):
+    // a call this architecture has no number for answers `ENOSYS`.
+    let stat = |call| {
         by_number(
             &jailed,
-            // ARMv7-A has only the 64-bit form's other name.
-            if cfg!(target_arch = "arm") {
-                Syscall::Fstatat64
-            } else {
-                Syscall::Newfstatat
-            },
+            call,
             [AT_FDCWD as u64, root, page.buffer(), 0, 0, 0],
-        ),
+        )
+    };
+    let statted = match stat(Syscall::Newfstatat) {
+        Err(Errno::ENOSYS) => stat(Syscall::Fstatat64),
+        other => other,
+    };
+    tally.ok(
+        statted,
         "/ could not be statted in a jail whose process ended",
     )?;
     let listing = by_number(
