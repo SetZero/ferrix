@@ -685,3 +685,8 @@ fn clear_ssbs() {
         );
     };
 }
+
+/// The switch barrier between two programs of one speculation domain:
+/// nothing. This architecture's barrier is the predictor invalidation alone,
+/// which a domain leaves out (`docs/OPAQUE-KERNEL.md` §9.3a, A2).
+pub(crate) fn switch_barrier_in_domain(_cpu: usize) {}

@@ -240,8 +240,61 @@ pub(crate) fn entered_space(root: u64) {
     let (Some(last), Some(issued)) = (LAST_ROOT.get(cpu), SWITCH_BARRIERS.get(cpu)) else {
         return;
     };
-    if last.swap(root, Ordering::Relaxed) != root && machine::switch_barrier(cpu) {
+    // Taken, not read: a root installed without `entering_space` before it,
+    // as a check may, is in no domain rather than the last one named here.
+    let incoming = ENTERING_DOMAIN
+        .get(cpu)
+        .map_or(0, |domain| domain.swap(0, Ordering::Relaxed));
+    let outgoing = LAST_DOMAIN
+        .get(cpu)
+        .map_or(0, |domain| domain.swap(incoming, Ordering::Relaxed));
+    if last.swap(root, Ordering::Relaxed) == root {
+        return;
+    }
+    // Inside one speculation domain the predictor invalidation is left out,
+    // and the rest of the barrier, x86-64's return-stack refill, stays
+    // (`docs/OPAQUE-KERNEL.md` §9.3a, A2). Not counted: the count is of
+    // invalidations, which the domain check reads.
+    if same_domain(outgoing, incoming) {
+        machine::switch_barrier_in_domain(cpu);
+        return;
+    }
+    if machine::switch_barrier(cpu) {
         let _ = issued.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Whether a switch from a space of domain `outgoing` to one of `incoming`
+/// stays inside one speculation domain: both the same, and not zero, which
+/// is no domain.
+fn same_domain(outgoing: u64, incoming: u64) -> bool {
+    outgoing != 0 && outgoing == incoming
+}
+
+/// The speculation domain of the space each processor last ran, read as
+/// that space left it (`left_space`) and set by each install
+/// (`entered_space`): zero for none.
+static LAST_DOMAIN: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// The speculation domain of the space each processor is installing, from
+/// `entering_space` to `entered_space`.
+static ENTERING_DOMAIN: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// The space this processor ran is leaving it, in speculation domain
+/// `domain` as it stands now: to a kernel thread, or to the space about to be
+/// installed. Read now and not when it came, so that a program that left its
+/// domain while it ran is out of it at the switch that ends its turn.
+pub(crate) fn left_space(domain: u64) {
+    if let Some(last) = LAST_DOMAIN.get(this_cpu()) {
+        last.store(domain, Ordering::Relaxed);
+    }
+}
+
+/// The space about to be installed on this processor is in speculation
+/// domain `domain`, for the `entered_space` its install makes.
+pub(crate) fn entering_space(domain: u64) {
+    if let Some(entering) = ENTERING_DOMAIN.get(this_cpu()) {
+        entering.store(domain, Ordering::Relaxed);
     }
 }
 
@@ -252,7 +305,17 @@ pub(crate) fn forget_root(root: u64) {
     if !HARDENED {
         return;
     }
-    for last in LAST_ROOT.iter().take(crate::smp::count()) {
-        let _ = last.compare_exchange(root, 0, Ordering::Relaxed, Ordering::Relaxed);
+    for (last, domain) in LAST_ROOT
+        .iter()
+        .zip(LAST_DOMAIN.iter())
+        .take(crate::smp::count())
+    {
+        // And its domain with it, so that a reused root never inherits one.
+        if last
+            .compare_exchange(root, 0, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            domain.store(0, Ordering::Relaxed);
+        }
     }
 }

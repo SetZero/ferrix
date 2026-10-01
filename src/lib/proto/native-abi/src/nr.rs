@@ -201,7 +201,10 @@ pub enum NativeCall {
     /// device address, in page order, up to `capacity`; the answer is how many
     /// pages the pin holds, whatever fits. Needs `READ`.
     VmoPinAddresses,
-    /// `(parent)` → handle. Make a job inside `parent`. Needs `MANAGE`.
+    /// `(parent, options)` → handle. Make a job inside `parent`. Needs
+    /// `MANAGE`. `options` is zero, or [`crate::types::JOB_SPECULATION_DOMAIN`]
+    /// to make the job one speculation domain; any other bit is
+    /// `INVALID_ARGS`.
     JobCreate,
     /// `(job)`. End every process in the job and every job inside it. Needs
     /// `MANAGE`.

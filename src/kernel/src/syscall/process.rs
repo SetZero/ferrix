@@ -500,6 +500,14 @@ impl Process {
             fs,
         )?;
         let child = Arc::get_mut(&mut shared).ok_or(AllocError)?;
+        // Born in its job's speculation domain only as the child of a member
+        // in that same domain: a process that moved into a marked job, or
+        // left its domain, has children outside it too
+        // (`docs/OPAQUE-KERNEL.md` §9.2). A child sent elsewhere by
+        // `CLONE_INTO_CGROUP` is in that job's domain only if its parent is.
+        if child.core.speculation_domain() != parent.core.speculation_domain() {
+            child.core.leave_speculation_domain();
+        }
         // In `pid_ns` when `CLONE_NEWPID` made one, else where the parent's
         // children go. Numbered in every namespace from there up, so a
         // namespace that is ending, or a job out of memory, refuses the fork.

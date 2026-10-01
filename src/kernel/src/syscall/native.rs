@@ -60,8 +60,8 @@ use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
-    self, CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo, MAP_READ,
-    MAP_WRITE, PortPacket, ProcessStatus, ReadActual,
+    self, CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo,
+    JOB_SPECULATION_DOMAIN, MAP_READ, MAP_WRITE, PortPacket, ProcessStatus, ReadActual,
 };
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
@@ -1245,7 +1245,7 @@ fn job_call(call: NativeCall, caller: &dyn Host, a: &[u64; 6]) -> Result<usize, 
     let [first, second, third, fourth, ..] = *a;
     let process = caller.core();
     match call {
-        NativeCall::JobCreate => job_create(process, handle(first)),
+        NativeCall::JobCreate => job_create(process, handle(first), second),
         NativeCall::JobKill => job_kill(process, handle(first)),
         NativeCall::JobSetLimit => job_set_limit(process, handle(first), second, third),
         NativeCall::JobGetQuota => job_get_quota(process, handle(first), second, third),
@@ -1264,12 +1264,38 @@ fn job_call(call: NativeCall, caller: &dyn Host, a: &[u64; 6]) -> Result<usize, 
 }
 
 /// `job_create`.
-fn job_create(process: &Process, parent: Handle) -> Result<usize, Errno> {
+fn job_create(process: &Process, parent: Handle, options: u64) -> Result<usize, Errno> {
+    if options & !JOB_SPECULATION_DOMAIN != 0 {
+        return Err(status::INVALID_ARGS);
+    }
+    // MANAGE on the parent is the authority both to make a job and to make
+    // it one speculation domain (`docs/OPAQUE-KERNEL.md` §9.2): checked
+    // before anything is made, so a refusal marks nothing.
     let parent = job_in(process, parent, Rights::MANAGE)?;
-    let child = parent.new_child().map_err(|why| match why {
+    let domain = options & JOB_SPECULATION_DOMAIN != 0;
+    let made = if domain {
+        parent.new_child_domain()
+    } else {
+        parent.new_child()
+    };
+    let child = made.map_err(|why| match why {
         job::JobError::NoMemory => status::NO_MEMORY,
         _ => status::BAD_STATE,
     })?;
+    if domain {
+        let (parent_id, domain) = (parent.id(), child.domain());
+        audit::record(
+            audit::DOMAIN,
+            audit::Outcome::Done,
+            0,
+            audit::Subject::of(process),
+            audit::Target {
+                kind: audit::target::JOB,
+                id: child.id(),
+            },
+            [parent_id as u32, (parent_id >> 32) as u32, domain as u32],
+        );
+    }
     insert_new(process, Object::Job(child), Rights::JOB)
 }
 

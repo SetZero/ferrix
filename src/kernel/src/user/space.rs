@@ -244,6 +244,10 @@ pub(crate) struct AddressSpace {
     /// [`AddressSpace::layout`].
     layout: SleepLock<()>,
     inner: SpinLock<Inner>,
+    /// The speculation domain its programs are in, zero for none, or
+    /// [`UNCLAIMED`] before a process has claimed it: see
+    /// [`AddressSpace::claim_domain`] and `docs/OPAQUE-KERNEL.md` §9.2.
+    domain: AtomicU64,
 }
 
 impl AddressSpace {
@@ -275,6 +279,7 @@ impl AddressSpace {
             cpus: CpuMask::new(),
             flushes: Flushes::new(),
             layout,
+            domain: AtomicU64::new(UNCLAIMED),
             inner: SpinLock::new(Inner {
                 map,
                 objects: BTreeMap::new(),
@@ -352,6 +357,14 @@ impl AddressSpace {
     /// joins is the one whose root is loaded, and the caller must not be
     /// preempted into a context expecting a different address space.
     pub(crate) unsafe fn install(&self, replacing: Option<&AddressSpace>) {
+        // The speculation domains the barrier decision compares: the
+        // outgoing space's read as it leaves, so that a program that left
+        // its domain while it ran is out of it now (`docs/OPAQUE-KERNEL.md`
+        // §9.2), and this one's.
+        if let Some(previous) = replacing {
+            arch::left_space(previous.domain());
+        }
+        arch::entering_space(self.domain());
         let cpu = this_logical_cpu();
         // NOALLOC: a `CpuMask` is a fixed bitmap; joining sets a bit.
         self.cpus.join(cpu);
@@ -378,12 +391,68 @@ impl AddressSpace {
     /// (TRANSLATE) Nothing on this processor may still need a user address, and interrupts
     /// must be masked across the call.
     pub(crate) unsafe fn uninstall(&self) {
+        // As it leaves, for the next install's decision: see `install`.
+        arch::left_space(self.domain());
         let cpu = this_logical_cpu();
         // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted, and the kernel
         // is reachable without one on every architecture.
         unsafe { arch::uninstall_user_root() };
         crate::sched::trip::count(crate::sched::trip::Count::RootUninstall);
         self.cpus.leave(cpu);
+    }
+}
+
+/// An [`AddressSpace`]'s domain before any process has claimed it.
+const UNCLAIMED: u64 = u64::MAX;
+
+/// An [`AddressSpace`]'s domain once it is out of every domain for good: two
+/// domains claimed it, or its process left its domain. Zero, by contrast, is
+/// a space claimed by a process in no domain, which a birth may still place.
+const OUT: u64 = u64::MAX - 1;
+
+impl AddressSpace {
+    /// The speculation domain the switch barrier decision reads: zero for
+    /// none, which an unclaimed space and one out for good are too.
+    pub(crate) fn domain(&self) -> u64 {
+        match self.domain.load(Ordering::Acquire) {
+            UNCLAIMED | OUT => 0,
+            domain => domain,
+        }
+    }
+
+    /// A process in speculation domain `domain` (zero for none) uses this
+    /// space: as it is made for the process, or as a second process comes to
+    /// share it (`CLONE_VM` without `CLONE_THREAD`).
+    ///
+    /// The first claim sets it. A claim that disagrees puts it out of every
+    /// domain for good: a space two domains share is in neither, since a
+    /// switch between its programs and either domain's must keep the barrier.
+    pub(crate) fn claim_domain(&self, domain: u64) {
+        let _ = self
+            .domain
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| match held {
+                UNCLAIMED => Some(domain),
+                held if held == domain || held == OUT => None,
+                _ => Some(OUT),
+            });
+    }
+
+    /// Put the space in `domain` as its one process is born there: native
+    /// `process_create` makes a process in the root job and then moves it,
+    /// unstarted, into the job it was made for. Only for a space no other
+    /// process shares, which a process not yet started is the sole user of.
+    /// A space out for good stays out.
+    pub(crate) fn set_birth_domain(&self, domain: u64) {
+        let _ = self
+            .domain
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+                (held != OUT).then_some(domain)
+            });
+    }
+
+    /// Its process has left its domain: out of every domain, for good.
+    pub(crate) fn leave_domain(&self) {
+        self.domain.store(OUT, Ordering::Release);
     }
 }
 
@@ -825,6 +894,7 @@ impl AddressSpace {
             cpus: CpuMask::new(),
             flushes: Flushes::new(),
             layout: SleepLock::new((), &crate::sync::SchedParker),
+            domain: AtomicU64::new(UNCLAIMED),
             inner: SpinLock::new(Inner {
                 map,
                 objects,

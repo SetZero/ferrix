@@ -677,6 +677,14 @@ pub(crate) fn switch_barrier(_cpu: usize) -> bool {
     HARDENED
 }
 
+/// The switch barrier between two programs of one speculation domain: the
+/// return stack refill alone, without `IBPB` (`docs/OPAQUE-KERNEL.md`
+/// §9.3a, A2). The refill stays because it costs a few hundred cycles and
+/// nothing then has to be argued about what else it protects.
+pub(crate) fn switch_barrier_in_domain(_cpu: usize) {
+    fill_return_stack();
+}
+
 /// Overwrite the return stack buffer with thirty-two harmless entries.
 ///
 /// Each `call` pushes its return address -- the `int3` after it, which a
