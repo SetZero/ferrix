@@ -337,6 +337,7 @@ unsafe fn ferrix_fpu_restore(area: *const FpuArea, components: u64) {
 /// (CONTEXT) The registers must belong to the task `state` is for: it was the last task
 /// with user state to run on this processor.
 pub(crate) unsafe fn save_user_state(state: &mut UserState) {
+    let pj = crate::sched::prof::now();
     // SAFETY: (CONTEXT) reading `FS_BASE` has no side effects.
     state.thread_pointer = unsafe { super::syscall::thread_pointer() };
     // SAFETY: (CONTEXT) the kernel side of `swapgs`, where the shadow is the program's.
@@ -345,6 +346,8 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
     // SAFETY: (CONTEXT) the caller switches tasks with interrupts masked, so these are
     // this processor's slots and the outgoing thread's.
     state.tls = unsafe { gdt::read_tls() };
+    crate::sched::prof::add(crate::sched::prof::Span::J, pj);
+    let pc = crate::sched::prof::now();
     let components = cpu::extended_state_components();
     if components != 0 && cpu::switch_saves_optimised() {
         // `XSAVEOPT` here and only here: the area is the task's own, which
@@ -361,6 +364,7 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
         // components, 64-byte aligned, which is what `XSAVE64` and `FXSAVE64` write.
         unsafe { ferrix_fpu_save(&raw mut state.fpu, components) };
     }
+    crate::sched::prof::add(crate::sched::prof::Span::C, pc);
     if let Some(left) = left_here() {
         *left.lock() = Some(Left::of(state));
     }
@@ -436,6 +440,7 @@ pub(crate) fn forget_left_state() {
 /// (CONTEXT) The task `state` belongs to must be the one this processor is switching to,
 /// and `entry_stack` the top of its kernel stack.
 pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
+    let pk = crate::sched::prof::now();
     // What this switch's save found, if it made one: see `Left`.
     let left = left_here().and_then(|left| left.lock().take());
     let wanted = Left::of(state);
@@ -456,11 +461,16 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
             );
         }
     }
+    crate::sched::prof::add(crate::sched::prof::Span::K, pk);
+    let pe = crate::sched::prof::now();
     // SAFETY: (CONTEXT) an area this module initialised or `XSAVE64` wrote, so every
     // reserved bit `XRSTOR64` checks is clear.
     unsafe { ferrix_fpu_restore(&raw const state.fpu, cpu::extended_state_components()) };
+    crate::sched::prof::add(crate::sched::prof::Span::E, pe);
+    let pl = crate::sched::prof::now();
     // SAFETY: (ENTRY) the caller guarantees the stack.
     unsafe { super::syscall::set_entry_stack(entry_stack) };
+    crate::sched::prof::add(crate::sched::prof::Span::L, pl);
 }
 
 /// Put this processor's user state back to a program's starting state: no

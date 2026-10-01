@@ -74,8 +74,8 @@ const SPANS: usize = 29;
 /// Names, in order.
 const NAMES: [&str; SPANS] = [
     "choose", "space", "ustate", "timer", "wake", "timerirq", "syscall", "chwrite", "chread",
-    "waitone", "halt", "ipi", "leftsched", "sync", "wr-write", "wr-wait", "c", "wr-whole", "ch-lock", "ch-acct", "ch-file",
-    "ch-pick", "ch-arm", "wk-lock", "wk-sleep", "wk-ins", "wt-list", "wt-unq", "nc-curr",
+    "waitone", "halt", "ipi", "leftsched", "sync", "wr-write", "wr-wait", "us-fpusave", "wr-whole", "us-fpurest", "ch-acct", "ch-file",
+    "ch-pick", "ch-arm", "us-segsave", "us-segrest", "us-stack", "wt-list", "wt-unq", "nc-curr",
 ];
 
 static TICKS: [AtomicU64; SPANS] = [const { AtomicU64::new(0) }; SPANS];
