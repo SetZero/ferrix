@@ -333,3 +333,5 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+
+**State, 2026-10-01 wind-down (os-7c), not landed:** seccomp S6a (test-seccomp) on stage13-s6. No review is needed, but pool INDEX lines are owed (test-seccomp --arch all, both controls, x86_64 and i386 stated) before anything cites it. A direct run passed on all four ABIs. Linux's seccomp_bpf selftest is not done (BACKLOG row).
