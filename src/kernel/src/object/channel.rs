@@ -309,7 +309,11 @@ impl Endpoint {
                 if fired {
                     deliver(|| peer.observers.lock().next_fired());
                 }
-                peer.waiters.wake_all();
+                // Onto this processor where it is free: a writer usually
+                // waits for the answer next, and a reader woken elsewhere is
+                // an interrupt to a processor that is likely halted. See
+                // `sched::Wake::Sync`.
+                peer.waiters.wake_all_with(crate::sched::Wake::Sync);
                 Ok(())
             }
             Some((why, message)) => {

@@ -563,6 +563,14 @@ impl Task {
         self.queued.store(queued, Ordering::Release);
     }
 
+    /// Whether it holds both its slots: no run queue holds it, and no sleeper
+    /// set or reaper's list does. What a task [`crate::sched::wake_with`] may
+    /// move must be, since a set elsewhere still holding it would run it
+    /// there too.
+    pub(crate) fn holds_slots(&self) -> bool {
+        self.run_slot.lock().is_some() && self.sleep_slot.lock().is_some()
+    }
+
     /// Swap in whether it is inside a system call, for the switch that takes
     /// it off its processor, and answer what it was: see `sched::IN_CALL`.
     pub(crate) fn swap_in_call(&self, in_call: bool) -> bool {
