@@ -40,7 +40,7 @@ use ferrix_vfs::Errno;
 
 use crate::fs::mount_check::{Page, Report as Counts, Tally, by_number, close, page_for};
 use crate::fs::namespace_check::{read_file, read_link, unshare};
-use crate::net::netlink::NetlinkSocket;
+use crate::net::netlink::{NetlinkSocket, Protocol};
 use crate::net::socket::{InetKind, InetSocket, of as inet_of};
 use crate::net::{self, NetNamespace, device, namespace, veth};
 use crate::syscall::family;
@@ -204,7 +204,7 @@ struct Nl {
 impl Nl {
     /// Open and bind a socket of `who`'s in `ns`.
     fn open(who: &Arc<Process>, ns: &Arc<NetNamespace>) -> Result<Nl, &'static str> {
-        let file = NetlinkSocket::open(ns, SOCK_DGRAM, false, (0, 0))
+        let file = NetlinkSocket::open(ns, SOCK_DGRAM, Protocol::Route, false, (0, 0))
             .map_err(|_| "a netlink socket could not be opened")?;
         let socket = net::netlink::of(&file).ok_or("a netlink socket is not one")?;
         socket
@@ -1680,7 +1680,7 @@ fn route_add(nl: &mut Nl, n: usize, tally: &mut Tally<'_>) -> Result<(), &'stati
 /// so that what the fill runs out of is the namespace's tables and not the
 /// room for a socket to ask with.
 pub(crate) fn fill_socket(ns: &Arc<NetNamespace>) -> Result<Arc<NetlinkSocket>, Errno> {
-    let file = NetlinkSocket::open(ns, SOCK_DGRAM, false, (0, 0))?;
+    let file = NetlinkSocket::open(ns, SOCK_DGRAM, Protocol::Route, false, (0, 0))?;
     net::netlink::of(&file).ok_or(Errno::EINVAL)
 }
 
