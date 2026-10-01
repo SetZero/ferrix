@@ -47,7 +47,7 @@ use core::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use core::mem::{offset_of, size_of};
 
 use crate::stdio::file::{self, File};
-use crate::stdio::io::{fgets, feof, getc};
+use crate::stdio::io::{feof, ferror, fgets, getc};
 use crate::stdio::open::{fclose, fopen};
 use crate::stdio::printf::{FileSink, Sink};
 use crate::string::{strlen, strnlen};
@@ -440,7 +440,9 @@ pub(crate) fn at(text: &[u8], index: usize) -> u8 {
 /// The length of the C string at the start of `text`: up to its first NUL, or
 /// all of it.
 pub(crate) fn c_len(text: &[u8]) -> usize {
-    text.iter().position(|&byte| byte == 0).unwrap_or(text.len())
+    text.iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(text.len())
 }
 
 /// The bytes of the C string `s`, without its NUL.
@@ -558,6 +560,12 @@ impl Database {
         unsafe { feof(self.stream) != 0 }
     }
 
+    /// Whether the last read failed rather than reaching the end.
+    pub(crate) fn error(&mut self) -> bool {
+        // SAFETY: the stream is open.
+        unsafe { ferror(self.stream) != 0 }
+    }
+
     /// Reads one byte, or `EOF`.
     pub(crate) fn byte(&mut self) -> c_int {
         // SAFETY: the stream is open.
@@ -594,6 +602,7 @@ pub(crate) mod testing {
         clippy::expect_used,
         clippy::panic,
         clippy::indexing_slicing,
+        clippy::excessive_nesting,
         reason = "a test reports failure by panicking"
     )]
 
@@ -776,7 +785,7 @@ pub(crate) mod testing {
                         let Ok((len, from)) = udp.recv_from(&mut buf) else {
                             continue;
                         };
-                        questions.fetch_add(1, Ordering::Relaxed);
+                        let _ = questions.fetch_add(1, Ordering::Relaxed);
                         let query = &buf[..len];
                         let (name, kind, _) = question(query);
                         let out = answer(query, &reply(&name, kind), false);
@@ -803,7 +812,7 @@ pub(crate) mod testing {
                         if stream.read_exact(&mut query).is_err() {
                             continue;
                         }
-                        questions.fetch_add(1, Ordering::Relaxed);
+                        let _ = questions.fetch_add(1, Ordering::Relaxed);
                         let (name, kind, _) = question(&query);
                         let out = answer(&query, &reply(&name, kind), true);
                         let mut framed = u16::try_from(out.len()).unwrap().to_be_bytes().to_vec();
