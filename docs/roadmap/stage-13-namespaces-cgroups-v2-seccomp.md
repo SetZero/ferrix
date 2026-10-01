@@ -309,3 +309,5 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+
+**State, 2026-10-01 wind-down (os-7c), not landed:** seccomp S3 on stage13-s3 (gated hash 6ec5b4081; the same patches rebased onto main 21f580cad are 8ffcc278a, branch stage13-s3-onmain). On 6ec5b4081: check, x86_64 (kvm), aarch64, armv7a PASSED; controls k1-k5 and k11-k15 FIRED. The consultant's ruling is still owed: s3k-k6..k10 and k16..k19, test-shell and test-vfs on 6ec5b4081, and check, the three boots, test-threads and test-init on the rebased hash.
