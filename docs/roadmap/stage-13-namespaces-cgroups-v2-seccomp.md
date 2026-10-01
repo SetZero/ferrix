@@ -325,3 +325,5 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+
+**State, 2026-10-01 wind-down (os-7c), not landed:** seccomp S5 (TSYNC) on stage13-s5. The consultant ruled OK IF. Condition 1 (a sibling starts with its creator's chain, fail closed) is written in WIP 33e12620a. Still owed: condition 2 (a preemption-off bound for the is_ancestor walk in MEMORY-AND-TIMING, or the root-id fix); pool rows and the four controls; the s1 control re-aimed (tools: s5controls.sh).
