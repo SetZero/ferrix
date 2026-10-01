@@ -5,6 +5,7 @@
 //! likely to fail on a work-in-progress tree fails first.
 
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::args::Args;
 use crate::cargo::{self, cargo as cargo_binary};
@@ -26,6 +27,146 @@ pub(crate) fn command(name: &str, args: &Args) -> Result<()> {
     }
 }
 
+/// The audits and generated-document checks: each reads the tree and writes
+/// nothing another reads (a `--check` compares in memory), so `check` runs
+/// them at once and prints their output in this order afterwards
+/// (`docs/TEST-TIME.md`, C1). Each is a step's name and the scripts it runs,
+/// one after another, each with its arguments.
+const AUDITS: &[(&str, &[&[&str]])] = &[
+    (
+        "line endings",
+        &[&["tools/common/check/check-line-endings.py"]],
+    ),
+    (
+        "assembly allow-list",
+        &[&["tools/common/check/check-asm-budget.py"]],
+    ),
+    // The seam §7 is built on: the kernel enumerates devices and drives
+    // none. A convenient register access in the wrong file is how that
+    // claim decays, and it decays silently, so it is asserted here rather
+    // than reviewed for.
+    (
+        "device-access allow-list",
+        &[&["tools/common/check/check-device-access.py"]],
+    ),
+    (
+        "unsafe audit",
+        &[&["tools/common/check/check-unsafe-audit.py"]],
+    ),
+    (
+        "panic audit",
+        &[&["tools/common/check/check-panic-audit.py"]],
+    ),
+    // The boundary four assurance ratings attach to. Every artifact in
+    // docs/certification is scoped to
+    // `tools/common/data/certification-item.json`, so a kernel file that
+    // drifts into the trusted core -- or an unclassified new one that
+    // nobody decided about -- silently changes what those ratings claim.
+    // docs/certification/ITEM.md.
+    (
+        "certification item boundary",
+        &[&["tools/common/check/check-item-boundary.py"]],
+    ),
+    // A coding standard with metrics, which EN 50716 requires and the
+    // other gates did not supply: how complicated one function in the
+    // certified item may be, how long, and whether it calls itself. A
+    // ratchet over a recorded baseline, like the item boundary above it.
+    (
+        "complexity budget",
+        &[&["tools/common/check/check-complexity.py"]],
+    ),
+    // Allocation failure is an error the certified item reports, never a
+    // stop (finding F-23). An allocating standard-library call in the
+    // item's product code is refused unless it goes through
+    // `src/kernel/src/fallible.rs` or is argued at the site; a ratchet
+    // over a recorded baseline, like the two above.
+    // docs/certification/MEMORY-AND-TIMING.md.
+    (
+        "fallible allocation",
+        &[&["tools/common/check/check-fallible-alloc.py"]],
+    ),
+    // The safety manual is an out-of-context argument an integrator
+    // designs against, so a claim in it that quietly stopped being true
+    // would be worse than no manual. Every claim names its evidence, and
+    // this fails when a citation stops resolving.
+    // docs/certification/SAFETY-MANUAL.md.
+    (
+        "safety requirements",
+        &[&["tools/common/check/check-safety-requirements.py"]],
+    ),
+    // The item's requirements, each naming its parent and, at the low
+    // level, the function it is about, against the `/// Verifies:` tags
+    // on the checks. A check naming an id nobody defines, or a
+    // requirement that loses its verifier, fails here rather than in an
+    // assessment. docs/certification/TRACEABILITY.md, which it
+    // regenerates.
+    (
+        "traceability",
+        &[&["tools/common/check/check-traceability.py", "--check"]],
+    ),
+    // The uncovered statements, sorted into what is argued and what is a
+    // gap. Regenerated from the residual the coverage run writes, so the
+    // two cannot disagree. docs/certification/COVERAGE-RESIDUAL.md.
+    (
+        "coverage residual",
+        &[&["tools/common/gen/gen-coverage-justification.py", "--check"]],
+    ),
+    // The item links no external crate on any architecture, which is
+    // what lets IEC 62304's SOUP obligation be answered with "none"
+    // rather than with an anomaly-list evaluation per dependency. That is
+    // a property worth re-establishing rather than remembering.
+    // docs/certification/SOUP.md.
+    (
+        "SOUP register",
+        &[&["tools/common/gen/gen-soup.py", "--check"]],
+    ),
+    // The architecture document is generated from `docs/sysml/` and
+    // committed. A model edited without regenerating leaves the two
+    // disagreeing, and the document is exactly where nobody would
+    // notice; this is the cheapest possible place to say so.
+    (
+        "architecture document",
+        &[
+            &["tools/common/gen/sysml/tests.py"],
+            &["tools/common/gen/gen-arch-doc.py", "--check"],
+        ],
+    ),
+    // The compositor's interface tables are generated from the protocol
+    // XML vendored beside them. A table edited by hand is a compositor
+    // that reads a client's message with the wrong signature, which is
+    // the kind of bug that shows up as one misdrawn window an hour later.
+    (
+        "wayland protocol tables",
+        &[&["tools/common/gen/gen-wayland-protocol.py", "--check"]],
+    ),
+    // The keymap the compositor hands every client, and the modifier
+    // bits that go with it, are libxkbcommon's own output through a
+    // committed probe. A keymap edited by hand is a keyboard that types
+    // the wrong letters, and the client is the only thing that would
+    // notice.
+    (
+        "xkb keymap and tables",
+        &[&["tools/common/gen/gen-xkb-tables.py", "--check"]],
+    ),
+    // The panic screen's font is generated from the BDF committed beside
+    // it, and a hand edit to either would otherwise drift silently.
+    ("font", &[&["tools/common/gen/gen-font.py", "--check"]]),
+    // The terminal's font is rasterised from the TrueType faces committed
+    // beside it, by a rasteriser in the repository rather than by
+    // whatever FreeType the machine has: that is what makes
+    // "byte-identical" a demand this gate can make of every checkout.
+    (
+        "terminal font",
+        &[&["tools/common/gen/gen-term-font.py", "--check"]],
+    ),
+    // The explanations a panic prints are rendered into a document, which
+    // goes stale the moment an entry changes without it.
+    (
+        "panic catalog",
+        &[&["tools/common/gen/gen-panic-catalog.py", "--check"]],
+    ),
+];
+
 /// Run the gate set.
 fn run(args: &Args) -> Result<()> {
     let root = paths::workspace_root();
@@ -46,133 +187,7 @@ fn run(args: &Args) -> Result<()> {
         cargo::run(command, "cargo fmt --check")
     })?;
 
-    step("line endings", || {
-        python("tools/common/check/check-line-endings.py")
-    })?;
-
-    step("assembly allow-list", || {
-        python("tools/common/check/check-asm-budget.py")
-    })?;
-
-    // The seam §7 is built on: the kernel enumerates devices and drives none.
-    // A convenient register access in the wrong file is how that claim decays,
-    // and it decays silently, so it is asserted here rather than reviewed for.
-    step("device-access allow-list", || {
-        python("tools/common/check/check-device-access.py")
-    })?;
-
-    step("unsafe audit", || {
-        python("tools/common/check/check-unsafe-audit.py")
-    })?;
-    step("panic audit", || {
-        python("tools/common/check/check-panic-audit.py")
-    })?;
-
-    // The boundary four assurance ratings attach to. Every artifact in
-    // docs/certification is scoped to `tools/common/data/certification-item.json`, so a
-    // kernel file that drifts into the trusted core -- or an unclassified new
-    // one that nobody decided about -- silently changes what those ratings
-    // claim. docs/certification/ITEM.md.
-    step("certification item boundary", || {
-        python("tools/common/check/check-item-boundary.py")
-    })?;
-
-    // A coding standard with metrics, which EN 50716 requires and the other
-    // gates did not supply: how complicated one function in the certified item
-    // may be, how long, and whether it calls itself. A ratchet over a recorded
-    // baseline, like the item boundary above it.
-    step("complexity budget", || {
-        python("tools/common/check/check-complexity.py")
-    })?;
-
-    // Allocation failure is an error the certified item reports, never a
-    // stop (finding F-23). An allocating standard-library call in the item's
-    // product code is refused unless it goes through `src/kernel/src/fallible.rs`
-    // or is argued at the site; a ratchet over a recorded baseline, like the
-    // two above. docs/certification/MEMORY-AND-TIMING.md.
-    step("fallible allocation", || {
-        python("tools/common/check/check-fallible-alloc.py")
-    })?;
-
-    // The safety manual is an out-of-context argument an integrator designs
-    // against, so a claim in it that quietly stopped being true would be worse
-    // than no manual. Every claim names its evidence, and this fails when a
-    // citation stops resolving. docs/certification/SAFETY-MANUAL.md.
-    step("safety requirements", || {
-        python("tools/common/check/check-safety-requirements.py")
-    })?;
-
-    // The item's requirements, each naming its parent and, at the low level,
-    // the function it is about, against the `/// Verifies:` tags on the
-    // checks. A check naming an id nobody defines, or a requirement that loses
-    // its verifier, fails here rather than in an assessment.
-    // docs/certification/TRACEABILITY.md, which it regenerates.
-    step("traceability", || {
-        python_with("tools/common/check/check-traceability.py", &["--check"])
-    })?;
-
-    // The uncovered statements, sorted into what is argued and what is a gap.
-    // Regenerated from the residual the coverage run writes, so the two cannot
-    // disagree. docs/certification/COVERAGE-RESIDUAL.md.
-    step("coverage residual", || {
-        python_with(
-            "tools/common/gen/gen-coverage-justification.py",
-            &["--check"],
-        )
-    })?;
-
-    // The item links no external crate on any architecture, which is what lets
-    // IEC 62304's SOUP obligation be answered with "none" rather than with an
-    // anomaly-list evaluation per dependency. That is a property worth
-    // re-establishing rather than remembering. docs/certification/SOUP.md.
-    step("SOUP register", || {
-        python_with("tools/common/gen/gen-soup.py", &["--check"])
-    })?;
-
-    // The architecture document is generated from `docs/sysml/` and committed.
-    // A model edited without regenerating leaves the two disagreeing, and the
-    // document is exactly where nobody would notice; this is the cheapest
-    // possible place to say so.
-    step("architecture document", || {
-        python("tools/common/gen/sysml/tests.py")?;
-        python_with("tools/common/gen/gen-arch-doc.py", &["--check"])
-    })?;
-
-    // The compositor's interface tables are generated from the protocol XML
-    // vendored beside them. A table edited by hand is a compositor that reads
-    // a client's message with the wrong signature, which is the kind of bug
-    // that shows up as one misdrawn window an hour later.
-    step("wayland protocol tables", || {
-        python_with("tools/common/gen/gen-wayland-protocol.py", &["--check"])
-    })?;
-
-    // The keymap the compositor hands every client, and the modifier bits
-    // that go with it, are libxkbcommon's own output through a committed
-    // probe. A keymap edited by hand is a keyboard that types the wrong
-    // letters, and the client is the only thing that would notice.
-    step("xkb keymap and tables", || {
-        python_with("tools/common/gen/gen-xkb-tables.py", &["--check"])
-    })?;
-
-    // The panic screen's font is generated from the BDF committed beside it,
-    // and a hand edit to either would otherwise drift silently.
-    step("font", || {
-        python_with("tools/common/gen/gen-font.py", &["--check"])
-    })?;
-
-    // The terminal's font is rasterised from the TrueType faces committed
-    // beside it, by a rasteriser in the repository rather than by whatever
-    // FreeType the machine has: that is what makes "byte-identical" a demand
-    // this gate can make of every checkout.
-    step("terminal font", || {
-        python_with("tools/common/gen/gen-term-font.py", &["--check"])
-    })?;
-
-    // The explanations a panic prints are rendered into a document, which
-    // goes stale the moment an entry changes without it.
-    step("panic catalog", || {
-        python_with("tools/common/gen/gen-panic-catalog.py", &["--check"])
-    })?;
+    steps_at_once(AUDITS)?;
 
     step("crate layering", || {
         let mut command = Command::new("bash");
@@ -228,15 +243,14 @@ fn run(args: &Args) -> Result<()> {
 fn cross_target_clippy() -> Result<()> {
     // The freestanding halves, once per target. A lint pass for x86-64 cannot
     // see Arm code at all, so skipping these means two thirds of the kernel go
-    // unlinted until CI.
+    // unlinted until CI. The kernel for every target is one cargo call, and
+    // the kernel `--mitigations off` another in its own target directory, so
+    // the two run at once (`docs/TEST-TIME.md`, C1).
+    step(
+        "clippy (kernel, every architecture, and again --mitigations off)",
+        kernel_clippy_both_settings,
+    )?;
     for arch in Arch::ALL {
-        step(&format!("clippy (kernel, {arch})"), || {
-            clippy(&["-p", "ferrix-kernel", "--target", arch.kernel_target()])
-        })?;
-        step(
-            &format!("clippy (kernel, {arch}, --mitigations off)"),
-            || kernel_clippy_mitigations_off(arch),
-        )?;
         step(&format!("clippy (loader, {arch})"), || {
             clippy(&["-p", "ferrix-boot", "--target", arch.loader_target()])
         })?;
@@ -816,7 +830,7 @@ pub(crate) fn miri_all(jobs: Option<u32>) -> Result<()> {
     );
     let queue = std::sync::Mutex::new(MIRI_PACKAGES.iter());
     let failed = std::sync::Mutex::new(Vec::new());
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let worker = || {
         loop {
             // Its own statement, so the queue's guard is dropped here: in a
@@ -853,7 +867,7 @@ pub(crate) fn miri_all(jobs: Option<u32>) -> Result<()> {
 /// `cargo +nightly miri test -p <package> --lib`, its output printed in one
 /// piece when it ends; whether it passed.
 fn miri_one(package: &str) -> bool {
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let output = miri_command(&["test", "-p", package, "--lib"])
         .stdin(Stdio::null())
         .output();
@@ -909,29 +923,152 @@ fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Announce a gate, run it, and report.
 fn step(name: &str, body: impl FnOnce() -> Result<()>) -> Result<()> {
     println!("\n== {name}");
-    body()
+    let started = Instant::now();
+    let result = body();
+    took(name, started);
+    result
 }
 
-/// `cargo clippy` over the kernel for `arch` built `--mitigations off`.
+/// The line that says how long a step took, so that where `check`'s minutes
+/// go can be read off its log (`docs/TEST-TIME.md`, C1).
+fn took(name: &str, started: Instant) {
+    println!("-- {name}: {:.1} s", started.elapsed().as_secs_f64());
+}
+
+/// Steps that read the tree and write nothing it reads, run at once: each
+/// one's output is kept and printed whole, in the order given, once all have
+/// ended, so a log reads as if they had run one after another. Every one
+/// runs even after one fails, and the first failure in that order is the
+/// error.
+fn steps_at_once(steps: &[(&str, &[&[&str]])]) -> Result<()> {
+    let started = Instant::now();
+    let results: Vec<(Duration, Result<Vec<u8>>)> = std::thread::scope(|scope| {
+        let running: Vec<_> = steps
+            .iter()
+            .map(|(_, scripts)| scope.spawn(move || scripts_in_turn(scripts)))
+            .collect();
+        running
+            .into_iter()
+            .map(|handle| {
+                handle.join().unwrap_or_else(|_| {
+                    (
+                        Duration::ZERO,
+                        Err(Error::new("a check step's thread panicked")),
+                    )
+                })
+            })
+            .collect()
+    });
+    let mut first_failure = None;
+    for ((name, _), (spent, result)) in steps.iter().zip(results) {
+        println!("\n== {name}");
+        match result {
+            Ok(said) => print!("{}", String::from_utf8_lossy(&said)),
+            Err(error) => {
+                println!("{error}");
+                let _ = first_failure.get_or_insert(error);
+            }
+        }
+        println!("-- {name}: {:.1} s", spent.as_secs_f64());
+    }
+    took("the steps above, at once", started);
+    first_failure.map_or(Ok(()), Err)
+}
+
+/// One of [`steps_at_once`]'s steps: its scripts one after another, stopping
+/// at the first that fails, with how long they took and what they printed.
+fn scripts_in_turn(scripts: &[&[&str]]) -> (Duration, Result<Vec<u8>>) {
+    let began = Instant::now();
+    let mut said = Vec::new();
+    for script in scripts {
+        let Some((name, arguments)) = script.split_first() else {
+            continue;
+        };
+        if let Err(error) = python_captured(name, arguments, &mut said) {
+            return (began.elapsed(), Err(error));
+        }
+    }
+    (began.elapsed(), Ok(said))
+}
+
+/// [`python_with`], with what the script prints added to `said` rather than
+/// shown, and its failure carrying that output.
+fn python_captured(script: &str, arguments: &[&str], said: &mut Vec<u8>) -> Result<()> {
+    let interpreter = python_interpreter().ok_or_else(|| {
+        Error::new("no working Python interpreter on PATH (tried python3, python)")
+    })?;
+    let output = Command::new(interpreter)
+        .current_dir(paths::workspace_root())
+        .arg(script)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| Error::new(format!("could not run {script}: {error}")))?;
+    said.extend_from_slice(&output.stdout);
+    said.extend_from_slice(&output.stderr);
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::new(format!(
+            "{}{script} failed ({})",
+            String::from_utf8_lossy(said),
+            output.status
+        )))
+    }
+}
+
+/// `cargo clippy` over the kernel for every architecture, and at the same
+/// time over the kernel built `--mitigations off`.
 ///
-/// The kernel's one build setting, the other way: it compiles out every
-/// side-channel defence, and code only one setting builds rots in the other.
-/// In the target directory `cargo::kernel` builds that setting into, so
-/// neither setting's cache is thrown away for the other's.
-fn kernel_clippy_mitigations_off(arch: Arch) -> Result<()> {
-    let config = cargo::mitigations_off_config(arch.kernel_target());
+/// That is the kernel's one build setting, the other way: it compiles out
+/// every side-channel defence, and code only one setting builds rots in the
+/// other. It is linted in the target directory `cargo::kernel` builds that
+/// setting into, so neither setting's cache is thrown away for the other's,
+/// and cargo's lock on one directory never waits for the other.
+fn kernel_clippy_both_settings() -> Result<()> {
+    let mut with_defences = vec!["-p", "ferrix-kernel"];
+    for arch in Arch::ALL {
+        with_defences.extend(["--target", arch.kernel_target()]);
+    }
+    let configs: Vec<String> = Arch::ALL
+        .iter()
+        .map(|arch| cargo::mitigations_off_config(arch.kernel_target()))
+        .collect();
     let directory = cargo::mitigations_off_target_dir();
     let directory = directory.to_string_lossy();
-    clippy(&[
-        "-p",
-        "ferrix-kernel",
-        "--target",
-        arch.kernel_target(),
-        "--config",
-        &config,
-        "--target-dir",
-        &directory,
-    ])
+    let mut without = with_defences.clone();
+    for config in &configs {
+        without.extend(["--config", config]);
+    }
+    without.extend(["--target-dir", &directory]);
+    // The second is captured and printed after the first, so the two passes'
+    // diagnostics never interleave.
+    let (first, second) = std::thread::scope(|scope| {
+        let off = scope.spawn(|| clippy_captured(&without));
+        let on = clippy(&with_defences);
+        let off = off
+            .join()
+            .unwrap_or_else(|_| Err(Error::new("the --mitigations off clippy thread panicked")));
+        (on, off)
+    });
+    println!("\n   -- the same, --mitigations off:");
+    second?;
+    first
+}
+
+/// [`clippy`], with its output kept and printed whole when it ends.
+fn clippy_captured(arguments: &[&str]) -> Result<()> {
+    let output = Command::new(cargo_binary())
+        .current_dir(paths::workspace_root())
+        .arg("clippy")
+        .args(arguments)
+        .args(["--", "-D", "warnings"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| Error::new(format!("could not run cargo clippy: {error}")))?;
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    cargo::finished(output.status, "cargo clippy --mitigations off")
 }
 
 /// `cargo clippy ... -- -D warnings`.
@@ -945,17 +1082,12 @@ fn clippy(arguments: &[&str]) -> Result<()> {
     cargo::run(command, "cargo clippy")
 }
 
-/// Run one of the gate scripts.
+/// Run one of the gate scripts, passing it arguments.
 ///
 /// The interpreter is *probed*, not guessed. `python3` exists on a stock
 /// Windows install as an App Execution Alias that is not Python at all: it
 /// prints an advertisement for the Microsoft Store and exits 9009. Looking the
 /// name up on PATH finds it, so the only reliable test is to run it.
-fn python(script: &str) -> Result<()> {
-    python_with(script, &[])
-}
-
-/// Run one of the gate scripts, passing it arguments.
 pub(crate) fn python_with(script: &str, arguments: &[&str]) -> Result<()> {
     let interpreter = python_interpreter().ok_or_else(|| {
         Error::new("no working Python interpreter on PATH (tried python3, python)")
