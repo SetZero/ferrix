@@ -1116,8 +1116,10 @@ fn kill() -> Step {
         if created != 0 {
             return 3;
         }
+        say("seccomp: kill: joining the killed thread");
         // SAFETY: joins the thread made above.
         let _ = unsafe { libc::pthread_join(thread, std::ptr::null_mut()) };
+        say("seccomp: kill: joined");
         // This thread has no filter: the call runs.
         if call0(GETPPID).0 < 0 {
             return 5;
