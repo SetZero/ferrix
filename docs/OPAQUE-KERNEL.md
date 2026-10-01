@@ -861,3 +861,295 @@ checks with their controls (items 3 and 4), gate, and send it to the
 certification consultant. `os-ipc/prof` and `os-ipc/prof2` are timing builds
 (spans printed at the shell's exit). They exist to find costs and must never
 land. The per-span figures they gave are the ones in §9.1 and the list above.
+
+### 9.5 Within 1.5 times seL4: the plan (2026-10-01, os-86)
+
+The customer asked for a plan to bring §9.1's round trip within 1.5 times
+seL4's. Nothing in it is built yet. Points are estimates, one point being 20 to
+30 minutes of one session. A figure marked *guess* stands until step 0
+measures it.
+
+**The target, as a number that can be checked.**
+- *What is compared.* §9.1's round trip: a client's `channel_write_read`
+  answered by the echo server's own. The seL4 equivalent is `seL4_Call` plus
+  `seL4_ReplyRecv` between two address spaces on one core at one priority.
+  sel4bench reports those two as "IPC call" and "IPC reply", each one way, so
+  a round trip is their sum.
+- *seL4's published figure*, from sel4.systems/performance.html. On an i7-6700
+  (Skylake, 3.4 GHz), in the default configuration without its Meltdown
+  defence, a call is 741 cycles and a reply 598. That is 1,339 cycles a round
+  trip, or 0.39 us.
+  - Both run seL4's fast path: the message fits in registers, no capability
+    moves, and the server is waiting.
+  - In that setup the server's FPU is off, so no vector state is switched.
+- *On nazuna* (Ryzen 9 9900X, Zen 5, up to 5.66 GHz), the same cycle count
+  would be about 0.25 us, and 1.5 times that about 0.37 us (*guess*). Today's
+  2.8 to 3.0 us inside a domain is eight times that.
+- *How it is compared.*
+  - Both kernels boot under the same QEMU and KVM, with the same `-cpu` model
+    and one virtual processor pinned to one host core.
+  - They run alternately: seL4, Ferrix, seL4, Ferrix.
+  - The figure is the ratio of their p50s within one run. nazuna's load moves
+    absolute figures from hour to hour; a ratio taken in one run holds.
+  - Both are kept in TSC ticks, which count at a fixed rate rather than at the
+    core's clock.
+- *Configuration: the gate figure has the protections matched.*
+  - **Ferrix**: every mitigation on, and the two programs in one speculation
+    domain.
+    - On Zen 5 that means AutoIBRS and `STIBP`, both set once at boot, and the
+      return-stack refill at every switch of address space (§9.3a, A2).
+    - Ferrix builds no page-table isolation, and Zen 5 needs none.
+  - **seL4**, built for the same processor:
+    - `KernelSkimWindow` off. This is its Meltdown defence, which Zen 5 does
+      not need.
+    - `KernelX86RSBOnContextSwitch` on, to match Ferrix's refill.
+    - `KernelX86IBPBOnContextSwitch` off, as by default.
+    - PCIDs on (`KernelSupportPCID`, also its default).
+  - **Reported beside the gate figure**, not gated:
+    - Ferrix with `--mitigations off`, against seL4's defaults.
+    - Both kernels with `IBPB` at every switch. `IBPB` alone costs about 2 us
+      a switch on this processor, so no design reaches the target between
+      programs that are not in one domain. The report says so.
+
+**Where the time goes today.** Read from the code on `os-ipc/zircon-trip` and
+from the timing builds.
+- *Locks.* A round trip takes about 25 spin locks on each side:
+  - about eight of the run-queue lock;
+  - about 14 `PreemptSpinLock`s: the handle table, the inboxes and
+    observers, the task slots, the switch's `LEFT`, and the process's and
+    thread's signal state;
+  - three wait-queue locks.
+
+  A `PreemptSpinLock`, taken and released, costs about six locked
+  read-modify-writes and four interrupt saves and restores. They keep the
+  preemption count and FX-0503's bookkeeping.
+- *`sched::current()`* takes the run-queue lock and clones an `Arc<Task>`. A
+  side calls it about eight times: from `native_call`, from `must_leave` three
+  times in one wait, from the wait itself, and from `needs_attention`.
+- *The way out of every call.* On every return to ring 3, `needs_attention`
+  takes `current()`, two `Arc` clones, the process's `state` lock and the
+  thread's `signals` lock. With it, `decode_syscall` matches twice and the call
+  is dispatched indirectly through the Linux personality. A native call that
+  does not sleep costs 464 ns.
+- *The scheduler.*
+  - The writer's wake files the reader in the EEVDF queue. That costs
+    `effective_weight`'s 128-bit divisions at each job level, `now_nanos` and
+    the quota atomics.
+  - The writer's block then runs `choose_next`, which picks the same reader
+    back out. That costs four `Arc` clones, a SeqCst read-modify-write of the
+    global `IDLE` word on every switch, and `arm_timer`.
+- *The switch's state.*
+  - Two `rdmsr`s read the FS and GS bases at every save, though the kernel
+    already knows both: a program has no `FSGSBASE` and can change them only
+    by a call.
+  - An `XSAVEOPT` and an `XRSTOR` of 832 bytes, because the program's
+    `syscall` stub promises it every vector register back.
+  - A `mov cr3` without PCID, which drops every user translation. QEMU's CPU
+    model does not offer `pcid` at all.
+- *What the timing builds measured*, per switch:
+
+  | Span | Time |
+  |---|---|
+  | the scheduler's choice | 0.8 to 1.2 us |
+  | the wake | 0.3 to 0.6 us |
+  | user state | 0.37 us (vector 0.12, segment bases 0.14) |
+  | the address space | 0.32 us |
+
+  The stamps inflate every span and the spans overlap. So the figures rank the
+  costs; they do not add up to the trip.
+
+seL4's fast path has none of this. It is one function. The caller's message
+stays in registers, one capability lookup finds the endpoint, and the checks
+are a handful of compares. The processor goes straight from the caller to the
+waiting server, and neither ever enters a run queue (Heiser and Elphinstone,
+*L4 Microkernels: The Lessons from 20 Years of Research and Deployment*,
+2016).
+
+**The budget.** At 1.5 times seL4, one direction may take about 185 ns, or
+about 1,000 cycles. Here is an allowance for each piece, to be checked against
+step 0's profile:
+
+| Piece | Allowance (*guess*) |
+|---|---|
+| `syscall`, `sysret`, and the frame pushed and popped | 40 ns |
+| the fast path's checks and its one handle lookup | 25 ns |
+| the words written into the waiting peer's frame | 5 ns |
+| the direct switch: stack, current task, and one `rdtsc` of accounting | 25 ns |
+| the FS base write and the vector scrub | 25 ns |
+| `CR3` with a PCID, no flush | 20 ns |
+| the return-stack refill | 40 ns |
+| **total** | **180 ns** |
+
+The refill and the hardware's own entry take almost half of it. The software
+between them has about 100 ns.
+
+**The steps.**
+
+| Step | What | Points | Round trip after it (*guess*) |
+|---|---|---|---|
+| 0 | Measure the target | 10–16 | — |
+| 1 | Land the written work (§9.4) | 5–8 | 2.8–3.0 us |
+| 2 | A cheap common path | 20–33 | 1.3–1.8 us |
+| 3 | A cheap switch | 17–24 | 0.9–1.3 us |
+| 4 | The direct switch and the fast path | 23–37 | 0.3–0.4 us |
+| 5 | Squeeze by the profile, and hold it | 5–11 | within 1.5 times seL4 |
+| | **Total** | **80–129** | about 27 to 65 hours of one session |
+
+0. **Measure the target** (10–16; runs beside step 1).
+   - *seL4 on nazuna* (3–5). Build sel4bench for x86-64 in the two
+     configurations above, and boot it with the gate's QEMU and `-cpu`.
+     nazuna has `cmake`, `ninja`, `gcc` and `python3` but not `repo`, so either
+     clone the manifest's repositories by hand or install `repo` for the user.
+   - *A seL4 root task that times like `ipc-bench`* (2–3). It runs 20,000
+     `Call` and `ReplyRecv` round trips, timed and counted exactly as
+     `ipc-bench` does, so the two figures differ in nothing but the kernel.
+   - *`bench-ipc` made exact* (3–5):
+     - an `lfence` around the counter read, or `rdtscp`;
+     - the p50 taken from sorted samples, since today's histogram reads up to
+       an eighth low;
+     - one processor by default, the virtual processor pinned;
+     - `+pcid,+invpcid` in the CPU model, for both kernels;
+     - `--against-sel4`, which alternates the two images and prints the ratio
+       and its spread.
+   - *The timing build, refreshed onto `main`* (2–3). The stamp's own cost is
+     measured and subtracted. Ablation switches skip one piece at a time and
+     measure the change, which gives each piece's cost without the stamps'
+     distortion. This build never lands.
+   - Done when the target is a number measured on nazuna, written here and in
+     the BACKLOG row.
+1. **Land the written work** (5–8). Cherry-pick §9.4's six commits onto
+   `main`, write the two owed checks with their controls, gate, and send it
+   to the certification consultant.
+2. **A cheap common path** (20–33). Every program gains from these, Linux
+   programs included, and none of them changes what a call does.
+   - `current()` read from the processor's own record, with no run-queue lock
+     and no `Arc` clone. It returns a borrow that lives while the task runs
+     (3–5).
+   - A lighter `PreemptSpinLock` (5–8). The preemption count and FX-0503's site
+     words become plain fields of the processor's record, which need no locked
+     operation and no masked interrupts. A lock and its release then cost one
+     locked operation. FX-0503's checks stay.
+   - The way out as one word of pending work per task (5–8):
+     - its bits are a signal, a stop, a kill, a resched and a regroup;
+     - it is read with interrupts masked, just before `sysret`;
+     - `needs_attention`'s locks are taken only when a bit is set;
+     - whoever posts the work sets the bit under the lock it already holds.
+   - A native call decoded once, and dispatched without the Linux
+     personality's table (1–2).
+   - The channel's `ready()` and `must_leave` read from one atomic state word,
+     instead of the inbox lock and `current()` (3–5).
+   - No global or locked writes in the switch (3–5):
+     - `IDLE` is written only when a processor goes idle or wakes from it;
+     - `entered_space`'s three swaps become plain per-processor stores, since
+       interrupts are already masked there;
+     - `effective_weight` is kept per job and recomputed only when a weight
+       changes.
+3. **A cheap switch** (17–24).
+   - *PCIDs on x86-64* (§8, step 10; 10–13):
+     - an allocator per processor, with generations;
+     - `CR3` written with the no-flush bit;
+     - a PCID that is reused gets flushed;
+     - a shootdown reaches every PCID a space holds, including one a processor
+       keeps lazily (os-35's lazy TLB, FX-0009).
+
+     Kernel pages are already global.
+   - *A vector-state contract for native calls that block* (5–8; a decision
+     for the customer, below):
+     - `channel_write_read` and the native waits are declared to destroy the
+       vector registers, as a function call does in the C ABI, and the
+       runtime's stub tells the compiler so.
+     - A task blocked in one of these calls has no vector state to save.
+     - Before the task runs again, the kernel resets its vector registers to
+       their initial state (`XRSTOR` of an empty header), keeping `MXCSR` and
+       the x87 control word. Nothing of the other program reaches it.
+     - A task preempted anywhere else is saved and restored as today.
+   - *The FS and GS bases kept in the task* rather than read back with
+     `rdmsr`, since only a call changes them. The switch's `LEFT` lock is
+     replaced by per-processor fields (2–3).
+4. **The direct switch and the fast path** (23–37). The design goes to the
+   certification consultant before any code (2–3).
+   - *The direct switch* (8–13).
+     - When a call wakes the task it then blocks waiting for, on this
+       processor, and nothing runnable here is more urgent, the processor
+       goes straight to that task. It is not filed in the run queue and
+       picked back out.
+     - The run queue's policy is kept by three conditions: the woken task's
+       affinity includes this processor, its job is within its quota, and
+       the caller's slice has not ended.
+     - Every channel call gains from this, including one that carries handles.
+   - *The fast path* (8–13). It is one function, reached from the entry stub
+     for 0x1013 before the general dispatch. It runs with interrupts masked
+     from entry to `sysret` and takes one lock, the channel's.
+     - It applies only when all of these hold:
+       - the message is at most 24 bytes and carries no handles;
+       - the handle names a channel with the write and read rights;
+       - the peer is the one task blocked in 0x1013 reading that channel;
+       - the peer's inbox is empty, so nothing queued is overtaken;
+       - the direct switch's conditions hold;
+       - neither task has a pending-work bit set.
+     - Then the words go straight into the peer's saved frame as its return
+       values, the caller is marked blocked reading, and the processor
+       switches.
+     - If any test fails, the general path runs, unchanged.
+   - *The evidence* (5–8). The fast path is a second implementation of
+     0x1013, so the argument is that its results equal the general path's.
+     - A boot argument turns the fast path off, and the boot says which path
+       it ran. The channel checks and `ipc-bench` run both ways, and every
+       observable result must agree: return words, return codes, order, a
+       peer's close, and a signal or a kill during the wait.
+     - One negative control per condition: each condition's test replaced by
+       "true", one at a time, must make a check fire.
+     - The check covers every branch of the fast path, and the coverage is
+       carried as for the rest of the item.
+
+     seL4 proved its fast path equal to its slow path; this is the tested
+     version of that argument. Whether that is enough for DAL C and EAL5+ is
+     the consultant's call, before step 4 starts.
+5. **Squeeze, and hold it** (5–11).
+   - Work through whatever step 0's profile still shows (3–8): the layout of
+     the task and channel records, `Arc` traffic on the fast path, the handle
+     lookup.
+   - Then add a perf row to the gate pool that runs `bench-ipc
+     --against-sel4` and fails above 1.65 times, so the figure stays (2–3).
+
+**Order and wall time.**
+- Steps 0 and 1 run side by side.
+- After step 1, step 2 splits across two sessions, and step 3's PCIDs take a
+  third.
+- Step 4 starts once steps 2 and 3 are in. Its conditions read the
+  pending-work word, and its switch assumes the cheap one.
+
+That critical path is about 50 to 80 points, 17 to 40 hours with three
+sessions. Every landing touches the item, so each needs the certification
+consultant, and at this writing that seat is empty.
+
+**Where it can fail, and what then.**
+- *seL4 on nazuna is far from 0.25 us.* The target moves with it, and step 0
+  restates it.
+- *After steps 2 and 3, the profile puts the cost somewhere other than the
+  scheduler and the wake.* Step 4 is re-planned before it is built.
+- *The consultant does not accept a tested second implementation.* Then the
+  work stops after the direct switch, at about 0.5 to 0.8 us (*guess*): under
+  the customer's microsecond, but two to three times seL4.
+- *The refill and the hardware entry leave too little room.* A2 keeps the
+  refill, and only the consultant can change that. The matched seL4 pays it
+  too.
+
+**Not in this plan.**
+- Calls between processors. seL4's fast path is one core only, too.
+- Linux programs. They gain from step 2 only.
+- Messages that carry handles or are longer than 24 bytes. They gain from
+  steps 2 and 3 and from the direct switch, but not from the fast path.
+- AArch64 and ARMv7-A. They gain from step 2, and get ASIDs and a fast path of
+  their own after x86-64. Those are measured on hardware, because under TCG
+  the TLB costs say nothing (§8).
+
+**Decisions for the customer.**
+1. Which figure is the promise: protections matched inside a domain
+   (recommended), or mitigations off.
+2. The vector-state contract for native calls that block. It changes the
+   native ABI for native programs only; the Linux ABI is untouched.
+3. Whether a fast path, which is a second implementation inside the
+   certified item, is acceptable at all, with the consultant's view. Without
+   it the plan stops at the direct switch.
+4. Who takes the certification consultant's seat.
