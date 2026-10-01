@@ -365,6 +365,33 @@ pub(crate) static STAGE9_KMEM: Explanation = Explanation {
           docs/certification/IMPLEMENTATION.md W-15",
 };
 
+/// For `object::process::Process::leave_speculation_domain`, when a member
+/// leaves its domain where it may not wait for the grace period that leaving
+/// takes.
+pub(crate) static SPECULATION_DOMAIN_LEAVE_MAY_NOT_WAIT: Explanation = Explanation {
+    code: "FX-0907",
+    title: "a process left its speculation domain where it may not wait",
+    meaning: "A member of a speculation domain that leaves it -- a move between jobs, a set-id \
+              `execve`, a change of credentials, `PR_SET_DUMPABLE` -- makes every processor \
+              whose last space was in the domain issue the predictor barrier before it goes \
+              on, and waits for them in a grace period (`docs/OPAQUE-KERNEL.md` §9.3b, F1). \
+              A grace period waits on every processor, so it may not be waited for holding a \
+              spin lock another processor may spin on with interrupts masked, nor with \
+              interrupts masked, which is a read-side section here: either can deadlock the \
+              machine at random. The leave checks first and stops the machine instead, \
+              naming the site.",
+    causes: &[
+        "A new caller of `syscall::attributes::update`, `Process::move_to` or \
+         `Process::leave_speculation_domain` holds a `sync::SpinLock`, or masks interrupts, \
+         when a member reaches it. Take the leave out from under the lock: decide under it, \
+         leave after it.",
+        "A path that used to reach `update` without a lock now holds one across it, such as \
+         a change of credentials made inside `with_credentials`.",
+    ],
+    see: "src/kernel/src/object/process.rs leave_speculation_domain; src/kernel/src/smp.rs \
+          synchronize; docs/OPAQUE-KERNEL.md §9.3b",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -2758,6 +2785,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SERVICES,
     &STAGE9_QUOTAS,
     &STAGE9_KMEM,
+    &SPECULATION_DOMAIN_LEAVE_MAY_NOT_WAIT,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,

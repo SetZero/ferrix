@@ -754,6 +754,27 @@ required**. What each finding changed:
   space between the write's start and its return, and so can the domain's
   other members: the window is the length of one grace period, and it is the
   MANAGE holder who opened it.
+- **C1, on F1: a leave waits for a grace period, so it may not run under a
+  spin lock or with interrupts masked.** Where each caller is when it
+  reaches `attributes::update` or a move:
+  - `exec_dumpable` runs in `execve` after the new image is populated,
+    holding no spin lock, with interrupts on.
+  - `credentials_changed` runs in the setuid family after `with_credentials`
+    has let its lock go.
+  - `PR_SET_DUMPABLE` calls `update` straight from `prctl`.
+  - A move by `cgroup.procs` (`write_to`, `Job::adopt`) runs on a file
+    write's path, which holds only sleeping locks.
+  - `inherit` (fork, `process_create`) and `setrlimit`'s `update` never
+    wait, because the process they reach is not a member. A fork's child
+    whose parent is not dumpable has already left. A child of
+    `process_create` is in the root job's no-domain. And a member that
+    is still dumpable does not leave.
+
+  The rule is checked as well as argued. The waiting branch of
+  `leave_speculation_domain` stops the machine with FX-0907 unless
+  `sched::may_block()` holds, that is unless the preemption count (FX-0503's)
+  is zero and interrupts are on. A control calls a leave from inside a
+  `SpinLock` in the check.
 - **F8:** `Job::new_child_in` is `bare_child` with a domain argument.
 - **F9:** MEMORY-AND-TIMING §2.2c gives the commit measured and the
   benchmark's resolution: its percentiles are an eighth of a power of two,

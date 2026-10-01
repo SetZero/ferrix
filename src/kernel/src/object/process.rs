@@ -285,6 +285,23 @@ impl Process {
         let was = self.domain.swap(LEFT, Ordering::AcqRel);
         self.space.leave_domain();
         if was != 0 && was != LEFT {
+            // The grace period below waits on every processor: never under a
+            // spin lock, never with interrupts masked, which is a read-side
+            // section here (`smp::synchronize`'s rule, the consultant's C1).
+            // Checked, so that a caller that breaks it stops at boot.
+            if !crate::sched::may_block() {
+                crate::panic::fatal!(
+                    crate::panic::catalog::SPECULATION_DOMAIN_LEAVE_MAY_NOT_WAIT,
+                    "a member left its speculation domain where it may not wait: {} \
+                     preemption-disabling locks held, interrupts {}",
+                    crate::sched::locks_here().map_or(0, |(_, held, _)| held),
+                    if crate::arch::interrupts_enabled() {
+                        "on"
+                    } else {
+                        "masked"
+                    }
+                );
+            }
             crate::arch::leaving_domain(was);
             crate::smp::synchronize();
         }
