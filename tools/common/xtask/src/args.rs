@@ -164,6 +164,10 @@ pub(crate) struct Args {
     /// means `kvm` (`qemu::accelerator`), and to `run`, which asks for `auto`
     /// unless it is given `--gdb`.
     pub(crate) accel: Option<String>,
+    /// `--since`, the base `gate-rows` reads a branch's changes from.
+    pub(crate) since: Option<String>,
+    /// `--moved`, the old base `gate-rows` compares a moved `main` with.
+    pub(crate) moved: Option<String>,
     /// `--to`, the mounted boot partition `flash` writes to. `None` means
     /// "find the only one".
     pub(crate) to: Option<String>,
@@ -458,6 +462,17 @@ impl Args {
         Ok(())
     }
 
+    /// `--accel`, `--since` and `--moved`: each one word, kept as given.
+    fn named(&mut self, flag: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        let given = Some(value(items, flag)?);
+        match flag {
+            "--accel" => self.accel = given,
+            "--since" => self.since = given,
+            _ => self.moved = given,
+        }
+        Ok(())
+    }
+
     /// `--statd` and `--installer`: programs the image carries. `--statd`
     /// is `--app statd`, kept for the phone's scripts, which say it.
     fn carry(&mut self, flag: &str) {
@@ -555,7 +570,7 @@ impl Args {
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" | "--memory" | "--timeout" => args.machine(&item, &mut items)?,
                 "--seeds" | "--jobs" => args.counts(&item, &mut items)?,
-                "--accel" => args.accel = Some(value(&mut items, "--accel")?),
+                "--accel" | "--since" | "--moved" => args.named(&item, &mut items)?,
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--stage" => args.stage = Some(value(&mut items, "--stage")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),

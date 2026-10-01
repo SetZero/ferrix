@@ -91,6 +91,7 @@ mod fat;
 mod ferrousli;
 mod flash;
 mod fuzzel;
+mod gate_rows;
 mod gateway;
 mod init;
 mod init_file;
@@ -276,6 +277,11 @@ COMMANDS:
     host-test     check's host test step alone, as CI runs it
     host-doctest  check's doc test step alone, as CI runs it
     host-doc      check's documentation step alone, as CI runs it
+    check-docs    check's commit hooks, audits and generated-document checks alone, no cargo
+                  step: the gate of a change to docs/ and top-level Markdown only
+    gate-rows --since <ref> [--moved <old main>]
+                  The gate rows docs/BACKLOG.md asks of the changes since <ref>; with
+                  --moved, whether a rebase from <old main> asks for a gate again
     check-ferrousli
                   check --ferrousli's ferrousli steps alone, as CI runs them
     miri          CI's Miri steps alone, --jobs crates at a time, building nothing else
@@ -580,7 +586,7 @@ fn run() -> Result<()> {
         "test-selfhost" => selfhost::test_selfhost(&args),
         "builds-execute" => builds_execute(&args),
         "check" | "miri" | "check-ferrousli" | "host-clippy" | "host-test" | "host-doctest"
-        | "host-doc" | "check-apps" => check::command(command, &args),
+        | "host-doc" | "check-apps" | "check-docs" | "gate-rows" => check::command(command, &args),
         "native-clippy" => args
             .arches()?
             .into_iter()

@@ -23,8 +23,28 @@ pub(crate) fn command(name: &str, args: &Args) -> Result<()> {
         "host-doctest" => host_doctest(),
         "host-doc" => host_doc(),
         "check-apps" => apps(),
+        "check-docs" => docs(),
+        "gate-rows" => crate::gate_rows::run(args),
         _ => run(args),
     }
+}
+
+/// `check-docs`: what of `check` reads documentation, for a change to
+/// `docs/` and top-level Markdown alone -- the commit hooks, and the audits
+/// and generated-document checks, which say whether a document went stale
+/// against the model, the code or the catalog it is generated from. No
+/// cargo step: nothing under `docs/` is compiled into anything
+/// (`docs/TEST-TIME.md`, Phase 3, B1; `cargo xtask gate-rows` picks it).
+fn docs() -> Result<()> {
+    step("commit hooks", commit_hooks)?;
+    steps_at_once(AUDITS)?;
+    println!("\nchecked (docs only: no cargo step)");
+    Ok(())
+}
+
+/// The first step of every check: whether the commit hooks are armed.
+fn commit_hooks() -> Result<()> {
+    python_with("tools/common/check/check-commit-authors.py", &["--hooks"])
 }
 
 /// The audits and generated-document checks: each reads the tree and writes
@@ -175,9 +195,7 @@ fn run(args: &Args) -> Result<()> {
     // whether the *other* local gates -- the commit hooks -- are running at
     // all. They are files until `core.hooksPath` points at them, and a clone
     // where nobody ran that line refuses nothing.
-    step("commit hooks", || {
-        python_with("tools/common/check/check-commit-authors.py", &["--hooks"])
-    })?;
+    step("commit hooks", commit_hooks)?;
 
     step("formatting", || {
         let mut command = Command::new(cargo_binary());
@@ -1102,7 +1120,7 @@ pub(crate) fn python_with(script: &str, arguments: &[&str]) -> Result<()> {
 }
 
 /// The first name on PATH that answers `--version` like an interpreter.
-fn python_interpreter() -> Option<&'static str> {
+pub(crate) fn python_interpreter() -> Option<&'static str> {
     ["python3", "python", "py"].into_iter().find(|name| {
         Command::new(name)
             .arg("--version")
