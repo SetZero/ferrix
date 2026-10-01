@@ -307,3 +307,4 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+- State 2026-10-01 wind-down, `stage13-fdinfo` (NP + fdinfo, 3250d96c6 code = 3700bfe1e + docs, on fcc7af7de): consultant ae46f413631b883c6 OK IF all of: gates on the landing hash (fdi23: check, x86_64, aarch64, armv7a, armv7a --smp 2, test-init --arch all, test-shell green; test-vfs not yet run), k4/k5 re-run with the message that fires, k8-k17 FIRED on that hash, NAMESPACES §12 quoting the control INDEX names. Not landed.
