@@ -176,6 +176,7 @@ impl WaitQueue {
                 return false;
             }
 
+            let pm = super::prof::now();
             let Some(task) = super::current() else {
                 // No scheduler yet, so there is nothing to switch to and
                 // nothing to be woken by: spin, and let the deadline above
@@ -222,6 +223,7 @@ impl WaitQueue {
                 task.set_sleep_deadline(wake_at);
             }
             task.set_state(BLOCKED);
+            super::prof::add(super::prof::Span::M, pm);
 
             // The last look, now that both a waker and the timer could find
             // us. Cancelling the sleep as well as the block, so a deadline
@@ -251,7 +253,9 @@ impl WaitQueue {
             // this queue for. `wake_all` drains the list, so this only matters
             // for the paths that leave without being drained: the recheck
             // timer, and the condition coming true.
+            let pn = super::prof::now();
             drained = !self.unqueue(task.id);
+            super::prof::add(super::prof::Span::N, pn);
             super::trip::slept(self, drained);
         }
     }
