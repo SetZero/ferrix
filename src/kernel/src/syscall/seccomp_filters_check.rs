@@ -308,7 +308,7 @@ fn probes(report: &mut Report) -> Result<(), &'static str> {
         (TRACE, true),
         (LOG, true),
         (ALLOW, true),
-        (TRAP, false),
+        (TRAP, true),
         (USER_NOTIF, false),
         (0x1234_0000, false),
     ] {
