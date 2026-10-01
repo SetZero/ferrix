@@ -722,6 +722,37 @@ day over 2026-09-24 to -26, and that is the rate the roadmap's sized scope,
 ≈ 442 points, burns at: the unsized work beside it takes nothing off it.
 The roadmap's *Burndown* lists that scope.
 
+### Update, 2026-10-01
+
+Counted from 02afa6c8 (the 2026-09-26 count, 17:37) to ae4c0d89a, by the same
+rule, over the calendar days 2026-09-27 through 10-01: a landing counts at
+the estimate written before its work started, and what had none is sized
+afterwards from `git log`, in clusters, on the same scale, and said to be
+so. The evening of 2026-09-26 itself, 17:37 to midnight -- which the desktop
+clients' foundation, the EDID monitor rules and the first `waybar` and
+`fuzzel` work sit in -- falls between this count and the one before it and
+is in neither.
+
+| day | estimated before | sized afterwards | what |
+|---|---|---|---|
+| 2026-09-27 | 90 | ≈ 150 | estimated: the 32-bit x86 ABI's I1 to I4, 42 (`docs/I386.md`), the sound stack's alsa-lib and `pulsed`, 21 (`docs/AUDIO.md`), authentication's phase 1, 27 (`docs/AUTH.md`); afterwards: the certification item's unsafe-site trace closed (F-26), its high-level requirements (51) and low-level requirements across object/, memory, the architectures, SMP, console and the IOMMU, F-41 through F-52 and W-8's design ≈ 70, the host-guest clipboard both ways ≈ 8, waybar's bar and PulseAudio module with fuzzel's window ≈ 13, the adb-over-USB bridge finishing ≈ 5, driver restart-on-death ≈ 5, the Linux personality's `inotify` and pidfds ≈ 5, hyprlock's library ≈ 5, the stripped 128 MiB boot row ≈ 5, Windows build and QEMU fixes ≈ 8, the opaque-kernel seam measurement proposed and shelved ≈ 8, and a dozen small kernel fixes ≈ 13; well over a hundred commits from more sessions than any day before it |
+| 2026-09-28 | 0 | ≈ 44 | the installer's MVP (`ferrix-install`, `test-install`) ≈ 13, System V semaphores for Steam ≈ 8, test-time's cut 2 ≈ 5, Steam's bootstrapper and its semaphore permission fix ≈ 5, CI and Miri infrastructure fixes ≈ 8, small VFS and `/proc` fixes ≈ 5 |
+| 2026-09-29 | 36 | ≈ 26 | estimated: yserver, the X server, 36 (`docs/YSERVER.md`); afterwards: Steam's sign-in window through yserver ≈ 8, the repo layout move to `src/`, `tools/` and `docs/` ≈ 5, packet pipes with `pipe2(O_DIRECT)` dropping Steam's last preloaded shim ≈ 5, ferrousli's glibc names for Steam's 64-bit side and multiarch loader search ≈ 5, `/proc`'s 32-bit inode and offset fixes ≈ 3 |
+| 2026-09-30 | 19 | ≈ 83 | estimated: N1 to N3 of Steam's mount namespaces, 19 (`docs/NAMESPACES.md` §9); afterwards: Claude Code on Ferrix, its gate, `XSAVE` and the AVX withholding for Zenbleed and GDS ≈ 21, the bottom mount under every namespace ≈ 3, the red submap fix ≈ 3, test-time's cut 3 ≈ 3, the discovery Finder ≈ 8, `ferrix-driver`'s start (input and `virtio-blk` moved onto it) ≈ 8, seccomp's S1 (the verifier and interpreter) ≈ 8, hyprix's `client.rs` split into modules ≈ 8, the stat/`btop`/`ferrofetch` apps ≈ 5, the repo layout's `interfaces/` and `discovery/` module declarations ≈ 3, and a dozen more kernel fixes (the robust futex list, `get_robust_list`'s missing check filed as P2, the MSI-X storm bound, `no_new_privs` and dumpability, `libudev`'s uevent socket) ≈ 13 |
+| 2026-10-01 | 0 | ≈ 94 | the speculation domain landed ahead of its full gate (`bf9efba95`) ≈ 21, the seL4 channel-round-trip plan recorded (`75c03a259`, docs only) ≈ 5, pid namespaces and the small namespaces (UTS, IPC, cgroup, `setns`) ≈ 13, seccomp's S2 (a registered filter at all four entries) ≈ 8, the gate pool and test-time phase 3 design ≈ 5, `pkg`, the package manager, and `test-pkg` ≈ 8, the apps launcher's icons, Bad Apple!!'s fetch, and building the ports and `btop` on Windows through WSL ≈ 8, more WSL build fixes ≈ 5, the certification's after-the-fact reviews and the verification audit's first findings ≈ 8, the stage 13 handover and branch-audit docs at the product owner's wind-down ≈ 5, and smaller items (the gateway's segments in flight, the net-throughput hang filed, booting under KVM by default, `--iterate`) ≈ 8 |
+
+So **≈ 240 on 2026-09-27, ≈ 44 on 2026-09-28, ≈ 62 on 2026-09-29, ≈ 102 on
+2026-09-30 and ≈ 94 on 2026-10-01**, 145 of the 542 estimated before the
+work started. The running total is **≈ 1,742 points in 18 calendar days,
+≈ 97 a day**, or ≈ 1,118 (≈ 62 a day) counting after 2026-09-24 only what
+had an estimate. Two things keep this count softer than the one before it:
+the certification item's requirements-and-trace work on 09-27 is the
+largest single cluster in it (≈ 70) and is sized the way a whole subsystem
+would be, against commit messages rather than a design doc's own number,
+because the item has no points column of its own; and the evening of
+2026-09-26 noted above fell between the two counts and is counted in
+neither.
+
 ---
 
 ## Decisions

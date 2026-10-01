@@ -1,21 +1,30 @@
 # Status, estimates and forecast
 
-*Rows reviewed 2026-09-30; the velocity, the burndown and the Gantt are
-still the count of 2026-09-26.* Over the four days of the
-points era that the fleet ran, 2026-09-14 to -17, about 445 points landed:
-131, 34, 66 and 214, which is ≈ 111 a calendar day and ≈ 150 a day the fleet
-was running, with 8–10 sessions, 15–20 points a session-day, and 21 points a
-queue-hour on both days that were measured finely. Every estimate under 8
-held, and stages 17 and 18 came in at the sizes they were given
-(`docs/BACKLOG.md`, *Velocity*). The count since then, to 2026-09-24, is
-≈ 870 points in 11 calendar days (≈ 79 a day), and 2026-09-24 alone landed
-≈ 99, about 22 an hour over the landing window, on a code base of 703 k
-lines of Rust. Counted again on 2026-09-26, the total is ≈ 1,200 points in
-13 calendar days (≈ 92 a day): 2026-09-25, a day of one or two sessions on
-the certification audit, landed ≈ 26, and 2026-09-26, with about twelve
-sessions, ≈ 278, of which 103 had been estimated before the work started
-and the rest were sized afterwards from `git log`. That is historical
-velocity, not a current schedule. The table records the state now.
+*Rows reviewed 2026-10-01; the velocity count now runs through 2026-10-01,
+but the burndown and the Gantt below are still drawn from the count of
+2026-09-26 -- the two charts are not redrawn here.* Over the four days of
+the points era that the fleet ran, 2026-09-14 to -17, about 445 points
+landed: 131, 34, 66 and 214, which is ≈ 111 a calendar day and ≈ 150 a day
+the fleet was running, with 8–10 sessions, 15–20 points a session-day, and
+21 points a queue-hour on both days that were measured finely. Every
+estimate under 8 held, and stages 17 and 18 came in at the sizes they were
+given (`docs/BACKLOG.md`, *Velocity*). The count since then, to 2026-09-24,
+is ≈ 870 points in 11 calendar days (≈ 79 a day), and 2026-09-24 alone
+landed ≈ 99, about 22 an hour over the landing window, on a code base of
+703 k lines of Rust. Counted again on 2026-09-26, the total was ≈ 1,200
+points in 13 calendar days (≈ 92 a day). Counted again now, to 2026-10-01,
+five more calendar days landed ≈ 542 points (≈ 108 a day of the days
+counted this time), of which ≈ 145 were estimated before the work started
+(the i386 ABI's 42, the sound stack's 21, authentication's phase 1 27,
+yserver's 36, and N1 to N3 of Steam's namespaces' 19) and the rest, ≈ 397,
+sized afterwards from `git log`, in clusters, the same way as before
+(`docs/BACKLOG.md`, *Velocity*, "Update, 2026-10-01"). The running total is
+**≈ 1,742 points in 18 calendar days, ≈ 97 a day**, or ≈ 1,118 (≈ 62 a day)
+counting only what had an estimate before it started. That is historical
+velocity, not a current schedule. What was estimated landed at ≈ 67 a day
+over 2026-09-24 to -26, and that is the rate the roadmap's sized scope,
+≈ 442 points as of 2026-09-26, was burning at then; the *Burndown* below
+still shows that count, not this one. The table records the state now.
 Stages 12 to 16 were sized in words before points existed; their points are
 first guesses rather than an owner's estimate and are replaced when a session
 sizes them.
