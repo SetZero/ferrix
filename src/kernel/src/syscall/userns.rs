@@ -243,13 +243,37 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0xF000_0000);
 /// The process a boot check is acting as, when no task is running: the
 /// kernel's own self-checks drive system calls on behalf of a process of their
 /// own, and a procfs file they open or write has to know whose ids to judge.
-/// Always `None` outside [`acting_as`].
-static ACTING: SpinLock<Option<Arc<crate::syscall::process::Process>>> = SpinLock::new(None);
+/// Always `None` outside [`acting_as`], and answered only to the task that set it.
+static ACTING: SpinLock<Option<Acting>> = SpinLock::new(None);
+
+/// What [`ACTING`] holds: the process, and the task the setting was made on, so
+/// that only that task is answered (none, for the boot thread before any task).
+struct Acting {
+    /// The process the check drives calls as.
+    process: Arc<crate::syscall::process::Process>,
+    /// The task that set it; `None` on a thread with no task.
+    owner: Option<Arc<crate::sched::Task>>,
+}
+
+/// Whether the running context is the one `owner` names.
+fn is_owner(owner: &Option<Arc<crate::sched::Task>>) -> bool {
+    match (owner, crate::sched::current()) {
+        (None, None) => true,
+        (Some(held), Some(running)) => Arc::ptr_eq(held, &running),
+        _ => false,
+    }
+}
 
 /// The process making the call: the running task's, or the one a boot check is
 /// acting as.
 pub(crate) fn acting() -> Option<Arc<crate::syscall::process::Process>> {
-    crate::syscall::process::current().or_else(|| ACTING.lock().clone())
+    crate::syscall::process::current().or_else(|| {
+        ACTING
+            .lock()
+            .as_ref()
+            .filter(|acting| is_owner(&acting.owner))
+            .map(|acting| Arc::clone(&acting.process))
+    })
 }
 
 /// Run `body` with `process` as [`acting`]'s answer when no task is running.
@@ -272,7 +296,10 @@ pub(crate) fn acting_as<R>(
         if slot.is_some() {
             return Err("acting_as was nested, or a check left it set");
         }
-        *slot = Some(Arc::clone(process));
+        *slot = Some(Acting {
+            process: Arc::clone(process),
+            owner: crate::sched::current(),
+        });
     }
     let answer = body();
     *ACTING.lock() = None;

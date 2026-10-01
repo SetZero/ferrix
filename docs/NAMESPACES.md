@@ -1172,6 +1172,14 @@ latest):
   message its row quotes; it has no log. Run it and quote the message that
   fires.
 
+**N4's owed conditions, met with NP:** `userns::acting` answers only the task
+that called `acting_as`; the EROFS check's negative control (the bind of
+`/proc/sys` remounted without `MS_RDONLY`) stops the boot with "a write through
+a read-only bind of /proc/sys was not refused EROFS"; the control "`privileged()`
+ignoring the namespace" is run and quoted in NP's gate record; U8's row in the
+vulnerability analysis is restated, and `Access`'s namespace-blindness is a
+BACKLOG row.
+
 **NP built (2026-09-30, os-7c).** `credentials::may_access`
 is Linux's `ptrace_may_access`: a process always, a caller whose filesystem ids
 (its real ones for `get_robust_list`) are every one of the target's real,
@@ -1179,13 +1187,15 @@ effective and saved ids when the target is dumpable, and a caller with
 `CAP_SYS_PTRACE` over the target's user namespace -- root in the first
 namespace, the namespace's owner from outside, nothing from a child
 namespace into a process it does not own. `/proc/<pid>/root`, `cwd`, `exe`,
-`fd` (its listing and its links), `maps`, `mountinfo` and `ns/*` ask it and
-are refused `EACCES`; `get_robust_list` of another process's thread is
+`fd` and `fdinfo` (their listings and links), `maps`, `mountinfo` and `ns/*` ask
+it and are refused `EACCES`; `get_robust_list` of another process's thread is
 `EPERM`, closing the gap the review of f16ab27a named. Dumpability is cleared
 by a change of ids through `attributes::credentials_changed` (the no-new-privs
 landing's); `PR_SET_DUMPABLE` sets it again, as bubblewrap does after it
 drops its ids. The `procacc` line (FX-0894) proves the refusals for a same-uid
 reader, for root and for root inside a user namespace, and that a process that
 changed its ids is refused until it sets dumpable. A set-id `execve` clearing
-dumpable stands on code, because the boot harness cannot run a real set-id
-file; AUTH.md's P2.1 names the rest.
+dumpable is `attributes::exec_dumpable`'s, which the boot harness cannot drive
+with a real set-id file; AUTH.md's P2.1 names the rest. The check lists the
+`fd` and `fdinfo` directories and reads `maps` and `mountinfo`; the links under
+`fd` stand on the same `may_inspect` call.

@@ -213,6 +213,16 @@ Linux's 32768 with `fits_path`/`path_cost` and a host test of both ends,
 checker to six programs carrying the real Linux 7.0 verifier's answer
 (`oracle.c --accept`), and an empty chain answers `KILL_PROCESS`.
 
+**Done -- NP and `/proc/<pid>/fdinfo` (2026-10-01):** `credentials::may_access`
+is Linux's `ptrace_may_access`; `/proc/<pid>/root`, `cwd`, `exe`, `fd`,
+`fdinfo`, `maps`, `mountinfo` and `ns/*` of another process, and
+`get_robust_list` of its threads, ask it. `/proc/<pid>/fdinfo` lists a file per
+descriptor with Linux's first lines, and a directory a jail holds for an ended
+process lists empty (Chrome's zygote, SECCOMP R4). Dumpability stays
+`attributes`'s own. Evidence: the `procacc` line (FX-0894), thirteen negative
+controls each stopping the boot with the check's message, and the packet pipe's
+owed control. The newborn-child window is a BACKLOG row.
+
 **Where stage 13 stands (2026-10-01).** The exit criterion -- an unprivileged
 user namespace runs a pid 1 under a memory limit with a scoped OOM kill and a
 seccomp filter that blocks a call -- is **not met**: pid namespaces and the
@@ -223,7 +233,7 @@ Linux):
 
 | Branch | What | State |
 |---|---|---|
-| `stage13-np`, `stage13-fdinfo` | `/proc`'s private links by `ptrace_may_access`, dumpable cleared by id changes, `/proc/<pid>/fdinfo` | boot check written; last run failed on a real bug now fixed, not re-run. Overlaps `main`'s own `credentials_changed` |
+| `stage13-np`, `stage13-fdinfo` | **landed 2026-10-01** | see below |
 | `stage13-n5` | unprivileged mounting: `may_mount` by owner, `tmpfs` alone, locked copies, detach-don't-pin, sysctls | `mountperm` line booted on x86_64, four controls fired; other gates not run |
 | `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
 | `stage13-smallns` | UTS, IPC, cgroup namespaces, nsfs, `setns`, pidfd `setns` | boots on three architectures, 55 controls; `check`, `test-init`, coverage not run |
