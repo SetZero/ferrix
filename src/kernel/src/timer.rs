@@ -81,7 +81,11 @@ fn on_tick(_irq: u32) {
         // the comparator is in the past. A one-shot that returned without
         // disarming would be acknowledged, re-asserted before the handler had
         // returned, and the machine would take that interrupt forever.
-        arch::timer_disarm();
+        // Nothing is armed from here on, whichever deadline this was.
+        if let Some(slot) = armed_slot() {
+            slot.store(0, Ordering::Relaxed);
+        }
+        arch::timer_disarm_fired();
     }
     // The scheduler arms this timer for the moment its processor next has a
     // decision to make, so every expiry is one. It only sets a flag: the
@@ -90,9 +94,48 @@ fn on_tick(_irq: u32) {
     crate::sched::timer_expired();
 }
 
-/// Fire the timer interrupt once, `nanos` from now.
+/// The most processors whose one-shot this module remembers.
+const PROCESSORS: usize = 256;
+
+/// When each processor's one-shot is armed to fire, on [`now_nanos`]'s
+/// timescale, or zero for none armed (or not known).
+///
+/// # Why a decision is not a reprogramming
+///
+/// The scheduler asks for its next decision at every switch and every wake
+/// that wants one, which is several times a round trip between two programs.
+/// Under a hypervisor each reprogramming is an exit -- on x86-64 the local
+/// APIC's registers are memory the hypervisor emulates -- and a channel round
+/// trip took four of them. So a one-shot already armed no later than the
+/// deadline asked for is left as it is: it fires early, the scheduler finds
+/// nothing yet due and asks again, and the asking is what was going to happen
+/// anyway. Only a deadline earlier than the one armed is written. An early
+/// interrupt costs one decision; a late one would cost a task its turn, and
+/// that never happens here.
+static ARMED: [AtomicU64; PROCESSORS] = [const { AtomicU64::new(0) }; PROCESSORS];
+
+/// This processor's slot in [`ARMED`], once processors have records.
+fn armed_slot() -> Option<&'static AtomicU64> {
+    crate::smp::this_cpu().and_then(|cpu| ARMED.get(cpu.logical))
+}
+
+/// Fire the timer interrupt once, `nanos` from now: or sooner, when it is
+/// armed already for sooner (see [`ARMED`]).
+///
+/// Called with interrupts masked on the processor whose timer it arms, as the
+/// scheduler calls it.
 pub(crate) fn after(nanos: u64) {
-    INTERVAL.store(0, Ordering::Relaxed);
+    let periodic = INTERVAL.swap(0, Ordering::Relaxed) != 0;
+    let Some(slot) = armed_slot() else {
+        arch::timer_arm(nanos);
+        return;
+    };
+    let wanted = now_nanos().saturating_add(nanos).max(1);
+    let armed = slot.load(Ordering::Relaxed);
+    if !periodic && armed != 0 && armed <= wanted {
+        return;
+    }
+    slot.store(wanted, Ordering::Relaxed);
     arch::timer_arm(nanos);
 }
 
@@ -102,6 +145,9 @@ pub(crate) fn after(nanos: u64) {
 /// measured from the deadlines they were due at rather than from the instants
 /// the interrupts arrived, so a late tick does not make its successors late.
 pub(crate) fn every(nanos: u64) {
+    if let Some(slot) = armed_slot() {
+        slot.store(0, Ordering::Relaxed);
+    }
     let next = now_nanos().saturating_add(nanos);
     INTERVAL.store(nanos, Ordering::Relaxed);
     arm_periodic(next, nanos);
@@ -138,9 +184,19 @@ fn arm_at(deadline: u64) {
 }
 
 /// Stop the timer. The counter keeps running; it always does.
+///
+/// A one-shot is left to fire rather than written off, for the reason
+/// [`ARMED`] gives: what it costs is one decision that finds nothing to do,
+/// where stopping it is an exit under a hypervisor every time a processor
+/// goes quiet. A periodic timer, which would fire for ever, is stopped.
 pub(crate) fn stop() {
-    INTERVAL.store(0, Ordering::Relaxed);
-    arch::timer_disarm();
+    let periodic = INTERVAL.swap(0, Ordering::Relaxed) != 0;
+    if periodic || armed_slot().is_none_or(|slot| slot.load(Ordering::Relaxed) == 0) {
+        if let Some(slot) = armed_slot() {
+            slot.store(0, Ordering::Relaxed);
+        }
+        arch::timer_disarm();
+    }
 }
 
 /// Timer interrupts taken since boot.

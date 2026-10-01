@@ -261,6 +261,11 @@ pub(crate) fn set_syscall_entry(entry: SyscallEntry) {
 /// with no dispatcher above its core can honestly say, and never a panic: the
 /// caller is a trap vector with a program waiting on it.
 pub(crate) fn system_call(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
+    // A program's call, marked so that a wake it makes leaves the decision to
+    // its way out rather than to the timer (`sched::resched_here`).
+    if regs.is_some() {
+        crate::sched::call_entered();
+    }
     let outcome = match SYSCALL_ENTRY.get() {
         Some(entry) => entry(args, regs),
         None => Outcome::Return(Errno::ENOSYS.as_return_value()),
@@ -269,6 +274,7 @@ pub(crate) fn system_call(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> 
     // (`echo $$ > cgroup.procs`) runs in the new job from here.
     if regs.is_some() {
         crate::sched::regroup_current();
+        crate::sched::call_left();
     }
     outcome
 }

@@ -1581,6 +1581,11 @@ pub(crate) fn timer_disarm() {
     apic::disarm();
 }
 
+/// Stop a one-shot that has just fired: nothing to do. The local APIC's
+/// one-shot has counted down to zero and stays there, and every register
+/// write would be an exit under a hypervisor.
+pub(crate) fn timer_disarm_fired() {}
+
 /// The interrupt number the timer arrives on.
 pub(crate) fn timer_irq() -> u32 {
     apic::timer_irq()
