@@ -869,6 +869,46 @@ seL4's. Nothing in it is built yet. Points are estimates, one point being 20 to
 30 minutes of one session. A figure marked *guess* stands until step 0
 measures it.
 
+**Start here** (for a session pointed at this section).
+- *Read first:* §9.1 to §9.4, then this section.
+- *The code to start from is on GitHub*, branch `os-ipc/zircon-trip` at
+  a1379b25b. It forks from a `main` older than the speculation domain, so do
+  not merge or rebase it whole.
+  - Make a branch from current `main`.
+  - Cherry-pick these six commits in this order, the branch's own:
+    1. 937b75972, `bench-ipc`;
+    2. 5b300da82, the timer and the decision at a call's end;
+    3. 54ff92c2a, the sync wake;
+    4. 169c39374, `channel_write_read` (0x1013);
+    5. 82ee2fa44, the clock;
+    6. dfedadeae, the deferred decision and `wait_trusting`.
+  - Leave out the rest of the branch:
+    - 15ae15cc3, the segment skip;
+    - 54509856e to 09afb2ddf, an early speculation domain that `main`'s
+      supersedes;
+    - a1379b25b, `XSAVEOPT`.
+  - That is step 1.
+- *The timing builds* are on GitHub too: `os-ipc/prof` (41bdef2ca) and
+  `os-ipc/prof2` (4b5be585c), both on `os-ipc/zircon-trip`. They print each
+  span's ns at the shell's exit. Step 0 refreshes `os-ipc/prof2` onto `main`.
+  Neither ever lands.
+- *Branches that meet this work:*
+  - os-35's lazy TLB, backed up on GitHub as
+    `backup/2026-10-01/os-35/ipc-lazytlb-land` (bdc227dbd). Step 3's PCIDs
+    must be built with it (§9.3b, F6; FX-0009).
+  - os-35's sync wake and idle poll, `os-35/ipc-wake` (dbd392808, §8).
+- *How the work is run:*
+  - Builds and gates run on nazuna. The gate pool is
+    `~/.local/share/ferrix/fleet/gate.sh`, with verdicts in its INDEX.
+  - Landings take the lock with `fleet/land.sh` and follow
+    `docs/CONVENTIONS.md`.
+  - Requirement ids are reserved before they are written.
+  - Every landing here touches the item, so it goes to the certification
+    consultant first. The customer names that seat.
+- *The measurement*, once step 1 is in: `cargo xtask bench-ipc --release
+  --accel kvm --smp 1`. Its `domain-call` line is the figure. Run it with and
+  without `--mitigations off`, back to back on the same host load.
+
 **The target, as a number that can be checked.**
 - *What is compared.* §9.1's round trip: a client's `channel_write_read`
   answered by the echo server's own. The seL4 equivalent is `seL4_Call` plus
