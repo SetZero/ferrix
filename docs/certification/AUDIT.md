@@ -29,6 +29,7 @@ changes nothing about the decision.
 | `GRANTED` | A native process made, with its creator's ids (P0) | `syscall/native.rs` `process_create` |
 | `GRANTED` | `devmgr` started through the starter; the starter given to pid 1 | `devmgr.rs` `devmgr_start`, `init.rs` `next_bootstrap` |
 | `GRANTED` | A device's control channel made for a driver (block, net, display, render, input, sound, log) | each core's `*_control_create`, through `native::serve` |
+| `GRANTED` | A job made one speculation domain (`DOMAIN`): the new job, its parent and the domain's number (`docs/OPAQUE-KERNEL.md` §9) | `syscall/native.rs` `job_create` |
 | `ENDED` | A process or job ended from outside: a job's kill, the scoped OOM kill, `cgroup.kill` | `object/job.rs` `kill`, `kill_members`; `object/oom.rs` |
 | `DEVICE` | A device quiesced; a DMA fault the IOMMU reported for a device | `native::quiesce`; `iommu` fault handlers |
 | `CHANGED` | TSF data changed by a call that succeeded: a job's limit set (`job_set_limit`), a cgroup's limit file written | `syscall/native.rs` `job_set_limit`; cgroupfs limit writes |

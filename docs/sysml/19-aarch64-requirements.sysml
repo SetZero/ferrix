@@ -765,6 +765,17 @@ package FerrixAarch64Requirements {
                 "arch::aarch64::speculation::firmware_call",
                 "arch::aarch64::speculation::report_once_started");
         }
+        requirement <'L.aarch64.51'> nothingInsideADomain : ItemLowLevel {
+            attribute :>> statement = "switch_barrier_in_domain shall issue nothing:
+                this architecture's switch barrier is ARCH_WORKAROUND_1, the
+                predictor invalidation a speculation domain leaves out, and the
+                Spectre-BHB loop on entry from EL0 is not on the switch path.";
+            attribute :>> criterion = "Switches between two members of one marked
+                job decide no barrier and switches out of the domain decide one
+                each way (the `domain` line on an AArch64 boot).";
+            attribute :>> parent = "H.TRAP.16";
+            attribute :>> unit = "arch::aarch64::speculation::switch_barrier_in_domain";
+        }
         requirement <'L.aarch64.43'> indicesAreClamped : ItemLowLevel {
             attribute :>> statement = "clamp_index and clamp_below shall answer
                 an index below its bound unchanged and any other as zero, with a

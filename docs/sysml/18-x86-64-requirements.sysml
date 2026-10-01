@@ -462,6 +462,18 @@ package FerrixX8664Requirements {
             attribute :>> unit = ("arch::x86_64::speculation::switch_barrier",
                 "arch::x86_64::speculation::fill_return_stack");
         }
+        requirement <'L.x86_64.124'> refillKeptInsideADomain : ItemLowLevel {
+            attribute :>> statement = "switch_barrier_in_domain shall, in a hardened
+                build, refill the return stack with 32 entries and issue no IBPB:
+                inside one speculation domain only the predictor invalidation is
+                left out.";
+            attribute :>> criterion = "Switches between two members of one marked
+                job decide no barrier (the `domain` line, case 1), and the hardened
+                build's return-stack refill runs at each of them.";
+            attribute :>> parent = "H.TRAP.16";
+            attribute :>> unit = ("arch::x86_64::speculation::switch_barrier_in_domain",
+                "arch::x86_64::speculation::fill_return_stack");
+        }
         requirement <'L.x86_64.32'> speculationPlanFollowsCpuid : ItemLowLevel {
             attribute :>> statement = "Plan::for_processor shall choose enhanced
                 IBRS where IA32_ARCH_CAPABILITIES offers it, else AutoIBRS, else

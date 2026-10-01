@@ -300,6 +300,25 @@ reference setting, `ferrix.devmgr=kernel`. The integrator shall use the
 reference setting, or accept that a boot with `init` does not prove those
 stages itself.
 
+### AoU-14 — one speculation domain holds only programs that may read each other
+A job made with `JOB_SPECULATION_DOMAIN` is one speculation domain
+(`docs/OPAQUE-KERNEL.md` §9). Between two programs born in it, a switch
+leaves out the predictor invalidation, so either program may read the
+other's memory speculatively (VULNERABILITY-ANALYSIS V-07). ASR-1's
+separation holds against speculative reads only *between* domains, and
+between a domain and every program outside one, the default for every job.
+
+The integrator shall place in one domain only programs that may read each
+other's memory: a driver and the client it serves, two halves of one service.
+MANAGE on a marked job is the authority to start programs in it, and the
+integrator shall hand that right only to a program trusted to place others
+there. A program that moves between jobs, or stops being dumpable (a set-id
+`execve`, a change of credentials, `PR_SET_DUMPABLE`), leaves its domain for
+good, so a privileged program is never in one by accident. Partitions of
+different criticality shall not share a domain. A marking is recorded as a
+`DOMAIN` audit event, which is how an assessor finds every domain on a
+running system.
+
 ## 5. Element failure analysis
 
 The hazard analysis the element *can* do: not what harm the system causes —

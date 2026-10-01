@@ -1259,4 +1259,77 @@ package FerrixObjectRequirements {
                 "object::oom::shared_with_the_living");
         }
     }
+
+    package SpeculationDomains {
+        doc /* docs/OPAQUE-KERNEL.md §9.2-§9.3a: a job marked at its creation,
+             * whose born members' switches skip the predictor invalidation.
+             * The customer's decision of 2026-10-01 (docs/BACKLOG.md). */
+
+        requirement <'L.object.106'> barrierSkippedOnlyInsideOneDomain : ItemLowLevel {
+            attribute :>> statement = "entered_space shall skip the predictor
+                invalidation at a switch of address space only when the outgoing
+                space's domain, read as it leaves, and the incoming space's are the
+                same and not zero, and shall otherwise decide the barrier as it did
+                before; forget_root shall clear a processor's last domain with its
+                last root.";
+            attribute :>> criterion = "Two members of one marked job switched both
+                ways on one processor decide 0 barriers; a member and a process of
+                no domain, and members of two marked jobs, decide 2 (the `domain`
+                line, cases 1 and 2).";
+            attribute :>> parent = "H.TRAP.16";
+            attribute :>> unit = ("arch::speculation::entered_space",
+                "arch::speculation::same_domain", "arch::speculation::left_space",
+                "arch::speculation::entering_space", "arch::speculation::forget_root",
+                "user::space::AddressSpace::install",
+                "user::space::AddressSpace::uninstall");
+        }
+        requirement <'L.object.107'> markedOnlyAtCreationUnderManage : ItemLowLevel {
+            attribute :>> statement = "job_create shall make a job a speculation
+                domain only with JOB_SPECULATION_DOMAIN, only under MANAGE on the
+                parent, and only as it makes the job; it shall refuse any other
+                option bit with INVALID_ARGS, write a DOMAIN audit record for each
+                job it marks and none for a refusal, and make every other job,
+                a child of a marked one included, in no domain.";
+            attribute :>> criterion = "job_create with the option and a parent
+                handle without MANAGE answers ACCESS_DENIED, with an unknown bit
+                INVALID_ARGS, and neither adds a DOMAIN record; with MANAGE it adds
+                one (the `domain` line, case 4).";
+            attribute :>> parent = ("H.TRAP.16", "H.OBJ.8");
+            attribute :>> unit = ("syscall::native::job_create",
+                "object::job::Job::new_child_domain", "object::job::Job::new_child_in",
+                "object::job::Job::domain");
+        }
+        requirement <'L.object.108'> membershipByBirth : ItemLowLevel {
+            attribute :>> statement = "A process shall be in a speculation domain
+                only if it was made in the marked job, by process_create or by a
+                fork of a member in the same job; its address space shall carry the
+                domain, and a space a process of another domain comes to share
+                shall be in no domain from then on.";
+            attribute :>> criterion = "A process made in a marked job reports the
+                job's domain, and a member whose space a process of no domain shares
+                decides the barrier both ways with another member (the `domain`
+                line, case 6); a marked job inside a marked job is a domain of its
+                own (case 7).";
+            attribute :>> parent = "H.TRAP.16";
+            attribute :>> unit = ("object::process::Process::new",
+                "object::process::Process::move_charged",
+                "user::space::AddressSpace::claim_domain",
+                "user::space::AddressSpace::set_birth_domain",
+                "syscall::process::Process::forked_into");
+        }
+        requirement <'L.object.109'> leavingIsForGood : ItemLowLevel {
+            attribute :>> statement = "A member shall leave its speculation domain
+                for good, and its address space with it, when it moves between jobs,
+                and when it stops being dumpable: a set-id execve, a change of
+                credentials, or PR_SET_DUMPABLE.";
+            attribute :>> criterion = "A member moved out of its job, one whose
+                credentials changed and one made not dumpable each decide the
+                barrier both ways with a member left in the domain (the `domain`
+                line, cases 3 and 5).";
+            attribute :>> parent = "H.TRAP.16";
+            attribute :>> unit = ("object::process::Process::leave_speculation_domain",
+                "user::space::AddressSpace::leave_domain",
+                "syscall::attributes::update");
+        }
+    }
 }

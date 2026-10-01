@@ -384,6 +384,26 @@ KVM, 5.1 s under `tcg` and 32 s under the plugin. The residual is a host that
 starves one virtual processor while it runs the waiter; that ends the wait
 early, which costs availability and never integrity.
 
+### 2.2b A channel round trip, measured, with and without a speculation domain
+
+Measured, not bounded. `cargo xtask bench-ipc` times 20,000 round trips of an
+eight-byte message between two native processes, each side making one
+`channel_write_read` (`docs/OPAQUE-KERNEL.md` §9). The figures below were
+taken on x86-64 under KVM on nazuna, a Zen 5 host, at host loads of 7 to 15,
+built `--mitigations on`, at p50:
+
+| | one processor | two processors |
+|---|---|---|
+| a write, a wait and a read on each side | 13.0 us | 13.0 us |
+| `channel_write_read`, the two in no domain | 6.5 us | 7.4 us |
+| `channel_write_read`, the two in one speculation domain | 3.0 us | 2.8 us |
+
+The difference between the last two rows is the predictor invalidation at
+the two switches a round trip makes. A domain removes it, and it is the one
+part of the switch a domain changes (SPECULATION.md §3). The p99 is three to
+four times the p50 on a shared host. These are measurements of one
+configuration, not a bound.
+
 ### 2.3 What is missing, per standard
 
 * **DO-178C DAL C** does not require WCET as such, but does require that
