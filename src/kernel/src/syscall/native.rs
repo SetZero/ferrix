@@ -907,10 +907,11 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
             }
             Err(ReadError::NoMemory) => return Err(status::NO_MEMORY),
         }
-        let _ = endpoint.waiters().wait_until_deadline(
-            || endpoint.readable_or_closed() || must_leave(caller),
-            u64::MAX,
-        );
+        // Trusting the queue: a message and the peer's close both wake it,
+        // and a signal or a kill wakes the task.
+        let _ = endpoint
+            .waiters()
+            .wait_trusting(|| endpoint.readable_or_closed() || must_leave(caller));
         if must_leave(caller) {
             return Err(Errno::EINTR);
         }

@@ -1631,8 +1631,11 @@ pub(crate) enum Wake {
     /// On the waker's processor, if nothing is queued there behind the
     /// waker: for a waker that is likely to block next, as a program that has
     /// written its request and waits for the answer does. A waker that does
-    /// not block after all shares its processor with the task it woke, which
-    /// the scheduler then decides between on the way out of the waker's call.
+    /// not block after all shares its processor with the task it woke until
+    /// the next decision, which the woken task's arrival arms the timer for,
+    /// at most a slice away. No decision is asked for at the wake: the
+    /// waker's block is the decision, as in Zircon, where the wake defers the
+    /// reschedule until the caller blocks.
     Sync,
 }
 
@@ -1676,9 +1679,9 @@ enum Placed {
 /// its affinity allows ([`may_place`]) where nothing else is queued. Anything
 /// else is the wake at home, exactly as before.
 ///
-/// This is os-35's `os-35/ipc-wake` (87675432), with one change: a moved
-/// task asks this processor for a decision ([`resched_here`]) rather than
-/// arming its timer for one, which a call's way out now makes.
+/// The move is os-35's `os-35/ipc-wake` (87675432). A task already at home
+/// on the waker's processor is woken there the same way, deferred
+/// (`wake_at_home`).
 pub(crate) fn wake_with(task: &Arc<Task>, how: Wake) {
     if how == Wake::Sync {
         let saved = <arch::Irq as IrqControl>::disable();
@@ -1687,6 +1690,8 @@ pub(crate) fn wake_with(task: &Arc<Task>, how: Wake) {
         if matches!(placed, Some(Placed::Moved | Placed::NotBlocked)) {
             return;
         }
+        wake_at_home(task, true);
+        return;
     }
     wake(task);
 }
@@ -1758,9 +1763,15 @@ fn wake_onto(task: &Arc<Task>, here: usize) -> Placed {
         // NOALLOC: `CpuQueue::insert` queues the task in its own run slot,
         // which `asleep_at_home` saw it hold.
         here_queue.insert(task);
-        drop(first_queue);
-        drop(second_queue);
-        resched_here(here);
+        // The waker's block is the decision: see `wake_at_home`'s `defer`.
+        // Idle here, as for an interrupt's waker, there is no block coming.
+        if here_queue.is_running_idle() {
+            drop(first_queue);
+            drop(second_queue);
+            resched_here(here);
+        } else {
+            here_queue.arm_timer(crate::timer::now_nanos());
+        }
         return Placed::Moved;
     }
 }
@@ -1784,7 +1795,19 @@ pub(crate) fn wake(task: &Arc<Task>) {
     // something else still believes it owns, and the task is lost rather than
     // run. Getting it right means giving those states names and an order,
     // which is a change of its own and not a corollary of five others.
+    wake_at_home(task, false);
+}
+
+/// [`wake`], and with `defer`, for a waker that blocks next ([`Wake::Sync`]):
+/// a task made runnable on the waker's own processor asks for no decision
+/// now. The waker's block is the decision, and until then this processor's
+/// timer is armed for its next one, at most a slice away, should the waker
+/// not block after all. Asking now would preempt the waker at its next
+/// lock's release, before it reached its wait: two decisions and a switch
+/// back where one decision does.
+fn wake_at_home(task: &Arc<Task>, defer: bool) {
     let saved = <arch::Irq as IrqControl>::disable();
+    let here = this_cpu();
     let mut kick_cpu = None;
     loop {
         let cpu = task.cpu();
@@ -1817,6 +1840,11 @@ pub(crate) fn wake(task: &Arc<Task>) {
             // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
             queue.insert(task);
         }
+        // Deferred to the waker's block, behind a waker that runs here.
+        if defer && here == Some(cpu) && !queue.is_running_idle() {
+            queue.arm_timer(crate::timer::now_nanos());
+            break;
+        }
         // As `spawn_on`, and for the same three reasons: something better has
         // arrived, or the processor is idle, or this is the first task to
         // wait behind the running one and so the first that needs its timer
@@ -1828,7 +1856,6 @@ pub(crate) fn wake(task: &Arc<Task>) {
     }
     // As `spawn_task`: a wake-up onto this processor arms this processor's
     // timer, so it is decided and done before interrupts come back.
-    let here = this_cpu();
     let remote = match kick_cpu {
         Some(cpu) if here == Some(cpu) => {
             resched_here(cpu);

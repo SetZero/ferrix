@@ -133,10 +133,34 @@ impl WaitQueue {
     /// waker first leaves a stale entry in one of the two, and both tolerate
     /// it — waking a task that is already runnable is a no-op, and a sleeper
     /// whose deadline was cleared is dropped when it is next looked at.
-    pub(crate) fn wait_until_deadline(
+    pub(crate) fn wait_until_deadline(&self, ready: impl FnMut() -> bool, deadline: u64) -> bool {
+        self.wait_sliced(ready, deadline, Some(RECHECK_NANOS))
+    }
+
+    /// Block until `ready` is true, trusting this queue's wakes: no deadline,
+    /// and no recheck while the task is listed.
+    ///
+    /// For a wait every change it waits for wakes, and that a round trip
+    /// takes twice: `channel_write_read`'s, whose message and whose peer's
+    /// close both wake the queue, as a signal and a kill wake the task
+    /// itself. A recheck is a sleep deadline filed in the run queue's sleeper
+    /// set as the task blocks and taken out again as it is woken, a fifth of
+    /// a microsecond a wait for a timer that does not fire; `poll` and
+    /// `epoll_wait` trust their queues the same way, with
+    /// [`WaitQueue::wait_on_any`]'s long `recheck`. A task there was no
+    /// memory to list is on no list a waker reads, and rechecks as every
+    /// wait does (finding F-23).
+    pub(crate) fn wait_trusting(&self, ready: impl FnMut() -> bool) -> bool {
+        self.wait_sliced(ready, u64::MAX, None)
+    }
+
+    /// [`WaitQueue::wait_until_deadline`], looking again every `recheck`
+    /// nanoseconds, or only when woken for `None`.
+    fn wait_sliced(
         &self,
         mut ready: impl FnMut() -> bool,
         deadline: u64,
+        recheck: Option<u64>,
     ) -> bool {
         // Whether the last sleep ended because a waker took this task off the
         // list, for the count `waits_ended_by_a_wake` reports.
@@ -170,7 +194,9 @@ impl WaitQueue {
             //
             // Polling a condition is the wrong shape for a kernel and the
             // right one for a checking harness, which is all this serves.
-            let slice = crate::timer::now_nanos().saturating_add(RECHECK_NANOS);
+            let slice = recheck.map_or(u64::MAX, |recheck| {
+                crate::timer::now_nanos().saturating_add(recheck)
+            });
             let wake_at = if slice < deadline { slice } else { deadline };
 
             // **Findable at every instant, which fixes the order.** Interrupts
@@ -183,9 +209,18 @@ impl WaitQueue {
             //
             // With no memory to list it, it is not listed, and sleeps to the
             // slice's end instead of until a wake: the condition is looked at
-            // then as it would be anyway (finding F-23).
-            task.set_sleep_deadline(wake_at);
-            let _ = fallible::try_push(&mut self.waiters.lock(), Arc::clone(&task));
+            // then as it would be anyway (finding F-23). A wait that trusts
+            // its wakes files no deadline while it is listed, and a recheck's
+            // when it could not be.
+            let listed = fallible::try_push(&mut self.waiters.lock(), Arc::clone(&task)).is_ok();
+            let wake_at = if listed || wake_at != u64::MAX {
+                wake_at
+            } else {
+                crate::timer::now_nanos().saturating_add(RECHECK_NANOS)
+            };
+            if wake_at != u64::MAX {
+                task.set_sleep_deadline(wake_at);
+            }
             task.set_state(BLOCKED);
 
             // The last look, now that both a waker and the timer could find
