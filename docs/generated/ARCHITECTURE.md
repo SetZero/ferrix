@@ -113,11 +113,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixX8664Requirements` | `18-x86-64-requirements.sysml` | What each unit of src/kernel/src/arch/x86_64/, src/kernel/src/trap.rs and src/kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements (part 13 defines the format): the descriptor tables and which selectors ring 3 may hold, the context switch and the user state it carries, starting processors, the paranoid entries, the speculation defences, the counter and timer, both ABIs' signal frames, SYSCALL and int $0x80, the exception gates and what a fault becomes, and which calls reach which answer. |
 | `FerrixAarch64Requirements` | `19-aarch64-requirements.sysml` | What each unit of src/kernel/src/arch/aarch64/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the trap path and the signal frames it builds, the context switch, the interrupt controllers and the generic timer, the boot console, the system registers, translation and the TLB, starting the other processors, the speculation defences, and what firmware is asked for -- power, reset, entropy. The PL011 and the GICv2 are arch/arm_common's, shared with ARMv7-A, and are not here. |
 | `FerrixDeviceRequirements` | `20-device-requirements.sysml` | What each unit of src/kernel/src/claim.rs and src/kernel/src/device.rs does, and the quiesce in src/kernel/src/syscall/native.rs, as `ItemLowLevel` requirements (part 13 defines the format): a device claimed through its core's control channels, the number its node is published under, the apertures and vectors a node hands out and nothing past them, the MSI-X vectors it mints, the bus mastering a quiesce turns off, and the quiesce itself, which waits out every core that serves the device before the next driver is given it. The objects a driver holds for a device -- its mapping, its interrupt, its pins -- are object/'s (part 14); the domain under them is iommu's (part 16). |
-| `FerrixArmv7aRequirements` | `21-armv7a-requirements.sysml` | ARMv7-A, the Cortex-A7 of the STM32MP157, has no requirements of its own beyond these: what the system call path does for the filter the core asks about every call (seccomp, `docs/SECCOMP.md` §3.3), and what its switch barrier does inside a speculation domain (`docs/OPAQUE-KERNEL.md` §9). The rest of the architecture waits in the baseline with the other architectures' unwritten rows. Ids are `L.armv7a.<n>`, flat through the architecture; the rules of part 19 hold. |
+| `FerrixArmv7aRequirements` | `21-armv7a-requirements.sysml` | ARMv7-A, the Cortex-A7 of the STM32MP157, has no requirements of its own beyond these: what the system call path does for the filter the core asks about every call (seccomp, `docs/SECCOMP.md` §3.3). The rest of the architecture waits in the baseline with the other architectures' unwritten rows. Ids are `L.armv7a.<n>`, flat through the architecture; the rules of part 19 hold. |
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of src/kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (src/kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of src/kernel/src/console.rs and src/kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (src/kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-24 files, 107 packages, 5368 elements, 213 relations. Model digest `45fda959d53683b4`.
+24 files, 105 packages, 5327 elements, 213 relations. Model digest `56228757e47fec11`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2185,7 +2185,7 @@ One namespace of each kind, held by every task. Every table that would otherwise
 
 `#inProgress`  ·  stage 13
 
-Steam's user and mount namespaces first (docs/NAMESPACES.md, N1 to N6). N1 (2026-09-28): every mount's own flags enforced, MS_REMOUNT, and mountinfo. N2 (2026-09-30): binds of directories, files and sockets, MS_REC, MNT_DETACH of a subtree, and a superblock per filesystem. N3 (2026-09-30): mount namespaces, copied by unshare and clone, pivot_root, a native child kept in its creator's, and openat2's resolve flags. N4, user namespaces, is next.
+Steam's user and mount namespaces first (docs/NAMESPACES.md, N1 to N6). N1 (2026-09-28): every mount's own flags enforced, MS_REMOUNT, and mountinfo. N2 (2026-09-30): binds of directories, files and sockets, MS_REC, MNT_DETACH of a subtree, and a superblock per filesystem. N3 (2026-09-30): mount namespaces, copied by unshare and clone, pivot_root, a native child kept in its creator's, and openat2's resolve flags. N4, user namespaces, is next. Network namespaces (docs/NETNS.md, landed 2026-10-01): a stack per namespace, a down loopback, veth pairs, devices that move with their ring, CAP_NET_ADMIN and CAP_NET_RAW over the owner.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -3380,7 +3380,7 @@ Ferrix on bare metal with an NVIDIA card driven by Ferrix itself: Path B of the 
 
 Steam on Ferrix, put on the roadmap by the customer on 2026-09-18 as the step after the GPU decision; a guest's stage first, on Path A's GPU, that does not wait for bare metal. What it stands on that nothing else staged: the 32-bit x86 ABI for the i386 client and 32-bit Wine, glibc's place taken by ferrousli under the Steam runtime, bubblewrap's needs over stage 13, a root on btrfs, XWayland, sound (virtio-snd, an audio core, a PulseAudio or PipeWire server), and Vulkan through Venus on a KVM host. Exit in three boots: the client logs in with its browser helper drawing; a native game installs, plays and sounds; a Windows game runs through Proton.
 
-Under way since 2026-09-26. Sound's playback is done (docs/AUDIO.md, 24 points): a ring-3 virtio-snd driver, the kernel's audio core and /dev/snd, verified by cargo xtask test-audio on x86-64 and AArch64; alsa-lib (U1, 3) and a sound server (U2, unsized) are left. The 32-bit x86 ABI is designed in docs/I386.md, I1 to I4 at 42 points, and I1 is met: a 32-bit program entered in compatibility mode, making its calls through int $0x80, on a GDT in Linux's order. I2 to I4 followed on 2026-09-27 (threads, signals, fork, and Alpine's and Debian's i386 busybox), with I5a: Valve's steamcmd logs in to Steam. Sound was finished the same day with alsa-lib and pulsed, a PulseAudio-protocol server. On 2026-09-29 the Steam client, unchanged, drew its sign-in window on hyprix through yserver (docs/STEAM.md, cargo xtask test-steam-window), with launch-side workarounds each owned by a fix: namespaces for pressure-vessel, the /proc gaps, and a SIGBUS that needs a 16 GiB guest. On 2026-09-30 the exit's first step was met: on the --everything desktop, its 64-bit side on ferrousli, the client signs in and shows its store, gated by cargo xtask test-steam-store with a test account. Its sandbox waits on stage 13, and its GPU process on user copies through a device window and a render group (docs/STEAM.md section 6). On 2026-10-01 the second step got its gate, cargo xtask test-steam-game, not passing yet: Teeworlds installs on request and downloads, and Steam then stalls staging it, for a reason not yet known (docs/STEAM.md section 7).
+Under way since 2026-09-26. Sound's playback is done (docs/AUDIO.md, 24 points): a ring-3 virtio-snd driver, the kernel's audio core and /dev/snd, verified by cargo xtask test-audio on x86-64 and AArch64; alsa-lib (U1, 3) and a sound server (U2, unsized) are left. The 32-bit x86 ABI is designed in docs/I386.md, I1 to I4 at 42 points, and I1 is met: a 32-bit program entered in compatibility mode, making its calls through int $0x80, on a GDT in Linux's order. I2 to I4 followed on 2026-09-27 (threads, signals, fork, and Alpine's and Debian's i386 busybox), with I5a: Valve's steamcmd logs in to Steam. Sound was finished the same day with alsa-lib and pulsed, a PulseAudio-protocol server. On 2026-09-29 the Steam client, unchanged, drew its sign-in window on hyprix through yserver (docs/STEAM.md, cargo xtask test-steam-window), with launch-side workarounds each owned by a fix: namespaces for pressure-vessel, the /proc gaps, and a SIGBUS that needs a 16 GiB guest. On 2026-09-30 the exit's first step was met: on the --everything desktop, its 64-bit side on ferrousli, the client signs in and shows its store, gated by cargo xtask test-steam-store with a test account. Its sandbox waits on stage 13, and its GPU process on user copies through a device window and a render group (docs/STEAM.md section 6).
 
 ### S20 — Stage 20 self hosting
 
@@ -3540,7 +3540,7 @@ Total cap `1600` lines; ratio backstop `0.06`, target `0.001`.
 
 ### The boot tests
 
-cargo xtask test-boot --arch \<a>: boot firmware, loader and kernel under QEMU and require FERRIX-BOOT-OK within the timeout. Every stage's exit criterion is a self-check in kmain and a line in this log. Under tcg by default, except an x86-64 guest on an x86-64 Linux host outside CI, which runs under kvm; kvm and --accel auto use the host's MMU and TLB, which is the only way a missing invalidation is reachable.
+cargo xtask test-boot --arch \<a>: boot firmware, loader and kernel under QEMU and require FERRIX-BOOT-OK within the timeout. Every stage's exit criterion is a self-check in kmain and a line in this log. Under tcg by default; --accel auto uses the host's MMU and TLB, which is the only way a missing invalidation is reachable.
 
 | Boot test | Architecture | Verifies |
 | --- | --- | --- |
@@ -3940,10 +3940,6 @@ flowchart LR
 | `L.object.101` | `theLargestIsChosen` | — | — | — |
 | `L.object.102` | `noLimitFullNoKill` | — | — | — |
 | `L.object.103` | `anEndedVictimIsEmptied` | — | — | — |
-| `L.object.113` | `barrierSkippedOnlyInsideOneDomain` | — | — | — |
-| `L.object.114` | `markedOnlyAtCreationUnderManage` | — | — | — |
-| `L.object.115` | `membershipByBirth` | — | — | — |
-| `L.object.116` | `leavingIsForGood` | — | — | — |
 | `L.sched.1` | `aDecisionWithinASlice` | — | — | — |
 | `L.sched.2` | `aLoneYieldAsksNothing` | — | — | — |
 | `L.iommu.1` | `unitsAreFoundOnce` | — | — | — |
@@ -4190,7 +4186,6 @@ flowchart LR
 | `L.x86_64.29` | `speculationControlsReadBack` | — | — | — |
 | `L.x86_64.30` | `indexClampedUnderSpeculation` | — | — | — |
 | `L.x86_64.31` | `switchBarrierIssued` | — | — | — |
-| `L.x86_64.126` | `refillKeptInsideADomain` | — | — | — |
 | `L.x86_64.32` | `speculationPlanFollowsCpuid` | — | — | — |
 | `L.x86_64.33` | `speculationExposureReported` | — | — | — |
 | `L.x86_64.34` | `lapicTimerCalibrated` | — | — | — |
@@ -4338,7 +4333,6 @@ flowchart LR
 | `L.aarch64.40` | `firmwareAnswersAreRead` | — | — | — |
 | `L.aarch64.41` | `theEntryLoopMatchesTheRecords` | — | — | — |
 | `L.aarch64.42` | `defencesAreAppliedAndReadBack` | — | — | — |
-| `L.aarch64.52` | `nothingInsideADomain` | — | — | — |
 | `L.aarch64.43` | `indicesAreClamped` | — | — | — |
 | `L.aarch64.44` | `trngWordsAreTakenInOrder` | — | — | — |
 | `L.aarch64.45` | `trngIsAskedOnlyWhereOffered` | — | — | — |
@@ -4385,7 +4379,6 @@ flowchart LR
 | `L.quiesce.5` | `theWaitHasAnEnd` | — | — | — |
 | `L.armv7a.1` | `theFilterIsAskedFirstAtTheSvc` | — | — | — |
 | `L.armv7a.2` | `aRolledBackFrameReadsAsAtTheCall` | — | — | — |
-| `L.armv7a.3` | `nothingInsideADomain` | — | — | — |
 | `L.smp.1` | `impossibleListsAreRefused` | — | — | — |
 | `L.smp.2` | `theBootProcessorIsZero` | — | — | — |
 | `L.smp.3` | `eachProcessorFindsItsOwnRecord` | — | — | — |
