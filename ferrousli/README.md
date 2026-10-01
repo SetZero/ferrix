@@ -70,10 +70,10 @@ this library does not have yet. Ferrix's `cargo xtask test-shell --init` and
 `test-vfs` are to run the installed binary, beside Alpine's musl build and the
 glibc one.
 
-busybox also calls functions from the three areas allowed to wait: pattern
-matching, a few math functions, and name resolution. Until each is written,
+busybox still calls functions from two areas allowed to wait: pattern
+matching and a few math functions. Until each is written,
 the library defines a stub that writes that the function is not implemented
-yet and aborts: 30 functions in `src/stubs.rs`. That list only shrinks, and
+yet and aborts: 11 functions in `src/stubs.rs`. That list only shrinks, and
 the busybox Ferrix is tested with must reach none of them.
 
 ## Headers
@@ -102,7 +102,7 @@ x86-64, static programs linked at a fixed address.
 | `unistd.h` | files, directories and links, `pipe` and `dup`, identities, `fork` on `clone`, `execve`, `execv`, `execvp`, `sleep`, `alarm`, `sysconf`, `isatty`, `syscall`; `chown` and its `l`, `f` and `at` forms, `utimes`, `gethostid` | `getcwd(NULL, 0)`, `set*id` across threads |
 | `fcntl.h`, `sys/stat.h`, `sys/mman.h` | every function, with glibc's `*64` and `__xstat` names | |
 | Mounts and file systems | `mount`, `umount`, `umount2`, `pivot_root`, `chroot`, `swapon`, `swapoff`, `sync`, `syncfs`, `readahead`; `statfs`, `statvfs` and their `f` forms, with glibc's `64` names; `mntent.h`'s `setmntent`, `getmntent`, `getmntent_r`, `endmntent` and `hasmntopt`, with octal escapes | `addmntent` |
-| Sockets and addresses | `socket`, `socketpair`, `bind`, `connect`, `listen`, `accept`, `accept4`, `getsockname`, `getpeername`, `getsockopt`, `setsockopt`, `shutdown`, `send`, `sendto`, `sendmsg`, `recv`, `recvfrom`, `recvmsg`; `inet_aton`, `inet_addr`, `inet_ntoa`, `inet_ntop`, `inet_pton`, the byte order functions, `if_nametoindex` | name resolution, `getifaddrs`, `if_nameindex` |
+| Sockets and addresses | `socket`, `socketpair`, `bind`, `connect`, `listen`, `accept`, `accept4`, `getsockname`, `getpeername`, `getsockopt`, `setsockopt`, `shutdown`, `send`, `sendto`, `sendmsg`, `recv`, `recvfrom`, `recvmsg`; `inet_aton`, `inet_addr`, `inet_ntoa`, `inet_ntop`, `inet_pton`, the byte order functions; `getaddrinfo`, `getnameinfo`, host and service lookups through `/etc` and DNS, the resolver and DNS packet interfaces; `getifaddrs`, `if_nameindex` and all interface-name conversions; the `ether_*` address and database functions | the networks and protocols databases |
 | System V IPC | shared memory, semaphores and message queues, every function | `ftok` |
 | Linux's own calls | `prctl`, `capget`, `capset`, `personality`, `setns`, `unshare`, `reboot`, `klogctl`, `inotify_init`, `inotify_init1`, `inotify_add_watch`, `inotify_rm_watch`, `sendfile`, `sysinfo`, `flock`; `sched_yield`, `sched_getaffinity`, `sched_setaffinity`, `CPU_COUNT` | `epoll`, `eventfd`, `signalfd`, `timerfd` |
 | `termios.h` | every function: attributes, the `cf*speed` calls, `cfmakeraw`, `tcdrain`, `tcflow`, `tcflush`, `tcsendbreak`, `tcgetsid`, and POSIX.1-2024's `tcgetwinsize` and `tcsetwinsize`; `unistd.h`'s `tcgetpgrp`, `tcsetpgrp`, `ttyname` and `ttyname_r` | `posix_openpt` and the rest of the pseudo-terminal calls |
