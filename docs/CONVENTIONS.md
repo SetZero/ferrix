@@ -177,6 +177,14 @@ id the model already defines, so an entry nobody released fails the
 landing that forgot it. Send the reservation to the certification
 consultant with the rest of the review when the ids are written.
 
+A `/// Verifies:` tag is read one line at a time: write one tag line per
+line of ids. A tag wrapped onto a second line ends in an empty id, and none
+of its ids count.
+
+The check that verifies the ids names them on one `/// Verifies:` line
+each: write one tag line per line of ids. A tag wrapped onto a second line
+ends in an empty id, and none of its ids count.
+
 ## Where a new file goes
 
 [LAYOUT.md](LAYOUT.md) says which directory each kind of thing belongs in:

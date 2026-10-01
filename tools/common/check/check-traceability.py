@@ -615,7 +615,12 @@ def scan_verifiers(source: str, rel: str, kind: str) -> tuple[list[Verifier], li
             continue
         bad = [i for i in ids if not ANY_ID.match(i)]
         if bad:
-            problems.append(f"{where}: not a requirement id: {', '.join(repr(b) for b in bad)}")
+            hint = (
+                " (a wrapped Verifies tag? write one `/// Verifies:` line per line of ids)"
+                if "" in bad
+                else ""
+            )
+            problems.append(f"{where}: not a requirement id: {', '.join(repr(b) for b in bad)}{hint}")
             continue
         attributes: list[str] = []
         cursor = index + 1
