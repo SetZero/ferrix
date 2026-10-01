@@ -313,3 +313,5 @@ on 2026-09-23.
 
 ---
 
+
+**stage13-cgctl, state at wind-down (2026-10-01, not landed):** origin branch `stage13-cgctl` (reclaim and memory.high, cgroup.freeze, cpu.max, io, with the consultant review fixes). Gated on 89c2f911a through fleet/gate.sh: check, boots x86_64 (kvm), aarch64, armv7a --smp 2, test-vfs on all three, test-shell, test-init --arch all and the release build all PASSED (INDEX tags cs-*); 7 of the 18 controls FIRED (panic) (cs-ctl-io-charge, -io-parent, -io-throttle, -io-root, -io-limit, -io-ended, -cpu-throttle) plus reclaim-hole by os-ctl-run (csm); the other 11 were stopped unrun at the wind-down and no consultant OK is recorded. Next: run the 11 controls, send the INDEX lines to the consultant, land.
