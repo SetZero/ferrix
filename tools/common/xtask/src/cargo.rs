@@ -54,10 +54,39 @@ pub(crate) fn mitigations_off() -> bool {
     MITIGATIONS_OFF.load(Ordering::Relaxed)
 }
 
+/// Whether this run's release kernels are built in the `iterate` profile.
+static ITERATE: AtomicBool = AtomicBool::new(false);
+
 /// Say how every kernel this run builds is to be built: `main` calls it once,
-/// with what `--mitigations` said.
-pub(crate) fn set_mitigations(setting: Mitigations) {
-    MITIGATIONS_OFF.store(setting == Mitigations::Off, Ordering::Relaxed);
+/// with what `--mitigations` said, and whether `--iterate` asked for a
+/// release kernel linked for working on it.
+///
+/// # Errors
+///
+/// `--iterate` without `--release`, which would change nothing.
+pub(crate) fn set_kernel_build(
+    mitigations: Mitigations,
+    iterate: bool,
+    release: bool,
+) -> Result<()> {
+    if iterate && !release {
+        return Err(Error::new(
+            "--iterate changes how a --release kernel is linked; give --release with it",
+        ));
+    }
+    MITIGATIONS_OFF.store(mitigations == Mitigations::Off, Ordering::Relaxed);
+    ITERATE.store(iterate, Ordering::Relaxed);
+    Ok(())
+}
+
+/// The cargo profile a kernel is built in, and so the directory cargo puts
+/// it in: `iterate` only for a release kernel with `--iterate`.
+fn kernel_profile(release: bool) -> &'static str {
+    match (release, ITERATE.load(Ordering::Relaxed)) {
+        (false, _) => "debug",
+        (true, false) => "release",
+        (true, true) => "iterate",
+    }
 }
 
 /// The `--config` that builds the kernel for `target` without its
@@ -83,16 +112,25 @@ pub(crate) fn mitigations_off_target_dir() -> PathBuf {
 }
 
 /// `cargo build -p ferrix-kernel` for `arch`, with the setting
-/// [`set_mitigations`] chose, and where the ELF it makes will be.
+/// [`set_kernel_build`] chose, and where the ELF it makes will be.
 fn kernel(arch: Arch, release: bool) -> Result<(Build, PathBuf)> {
     let target = arch.kernel_target();
-    let build = build("ferrix-kernel", target, release)?;
+    let profile = kernel_profile(release);
+    let build = if profile == "iterate" {
+        println!("  with --iterate: thin LTO, not the release kernel a gate builds");
+        build("ferrix-kernel", target, false)?.args(["--profile", "iterate"])
+    } else {
+        build("ferrix-kernel", target, release)?
+    };
     if !MITIGATIONS_OFF.load(Ordering::Relaxed) {
-        return Ok((build, output(target, release, "ferrix-kernel")));
+        let made = paths::target_dir()
+            .join(target)
+            .join(profile)
+            .join("ferrix-kernel");
+        return Ok((build, made));
     }
     println!("  with --mitigations off: no side-channel defences");
     let directory = mitigations_off_target_dir();
-    let profile = if release { "release" } else { "debug" };
     let made = directory.join(target).join(profile).join("ferrix-kernel");
     let build = build
         .args(["--config", &mitigations_off_config(target)])

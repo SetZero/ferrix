@@ -45,6 +45,10 @@ pub(crate) struct Args {
     pub(crate) arch: Option<String>,
     /// `--release`.
     pub(crate) release: bool,
+    /// `--iterate`, with `--release`: the kernel in cargo's `iterate`
+    /// profile, release with thin LTO, for working on it rather than gating
+    /// it (`docs/TEST-TIME.md`, C4).
+    pub(crate) iterate: bool,
     /// `--mitigations`: whether the kernel is built with its side-channel
     /// defences, which it is unless told `off`.
     pub(crate) mitigations: Mitigations,
@@ -437,6 +441,7 @@ impl Args {
     fn build(&mut self, flag: &str) {
         match flag {
             "--release" => self.release = true,
+            "--iterate" => self.iterate = true,
             _ => self.strip_kernel = true,
         }
     }
@@ -505,7 +510,7 @@ impl Args {
         while let Some(item) = items.next() {
             match item.as_str() {
                 "-h" | "--help" => args.help = true,
-                "--release" | "--strip-kernel" => args.build(&item),
+                "--release" | "--strip-kernel" | "--iterate" => args.build(&item),
                 "--mitigations" => args.mitigations(&mut items)?,
                 "--gdb" => args.gdb = true,
                 "--fast" => args.fast = true,
@@ -835,6 +840,13 @@ mod tests {
                 "a command needing one architecture must refuse several"
             );
         }
+    }
+
+    #[test]
+    fn iterate_is_a_flag_of_its_own_and_off_by_default() {
+        assert!(!parse(&["build", "--release"]).unwrap().iterate);
+        let args = parse(&["build", "--release", "--iterate"]).unwrap();
+        assert!(args.iterate && args.release);
     }
 
     #[test]

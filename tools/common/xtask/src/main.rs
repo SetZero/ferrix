@@ -297,6 +297,9 @@ COMMANDS:
 OPTIONS:
     --arch <x86_64|aarch64|armv7a|all>   Target architecture   [default: host]
     --release                            Build with optimisations
+    --iterate                            With --release: the kernel with thin LTO, relinked in
+                                         seconds; for working on it, never for a gate
+                                         (docs/TEST-TIME.md, C4)
     --strip-kernel                       Images carry the kernel without its debug information, as
                                          flash writes it; the loader reads the whole file into
                                          memory, so a small --memory needs it [default: off]
@@ -498,10 +501,9 @@ fn builds_execute(args: &Args) -> Result<()> {
 
 fn run() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1))?;
-    // Every kernel this run builds, whichever command builds it: set once,
-    // here, rather than threaded through each of them.
-    cargo::set_mitigations(args.mitigations);
-    // And every image it writes, for the same reason.
+    // Every kernel and image this run builds, whichever command builds it:
+    // set once, here, rather than threaded through each of them.
+    cargo::set_kernel_build(args.mitigations, args.iterate, args.release)?;
     fat::set_strip_kernel(args.strip_kernel);
 
     if args.help {
