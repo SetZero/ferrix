@@ -141,13 +141,20 @@ interpreter, `src/lib/kernel/seccomp`. S2 is the hook: the core's four
 system call entries ask a registered filter about every call first, before
 their own early answers (`arch_prctl`, `set_tls`, the signal returns) and
 before the native range is split, with the entry's own `arch` token and the
-instruction after the call, and apply its answer as the dispatcher's. It
-answers `Continue` for every call until S3; the `seccomp` boot line drives
-each entry with frames of its own to prove the filter is asked once, first,
-and as the entry's own (`docs/SECCOMP.md` §12). Booted on all three
-architectures at the first S2 commit; the later S2 commits and the
-negative controls were not run. S3, the filters themselves -- which meet
-this stage's exit clause -- is half written and does not build.
+instruction after the call. The filter can fail a call with an errno or let it
+go on and nothing else: its `Verdict` has no variant that carries an
+`Outcome`, and the core cuts an errno to 4095 (the consultant's review of the
+first form). It answers `Continue` for every program until S3; the `seccomp`
+boot line (FX-1302) drives each entry with frames of its own to prove the
+filter is asked once, first, and as the entry's own, and a second line reads
+the cost: 15 to 38 ns a call for the hook, and 26 to 60 ns for one interpreted
+filter instruction, so at most 0.8 to 2.0 ms for the longest chain
+(`docs/certification/MEMORY-AND-TIMING.md` §2.2b). Gated on the final tree:
+`cargo xtask check`, the three boots, `test-threads`, `test-init` and
+`test-shell` on all three architectures, and nine negative controls that each
+stopped the boot with the check's own message (`docs/SECCOMP.md` §12).
+ARMv7-A has its first requirements (`L.armv7a.1`, `L.armv7a.2`). S3, the
+filters themselves -- which meet this stage's exit clause -- follows.
 
 **Done -- N1, per-mount flags (2026-09-28, 5 points).** `ro`, `nosuid`,
 `nodev` and `noexec` are a mount's own and enforced -- `EROFS` for every
@@ -244,7 +251,7 @@ Linux):
 | `stage13-timens` | time namespace | agent had not reported |
 | `stage13-pidns` | pid namespaces | boots pass; **`test-vfs` fails on x86_64**: a kernel stack overflow on the `ioctl` path, cause not found (`Process` grew by about 48 bytes) |
 | `stage13-cgctl` | M2's reclaim and `memory.high`, `cgroup.freeze`, `cpu.max` with `cpu.stat`, the `io` controller (`io.stat`, `io.max`) | reclaim, freeze and cpu booted; the io check stopped at its last line (a quota-slot count, a fix written, not booted); no full boot, no `test-shell`/`test-vfs`, no negative control run |
-| `stage13-s2` | seccomp S2 to S5 | in progress |
+| `stage13-s3` | seccomp S3 to S5 | S3 built and booting, not gated; S4 and S5 not started |
 | `stage13-container` | `cargo xtask test-container`, the exit criterion as a program | written, never run |
 
 These branches were written against an earlier N4 and conflict with each other

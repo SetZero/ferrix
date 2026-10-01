@@ -1474,22 +1474,49 @@ Built ahead of S3, since none of it needs the kernel:
 nothing that filters yet. `trap::set_syscall_filter` and
 `trap::filter_system_call` are registered like `set_syscall_entry`;
 `SyscallArgs` gained `ip`, the instruction after the call (so the hook
-takes `&SyscallArgs` alone, where §3.3's sketch passed the pointer
+takes `&SyscallArgs` alone, where §3.3's first sketch passed the pointer
 beside it); each of the four entries -- x86-64 `SYSCALL` and `int $0x80`,
-AArch64 `svc`, ARMv7-A `svc` -- fills `ip` from its saved program counter
-and asks the filter first, before its early answers and before the native
-range is split, applying an `Answer` as it applies the dispatcher's. The
-x86-64 `SYSCALL` entry was split (`answer_here`, `enter_program`) to stay
-under the complexity floor and nothing else about it changed.
-`arch::audit_arch` gives each entry's token, `arch::syscall_rollback_value`
-the value a trapped call's return register is given (S4 uses it; until
-then one check reads it). The registered body, `syscall::seccomp::check`,
-answers `Continue` for every call of every program; only a test probe,
-which the boot check arms for its own task and disarms, can make it
-answer otherwise. The native range carries the token `0xC000_0F1F`
-(`e_machine` 0x0F1F, 64-bit and little-endian flags), which Linux never
-uses. `seccomp_data`'s number is the low 32 bits of the register while the
-dispatcher still uses the whole one.
+AArch64 `svc`, ARMv7-A `svc` -- fills `ip` from its saved program
+counter and asks the filter first, before its early answers and before the
+native range is split, applying the answer as the dispatcher's. The x86-64
+`SYSCALL` entry was split (`answer_here`, `enter_program`) to stay under
+the complexity floor and nothing else about it changed.
+
+**The consultant's review (2026-10-01) and what it changed.** The hook and
+its placement were accepted. The first form of the verdict, `Answer(Outcome)`,
+was refused: `Outcome::Enter` would have let one bug in the load turn a
+`getpid` into an `execve`'s jump (and on x86-64 into compat mode), and
+`Return(isize)` was unclamped. The built `Verdict` is `Continue` or
+`Errno(u32)` and has no variant that carries an `Outcome`; the core builds
+the answer in `trap::ask`, clamping the errno to 4095. The hook is
+entered and left with interrupts masked; a body that runs a chain opens them
+for the walk and closes them again (`MEMORY-AND-TIMING.md` §2.2b has the
+bound, 32,768 steps, and what a step costs measured in the guest: 27.2 ns
+on x86-64, 25.8 ns on AArch64, 60.2 ns on ARMv7-A, so at most 0.9, 0.8 and
+2.0 ms a call). ARMv7-A, which had no requirements, has
+`L.armv7a.1` and `L.armv7a.2` (`docs/sysml/21-armv7a-requirements.sysml`),
+and `L.trap.7`'s two claims that nothing exercised -- nothing registered is
+`Continue`, the first registration stands -- are checked on a slot of the
+check's own. The coverage anchor carried across the hook and dropped as
+unmeasured is `enter_compat_after_execve(entry, stack)` in
+`arch/x86_64/syscall.rs`, line 543 before this landing, which is now inside
+`enter_program`; the next `cargo xtask coverage` measures it.
+
+**Deviations from the design, accepted by the consultant and recorded.**
+* The hook is `fn(&SyscallArgs) -> Verdict` with `ip` a field of
+  `SyscallArgs`, not a second parameter, and `filter_system_call` answers
+  `Option<Outcome>`.
+* The boot check's probe, a test seam that shows what a filter was shown and
+  which a filter program cannot say, stays after S3, so a thread with no
+  filter pays the registration's load and the probe word's, where §3.3 prices
+  the first alone.
+* `NATIVE_ARCH` (`0xC000_0F1F`) carries the 64-bit flag on ARMv7-A too, where
+  no native register is 64 bits wide.
+* SR2 is stricter than Linux: a number with bits above the 32nd is dispatched
+  as no call, where Linux masks it and runs the low half. `docs/BACKLOG.md`
+  has the row.
+* `FX-1302` sits in `catalog::ALL` in code order, not in numeric order beside
+  `FX-1301`; the generated page sorts.
 
 Evidence: the `seccomp` boot line (FX-1302, `syscall/seccomp_check.rs`),
 which drives each entry of the architecture through
@@ -1502,29 +1529,29 @@ argument as the frame held them, and the filter's value to come back
 from the kernel's own table, so that an `int $0x80` call is i386's and a
 filter written for x86-64 alone does not judge it (SR1); a number with
 bits above the 32nd to be judged as its low half and dispatched as no call
-(SR2); and a native-range call to carry the native token, refused by a
+(SR2); a native-range call to carry the native token, refused by a
 filter that refuses every foreign `arch` and let through by one that
-allows that token by name (Q2, both ways). A second line reads what the
-hook costs a thread with no filter, against a dispatcher call and the
-whole entry, in the guest.
+allows that token by name (Q2, both ways); and the core to cut an errno
+to 4095 and to keep 512 an errno. A second line reads what the hook costs.
 
-Gates run, and not run. Booted on `s2/work` (`a1632b0e`, the first S2
-commit): x86-64 (11 calls), AArch64 (6) and ARMv7-A at `--smp 2` (7), each
-`FERRIX-BOOT-OK stages 1-12`. **Not run:** the measurement commit and the
-later ones (docs, requirements, coverage anchors) were never booted;
-`cargo xtask check`; `test-threads --arch all`; the negative controls,
-which were queued and cancelled when the customer asked to stop; the
-hook's per-call cost (the line exists, nobody has read it yet). The
-negative controls, to run before landing and quote in the commit: the
-hook moved below the early answers (x86-64: `answer_here` before the
-filter call, expecting "arch_prctl was answered before the filter";
-AArch64 and ARMv7-A likewise, "rt_sigreturn was answered before the
-filter" and "set_tls was answered before the filter"); the token from the
-image (`audit_arch`'s i386 arm answering x86-64's, "an int 0x80 call was
-filtered as x86-64"); the number cut to 32 bits by the entry ("a number
-with bits above the 32nd set was dispatched as a call"); the native token
-not applied ("a native call was not filtered under the native token").
-`docs/SECCOMP.md` §9's S2 row is met but for these runs.
+**Gates run on the final tree** (`stage13-s2`, side ref `os7s/s2`, nazuna):
+`cargo xtask check` exit 0; `test-boot` on x86-64, AArch64 and ARMv7-A at
+`--smp 2` each `FERRIX-BOOT-OK stages 1-12`; `test-threads --arch all` and
+`test-init --arch all` the same; `test-shell --arch all` as the landing
+message says. Negative controls, each a throwaway branch with one sabotage and
+a `NEGATIVE CONTROL` line in the boot log, each stopping the boot with the
+check's own message:
 
-**S3 is half written on `stage13-s3-wip`, which does not build**; see its
-commit message for what is there and what is not.
+| Control (sabotage) | Boot | Message |
+|---|---|---|
+| the SYSCALL entry skips the filter for `arch_prctl` | x86-64 | `arch_prctl was answered before the filter` |
+| the svc entry skips the filter for `rt_sigreturn` | AArch64 | `rt_sigreturn was answered before the filter` |
+| the svc entry skips the filter for `set_tls` | ARMv7-A | `set_tls was answered before the filter` |
+| `int $0x80` carries x86-64's token | x86-64 | `an int 0x80 call was filtered as x86-64` |
+| the SYSCALL entry cuts the number to 32 bits | x86-64 | `a number with bits above the 32nd set was dispatched as a call` |
+| native-range calls get no native token | x86-64 | `a native call was not filtered under the native token` |
+| the core does not clamp an errno | x86-64 | `the core let a filter's errno out of 0 to 4095 through` |
+| an empty slot answers every call | x86-64 | `a call was answered with no filter registered` |
+| a registration into a slot of the check's own registers nothing | x86-64 | `a later registration replaced the first, or the first was not asked` |
+
+S3 follows on `stage13-s3`.
