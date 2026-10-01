@@ -93,7 +93,8 @@ on Ferrix will read the same records.
 * `kind = "script"`: `bash build.sh <arch> <out>`, which installs into
   `<out>` the paths `from` names. For C ports, which source ferrousli's port
   toolkit (`src/user/system/linux/ferrousli/tools/ports/common.sh`) as a native app
-  links the runtime; it needs a Linux host. `check` runs `bash -n` over it.
+  links the runtime; it needs a Linux host's tools, which on Windows are
+  WSL's default distribution's. `check` runs `bash -n` over it.
 
 Each app builds into `target/apps/<name>/`, never the system's target
 directory. An app whose toolchain is missing, or that does not list an
@@ -101,7 +102,9 @@ architecture, is skipped with a line saying so, as a port is today.
 
 A script build is a download and minutes of C, which no image starts on its
 own, as no image starts a port: `run` and `run-compositor` take the package
-built last, and say how to build it when there is none. `cargo xtask
+built last, and say how to build it when there is none. Under
+`--everything`, which leaves nothing out, one with no package is built, and
+a build that fails stops the run. `cargo xtask
 build-apps` builds every app's package, or `--app`'s; `test-apps` builds
 what it boots. A cargo build is incremental, and every image makes it.
 
@@ -143,7 +146,7 @@ in xtask names an app.
 |---|---|
 | `cargo xtask apps` | lists it, and checks its manifest |
 | `cargo xtask check` | formatting (`bash -n` for a script); clippy on the host's lib target and the programs' targets; the host tests; rule 1 |
-| `cargo xtask run`, `run-compositor` | builds the `default` ones for the architecture and installs their packages into the image |
+| `cargo xtask run`, `run-compositor` | builds the `default` ones for the architecture and installs their packages into the image; under `--everything`, every app |
 | `cargo xtask build`, `test-boot` | installs only the ones `--app` names |
 | `cargo xtask build-apps` | builds its package, a script's too |
 | `cargo xtask test-apps` | one boot that runs every `[[smoke]]` line and wants each `expect` |

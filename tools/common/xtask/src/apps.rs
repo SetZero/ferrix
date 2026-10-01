@@ -167,8 +167,8 @@ fn every_app_named_is_one(apps: &[App], args: &Args) -> Result<()> {
 }
 
 /// The apps an image a person runs carries: the `default` ones and every
-/// `--app`, or none with `--no-apps`; with `defaults` false, only the
-/// `--app` ones.
+/// `--app`, or none with `--no-apps`; under `--everything`, every app; with
+/// `defaults` false, only the `--app` ones.
 fn selected(args: &Args, defaults: bool) -> Result<Vec<App>> {
     let apps = discover()?;
     every_app_named_is_one(&apps, args)?;
@@ -178,7 +178,8 @@ fn selected(args: &Args, defaults: bool) -> Result<Vec<App>> {
     Ok(apps
         .into_iter()
         .filter(|app| {
-            (defaults && app.recipe.default) || args.apps.iter().any(|name| name == app.name())
+            (defaults && (app.recipe.default || args.everything))
+                || args.apps.iter().any(|name| name == app.name())
         })
         .collect())
 }
@@ -204,9 +205,16 @@ pub(crate) fn named(arch: Arch, args: &Args) -> Result<Vec<ports::File>> {
 }
 
 fn install_selected(arch: Arch, args: &Args, defaults: bool) -> Result<Vec<ports::File>> {
+    // `--everything` is everything: a script app with no package is built,
+    // and a build that fails stops the run.
+    let fresh = if args.everything {
+        Fresh::UnlessBuilt
+    } else {
+        Fresh::UnlessScript
+    };
     let mut packages = Vec::new();
     for app in selected(args, defaults)? {
-        if let Some(path) = package(&app, arch, args.release, Fresh::UnlessScript)? {
+        if let Some(path) = package(&app, arch, args.release, fresh)? {
             packages.push(read(&path)?);
         }
     }
@@ -226,6 +234,9 @@ pub(crate) enum Fresh {
     /// of C that no image starts on its own, as no image starts a port: the
     /// last package built is taken, and its absence said.
     UnlessScript,
+    /// As [`Fresh::UnlessScript`], but a script app with no package yet is
+    /// built: `--everything`, which leaves nothing out.
+    UnlessBuilt,
 }
 
 /// Where `app`'s package for `arch` is written.
@@ -261,15 +272,17 @@ pub(crate) fn package(
         return Ok(None);
     }
     let out = package_path(app, arch);
-    if fresh == Fresh::UnlessScript && app.recipe.build == Build::Script {
+    if fresh != Fresh::Always && app.recipe.build == Build::Script {
         if out.is_file() {
             println!("  {name}: the package built last, {}", out.display());
             return Ok(Some(out));
         }
-        println!(
-            "  {name} is not built for {arch}: `cargo xtask build-apps --arch {arch} --app {name}`"
-        );
-        return Ok(None);
+        if fresh == Fresh::UnlessScript {
+            println!(
+                "  {name} is not built for {arch}: `cargo xtask build-apps --arch {arch} --app {name}`"
+            );
+            return Ok(None);
+        }
     }
     let Some(built) = build(app, arch, release)? else {
         return Ok(None);
@@ -384,20 +397,37 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
             out
         }
         (Build::Script, _) => {
-            if cfg!(windows) {
-                println!("  {name} is built by its build.sh, which needs a Linux host");
-                return Ok(None);
-            }
             let out = target_dir.join(arch.name()).join("out");
             fs::create_dir_all(&out)
                 .map_err(|error| Error::new(format!("{}: {error}", out.display())))?;
-            let mut command = Command::new("bash");
-            let _ = command
-                .current_dir(&app.dir)
-                .arg("build.sh")
-                .arg(arch.name())
-                .arg(&out);
-            cargo::run(command, &format!("{name}'s build.sh"))?;
+            if cfg!(windows) {
+                // In WSL, as ferrousli's shared library is built, writing
+                // into this checkout's target directory through `/mnt`.
+                crate::wsl::require_toolchain(&format!(
+                    "{name} is built by its build.sh with a Linux host's tools"
+                ))?;
+                let status = crate::wsl::bash(
+                    &app.dir,
+                    "exec bash build.sh \"$1\" \"$(wslpath -u \"$2\")\"",
+                    &[arch.name(), &out.to_string_lossy()],
+                )
+                .stdin(std::process::Stdio::null())
+                .status()
+                .map_err(|error| Error::new(format!("could not run wsl.exe: {error}")))?;
+                if !status.success() {
+                    return Err(Error::new(format!(
+                        "{name}'s build.sh {arch} in WSL: {status}"
+                    )));
+                }
+            } else {
+                let mut command = Command::new("bash");
+                let _ = command
+                    .current_dir(&app.dir)
+                    .arg("build.sh")
+                    .arg(arch.name())
+                    .arg(&out);
+                cargo::run(command, &format!("{name}'s build.sh"))?;
+            }
             out
         }
     };
@@ -727,6 +757,20 @@ mod tests {
         for app in super::discover().expect("every app's manifest reads") {
             super::stays_in_its_folder(&app).expect("nothing outside the folder names it");
         }
+    }
+
+    #[test]
+    fn everything_selects_every_app() {
+        let every = super::discover().expect("every app's manifest reads").len();
+        let mut args = crate::args::Args::default();
+        let defaults = super::selected(&args, true).expect("the defaults").len();
+        assert!(defaults < every, "an opt-in app to leave out");
+        args.everything = true;
+        assert_eq!(
+            super::selected(&args, true).expect("every app").len(),
+            every
+        );
+        assert!(super::selected(&args, false).expect("none").is_empty());
     }
 
     #[test]
