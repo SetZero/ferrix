@@ -502,3 +502,174 @@ nothing about steps 3 and 10. Use the Pixel 7 under KVM or the DK1.
 **Still owed to the trace.** `bench-seam`'s Linux side prints a mean only,
 not p50/p99 per read; the ftrace segments on Linux and the host-side
 count of VM exits (`trace-cmd` on nazuna) are not written.
+
+## 9. The channel round trip, and speculation domains (2026-10-01, os-c7)
+
+**For the certification consultant's design review. No code for the domain
+exists yet.** The customer's decision is in `docs/BACKLOG.md`, Decisions,
+2026-10-01 (2c0e37214).
+
+### 9.1 Where the round trip stands
+
+`cargo xtask bench-ipc` boots a native client and a native echo server
+(`/sbin/ipc-bench`) and times 20,000 round trips of eight bytes. That is the
+figure an IPC design is quoted by, and it has no device in it.
+
+The reference points:
+- Zircon's own report gives about 6 us for a cross-process `channel_call`
+  on bare metal (`zircon/docs/benchmarks/microbenchmarks.md`, 2018).
+- The SkyBridge and UnderBridge papers measured Zircon at 8,000 to 20,000
+  cycles.
+- seL4's direct-switch fast path is the one design under a microsecond.
+
+Branch `os-ipc/zircon-trip`, x86-64 under KVM on nazuna, one processor, p50:
+
+| | mitigations on | off |
+|---|---|---|
+| `origin/main`: write, wait and read on each side | 37 us | |
+| branch, the same calls | 12 us | 5.1 us |
+| branch, `channel_write_read` (0x1013) | 6.5 us | 2.6 us |
+
+§9.4 lists what the branch changes. The gap between the two columns is the
+switch barrier: `IBPB` and the return-stack refill at the two switches between
+programs that a round trip makes, about 2 us each on this processor. No round
+trip under a microsecond is possible while every switch between two programs
+pays it. The decision changes that.
+
+### 9.2 The speculation domain
+
+**What a domain is.** A job created marked. The domain's identity is a
+non-zero `u64` taken from a counter when the job is made, and it is never
+reused; zero means "no domain". An unmarked job, the default, is no domain.
+Neither is any job inside a marked one, because a child job is made unmarked.
+
+**Marking.** `job_create` gains an options argument in its second register,
+which today's callers already pass as zero.
+- `JOB_SPECULATION_DOMAIN` asks for the mark, and any other bit is
+  `INVALID_ARGS`.
+- The call already needs MANAGE on the parent, so the mark needs nothing more.
+- A job is marked only as it is made, when it has no process. Nothing else
+  sets or clears the mark.
+- The kernel writes an audit record of the marking, with the parent's and the
+  child's ids. It is a new event, `DOMAIN`, in `docs/certification/AUDIT.md`
+  §1.
+
+**Membership is stricter than "in the job".** A process is in a domain only
+if it was made in the marked job and has never left it.
+- It was made by `process_create` into the job, or by a fork of such a
+  process, whose child starts in its parent's job.
+- `Process` keeps the domain it was born with.
+- Any move between jobs sets that domain to zero for good, whichever job it
+  moves to. A move is `Process::move_to`: a `cgroup.procs` write,
+  `CLONE_INTO_CGROUP`, or a delegation.
+- A process moved *into* a marked job does not join the domain.
+
+So nothing joins a domain except by being started in it by a holder of the
+job's MANAGE right, and nothing that leaves keeps it. The integrator who marks
+a job decides what may be started in it. That is what the assumption of use
+means by "places in one domain only programs that may read each other's
+memory". MANAGE on a marked job is that authority, so handing it to another
+program hands that authority over too, and the AoU says so.
+
+**Where the switch reads it.** On the `AddressSpace`, which is what the barrier
+is keyed on today (`speculation::entered_space(root)`). The space gets a
+`domain: AtomicU64`, set from its process's domain when the space is made for
+that process. It is set to zero for good in two cases:
+- a process of another domain, or one that left its domain, comes to share
+  the space (`CLONE_VM` without `CLONE_THREAD`);
+- the owning process leaves its domain.
+
+Threads share their process's space, so they share its domain.
+
+**The decision is one rule on every architecture.** `entered_space` already
+runs on all three, called from each architecture's `install_user_root`.
+- Each processor keeps `LAST_DOMAIN` beside `LAST_ROOT`.
+- The outgoing space's domain is read *as it leaves*, not as it came: by
+  `AddressSpace::install` from the space it replaces, and by
+  `AddressSpace::uninstall` on the way to a kernel thread. A process that left
+  its domain while it ran is no longer in it at the switch that ends its turn.
+- The barrier is skipped exactly when the root differs and
+  `LAST_DOMAIN == domain != 0`. Otherwise it is issued as now.
+- `forget_root` also clears `LAST_DOMAIN` wherever it clears a root, so a
+  reused root never inherits a domain.
+
+The compare is two loads and a branch, at the place the barrier is decided.
+Arm's predictor invalidation (`entered_space` on AArch64 and ARMv7-A) follows
+the same rule.
+
+### 9.3 Requirements, checks and controls
+
+Proposed rows, numbered when they land:
+- **H.spec (new):** a switch between the address spaces of two programs not
+  in one speculation domain issues the predictor barrier. A switch between two
+  address spaces of one domain does not.
+- **L.spec, each architecture:** `entered_space` skips the barrier only when
+  the root differs, and the outgoing and incoming domains are the same and
+  non-zero, the outgoing one read as it leaves.
+- **L.object:** `job_create` marks a job only with `JOB_SPECULATION_DOMAIN` and
+  only under the parent's MANAGE. It refuses any other option bit and writes
+  the `DOMAIN` audit record. A child of a marked job is unmarked.
+- **L.object:** a process is in a domain only if it was made in the marked job
+  and never moved. A move sets its domain, and its space's, to zero.
+
+The check runs in stage 9, on every architecture, at two processors or more.
+It counts `switch_barriers_on` around pinned switches:
+1. Two processes of one marked job handed one processor back and forth: no new
+   barrier.
+2. One of them switched with a process of an unmarked job, and with a process
+   of another marked job: one barrier each way.
+3. A process moved out of the marked job, switched with one left in it: one
+   barrier each way.
+4. `job_create` with the option but without MANAGE on the parent, and with an
+   unknown option bit: refused, nothing marked, no audit record.
+
+Each negative control must be shown firing and stopping the boot on the
+check's own message:
+- the domain compare answering always true, which fails case 2;
+- the MANAGE test removed, which fails case 4;
+- the move not clearing the domain, which fails case 3.
+
+### 9.4 The rest of the branch, for its own review
+
+These are reviewed separately, once rebased and gated, as the consultant asked.
+
+1. **The timer** (`timer.rs`). A one-shot already armed no later than the
+   deadline asked for is not rewritten, and `stop` leaves a one-shot to fire.
+   The LAPIC's registers are emulated, so each write is an exit, about 7 us on
+   nazuna.
+2. **Wakes inside a call.** `trap::system_call` marks the task as inside a
+   call. A wake the call makes then leaves its decision to the call's way out
+   (`sched::call_left`) rather than to a 20 us timer.
+3. **The wake and the wait.** os-35's `Wake::Sync` is used for channel writes,
+   and defers the decision to the waker's block. The wait queue keeps its
+   buffer, and `wait_trusting` is new.
+   - Why `wait_trusting` needs no recheck: every condition its one caller
+     waits for, a message or the peer's close, wakes the queue in the same
+     lock order as `wait_until_deadline`'s wakers do. A signal or a kill wakes
+     the task itself (`syscall::process`, `sched::wake` then
+     `sched::interrupt`). A task there was no memory to list rechecks, as F-23
+     has it.
+   - Its check, owed: a waiter woken by each of the three. The control makes
+     the channel's close not wake the queue, which must leave the waiter
+     blocked past a bound the check states.
+4. **The new call.** `channel_write_read` (0x1013), with
+   `trap::Outcome::ReturnWords`.
+   - The words handed back are the message's bytes, then zeros. They come from
+     an inbox slot, or from a queued message copied into a zeroed array
+     (`Small::of`). A call that fails answers `Outcome::Return`, which leaves
+     the argument registers as the caller set them. So no kernel value reaches
+     the registers.
+   - Its check, owed: a message shorter than three words comes back with the
+     rest zero, and a failing call's registers come back as sent. The control
+     fills the slot's tail with a pattern, which the check must catch.
+5. **Segment state.** x86-64's switch skips segment, descriptor and base
+   writes that equal what the same switch's save read. It made no measurable
+   difference, and is a candidate to drop.
+6. **The clock.** `now_nanos` uses two exact 64-bit divisions in place of one
+   128-bit division.
+
+After the domain, the round trip is 2.6 us. What is left before it is under a
+microsecond:
+- PCIDs, so a switch does not flush the user half;
+- a direct switch from caller to callee;
+- the system call's own path, at 464 ns for a native call that does not sleep.
