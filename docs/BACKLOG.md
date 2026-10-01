@@ -1139,3 +1139,73 @@ bf9efba95. Each branch below is local on the Windows checkout and on GitHub.
   that print a round trip's spans. They must never land.
 - `os-ipc/spec-domain` (bf9efba95) is on `main`, and `os-ipc/winddown` is
   this record. Both can be deleted.
+
+A Windows-checkout wind-down on 2026-10-01, before switching to another PC:
+every local branch and worktree was checked for content worth keeping and
+for whether it was already on GitHub. 91 branches had no upstream
+configured; 23 of them had no commit `main` lacks (already landed, safe to
+delete) and the other 68 did. All 68 are now pushed: 48 as brand new
+branches, 19 that turned out to already match a branch GitHub had under the
+same name (another session's concurrent work), and `guest-frame-time`,
+below, which could not be pushed as a plain fast-forward. Ten worktrees also
+held uncommitted changes; seven were real, finished-looking work and are
+listed below, and three needed a human call, also below.
+- `guest-frame-time`: diverged from its own name on GitHub. Origin carries
+  six newer `WIP` commits on terminal and scroll rendering
+  (`c1534cfaa`..`3f382700b`); this checkout has one unreviewed commit,
+  `d33a86602`, a guest-compositor frame-cost fix (musl's `f32::round` and
+  `memcmp` costing 30-40x glibc's in a guest). The two overlap in
+  `compositor/render/exact.rs` and `compositor/term/*`, so neither a
+  force-push nor a blind merge is safe. Left: whoever owns the current WIP
+  decides which stands and reconciles the files that overlap; `d33a86602`
+  is still only on this machine.
+- `clipboard-vdagent`: also diverged under its own name — origin had landed
+  a `user/vport`-based clipboard agent (`c7d7b93fe`, from the 2026-09-27
+  wind-down) while this checkout independently built a `compositor/vdagent`
+  crate for the same feature. Rather than merge two different
+  implementations of one feature, the `vdagent` attempt is kept as
+  `wip/clipboard-vdagent-compositor-approach` (pushed), and the
+  `clipboard-vdagent` branch itself now matches origin. Left: decide which
+  approach to keep, or whether `vport` already covers what `vdagent` did.
+- `stage13-timens` (worktree `timens`): most of stage 13's time namespaces
+  staged (30 files, `fs/timens_check.rs`, `syscall/timens.rs`, vdso, futex,
+  timerfd and procfs integration), blocked on an unresolved merge conflict
+  in `src/kernel/src/panic/catalog.rs` — both sides add an adjacent catalog
+  entry, FX-0907 and FX-0910. Left: take both entries, then regenerate
+  `docs/generated/PANICS.md` and the two certification coverage JSONs that
+  depend on it, before this can be committed.
+- A detached-HEAD worktree (`display-show`, at `d9c5658ed`) has one
+  uncommitted line: `compositor/blank/src/modeset.rs`'s `BACKGROUND`
+  changed from a dark slate to pure blue, while the adjacent comment still
+  reads "a dark slate, so a screen that is merely black is not mistaken for
+  success." Reads as a leftover debug probe, not an intended change. Left:
+  confirm and discard, or finish it and fix the comment.
+
+Seven pieces of real, uncommitted work were found and committed today, each
+pushed rather than left only on this disk:
+- `wip/windows-home-edid-remote-fix` (`019632ddb`): xtask's `HOME` lookup
+  falls back to `USERPROFILE` on Windows; a monitor's EDID is saved under
+  `~/.local/share/ferrix/edid/` and read back on a machine that never had
+  it plugged in; `remote-desktop`'s teardown no longer stops a newer run's
+  boot.
+- `codex/posix-stdlib` (`f52a68966`): `quick_exit`, `at_quick_exit`,
+  `secure_getenv`, `a64l`/`l64a`, `getsubopt`, and `crypt`'s traditional and
+  BSDi DES.
+- `display-design` (`fdd665dad`): `docs/DISPLAY.md`, Draft 1 of the stage-17
+  ring-3 virtio-gpu driver, for the product owner and kernel review.
+- `ferrousli-netcore` (`a3b2152e9`): the resolver's DNS, lookup and `inet`
+  rework that `ferrousli-netdb` (above, this file's os-35/os-86 style
+  entries notwithstanding) builds on.
+- `init/l4` (`1f5f72870`): `libs/svc` gets a `manager/` subsystem — a
+  dependency graph (`Kind::implied`), lifecycle and a restart policy — the
+  init program's L4 step.
+- `os5d/gate-rows` was pushed and has since landed on `main` as `7afed6fdc`
+  by another session.
+
+No other file duplicates this section's purpose: `docs/roadmap/status.md`
+and `docs/roadmap/where-it-stands.md` track stage progress and finished
+work, not which branches are still open, and every other mention of
+"unlanded branch" found while looking (`docs/AUTH.md`, `docs/CONVENTIONS.md`,
+`docs/OPAQUE-KERNEL.md`, `docs/POSIX-2024.md`) is a single reference to a
+specific branch, not a second tracking list. This section stays the one
+place branch state is recorded.
