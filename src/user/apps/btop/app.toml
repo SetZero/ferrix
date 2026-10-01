@@ -14,6 +14,20 @@ from = "btop"
 to = "bin/btop"
 mode = "755"
 
+# Its entry in a launcher and its icon, kept in this folder: fuzzel lists
+# every `.desktop` file in `usr/share/applications`.
+[[package.files]]
+from = "share/btop.desktop"
+source = "folder"
+to = "usr/share/applications/btop.desktop"
+mode = "644"
+
+[[package.files]]
+from = "share/btop.svg"
+source = "folder"
+to = "usr/share/icons/hicolor/scalable/apps/btop.svg"
+mode = "644"
+
 [build]
 kind = "script"
 

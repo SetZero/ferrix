@@ -17,7 +17,7 @@ use std::process::Command;
 pub(crate) use new::new_app;
 
 use ferrix_cpio::{Archive, FileType};
-use ferrix_pkg::manifest::{self, Abi, Build, FileSpec, Recipe};
+use ferrix_pkg::manifest::{self, Abi, Build, FileSpec, Recipe, Source};
 use ferrix_pkg::plan::plan;
 use ferrix_pkg::record::{self, Installed, Record};
 
@@ -378,7 +378,7 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
             if release {
                 build = build.args(["--release"]);
             }
-            for spec in &app.recipe.files {
+            for spec in built_by_it(app) {
                 build = build.output(out.join(&spec.from));
             }
             println!("  building {name} for {target}");
@@ -404,7 +404,7 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
             // its own: the musl targets carry their C runtime, so rust-lld
             // is the whole toolchain on any host.
             .env(&linker_variable(target), "rust-lld");
-            for spec in &app.recipe.files {
+            for spec in built_by_it(app) {
                 build = build.output(out.join(&spec.from));
             }
             println!("  building {name} for {target}");
@@ -448,7 +448,10 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
     };
     let mut files = Vec::new();
     for spec in &app.recipe.files {
-        let bytes = read(&out.join(&spec.from))?;
+        let bytes = match spec.source {
+            Source::Build => read(&out.join(&spec.from))?,
+            Source::Folder => read(&app.dir.join(&spec.from))?,
+        };
         if app.recipe.package.abi == Abi::Native && bytes.starts_with(b"\x7fELF") {
             native::verify(arch, &bytes).map_err(|why| {
                 Error::new(format!(
@@ -460,6 +463,15 @@ fn build(app: &App, arch: Arch, release: bool) -> Result<Option<Built>> {
         files.push((spec.clone(), bytes));
     }
     Ok(Some(files))
+}
+
+/// The files of `app`'s manifest its build makes: not the ones kept in its
+/// folder.
+fn built_by_it(app: &App) -> impl Iterator<Item = &FileSpec> {
+    app.recipe
+        .files
+        .iter()
+        .filter(|spec| spec.source == Source::Build)
 }
 
 /// Install `packages` into a root: what an image carries, as `ports` files.
@@ -772,6 +784,48 @@ mod tests {
         for app in super::discover().expect("every app's manifest reads") {
             super::stays_in_its_folder(&app).expect("nothing outside the folder names it");
         }
+    }
+
+    #[test]
+    fn every_launcher_entry_starts_what_its_package_installs() {
+        let mut entries = 0;
+        for app in super::discover().expect("every app's manifest reads") {
+            for spec in app
+                .recipe
+                .files
+                .iter()
+                .filter(|spec| spec.to.starts_with("usr/share/applications/"))
+            {
+                entries += 1;
+                entry_is_its_package(&app, &spec.from);
+            }
+        }
+        assert!(entries > 0, "an app ships an entry");
+    }
+
+    /// Every program the entry at `from` names is `app`'s, or the shell
+    /// that holds a terminal open, and its icon is one `app` carries.
+    fn entry_is_its_package(app: &App, from: &str) {
+        let installs = |path: &str| app.recipe.files.iter().any(|spec| spec.to == path);
+        let text =
+            std::fs::read_to_string(app.dir.join(from)).expect("an entry its manifest names");
+        let key = |name: &str| {
+            text.lines()
+                .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+                .unwrap_or_else(|| panic!("{from}: no {name}"))
+        };
+        for program in key("Exec")
+            .split([' ', '"', ';'])
+            .filter_map(|word| word.strip_prefix('/'))
+        {
+            assert!(
+                installs(program) || program == "bin/zinc",
+                "{from}: {program} is not installed by {}",
+                app.recipe.package.name
+            );
+        }
+        let icon = format!("usr/share/icons/hicolor/scalable/apps/{}.svg", key("Icon"));
+        assert!(installs(&icon), "{from}: no {icon}");
     }
 
     #[test]

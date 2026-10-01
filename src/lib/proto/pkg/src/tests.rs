@@ -8,7 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
-use crate::manifest::{self, Abi, Build, Dependency, Version};
+use crate::manifest::{self, Abi, Build, Dependency, Source, Version};
 use crate::plan::plan;
 use crate::record::{self, Installed, Record};
 use crate::toml::{self, Value};
@@ -31,6 +31,7 @@ mode = "755"
 
 [[package.files]]
 from = "share/ferrofetch.txt"
+source = "folder"
 to = "usr/share/ferrofetch/note.txt"
 mode = "644"
 
@@ -71,6 +72,8 @@ fn a_manifest_with_every_table_reads() {
     assert_eq!(recipe.files[0].to, "bin/ferrofetch");
     assert_eq!(recipe.files[0].mode, 0o755);
     assert_eq!(recipe.files[1].mode, 0o644);
+    assert_eq!(recipe.files[0].source, Source::Build, "the default");
+    assert_eq!(recipe.files[1].source, Source::Folder);
     assert_eq!(recipe.build, Build::Cargo);
     assert!(!recipe.default);
     assert!(recipe.host_tests);
@@ -173,11 +176,31 @@ fn a_manifest_needs_a_package_and_a_file() {
                 && !line.starts_with("from")
                 && !line.starts_with("to =")
                 && !line.starts_with("mode")
+                && !line.starts_with("source")
         })
         .map(|line| format!("{line}\n"))
         .collect();
     let error = manifest::recipe(&no_files).expect_err("no files");
     assert!(error.0.contains("at least one file"), "{error}");
+}
+
+#[test]
+fn a_file_of_the_folder_stays_in_it() {
+    let folder = APP.replace(
+        "from = \"share/ferrofetch.txt\"",
+        "from = \"../statd/secret\"",
+    );
+    assert_ne!(folder, APP, "the line replaced");
+    let error = manifest::recipe(&folder).expect_err("a path out of the folder");
+    assert!(
+        error.0.contains("not a path in the app's folder"),
+        "{error}"
+    );
+
+    let elsewhere = APP.replace("source = \"folder\"", "source = \"network\"");
+    assert_ne!(elsewhere, APP, "the line replaced");
+    let error = manifest::recipe(&elsewhere).expect_err("an unknown source");
+    assert!(error.0.contains("not `build` or `folder`"), "{error}");
 }
 
 #[test]

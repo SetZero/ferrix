@@ -15,6 +15,14 @@ from = "badapple"
 to = "bin/badapple"
 mode = "755"
 
+# Its icon. Its launcher entry is not here: it names the video, which is
+# fetched, so xtask writes it beside the video when it carries that.
+[[package.files]]
+from = "share/badapple.svg"
+source = "folder"
+to = "usr/share/icons/hicolor/scalable/apps/badapple.svg"
+mode = "644"
+
 [build]
 kind = "cargo"
 

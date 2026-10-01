@@ -647,7 +647,9 @@ pub(crate) fn on_the_desktop(
     ))
 }
 
-/// The launcher's entry (the Desktop Entry specification).
+/// The launcher's entry (the Desktop Entry specification). Written here,
+/// not kept in the app's folder as other apps' entries are, because it
+/// names the video, which only this carries; the icon is the app's.
 fn desktop_entry() -> String {
     format!(
         "[Desktop Entry]\n\
@@ -655,6 +657,7 @@ fn desktop_entry() -> String {
          Name=Bad Apple!!\n\
          Comment=The shadow-art video, with its song\n\
          Exec=/{GUEST_PLAYER} /{GUEST_VIDEO} /{GUEST_SONG}\n\
+         Icon=badapple\n\
          Terminal=false\n\
          Categories=AudioVideo;Video;Player;\n\
          Keywords=touhou;video;music;\n"

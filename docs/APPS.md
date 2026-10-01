@@ -58,6 +58,12 @@ from = "example"                # a cargo binary, or a path in a script's output
 to = "bin/example"              # where it goes, from the root
 mode = "755"
 
+[[package.files]]
+from = "share/example.desktop"  # with `source = "folder"`: kept in the folder
+source = "folder"               # build (the default) | folder
+to = "usr/share/applications/example.desktop"
+mode = "644"
+
 [build]
 kind = "cargo"                  # cargo | script
 
@@ -268,28 +274,30 @@ installs every app, the desktop takes the package's player and
 is the soft-float build, which `test-badapple` does not boot. Gated by
 `check`, `test-apps` and `test-badapple` on all three architectures.
 
+Later that day: launcher entries. `[[package.files]]` takes `source =
+"folder"` for a file kept in the app's folder rather than made by its
+build, and btop and ferrofetch ship a `.desktop` entry and an icon in
+`share/` -- btop with `Terminal=true`, ferrofetch run by zinc with a `read`
+that holds the terminal open. fuzzel reads `usr/share/applications`
+itself, so `fuzzel.rs` is unchanged, and its boot's `fuzzel: 3 entries`
+stays, the test boot carrying no apps. badapple ships its icon; its entry
+stays in `badapple.rs`, written beside the fetched video, since it names
+the video. A host test holds every entry to the package: each program its
+`Exec` names is one the package installs (or zinc), and its `Icon` is one
+the package carries. With 211bc0e5 (every app under `--everything`, a
+script app built through WSL on Windows), the customer's "`--everything`
+IS EVERYTHING" holds for apps.
+
 What is left, in order, for the next session:
 
-1. **Launcher entries**, claimed from os-ff's list of what the
-   `--everything` desktop's launcher lacks. Each app ships
-   `usr/share/applications/<name>.desktop`, and an icon under
-   `usr/share/icons/hicolor/scalable/apps/`, as `[[package.files]]` in its
-   own folder: btop with `Terminal=true`, ferrofetch with a hold. fuzzel
-   reads that directory itself, so `xtask/src/fuzzel.rs` needs no change,
-   and the fuzzel boot's `fuzzel: 3 entries` stays, since the test boot
-   carries no apps. The other half, the customer's rule "`--everything` IS
-   EVERYTHING", landed as 211bc0e5: every app, a script app built through
-   WSL on Windows. badapple's `.desktop` file, which `badapple.rs`'s
-   `on_the_desktop` still writes, moves into the package then; it keeps the
-   video, the song and `SUPER M`.
-2. **The other ports**: curl, git, foot, vkgears, alsa-lib and alsa-utils,
+1. **The other ports**: curl, git, foot, vkgears, alsa-lib and alsa-utils,
    and sshdt. Each is named by a system test (`test-net`'s TLS files,
    `test-compositor`'s foot and vkgears, `test-audio`'s ALSA, `test-ssh`'s
    sshdt), so those tests ask for the app by name, as they asked for the
    port. Libraries only built against -- zlib, libcxx -- stay ports; the
    `depends` a port has at install time (alsa-utils on alsa-lib's
    configuration, git on curl's certificates) go into `app.toml`.
-3. **The package manager** (§7), on `ferrix-pkg`: `pkg list`, `info`,
+2. **The package manager** (§7), on `ferrix-pkg`: `pkg list`, `info`,
    `install` of a local `.fxpkg` and `remove`, first-party, and a
    `test-pkg` boot that installs, runs and removes an app.
 

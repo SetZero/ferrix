@@ -183,15 +183,29 @@ pub struct Package {
     pub depends: Vec<Dependency>,
 }
 
-/// One of `[[package.files]]`: a file the build makes, and where it goes.
+/// One of `[[package.files]]`: a file the build makes, or one kept in the
+/// app's folder, and where it goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileSpec {
-    /// A cargo binary's name, or a path in a script's output.
+    /// A cargo binary's name, or a path in a script's output; with
+    /// [`Source::Folder`], a path in the app's folder.
     pub from: String,
+    /// Where `from` is.
+    pub source: Source,
     /// Its path from the root, with no leading `/`.
     pub to: String,
     /// Its permission bits.
     pub mode: u32,
+}
+
+/// Where a file of `[[package.files]]` comes from: `source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// What the build made: the default.
+    Build,
+    /// `source = "folder"`: kept in the app's folder, as written -- a
+    /// launcher's `.desktop` file, an icon.
+    Folder,
 }
 
 /// How the tree builds a package.
@@ -361,15 +375,32 @@ pub(crate) fn read_package(table: &Table) -> Result<Package, Error> {
 
 /// One of `[[package.files]]`.
 fn read_file(table: &Table) -> Result<FileSpec, Error> {
-    known_keys(table, &["from", "to", "mode"])?;
+    known_keys(table, &["from", "source", "to", "mode"])?;
     let to = string(table, "to")?;
     if !is_safe_path(&to) {
         return refuse(format!(
             "[[package.files]] to: `{to}` is not a path from the root without `.`, `..` or a leading `/`"
         ));
     }
+    let from = string(table, "from")?;
+    let source = match optional_string(table, "source")?.as_deref() {
+        None | Some("build") => Source::Build,
+        Some("folder") => Source::Folder,
+        Some(other) => {
+            return refuse(format!(
+                "[[package.files]] source: `{other}` is not `build` or `folder`"
+            ));
+        }
+    };
+    // A file of the folder is the folder's: never one beside it.
+    if source == Source::Folder && !is_safe_path(&from) {
+        return refuse(format!(
+            "[[package.files]] from: `{from}` is not a path in the app's folder without `.`, `..` or a leading `/`"
+        ));
+    }
     Ok(FileSpec {
-        from: string(table, "from")?,
+        from,
+        source,
         to,
         mode: mode(&string(table, "mode")?)?,
     })

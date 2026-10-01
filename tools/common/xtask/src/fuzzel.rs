@@ -10,6 +10,9 @@
 //! `hicolor` theme, so the icon lookup and the large picture of the selected
 //! entry have something to find. The files are in
 //! `src/user/system/linux/compositor/fuzzel/data/`, where fuzzel's host test reads the same ones.
+//! These are the system's entries; an app ships its own in its package
+//! (`docs/APPS.md`), so the `--everything` desktop lists btop and
+//! ferrofetch beside them.
 //!
 //! `top` is `Terminal=true` on purpose. fuzzel starts such an entry through
 //! `terminal=`, and the user's `fuzzel.ini` says `terminal=foot`, which is not

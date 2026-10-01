@@ -13,6 +13,20 @@ from = "ferrofetch"
 to = "bin/ferrofetch"
 mode = "755"
 
+# Its entry in a launcher and its icon, kept in this folder: fuzzel lists
+# every `.desktop` file in `usr/share/applications`.
+[[package.files]]
+from = "share/ferrofetch.desktop"
+source = "folder"
+to = "usr/share/applications/ferrofetch.desktop"
+mode = "644"
+
+[[package.files]]
+from = "share/ferrofetch.svg"
+source = "folder"
+to = "usr/share/icons/hicolor/scalable/apps/ferrofetch.svg"
+mode = "644"
+
 [build]
 kind = "cargo"
 
