@@ -58,6 +58,12 @@ coordinator's rules (customer, 2026-09-26):
   base, or if it moved only in files the change does not touch and nothing
   cross-cutting (locks, the scheduler, the trap or system-call entry, memory
   management). Otherwise release, re-verify and queue again.
+* A branch that writes new requirement ids reserves them first, in
+  `tools/common/data/requirement-reservations.json`, as a docs-only landing
+  under the lock, and deletes the entry in the commit that writes the ids
+  (`docs/CONVENTIONS.md`, "Requirement ids are reserved before they are
+  written"). `cargo xtask check` refuses an unreserved new id and an
+  unreleased entry.
 * Hold the lock only for the rebase and the fast-forward, and `land.sh
   release` at once. Two minutes is the target hold; a hold of fifteen is
   stale.

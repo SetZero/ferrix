@@ -58,7 +58,12 @@ The gate fails when
     by `--record`, in a diff somebody reviews; verifying one and not
     re-recording fails, so an allowance cannot outlive its reason;
   * docs/certification/TRACEABILITY.md is not what this script writes
-    (`--check`).
+    (`--check`);
+  * a high- or low-level id that is not defined at the merge-base with
+    `main` lies in no range main's tools/common/data/requirement-reservations.json
+    held there, or that file has a malformed entry, a range overlapping
+    another, or a range holding an id the model defines (a reservation is
+    released in the commit that writes its ids; docs/CONVENTIONS.md).
 
 It sorts the item's product functions for DO-178C's "no unintended function"
 question: those a low-level requirement names as its unit; *accessors* -- one
@@ -96,7 +101,9 @@ import argparse
 import dataclasses
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -120,6 +127,7 @@ BASELINE = ROOT / "tools" / "common" / "data" / "traceability-baseline.json"
 UNIT_RULES = ROOT / "tools" / "common" / "data" / "traceability-units.json"
 SECURITY_TARGET = CERT / "SECURITY-TARGET.md"
 SAFETY_REGISTER = ROOT / "tools" / "common" / "data" / "safety-requirements.json"
+RESERVATIONS = ROOT / "tools" / "common" / "data" / "requirement-reservations.json"
 
 ARCHES = ("x86_64", "aarch64", "armv7a")
 ARCH_LABEL = {"x86_64": "x86-64", "aarch64": "AArch64", "armv7a": "ARMv7-A"}
@@ -775,6 +783,195 @@ def _id_key(rid: str):
     return [int(p) if p.isdigit() else p for p in rid.split(".")]
 
 
+# --- reservations ------------------------------------------------------------
+#
+# Unlanded branches each took "the next free id on main" and took the same
+# ids three times on 2026-10-01. So a new id is written only inside a range
+# reserved on main first, in tools/common/data/requirement-reservations.json,
+# and the reservation is released -- its entry deleted or shrunk -- in the
+# commit that writes the ids, so it lands with them.
+#
+# Two refusals follow. A requirement id not defined at the merge-base with
+# `main` (new on this branch) must lie in a range that main's reservations
+# file held at that merge-base: a branch cannot reserve for itself. And the
+# file in the tree may hold no range that overlaps another, or that holds an
+# id the tree's model defines -- on main that is an id main already uses; on
+# a branch it is one the branch wrote and has not released.
+
+
+@dataclasses.dataclass
+class Reservation:
+    text: str  # as written, "L.object.106-112"
+    prefix: str  # "L.object"
+    low: int
+    high: int
+    branch: str
+
+    def holds(self, rid: str) -> bool:
+        prefix, _, number = rid.rpartition(".")
+        return prefix == self.prefix and number.isdigit() and self.low <= int(number) <= self.high
+
+
+ENTRY_FIELDS = ("ids", "owner", "branch", "date", "purpose")
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+
+
+def parse_reservations(data: dict, where: str) -> tuple[list[Reservation], list[str]]:
+    """The ranges of one reservations file, and what is wrong with its entries."""
+    found: list[Reservation] = []
+    problems: list[str] = []
+    entries = data.get("reservations")
+    if not isinstance(entries, list):
+        return found, [f"{where}: no `reservations` list"]
+    for index, entry in enumerate(entries):
+        label = f"{where}: reservation {index + 1}"
+        if not isinstance(entry, dict):
+            problems.append(f"{label}: not an object")
+            continue
+        branch = str(entry.get("branch", "")).strip()
+        if branch:
+            label += f" ({branch})"
+        for field in ENTRY_FIELDS:
+            if not entry.get(field):
+                problems.append(f"{label}: no `{field}`")
+        if entry.get("date") and not DATE.match(str(entry["date"])):
+            problems.append(f"{label}: date {entry['date']!r} is not YYYY-MM-DD")
+        ids = entry.get("ids") or []
+        for text in ids if isinstance(ids, list) else [ids]:
+            prefix, _, numbers = str(text).rpartition(".")
+            low, dash, high = numbers.partition("-")
+            high = high if dash else low
+            level = "high" if prefix.startswith("H.") else "low"
+            if not (
+                low.isdigit()
+                and high.isdigit()
+                and ID_FORM[level].match(f"{prefix}.{low}")
+                and ID_FORM[level].match(f"{prefix}.{high}")
+            ):
+                problems.append(f"{label}: {text!r} is not an id or a range like L.object.106-112")
+            elif int(low) > int(high):
+                problems.append(f"{label}: {text!r} runs backwards")
+            else:
+                found.append(Reservation(str(text), prefix, int(low), int(high), branch))
+    return found, problems
+
+
+def check_reservations(reserved: list[Reservation], defined: set[str], where: str) -> list[str]:
+    """Ranges that overlap each other, or hold an id the model already defines."""
+    problems: list[str] = []
+    for index, a in enumerate(reserved):
+        for b in reserved[index + 1 :]:
+            if a.prefix == b.prefix and a.low <= b.high and b.low <= a.high:
+                problems.append(
+                    f"{where}: {a.text} ({a.branch}) overlaps {b.text} ({b.branch}): one id, one owner"
+                )
+        taken = sorted((rid for rid in defined if a.holds(rid)), key=_id_key)
+        if taken:
+            problems.append(
+                f"{where}: {a.text} ({a.branch}) holds {', '.join(taken)}, which the model already "
+                f"defines: release the reservation -- delete or shrink its entry -- in the commit "
+                f"that writes the ids, or reserve a range main does not use"
+            )
+    return problems
+
+
+def unreserved(new: dict[str, str], reserved: list[Reservation]) -> list[str]:
+    """New ids (id -> where it is written) that no reservation on main holds."""
+    return [
+        f"{where}: {rid} is new on this branch, and no range in main's "
+        f"{RESERVATIONS.relative_to(ROOT).as_posix()} holds it: reserve it there in a "
+        f"docs-only landing first, then rebase (docs/CONVENTIONS.md)"
+        for rid, where in sorted(new.items(), key=lambda item: _id_key(item[0]))
+        if not any(r.holds(rid) for r in reserved)
+    ]
+
+
+def _git(*args: str) -> str | None:
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(ROOT), *args], capture_output=True, text=True, encoding="utf-8"
+        )
+    except OSError:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def main_bases() -> list[str]:
+    """The merge-bases of HEAD with `main`, newest only.
+
+    `FERRIX_MAIN_REF` names the ref when set; otherwise both `main` and
+    `origin/main` are asked, and a base that is an ancestor of the other is
+    dropped, so a stale one of the two does not count. On `main` itself the
+    base is HEAD and nothing is new.
+    """
+    refs = [os.environ["FERRIX_MAIN_REF"]] if os.environ.get("FERRIX_MAIN_REF") else ["main", "origin/main"]
+    bases: set[str] = set()
+    for ref in refs:
+        if _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}") is None:
+            continue
+        base = _git("merge-base", "HEAD", ref)
+        if base:
+            bases.add(base.strip())
+    return sorted(
+        b for b in bases if not any(c != b and _git("merge-base", "--is-ancestor", b, c) is not None for c in bases)
+    )
+
+
+def ids_at(commit: str) -> set[str]:
+    """Every short name the model defines at `commit`."""
+    listing = _git("ls-tree", "--name-only", commit, f"{MODEL_DIR.relative_to(ROOT).as_posix()}/") or ""
+    ids: set[str] = set()
+    for path in listing.splitlines():
+        if path.endswith(".sysml"):
+            root, _, _ = parse_text(path, _git("show", f"{commit}:{path}") or "")
+            ids |= {element.short_name for element in root.walk() if element.short_name}
+    return ids
+
+
+def reservations_at(commit: str) -> list[Reservation]:
+    text = _git("show", f"{commit}:{RESERVATIONS.relative_to(ROOT).as_posix()}")
+    if text is None:
+        return []
+    try:
+        return parse_reservations(json.loads(text), "main")[0]
+    except ValueError:
+        return []
+
+
+def reservation_problems(requirements: list[Requirement], model_ids: set[str]) -> tuple[list[str], str]:
+    """Both refusals against the tree and `main`, and a line saying what ran."""
+    where = RESERVATIONS.relative_to(ROOT).as_posix()
+    if not RESERVATIONS.exists():
+        return [f"no {where}: it is committed, with an empty `reservations` list when none is held"], ""
+    try:
+        data = json.loads(RESERVATIONS.read_text(encoding="utf-8"))
+    except ValueError as error:
+        return [f"{where}: not JSON: {error}"], ""
+    reserved, problems = parse_reservations(data, where)
+    problems += check_reservations(reserved, model_ids, where)
+    bases = main_bases()
+    if not bases:
+        return problems, (
+            f"{len(reserved)} range(s) reserved; no `main` to compare with (FERRIX_MAIN_REF, main, "
+            f"origin/main), so new ids were not checked against them"
+        )
+    model = MODEL_DIR.relative_to(ROOT).as_posix()
+    unchanged = all(_git("diff", "--quiet", base, "--", model) is not None for base in bases) and not _git(
+        "ls-files", "--others", "--exclude-standard", "--", model
+    )
+    on_main = model_ids if unchanged else set().union(*(ids_at(base) for base in bases))
+    new = {
+        r.id: f"{r.source}:{r.line}"
+        for r in requirements
+        if r.id and r.id not in on_main and ID_FORM[r.level].match(r.id)
+    }
+    problems += unreserved(new, [r for base in bases for r in reservations_at(base)])
+    return problems, (
+        f"{len(reserved)} range(s) reserved; {len(new)} id(s) new against main at "
+        f"{', '.join(base[:9] for base in bases)}"
+    )
+
+
 # --- the matrix --------------------------------------------------------------
 
 
@@ -1233,6 +1430,51 @@ def self_test() -> list[str]:
         failures.append("best: a reached check does not win")
     if _impl_type("<T: Copy> fmt::Debug for Table<T> where T: Sized ") != "Table":
         failures.append(f"impl type: {_impl_type('<T: Copy> fmt::Debug for Table<T> where T: Sized ')}")
+
+    entry = {"owner": "os-1", "branch": "b1", "date": "2026-10-01", "purpose": "p"}
+    reserved, problems = parse_reservations(
+        {
+            "reservations": [
+                {**entry, "ids": ["L.object.106-112", "H.TRAP.17", "L.x86_64.3"]},
+                {**entry, "branch": "b2", "ids": ["L.object.110-113", "L.mm.9-4", "X.y.1", "L.mm.1-"]},
+                {"ids": ["L.sched.3"], "date": "1 Oct"},
+            ]
+        },
+        "r.json",
+    )
+    if [(r.prefix, r.low, r.high) for r in reserved] != [
+        ("L.object", 106, 112),
+        ("H.TRAP", 17, 17),
+        ("L.x86_64", 3, 3),
+        ("L.object", 110, 113),
+        ("L.sched", 3, 3),
+    ]:
+        failures.append(f"reservations: read {reserved}")
+    wanted = [
+        "reservation 2 (b2): 'L.mm.9-4' runs backwards",
+        "reservation 2 (b2): 'X.y.1' is not an id",
+        "reservation 2 (b2): 'L.mm.1-' is not an id",
+        "reservation 3: no `owner`",
+        "reservation 3: no `branch`",
+        "reservation 3: no `purpose`",
+        "reservation 3: date '1 Oct' is not YYYY-MM-DD",
+    ]
+    if len(problems) != len(wanted) or not all(any(w in p for p in problems) for w in wanted):
+        failures.append(f"reservations: problems {problems}")
+    problems = check_reservations(reserved, {"L.object.105", "L.object.106", "L.objects.107", "H.TRAP.1"}, "r.json")
+    wanted = [
+        "L.object.106-112 (b1) overlaps L.object.110-113 (b2)",
+        "L.object.106-112 (b1) holds L.object.106, which the model already defines",
+    ]
+    if len(problems) != len(wanted) or not all(any(w in p for p in problems) for w in wanted):
+        failures.append(f"reservation overlaps: {problems}")
+    problems = unreserved(
+        {"L.object.112": "a:1", "L.object.114": "a:2", "H.TRAP.17": "a:3", "H.TRAP.18": "a:4", "L.objects.106": "a:5"},
+        reserved,
+    )
+    wanted = ["a:2: L.object.114 is new", "a:4: H.TRAP.18 is new", "a:5: L.objects.106 is new"]
+    if len(problems) != len(wanted) or not all(any(w in p for p in problems) for w in wanted):
+        failures.append(f"unreserved ids: {problems}")
     return failures
 
 
@@ -1253,7 +1495,7 @@ def main() -> int:
             print(f"traceability: self-test: {failure}", file=sys.stderr)
         return 1
     if args.self_test:
-        print("traceability: self-test passes (model, units, tags, ratchet, reach)")
+        print("traceability: self-test passes (model, units, tags, ratchet, reach, reservations)")
         return 0
 
     model = load(sorted(MODEL_DIR.glob("*.sysml")), ROOT)
@@ -1265,6 +1507,8 @@ def main() -> int:
     verifiers, wrong = all_verifiers()
     problems += wrong
     defined = {r.id for r in requirements}
+    wrong, reserved_line = reservation_problems(requirements, model_ids)
+    problems += wrong
     known = defined | model_ids
     by_id: dict[str, list[Verifier]] = defaultdict(list)
     for verifier in verifiers:
@@ -1361,6 +1605,8 @@ def main() -> int:
         f"(failed only in a complete subsystem: {', '.join(rules['complete']) or 'none yet'}; "
         f"--report lists them)"
     )
+    if reserved_line:
+        print(f"traceability: {reserved_line}")
     return status
 
 

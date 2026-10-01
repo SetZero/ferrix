@@ -155,6 +155,28 @@ do not need it. The review checks the rules the evidence rests on:
 The review is internal, not independent verification in the standards'
 sense (F-27, F-29).
 
+## Requirement ids are reserved before they are written
+
+On 2026-10-01 three unlanded branches each took "the next free id on
+`main`" and wrote the same requirement ids. So a new `H.*` or `L.*` id is
+written only inside a range reserved on `main` first:
+
+1. **Reserve.** Before writing the ids, add an entry to
+   `tools/common/data/requirement-reservations.json`: the ids or ranges
+   (`L.object.106-112`), your session, your branch, the date and one line of
+   purpose. Take the numbers above the highest on `main` *and* in the file.
+   Land it as a docs-only landing under the lock, then rebase onto it.
+2. **Release.** In the commit that writes the ids, delete the entry, or
+   shrink it to the ids still unwritten. The release lands with the ids.
+
+`check-traceability.py`, which `cargo xtask check` runs, holds both ends.
+It refuses an id that is not defined at the merge-base with `main` and that
+`main`'s copy of the file did not reserve there, so a branch cannot reserve
+for itself. It also refuses a range that overlaps another, or that holds an
+id the model already defines, so an entry nobody released fails the
+landing that forgot it. Send the reservation to the certification
+consultant with the rest of the review when the ids are written.
+
 ## Where a new file goes
 
 [LAYOUT.md](LAYOUT.md) says which directory each kind of thing belongs in:

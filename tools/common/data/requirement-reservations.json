@@ -1,0 +1,29 @@
+{
+  "//": [
+    "Requirement ids held for unlanded branches, so that two branches never",
+    "write the same new id. A branch reserves its range here in a docs-only",
+    "landing under the lock before it writes the ids, and releases it --",
+    "deletes or shrinks its entry -- in the commit that writes them, so the",
+    "release lands with the ids. tools/common/check/check-traceability.py",
+    "refuses a new id that main's copy of this file did not hold at the",
+    "branch's merge-base, and a range that overlaps another or holds an id",
+    "the model defines. `ids` takes single ids and ranges, L.object.106-112.",
+    "docs/CONVENTIONS.md, 'Requirement ids are reserved before they are written'."
+  ],
+  "reservations": [
+    {
+      "ids": ["L.object.106-112", "L.sched.3-4", "H.QUOTA.10-12"],
+      "owner": "os-7c",
+      "branch": "stage13-cgctl",
+      "date": "2026-10-01",
+      "purpose": "Stage 13 cgroup control: the cgctl landing chain (allocated by os-ad via os-79)"
+    },
+    {
+      "ids": ["H.TRAP.17", "L.object.113-116", "L.x86_64.126", "L.aarch64.52", "L.armv7a.3"],
+      "owner": "os-c7",
+      "branch": "os-ipc/spec-domain",
+      "date": "2026-10-01",
+      "purpose": "Speculation-domain jobs on the IPC fast path (allocated by os-ad)"
+    }
+  ]
+}
