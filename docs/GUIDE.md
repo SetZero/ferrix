@@ -255,7 +255,10 @@ byte-for-byte reproducible.
 `cargo xtask check --ferrousli` gates the C library too, whose tests build and
 run Linux programs. On Windows those steps run in WSL's default distribution,
 which needs rustup and `build-essential` installed inside it; the first step
-says so if they are missing.
+says so if they are missing. So do `cargo xtask ports` and an app's
+`build.sh`: the ports install under WSL's home, where xtask reads them
+through `\\wsl.localhost`, and `run-compositor --everything` builds every
+one that is missing, and a missing busybox, rather than booting without it.
 
 ### A busybox shell
 

@@ -29,6 +29,10 @@
 //! distribution, as a script app's `build.sh` does, and the ports are
 //! installed in its home and read from there (`crate::wsl::home`). There is
 //! no native Windows build of them yet.
+//!
+//! `run-compositor --everything` carries every port, so it builds them when
+//! one is missing ([`everything`]) rather than saying so and booting
+//! without it.
 
 use std::path::{Path, PathBuf};
 
@@ -339,6 +343,50 @@ pub(crate) fn installed_port(arch: Arch, port: &str) -> Result<Vec<File>> {
     installed_where(arch, |wanted| {
         wanted == port && ports_for(arch).contains(&port)
     })
+}
+
+/// `--everything`'s ports: [`installed`], but the ports `arch` builds are
+/// built first when one is missing, and a build that fails, or a port still
+/// missing after it, stops the run. `--everything` is everything.
+///
+/// # Errors
+///
+/// A build that fails, or a port its build did not install.
+pub(crate) fn everything(arch: Arch) -> Result<Vec<File>> {
+    let missing = missing(arch)?;
+    if missing.is_empty() {
+        return installed(arch);
+    }
+    println!(
+        "  not built yet: {}; --everything carries every port, so building them",
+        missing.join(", ")
+    );
+    build(arch)?;
+    let missing = self::missing(arch)?;
+    if !missing.is_empty() {
+        return Err(Error::new(format!(
+            "`cargo xtask ports` for {arch} did not install {}",
+            missing.join(", ")
+        )));
+    }
+    installed(arch)
+}
+
+/// The ports `arch` builds of which a file is not installed.
+fn missing(arch: Arch) -> Result<Vec<&'static str>> {
+    let root = root()?;
+    let mut missing: Vec<&str> = Vec::new();
+    for file in FILES
+        .iter()
+        .filter(|file| ports_for(arch).contains(&file.port))
+    {
+        if std::fs::symlink_metadata(installed_path(&root, arch, file)).is_err()
+            && !missing.contains(&file.port)
+        {
+            missing.push(file.port);
+        }
+    }
+    Ok(missing)
 }
 
 /// The installed files of the ports `wanted` names.

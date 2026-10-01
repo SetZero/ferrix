@@ -335,16 +335,25 @@ impl Carried {
     /// busybox is used where there is one and skipped where there is not:
     /// somebody who asked to look at the compositor did not ask to wait for a
     /// busybox to be built, and a screen with no shell is still the screen
-    /// they wanted.
+    /// they wanted. Except under `--everything`, which is everything: there a
+    /// busybox or a port that is not built yet is built, and a build that
+    /// fails stops the run.
     ///
     /// # Errors
     ///
-    /// A `--init` that names no file, or a zinc that will not build.
+    /// A `--init` that names no file, a zinc that will not build, or under
+    /// `--everything` a busybox or a port that will not.
     fn wanted(arch: Arch, args: &Args) -> Result<Self> {
         let asked = crate::optional_program(arch, args)?;
         let busybox = match asked {
             Some(program) => Some(program),
-            None => crate::busybox::installed_program(arch),
+            None => match crate::busybox::installed_program(arch) {
+                None if args.everything => {
+                    println!("  no busybox yet; --everything carries one, so building it");
+                    Some(crate::busybox::build(arch)?)
+                }
+                installed => installed,
+            },
         };
         match &busybox {
             Some(program) => println!("  busybox {} in /bin", program.display()),
@@ -353,7 +362,11 @@ impl Carried {
                 println!("    `cargo xtask busybox` builds one, or --init <PATH> names one");
             }
         }
-        let mut ports = crate::ports::installed(arch)?;
+        let mut ports = if args.everything {
+            crate::ports::everything(arch)?
+        } else {
+            crate::ports::installed(arch)?
+        };
         if !ports.is_empty() {
             println!("  {} ported files in /bin and /etc", ports.len());
         }
