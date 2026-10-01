@@ -22,6 +22,8 @@ pub const AT_PHNUM: usize = 5;
 pub const AT_PAGESZ: usize = 6;
 /// The address of sixteen random bytes.
 pub const AT_RANDOM: usize = 25;
+/// Whether the kernel entered the process in secure-execution mode.
+pub const AT_SECURE: usize = 23;
 
 /// The vector, or null before [`init`].
 static AUXV: AtomicPtr<usize> = AtomicPtr::new(null_mut());
