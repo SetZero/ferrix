@@ -43,6 +43,8 @@ const HOST: &[u8] = b"/tmp/.mp-check/host";
 const PIN: &[u8] = b"/tmp/.mp-check/pin";
 /// The child's own tmpfs.
 const OWN: &[u8] = b"/tmp/.mp-check/own";
+/// A directory the child makes in its own tmpfs.
+const MADE: &[u8] = b"/tmp/.mp-check/own/made";
 
 /// `mkdirat` with mode 0777, so the unprivileged process may make its own.
 fn make_directory(page: &mut Page<'_>, path: &[u8]) -> Result<Result<usize, Errno>, &'static str> {
@@ -159,6 +161,12 @@ fn unprivileged(tally: &mut Tally<'_>, root_page: &mut Page<'_>) -> Result<(), &
     if options_of(&user, OWN)?.is_none_or(|options| !contains(&options, b"nosuid,nodev")) {
         return Err("a tmpfs mounted from a user namespace was not nosuid,nodev (M2)");
     }
+    // A tmpfs is `1777` and the mounter's, as Linux's is (bubblewrap makes its
+    // new root's directory in one it mounted as uid 1000).
+    tally.ok(
+        make_directory(&mut page, MADE)?,
+        "uid 1000 could not make a directory in the tmpfs it mounted",
+    )?;
     for kind in [&b"proc"[..], b"devtmpfs", b"sysfs", b"cgroup2", b"btrfs"] {
         tally.refused(
             mount(&mut page, b"none", PIN, kind, 0)?,
