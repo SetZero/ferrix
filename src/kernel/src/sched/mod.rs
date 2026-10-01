@@ -678,9 +678,55 @@ fn mark_resched(cpu: usize) {
 /// armed too, for the shortest interval worth arming. From inside an interrupt
 /// the exit comes first, and `choose_next` re-arms the timer for the real
 /// decision before this one fires.
+///
+/// **Not from inside a system call.** Its way out looks at the flag
+/// ([`call_left`]), as an interrupt's does, so the woken task runs as soon as
+/// the call ends, and the timer, an exit under a hypervisor each time it is
+/// written, is left alone. A wake made by a call is most of the wakes a
+/// round trip between two programs makes.
 fn resched_here(cpu: usize) {
     mark_resched(cpu);
-    crate::timer::after(queue::MIN_ARM_NS);
+    if !IN_CALL
+        .get(cpu)
+        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
+        crate::timer::after(queue::MIN_ARM_NS);
+    }
+}
+
+/// Whether the task each processor runs is inside a system call: raised and
+/// lowered around the call by [`call_entered`] and [`call_left`], and carried
+/// by the task while it does not run (`choose_next`). What lets a wake made by
+/// a call leave the decision to the call's way out ([`resched_here`]).
+static IN_CALL: [AtomicBool; IN_CALL_PROCESSORS] =
+    [const { AtomicBool::new(false) }; IN_CALL_PROCESSORS];
+
+/// Processors [`IN_CALL`] covers: as many as a domain can name.
+const IN_CALL_PROCESSORS: usize = 256;
+
+/// The running task has entered a system call.
+pub(crate) fn call_entered() {
+    let saved = <arch::Irq as IrqControl>::disable();
+    if let Some(flag) = this_cpu().and_then(|cpu| IN_CALL.get(cpu)) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    <arch::Irq as IrqControl>::restore(saved);
+}
+
+/// The running task is leaving a system call: make the decision a wake made
+/// during it asked for, as an interrupt's exit would.
+pub(crate) fn call_left() {
+    let saved = <arch::Irq as IrqControl>::disable();
+    let decide = this_cpu().is_some_and(|cpu| {
+        if let Some(flag) = IN_CALL.get(cpu) {
+            flag.store(false, Ordering::Relaxed);
+        }
+        started() && preempt_count(cpu) == 0 && take_resched(cpu)
+    });
+    <arch::Irq as IrqControl>::restore(saved);
+    if decide {
+        schedule();
+    }
 }
 
 /// Interrupt another processor so it notices its flag: that one alone, and
@@ -1962,6 +2008,11 @@ fn choose_next(
     // call, which is the program's own doing.
     if interrupted_user && previous.state() == RUNNABLE {
         previous.note_preemption();
+    }
+    // Whether each is inside a system call goes with it: see `IN_CALL`.
+    if let Some(flag) = IN_CALL.get(cpu) {
+        let _ = previous.swap_in_call(flag.load(Ordering::Relaxed));
+        flag.store(next.swap_in_call(false), Ordering::Relaxed);
     }
     queue.previous = Some(Arc::clone(&previous));
     queue.current = Some(Arc::clone(&next));

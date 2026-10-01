@@ -1426,6 +1426,12 @@ pub(crate) fn timer_disarm() {
     timer::disarm();
 }
 
+/// Stop a one-shot that has just fired: the generic timer's line is level
+/// triggered and stays asserted while its comparator is in the past.
+pub(crate) fn timer_disarm_fired() {
+    timer::disarm();
+}
+
 /// The interrupt number the timer arrives on.
 pub(crate) fn timer_irq() -> u32 {
     timer::irq()

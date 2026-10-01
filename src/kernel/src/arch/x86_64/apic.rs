@@ -16,7 +16,7 @@
 //! moment earlier, which is the same thing every other kernel does.
 
 use core::hint::spin_loop;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ferrix_acpi::{Acpi, IsaInterrupt, Madt, MadtEntry};
 use ferrix_sync::IrqControl;
@@ -338,6 +338,9 @@ pub(crate) fn init_this_cpu() {
     regs.write32(LAPIC_SVR, SVR_ENABLE | SPURIOUS_VECTOR as u32);
     regs.write32(LAPIC_TIMER_DCR, DCR_DIVIDE_BY_16);
     regs.write32(LAPIC_LVT_TIMER, TIMER_VECTOR as u32 | LVT_MASKED);
+    if let Some(flag) = lvt_unmasked() {
+        flag.store(false, Ordering::Relaxed);
+    }
 }
 
 /// Reset processor `apic_id` into waiting for a start-up IPI.
@@ -451,7 +454,13 @@ pub(crate) fn arm(nanos: u64) {
     let count = u32::try_from(ticks.max(1)).unwrap_or(u32::MAX);
 
     let regs = lapic();
-    regs.write32(LAPIC_LVT_TIMER, TIMER_VECTOR as u32);
+    // The vector is unmasked once and left so: rewriting it at every arm was
+    // a second exit under a hypervisor for a register that had not changed.
+    // Unknown (no per-CPU record yet) is written, as before.
+    let unmasked = lvt_unmasked();
+    if !unmasked.is_some_and(|flag| flag.swap(true, Ordering::Relaxed)) {
+        regs.write32(LAPIC_LVT_TIMER, TIMER_VECTOR as u32);
+    }
     regs.write32(LAPIC_TIMER_ICR, count);
 }
 
@@ -460,6 +469,17 @@ pub(crate) fn disarm() {
     let regs = lapic();
     regs.write32(LAPIC_TIMER_ICR, 0);
     regs.write32(LAPIC_LVT_TIMER, TIMER_VECTOR as u32 | LVT_MASKED);
+    if let Some(flag) = lvt_unmasked() {
+        flag.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Whether each processor's timer vector is unmasked, as [`arm`] left it.
+static LVT_UNMASKED: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
+
+/// This processor's flag in [`LVT_UNMASKED`], once processors have records.
+fn lvt_unmasked() -> Option<&'static AtomicBool> {
+    crate::smp::this_cpu().and_then(|cpu| LVT_UNMASKED.get(cpu.logical))
 }
 
 /// How fast the timer counts, for the boot log.

@@ -95,6 +95,9 @@ pub(crate) struct Task {
     cpu: AtomicU64,
     /// Whether a run queue holds it, as a queued entity or as the running one.
     queued: AtomicBool,
+    /// Whether it is inside a system call, as the processor running it last
+    /// had it (`crate::sched::IN_CALL`): kept here while it does not run.
+    in_call: AtomicBool,
     /// Whether it may be moved to another CPU.
     /// The processors it may run on.
     affinity: CpuSet,
@@ -278,6 +281,7 @@ impl Task {
             state: AtomicU8::new(RUNNABLE),
             cpu: AtomicU64::new(cpu as u64),
             queued: AtomicBool::new(false),
+            in_call: AtomicBool::new(false),
             affinity,
             address_space,
             thread,
@@ -323,6 +327,7 @@ impl Task {
             state: AtomicU8::new(RUNNABLE),
             cpu: AtomicU64::new(cpu as u64),
             queued: AtomicBool::new(false),
+            in_call: AtomicBool::new(false),
             // An adopted context — the boot task, or a processor's idle task —
             // is the one thing that genuinely cannot move: it *is* that
             // processor's context. An affinity of exactly its own processor
@@ -556,6 +561,12 @@ impl Task {
     /// Say whether a run queue holds it. Only under that queue's lock.
     pub(crate) fn set_queued(&self, queued: bool) {
         self.queued.store(queued, Ordering::Release);
+    }
+
+    /// Swap in whether it is inside a system call, for the switch that takes
+    /// it off its processor, and answer what it was: see `sched::IN_CALL`.
+    pub(crate) fn swap_in_call(&self, in_call: bool) -> bool {
+        self.in_call.swap(in_call, Ordering::Relaxed)
     }
 
     /// What it carries between queues.
