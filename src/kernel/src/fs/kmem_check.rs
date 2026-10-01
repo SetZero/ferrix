@@ -73,6 +73,11 @@ pub(crate) struct Report {
     pub(crate) cgroup_namespaces: usize,
     /// Namespace files, each opened from a link of `/proc/<pid>/ns`.
     pub(crate) namespace_files: usize,
+    /// Pid namespaces, each a child of the first (`docs/PIDNS.md` §7).
+    pub(crate) pid_namespaces: usize,
+    /// Tasks numbered in a pid namespace, each with its record and its entry
+    /// in the namespace's map.
+    pub(crate) pid_numbers: usize,
 }
 
 /// How many mounts the namespace the mount namespaces are copied from
@@ -112,6 +117,10 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         report.ipc_namespaces = ipc_namespaces(&tree)?;
         report.cgroup_namespaces = cgroup_namespaces(&tree)?;
         report.namespace_files = namespace_files(&tree)?;
+        report.pid_namespaces = kind(&tree, "pid namespaces", |_| {
+            crate::syscall::pidns::create(None)
+        })?;
+        report.pid_numbers = pid_numbers(&tree)?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))
@@ -267,6 +276,18 @@ fn user_namespaces(tree: &Arc<Job>) -> Result<usize, &'static str> {
     let creator = crate::syscall::credentials::Credentials::root();
     kind(tree, "user namespaces", |_| {
         crate::syscall::userns::create(&creator)
+    })
+}
+
+/// Tasks numbered in a pid namespace, made as a fork into one makes them:
+/// each record and each entry in the namespace's map is charged to the job
+/// asking, refused `ENOMEM` at its limit, and gives its heap back when the
+/// task goes (`docs/PIDNS.md` §7).
+fn pid_numbers(tree: &Arc<Job>) -> Result<usize, &'static str> {
+    let namespace = crate::syscall::pidns::create(None)
+        .map_err(|_| "kmem: no pid namespace to number tasks in")?;
+    kind(tree, "pid numbers", |at| {
+        crate::syscall::pidns::assign(&namespace, 1_000 + at as u32)
     })
 }
 

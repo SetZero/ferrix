@@ -31,6 +31,7 @@ use crate::fs;
 use crate::sync::SpinLock;
 use crate::syscall::fd;
 use crate::syscall::nsproxy::{self, CLONE_NEWCGROUP, CLONE_NEWIPC, CLONE_NEWUTS};
+use crate::syscall::pidns::{self, CLONE_NEWPID};
 use crate::syscall::process::Process;
 use crate::syscall::userns::{self, CAP_SYS_ADMIN};
 
@@ -62,7 +63,7 @@ pub(crate) const CLONE_NEWUSER: u64 = 0x1000_0000;
 /// address space, and is `EINVAL`.
 pub(crate) fn sys_unshare(process: &Process, flags: u64) -> Result<usize, Errno> {
     const SMALL: u64 = CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWCGROUP;
-    if flags & !(CLONE_FILES | CLONE_FS | CLONE_NEWNS | CLONE_NEWUSER | SMALL) != 0 {
+    if flags & !(CLONE_FILES | CLONE_FS | CLONE_NEWNS | CLONE_NEWUSER | CLONE_NEWPID | SMALL) != 0 {
         return Err(Errno::EINVAL);
     }
     if flags & CLONE_FILES != 0 && Arc::strong_count(process.files()) > 1 {
@@ -90,15 +91,28 @@ pub(crate) fn sys_unshare(process: &Process, flags: u64) -> Result<usize, Errno>
         Some(fresh) => Arc::clone(fresh),
         None => process.with_credentials(|held| Arc::clone(&held.user_ns)),
     };
-    // `CLONE_NEWNS` needs `CAP_SYS_ADMIN` where the caller is: in the
-    // namespace it is about to have, if it asked for one.
-    if flags & CLONE_NEWNS != 0
+    // `CLONE_NEWNS` and `CLONE_NEWPID` need `CAP_SYS_ADMIN` where the caller
+    // is: in the namespace it is about to have, if it asked for one.
+    if flags & (CLONE_NEWNS | CLONE_NEWPID) != 0
         && fresh.is_none()
         && !process.with_credentials(|held| held.holds(CAP_SYS_ADMIN))
     {
         return Err(Errno::EPERM);
     }
+    // `EINVAL` where its children already go in a namespace of their own,
+    // as Linux's `copy_pid_ns` answers: a second one would nest with no
+    // process in the first, which has no init.
+    if flags & CLONE_NEWPID != 0 && process.children_in_other_namespace() {
+        return Err(Errno::EINVAL);
+    }
     // Made before anything is changed, so a refusal leaves nothing behind.
+    // A pid namespace takes the caller's later children and not the caller
+    // (`docs/PIDNS.md` §1).
+    let fresh_pids = if flags & CLONE_NEWPID != 0 {
+        Some(pidns::create(process.children_namespace().as_ref())?)
+    } else {
+        None
+    };
     let proxy = nsproxy::make(process, flags, &owner, process.job())?;
     if flags & CLONE_NEWNS != 0 {
         copy_namespace(process.fs_context(), &owner)?;
@@ -108,6 +122,9 @@ pub(crate) fn sys_unshare(process: &Process, flags: u64) -> Result<usize, Errno>
     }
     if let Some(fresh) = fresh {
         enter_user_namespace(process, fresh);
+    }
+    if let Some(pids) = fresh_pids {
+        process.set_children_namespace(pids);
     }
     Ok(0)
 }

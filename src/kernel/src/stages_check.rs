@@ -342,6 +342,7 @@ pub(super) fn check_namespaces(disk: bool) {
     );
     check_user_namespaces();
     check_small_namespaces();
+    check_pid_namespaces();
 }
 
 /// User namespaces: the rules of `docs/NAMESPACES.md` §4 attempted and
@@ -372,6 +373,21 @@ fn check_small_namespaces() {
     };
     println!(
         "  smallns  {} calls answered as Linux answers them, {} of them refusals: UTS names copied and then private, a maker of a user namespace naming its own and never the first's, IPC keys and counts private, a cgroup namespace's paths, mount and move rule, namespace files opened, named and asked, setns refused and joined by kind",
+        checked.calls, checked.refusals,
+    );
+}
+
+/// Pid namespaces: the rules of `docs/PIDNS.md` attempted and refused.
+fn check_pid_namespaces() {
+    let checked = match fs::pidns_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE13_PID_NAMESPACES,
+            "pid namespace self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  pidns    {} calls answered as Linux answers them, {} of them refusals: pid 1 and 2 in a namespace and other numbers outside, kill, wait4, getppid, groups and sessions in the caller's numbers, an orphan given to its namespace's init, the init's end ending the namespace, an init ignoring what it does not catch from inside, si_pid and SO_PEERCRED told to the reader, a procfs and cgroup.procs of a namespace by its numbers, CLONE_NEWPID's privilege, flags and depth, a native child numbered in its creator's namespace, and a namespace closed by a failed first fork",
         checked.calls, checked.refusals,
     );
 }
@@ -1009,7 +1025,7 @@ pub(super) fn check_kernel_memory() {
     println!(
         "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
          {} descriptors in flight, {} epoll registrations, {} eventfds, {} regions of one \
-         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts, {} user, {} UTS, {} IPC and {} cgroup namespaces and {} namespace files, and \
+         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts, {} user, {} UTS, {} IPC, {} cgroup and {} pid namespaces, {} pid numbers and {} namespace files, and \
          was refused one more of each -- \
          ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged \
          came back",
@@ -1029,6 +1045,8 @@ pub(super) fn check_kernel_memory() {
         report.uts_namespaces,
         report.ipc_namespaces,
         report.cgroup_namespaces,
+        report.pid_namespaces,
+        report.pid_numbers,
         report.namespace_files,
     );
 }

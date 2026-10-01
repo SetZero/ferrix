@@ -76,6 +76,7 @@ Causes are listed most likely first.
 | [FX-0887](#fx-0887) | A mount namespace failed its self-check |
 | [FX-0888](#fx-0888) | A user namespace failed its self-check |
 | [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
+| [FX-0891](#fx-0891) | A pid namespace failed its self-check |
 | [FX-0892](#fx-0892) | A UTS, IPC or cgroup namespace, or setns, failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-0902](#fx-0902) | an allocation failure was not survived |
@@ -1743,6 +1744,47 @@ says SYSFS_MAGIC, and cgroup2 mounts on fs/cgroup.
 
 See: src/kernel/src/fs/sysfs.rs; src/kernel/src/fs/sysfs/check.rs;
 src/lib/fs/sysfs; docs/SYSFS.md.
+
+<a id="fx-0891"></a>
+
+## FX-0891 — A pid namespace failed its self-check
+
+`fs::pidns_check::run` makes a namespace with unshare(CLONE_NEWPID) and forks
+into it. The first process must be pid 1 there and have another number outside,
+the next 2, and the caller that unshared must not have moved; kill, wait4,
+getppid, getpgid, getsid and setsid must speak the caller's numbers, refusing a
+process the namespace cannot see and reading 0 for a parent or group it cannot;
+an orphan must go to its namespace's init, and the init's end must end the
+namespace and shut it to new members; an init must ignore SIGTERM, SIGKILL and
+SIGSTOP from inside, catch a signal it has a handler for, and take SIGSTOP and
+SIGKILL from an ancestor namespace; si_pid, ssi_pid and SO_PEERCRED must be told
+in the reader's numbers and 0 for a sender it cannot see; a procfs mounted in a
+namespace must list only its processes by its numbers, with self, NSpid and
+ns/pid to match; cgroup.procs must list and take the reader's numbers; and
+CLONE_NEWPID must need CAP_SYS_ADMIN unless a user namespace comes with it, be
+refused with CLONE_THREAD or CLONE_PARENT, and stop at 32 levels, each made from
+a process in the one above; a native child must be numbered in its creator's
+namespace; and a namespace whose first fork failed must take no later fork
+(docs/PIDNS.md, P1 to P14).
+
+1. `pidns::from_user` or `pidns::to_user` is skipped at a call that names or
+   reports a pid.
+2. `Local::allocate` hands out a number already in use, or does not start at 1
+   in a namespace.
+3. `Process::reaper_for_orphans` sends an orphan to the machine's pid 1 instead
+   of its namespace's init.
+4. `pidns::init_gone` does not shut the namespace or does not kill its members.
+5. `pidns::discards` lets a signal through to an init that it should not, or
+   keeps SIGKILL from an ancestor namespace out.
+6. A procfs instance lists or finds processes by their kernel numbers.
+7. `namespaces_asked` or `sys_unshare` skips CAP_SYS_ADMIN, the CLONE_THREAD and
+   CLONE_PARENT refusals, or the depth limit.
+8. `launch::load_native` leaves a native child out of its creator's namespace,
+   or `Numbers::drop` leaves a namespace open after its pid 1 went.
+
+See: src/kernel/src/fs/pidns_check.rs; src/kernel/src/syscall/pidns.rs;
+src/kernel/src/syscall/family.rs; src/kernel/src/syscall/kill.rs;
+src/kernel/src/fs/procfs.rs.
 
 <a id="fx-0892"></a>
 

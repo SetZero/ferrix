@@ -191,9 +191,33 @@ pub(crate) fn load_native(
     credentials: Credentials,
     context: Option<Context>,
 ) -> Result<Arc<Process>, ExecError> {
+    load_native_in(image, name, credentials, context, None)
+}
+
+/// [`load_native`], numbered in `pids` and every namespace above it when the
+/// creator is in a pid namespace below the first. A native process can make
+/// Linux calls, so one left in the first namespace would name the machine's
+/// processes by their kernel numbers from inside a container, and be out of
+/// reach of its init's end (`docs/PIDNS.md` §4).
+///
+/// # Errors
+///
+/// [`ExecError`]; a namespace that is ending is out of memory.
+pub(crate) fn load_native_in(
+    image: &[u8],
+    name: &[u8],
+    credentials: Credentials,
+    context: Option<Context>,
+    pids: Option<&Arc<crate::syscall::pidns::PidNamespace>>,
+) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
-    let process =
+    let mut process =
         Process::new(Arc::clone(&space)).map_err(|_| ExecError::Space(SpaceError::OutOfMemory))?;
+    if let Some(namespace) = pids {
+        process
+            .enter_pid_namespace(namespace)
+            .map_err(|_| ExecError::Space(SpaceError::OutOfMemory))?;
+    }
     process.with_credentials(|held| *held = credentials);
     if let Some(context) = context {
         // Not shared with anything yet; what it replaces goes after the lock.

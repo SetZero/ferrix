@@ -235,8 +235,8 @@ checker to six programs carrying the real Linux 7.0 verifier's answer
 
 **Where stage 13 stands (2026-10-01).** The exit criterion -- an unprivileged
 user namespace runs a pid 1 under a memory limit with a scoped OOM kill and a
-seccomp filter that blocks a call -- is **not met**: pid namespaces and the
-filter itself are built on branches and not on `main`. Built, gated on their
+seccomp filter that blocks a call -- is **not met**: pid namespaces are on `main`, the
+filter itself is built on a branch and not. Built, gated on their
 own boots, reviewed by nobody yet, and **not landed** (each on a local branch
 with a side ref on nazuna; `docs/BACKLOG.md` lists their differences from
 Linux):
@@ -248,7 +248,6 @@ Linux):
 | `stage13-bwrap-user` | `test-bwrap` as uid 1000 | its one run exited 1 near the `threads` line; cause not read |
 | `stage13-netns` | network namespaces, veth pairs, per-namespace stacks | boots on three architectures, `test-shell`, `test-vfs`, `test-net`, 30 controls; `check` not run |
 | `stage13-timens` | time namespace | agent had not reported |
-| `stage13-pidns` | pid namespaces | boots pass; **`test-vfs` fails on x86_64**: a kernel stack overflow on the `ioctl` path, cause not found (`Process` grew by about 48 bytes) |
 | `stage13-cgctl` | M2's reclaim and `memory.high`, `cgroup.freeze`, `cpu.max` with `cpu.stat`, the `io` controller (`io.stat`, `io.max`) | reclaim, freeze and cpu booted; the io check stopped at its last line (a quota-slot count, a fix written, not booted); no full boot, no `test-shell`/`test-vfs`, no negative control run |
 | `stage13-s3` | seccomp S3 to S5 | S3 built and booting, not gated; S4 and S5 not started |
 | `stage13-container` | `cargo xtask test-container`, the exit criterion as a program | written, never run |
@@ -267,7 +266,7 @@ the reader's cgroup namespace root and a `cgroup2` mount rooted there;
 `/proc/<pid>/ns/{uts,ipc,cgroup}`, all five `ns` links opening as nsfs files
 with `NS_GET_USERNS`, `NS_GET_PARENT`, `NS_GET_NSTYPE` and `NS_GET_OWNER_UID`;
 `setns` by namespace file or pidfd for mount, user, UTS, IPC and cgroup
-namespaces. Pid and network namespaces stay `EINVAL`. The `smallns` boot
+namespaces. Network namespaces stay `EINVAL`; pid ones landed after (below). The `smallns` boot
 line (FX-0892) and its negative controls prove it; `docs/NAMESPACES.md` §12
 has the list and the differences from Linux (a namespace set per process,
 not per thread, among them). The review found that a native `process_create`
@@ -276,6 +275,19 @@ was judged in the writer's namespace, not the opener's (and not at all for
 `CLONE_INTO_CGROUP` and `job_for_cgroup`); all are fixed with checks and
 controls (NAMESPACES §12). Later namespace landings extend `launch::load_native`'s
 proxy copy and its check.
+
+**Done -- pid namespaces (2026-10-01; `docs/PIDNS.md`):** `CLONE_NEWPID` through `clone`, `clone3` and
+`unshare`, so an unprivileged user namespace can run a process that is pid
+1 inside it -- the pid-1 part of the exit criterion. A task in a namespace
+below the first has a number in each level; the kernel number stays the key
+of the registry, the job tree, groups and sessions. Every call that names or
+reports a pid speaks the caller's namespace, orphans go to their own
+namespace's init, an init's end ends its namespace, and an init ignores
+what it has no handler for except `SIGKILL` and `SIGSTOP` from an ancestor.
+procfs, `cgroup.procs`, `si_pid`, `SO_PEERCRED` and the terminal's groups
+follow. The `pidns` boot line (FX-0891) and a pid-namespace fill in `kmem`
+prove it, each rule with a negative control; `PIDNS.md` §8 lists where it
+differs from Linux.
 
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,

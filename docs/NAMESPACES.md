@@ -1216,8 +1216,8 @@ the review ran, before the UTS namespace, it stopped at the host name
 
 **The small namespaces, designed (2026-09-30, os-smallns).** UTS, IPC and
 cgroup namespaces, `setns(2)` by namespace descriptor, and the `unshare` and
-`clone` flags for all five that exist. Pid and network namespaces are other
-landings; their flags stay `EINVAL`. Stage 13's roadmap file has the rest.
+`clone` flags for all five that exist. Pid namespaces (`docs/PIDNS.md`) and network ones are other
+landings; the network flag stays `EINVAL`. Stage 13's roadmap file has the rest.
 
 *The data.* A mount namespace stays in the fs context and a user namespace in
 the credentials. The other three are named together in a `NsProxy`
@@ -1449,3 +1449,19 @@ each stopping the boot with `smallns self-check failed: <message>`
 The namespace files' fill in `kmem_check` has no control: the detached mount
 the VFS charges bounds it, and the inode's few bytes do not change the count
 a job makes. That is a gap in the evidence, not in the code's charge.
+
+**Pid namespaces (2026-09-30, branch `stage13-pidns`, built on
+`stage13-n4-userns`, not landed; `docs/PIDNS.md` is the design).** This is
+the pid half that the first page of this document left out. `CLONE_NEWPID`
+through `clone`, `clone3` and `unshare`, alone or with `CLONE_NEWUSER`;
+a task in a namespace below the first holds its numbers in a `Numbers`
+record (`syscall/pidns.rs`), and the machine-wide number stays the key of
+the registry, the jobs, groups, sessions and the terminal. Every call that
+names or reports a pid speaks the caller's namespace (PIDNS §4 lists the
+sites, found by grep); the init of a namespace gets its orphans, takes the
+namespace with it when it ends, and ignores what it has no handler for;
+procfs is per namespace (`status` has `NStgid`/`NSpid`/`NSpgid`/`NSsid`;
+`ns/pid`, `ns/pid_for_children`). The exit criterion's pid-1 part is here.
+Evidence and differences are PIDNS §8 and §9. Two things in this document
+change with it: §1.5's row for `CLONE_NEWPID` is no longer `EINVAL`, and
+the N4 "gated so far" list above is unchanged by it.

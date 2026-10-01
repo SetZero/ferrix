@@ -50,6 +50,7 @@ use ferrix_linux_abi::types::{
 use ferrix_vfs::OpenFile;
 
 use crate::fs::terminal::{self, Terminal, Termios, Winsize};
+use crate::syscall::pidns;
 use crate::syscall::process::Process;
 use crate::syscall::{registry, uaccess};
 
@@ -147,6 +148,7 @@ fn set(flush: bool, settings: impl FnOnce(Termios) -> Termios) {
 /// The live processes are listed before the terminal is locked and dropped
 /// after it is released: dropping the last reference to a process frees its
 /// memory, which is not something to do under a spin lock.
+#[inline(never)]
 fn job_control(process: &Process, request: u32, arg: u64) -> Result<usize, Errno> {
     let live = registry::live()?;
     let answer = match request {
@@ -163,10 +165,11 @@ fn job_control(process: &Process, request: u32, arg: u64) -> Result<usize, Errno
             }
             Ok(0)
         }),
-        TIOCGPGRP => terminal::with(|terminal| controlling(process, terminal, &live))
-            .and_then(|(_, foreground)| put_int(process, arg, foreground)),
+        TIOCGPGRP => terminal::with(|terminal| controlling(process, terminal, &live)).and_then(
+            |(_, foreground)| put_int(process, arg, pidns::pgrp_to_user(process, foreground)),
+        ),
         TIOCGSID => terminal::with(|terminal| controlling(process, terminal, &live))
-            .and_then(|(session, _)| put_int(process, arg, session)),
+            .and_then(|(session, _)| put_int(process, arg, pidns::sid_to_user(process, session))),
         TIOCSPGRP => set_foreground(process, &live, arg),
         _ => Err(Errno::ENOTTY),
     };
@@ -226,11 +229,14 @@ fn take_controlling(
 /// A process in a background group changing the foreground would be sent
 /// `SIGTTOU` on Linux unless it ignores it -- which a shell's children do not
 /// yet, and nothing delivers a signal, so the change is simply allowed.
+#[inline(never)]
 fn set_foreground(process: &Process, live: &[Arc<Process>], arg: u64) -> Result<usize, Errno> {
     let (session, _) = terminal::with(|terminal| controlling(process, terminal, live))?;
     let mut bytes = [0_u8; 4];
     get(process, arg, &mut bytes)?;
     let group = u32::try_from(i32::from_le_bytes(bytes)).map_err(|_| Errno::EINVAL)?;
+    // A number in the caller's namespace; a group it has no one in is no group.
+    let group = pidns::pgrp_from_user(process, group).ok_or(Errno::ESRCH)?;
     let members: Vec<u32> = live
         .iter()
         .filter(|other| other.pgid() == group)
@@ -422,6 +428,7 @@ fn pty_ioctl(
 /// for it gets it if nobody else holds it, a process may only ask about the
 /// terminal of its own session, and the foreground group must be a group in
 /// that session.
+#[inline(never)]
 fn pty_job_control(
     process: &Process,
     pty: &crate::fs::pty::Pty,
@@ -455,20 +462,22 @@ fn pty_job_control(
             if pty.session() != process.sid() {
                 Err(Errno::ENOTTY)
             } else {
-                put_int(process, arg, pty.foreground())
+                put_int(process, arg, pidns::pgrp_to_user(process, pty.foreground()))
             }
         }
         TIOCGSID => {
             if pty.session() != process.sid() {
                 Err(Errno::ENOTTY)
             } else {
-                put_int(process, arg, pty.session())
+                put_int(process, arg, pidns::sid_to_user(process, pty.session()))
             }
         }
         TIOCSPGRP => {
             let mut bytes = [0_u8; 4];
             get(process, arg, &mut bytes)?;
-            let group = u32::from_le_bytes(bytes);
+            let number = u32::from_le_bytes(bytes);
+            // A number in the caller's namespace.
+            let group = pidns::pgrp_from_user(process, number).unwrap_or(0);
             if pty.session() != process.sid() {
                 return Err(Errno::ENOTTY);
             }

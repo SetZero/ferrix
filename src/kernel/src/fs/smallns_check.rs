@@ -40,7 +40,8 @@ use crate::syscall::{fd, sem, system};
 
 /// `CLONE_NEWNET`, which does not exist yet.
 const CLONE_NEWNET: u64 = 0x4000_0000;
-/// `CLONE_NEWPID`, which does not exist yet.
+/// `CLONE_NEWPID`, which `setns` cannot join (pid namespaces are made, not entered:
+/// `docs/PIDNS.md` §8).
 const CLONE_NEWPID: u64 = 0x2000_0000;
 
 /// A semaphore key of the check's own.
@@ -1098,7 +1099,7 @@ fn joining_pidfd(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     tally.refused(
         setns(&caller, fd, CLONE_NEWPID),
         Errno::EINVAL,
-        "setns on a pidfd with CLONE_NEWPID, which does not exist, was not EINVAL",
+        "setns on a pidfd with CLONE_NEWPID, which it cannot join, was not EINVAL",
     )?;
     tally.ok(
         setns(&caller, fd, CLONE_NEWUTS | CLONE_NEWIPC),
@@ -1296,18 +1297,17 @@ fn files_related(
 // Flags
 // ---------------------------------------------------------------------------
 
-/// Flags that cannot be given: pid and network namespaces do not exist, and a
+/// Flags that cannot be given: network namespaces do not exist, and a
 /// thread cannot have one of the small ones; `CLONE_NEWIPC` excludes
 /// `CLONE_SYSVSEM`.
 fn flags(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     let root = maker()?;
     let asked = |flags: u64| family::namespaces_asked(&root, flags).map(|()| 0);
-    for (flag, what) in [
-        (CLONE_NEWNET, "clone with CLONE_NEWNET was not refused"),
-        (CLONE_NEWPID, "clone with CLONE_NEWPID was not refused"),
-    ] {
-        tally.refused(asked(flag), Errno::EINVAL, what)?;
-    }
+    tally.refused(
+        asked(CLONE_NEWNET),
+        Errno::EINVAL,
+        "clone with CLONE_NEWNET was not refused",
+    )?;
     tally.refused(
         unshare(&root, CLONE_NEWNET),
         Errno::EINVAL,

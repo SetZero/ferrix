@@ -83,8 +83,8 @@ const DETACH_FILE: &[u8] = b"ns-check-detach";
 /// `/mnt-rw`.
 const DISK_INDEX: u32 = 2;
 
-/// `CLONE_NEWPID`: a namespace Ferrix does not have.
-const CLONE_NEWPID: u64 = 0x2000_0000;
+/// `CLONE_NEWNET`: a namespace Ferrix does not have.
+const CLONE_NEWNET: u64 = 0x4000_0000;
 
 /// What the check saw, for the boot line.
 #[derive(Debug, Default)]
@@ -539,7 +539,7 @@ fn private_both_ways(
     )?;
     drop(unprivileged);
     tally.refused(
-        unshare(inside.process, CLONE_NEWPID),
+        unshare(inside.process, CLONE_NEWNET),
         Errno::EINVAL,
         "unshare of a namespace Ferrix does not have was not refused EINVAL",
     )?;
@@ -825,6 +825,11 @@ fn native_child_stays(
             return Err("a creator's new small namespace was not named apart");
         }
     }
+    // And its children to go in a pid namespace of their own, which a native
+    // child is numbered in too (`docs/PIDNS.md` §4).
+    let fresh_pids = crate::syscall::pidns::create(None)
+        .map_err(|_| "the creator of a native child could not make a pid namespace")?;
+    creator.set_children_namespace(fresh_pids);
     let host = launch::load_native(Some(&**creator as &dyn Host), &file, b"/ns-check-child")
         .map_err(|_| "a native child could not be made inside a pivoted namespace")?;
     let child = core_process::downcast::<Process>(host)
@@ -837,6 +842,8 @@ fn native_child_stays(
     for kind in kinds {
         same_small &= ns_link(page, child.pid(), kind)? == ns_link(page, creator.pid(), kind)?;
     }
+    let same_pids =
+        ns_link(page, child.pid(), b"pid")? == ns_link(page, creator.pid(), b"pid_for_children")?;
     tally.report.calls += 1;
     process::kill(&child, 137);
     drop((child, context));
@@ -848,6 +855,9 @@ fn native_child_stays(
     }
     if !same_small {
         return Err("a native child's UTS, IPC or cgroup namespace was not its creator's");
+    }
+    if !same_pids {
+        return Err("a native child's pid namespace was not the one its creator's children go in");
     }
     Ok(())
 }

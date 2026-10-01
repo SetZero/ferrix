@@ -68,6 +68,7 @@ use crate::sched::{self, Task, WaitQueue};
 use crate::syscall::credentials::Credentials;
 use crate::syscall::fd;
 use crate::syscall::nsproxy::NsProxy;
+use crate::syscall::pidns::{self, Numbers, PidNamespace};
 use crate::syscall::registry;
 use crate::syscall::signal::{Origin, Posted, Signals};
 use crate::syscall::thread::{self, Thread};
@@ -179,6 +180,16 @@ pub(crate) struct Process {
     pgid: AtomicU32,
     /// Its session.
     sid: AtomicU32,
+    /// Its numbers in the pid namespaces below the first it is in, or `None`
+    /// in the first, where its pid is all it has. Fixed when it is made
+    /// (`docs/PIDNS.md` §2.2).
+    pids: Option<Arc<Numbers>>,
+    /// The pid namespace its children are made in, when `unshare` set one;
+    /// its own otherwise.
+    pid_for_children: SpinLock<Option<Arc<PidNamespace>>>,
+    /// The numbers of its group and its session, kept so that both can be
+    /// told in a namespace after their leaders are reaped.
+    groups: SpinLock<Groups>,
     /// The children it has not yet waited for, ended or not. Strong, so an
     /// ended child stays findable -- a zombie -- until `wait4` takes it.
     children: SpinLock<Vec<Arc<Process>>>,
@@ -220,6 +231,16 @@ pub(crate) struct Process {
     /// §12). A leaf lock: cloned out before anything is done with what it
     /// names.
     nsproxy: SpinLock<NsProxy>,
+}
+
+/// The numbers of a process group and a session in the namespaces below the
+/// first (`None` for one led from the first, which a namespace cannot see).
+#[derive(Debug, Clone, Default)]
+struct Groups {
+    /// The group's.
+    pgrp: Option<Arc<Numbers>>,
+    /// The session's.
+    session: Option<Arc<Numbers>>,
 }
 
 /// Where a program starts: the two numbers `exec::load` computes and the task
@@ -343,14 +364,31 @@ impl Process {
     /// A process over an address space, numbered `pid`, which the caller has
     /// reserved in the registry, and counted in `job`.
     fn with_pid(space: Arc<AddressSpace>, pid: u32, job: Arc<Job>) -> Result<Process, AllocError> {
+        let files = fallible::try_arc(SpinLock::new(fd::standard_streams()?))?;
+        let fs = fallible::try_arc(SpinLock::new(fs::root_disk::process_context()))?;
+        Process::with_context(space, pid, job, files, fs)
+    }
+
+    /// [`Process::with_pid`] over a descriptor table and a directory context
+    /// that are already made. They are made first, and by the caller, because
+    /// opening the console is among the deepest things a fork does, and a
+    /// `Process` is over a kilobyte: built after them, it is not on the stack
+    /// while they run. A kernel stack is four pages (`docs/PIDNS.md` §10).
+    fn with_context(
+        space: Arc<AddressSpace>,
+        pid: u32,
+        job: Arc<Job>,
+        files: Arc<SpinLock<FdTable<Arc<OpenFile>>>>,
+        fs: Arc<SpinLock<Context>>,
+    ) -> Result<Process, AllocError> {
         Ok(Process {
             core: object::process::Process::new(space, pid, job)?,
             umask: AtomicU32::new(DEFAULT_UMASK),
             oom_score_adj: AtomicI32::new(0),
             identity: SpinLock::new(Identity::default()),
             sem_undo: sem::UndoList::new(),
-            files: fallible::try_arc(SpinLock::new(fd::standard_streams()?))?,
-            fs: fallible::try_arc(SpinLock::new(fs::root_disk::process_context()))?,
+            files,
+            fs,
             state: SpinLock::new(State::new()?),
             heap_lock: SleepLock::new((), &crate::sync::SchedParker),
             startup: SpinLock::new(None),
@@ -370,6 +408,9 @@ impl Process {
             // A fork child inherits its parent's instead, below.
             pgid: AtomicU32::new(pid),
             sid: AtomicU32::new(pid),
+            pids: None,
+            pid_for_children: SpinLock::new(None),
+            groups: SpinLock::new(Groups::default()),
             children: SpinLock::new(Vec::new()),
             child_exited: WaitQueue::new(),
             exit_signal: AtomicU32::new(SIGCHLD),
@@ -413,33 +454,62 @@ impl Process {
         share_files: bool,
         share_fs: bool,
     ) -> Result<Process, AllocError> {
-        Process::forked_into(parent, space, share_files, share_fs, None)
+        let child = Process::forked_into(parent, space, share_files, share_fs, None, None)?;
+        // Nothing else holds it yet.
+        Arc::into_inner(child).ok_or(AllocError)
     }
 
     /// [`Process::forked`], into `job` rather than the parent's when one is
     /// given: `clone3`'s `CLONE_INTO_CGROUP`, whose caller has checked that
     /// the parent may put a process there. The child is counted there from
     /// the start, so it is never in the parent's job at all.
+    ///
+    /// Shared but not registered, and built in its `Arc` from the start: this
+    /// is on the fork path, which stands deep on a four-page kernel stack, and
+    /// a `Process` of over a kilobyte held by value in each frame between
+    /// here and `clone_with` was most of it.
+    #[inline(never)]
     pub(crate) fn forked_into(
         parent: &Arc<Process>,
         space: Arc<AddressSpace>,
         share_files: bool,
         share_fs: bool,
         job: Option<Arc<Job>>,
-    ) -> Result<Process, AllocError> {
+        pid_ns: Option<Arc<PidNamespace>>,
+    ) -> Result<Arc<Process>, AllocError> {
         let job = job.unwrap_or_else(|| parent.job());
-        let mut child = Process::with_pid(space, object::process::allocate().unwrap_or(0), job)?;
-        child.files = if share_files {
+        // The child's own descriptors and directories, which are the parent's
+        // or a copy of them: never the console `with_pid` would open for a
+        // kernel-made process and the copy would then replace.
+        let files = if share_files {
             Arc::clone(&parent.files)
         } else {
             let copied = parent.files.lock().try_clone().map_err(|_| AllocError)?;
             fallible::try_arc(SpinLock::new(copied))?
         };
-        child.fs = if share_fs {
+        let fs = if share_fs {
             Arc::clone(&parent.fs)
         } else {
             fallible::try_arc(SpinLock::new(parent.fs.lock().clone()))?
         };
+        let mut shared = Process::shared_with_context(
+            space,
+            object::process::allocate().unwrap_or(0),
+            job,
+            files,
+            fs,
+        )?;
+        let child = Arc::get_mut(&mut shared).ok_or(AllocError)?;
+        // In `pid_ns` when `CLONE_NEWPID` made one, else where the parent's
+        // children go. Numbered in every namespace from there up, so a
+        // namespace that is ending, or a job out of memory, refuses the fork.
+        let children_ns = pid_ns.or_else(|| parent.children_namespace());
+        if let Some(namespace) = children_ns
+            && child.pid() != 0
+        {
+            child.pids = Some(pidns::assign(&namespace, child.pid()).map_err(|_| AllocError)?);
+        }
+        child.groups = SpinLock::new(parent.groups.lock().clone());
         child.state = SpinLock::new(parent.state.lock().for_fork()?);
         child.startup = SpinLock::new(parent.startup());
         child.parent = SpinLock::new(Arc::downgrade(parent));
@@ -450,7 +520,20 @@ impl Process {
         child.credentials = SpinLock::new(parent.credentials.lock().clone());
         child.nsproxy = SpinLock::new(parent.nsproxy.lock().clone());
         child.identity = SpinLock::new(parent.identity.lock().clone());
-        Ok(child)
+        Ok(shared)
+    }
+
+    /// [`Process::with_context`], shared. Apart, so that the `Process` it
+    /// builds is on the stack only while it moves to the heap.
+    #[inline(never)]
+    fn shared_with_context(
+        space: Arc<AddressSpace>,
+        pid: u32,
+        job: Arc<Job>,
+        files: Arc<SpinLock<FdTable<Arc<OpenFile>>>>,
+        fs: Arc<SpinLock<Context>>,
+    ) -> Result<Arc<Process>, AllocError> {
+        fallible::try_arc(Process::with_context(space, pid, job, files, fs)?)
     }
 
     /// Its descriptor table.
@@ -1050,6 +1133,9 @@ impl Process {
         // With nobody to take them -- the boot checks run before init, and init
         // itself may end -- they are released as before: an ended one here, a
         // running one when it ends.
+        // The init of a pid namespace takes its namespace with it: nothing
+        // may join it, and everything in it is killed (`docs/PIDNS.md` §5).
+        pidns::init_gone(self);
         let orphans = core::mem::take(&mut *self.children.lock());
         let reaper = self.reaper_for_orphans();
         for orphan in orphans {
@@ -1108,16 +1194,23 @@ impl Process {
         }
     }
 
-    /// Where its children go when it ends: the nearest ancestor still running
-    /// that set `PR_SET_CHILD_SUBREAPER`, or else init, if init is running and
-    /// is not this process.
+    /// Where its children go when it ends: the nearest ancestor *in its own
+    /// namespace* still running that set `PR_SET_CHILD_SUBREAPER`, or else
+    /// its namespace's init -- pid 1 of the machine, in the first namespace --
+    /// if that is running and is not this process.
     fn reaper_for_orphans(&self) -> Option<Arc<Process>> {
         let mut ancestor = self.parent();
         while let Some(candidate) = ancestor {
+            if !pidns::same_namespace(self, &candidate) {
+                break;
+            }
             if !candidate.is_terminated() && attributes::get(&candidate).child_subreaper {
                 return Some(candidate);
             }
             ancestor = candidate.parent();
+        }
+        if let Some(local) = pidns::local_reaper(self) {
+            return local;
         }
         registry::find(registry::INIT_PID)
             .filter(|init| !init.is_terminated() && !core::ptr::eq(Arc::as_ptr(init), self))
@@ -1471,35 +1564,119 @@ impl Process {
             })
     }
 
-    /// Its parent's pid, or zero when it has none: a process the kernel
-    /// started, or one whose parent has ended.
-    pub(crate) fn parent_pid(&self) -> u32 {
+    /// The number `viewer` calls its parent by, or zero when it has none or
+    /// the viewer cannot see it: a process the kernel started, one whose
+    /// parent has ended, and a namespace's init.
+    pub(crate) fn parent_pid_in(&self, viewer: &Process) -> u32 {
         self.parent
             .lock()
             .upgrade()
-            .map_or(0, |parent| parent.pid())
+            .map_or(0, |parent| pidns::to_user(viewer, &parent))
     }
 
-    /// Its process group.
+    /// Its process group, as a kernel number.
     pub(crate) fn pgid(&self) -> u32 {
         self.pgid.load(Ordering::Acquire)
     }
 
-    /// Move it into process group `pgid`.
-    pub(crate) fn set_pgid(&self, pgid: u32) {
+    /// The number `viewer` calls its process group by; zero for one led from
+    /// outside the viewer's namespace.
+    pub(crate) fn pgid_in(&self, viewer: &Process) -> u32 {
+        let record = self.groups.lock().pgrp.clone();
+        pidns::group_to_user(viewer, record.as_ref(), self.pgid())
+    }
+
+    /// The numbers of its process group, to give to a process joining it.
+    pub(crate) fn group_record(&self) -> Option<Arc<Numbers>> {
+        self.groups.lock().pgrp.clone()
+    }
+
+    /// The numbers of its session.
+    pub(crate) fn session_record(&self) -> Option<Arc<Numbers>> {
+        self.groups.lock().session.clone()
+    }
+
+    /// Move it into process group `pgid`, whose numbers are `record`.
+    pub(crate) fn set_pgid(&self, pgid: u32, record: Option<Arc<Numbers>>) {
+        self.groups.lock().pgrp = record;
         self.pgid.store(pgid, Ordering::Release);
     }
 
-    /// Its session.
+    /// Its session, as a kernel number.
     pub(crate) fn sid(&self) -> u32 {
         self.sid.load(Ordering::Acquire)
+    }
+
+    /// The number `viewer` calls its session by; zero for one led from
+    /// outside the viewer's namespace.
+    pub(crate) fn sid_in(&self, viewer: &Process) -> u32 {
+        let record = self.groups.lock().session.clone();
+        pidns::group_to_user(viewer, record.as_ref(), self.sid())
     }
 
     /// Make it the leader of a new session and of a new process group, both
     /// numbered by its pid: what `setsid` does.
     pub(crate) fn lead_new_session(&self) {
+        {
+            let mut groups = self.groups.lock();
+            groups.session = self.pids.clone();
+            groups.pgrp = self.pids.clone();
+        }
         self.sid.store(self.pid(), Ordering::Release);
         self.pgid.store(self.pid(), Ordering::Release);
+    }
+
+    /// Its numbers in the namespaces below the first it is in; `None` in
+    /// the first.
+    pub(crate) fn numbers(&self) -> Option<&Arc<Numbers>> {
+        self.pids.as_ref()
+    }
+
+    /// The namespace its children are made in; `None` for the first.
+    pub(crate) fn children_namespace(&self) -> Option<Arc<PidNamespace>> {
+        self.pid_for_children.lock().clone().or_else(|| {
+            self.pids
+                .as_ref()
+                .map(|numbers| Arc::clone(numbers.namespace()))
+        })
+    }
+
+    /// Whether `unshare(CLONE_NEWPID)` has given its children a namespace
+    /// that is not its own: Linux's `pid_ns_for_children` differing from the
+    /// task's active namespace, which makes another `CLONE_NEWPID` `EINVAL`.
+    pub(crate) fn children_in_other_namespace(&self) -> bool {
+        self.pid_for_children.lock().is_some()
+    }
+
+    /// Number a process that is made and not yet shared in `namespace` and
+    /// every one above it, and make it the leader of its own group and
+    /// session there: a native child made by a creator that is in a pid
+    /// namespace (`docs/PIDNS.md` §4).
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` for a namespace that is ending, for the job's memory, and for
+    /// the maps' nodes.
+    pub(crate) fn enter_pid_namespace(
+        &mut self,
+        namespace: &Arc<PidNamespace>,
+    ) -> Result<(), Errno> {
+        if self.pid() == 0 {
+            return Ok(());
+        }
+        let numbers = pidns::assign(namespace, self.pid())?;
+        self.groups = SpinLock::new(Groups {
+            pgrp: Some(Arc::clone(&numbers)),
+            session: Some(Arc::clone(&numbers)),
+        });
+        self.pids = Some(numbers);
+        Ok(())
+    }
+
+    /// Have its later children made in `namespace` (`unshare(CLONE_NEWPID)`).
+    pub(crate) fn set_children_namespace(&self, namespace: Arc<PidNamespace>) {
+        let displaced = self.pid_for_children.lock().replace(namespace);
+        drop(displaced);
     }
 
     /// The signal its parent is told with when it ends.
@@ -2078,10 +2255,19 @@ pub(crate) fn new_for_check() -> Result<Arc<Process>, SpaceError> {
 ///
 /// As [`AddressSpace::fork`].
 pub(crate) fn fork_for_check(parent: &Arc<Process>) -> Result<Arc<Process>, SpaceError> {
+    fork_for_check_in(parent, None)
+}
+
+/// [`fork_for_check`] into `namespace`, as `clone(CLONE_NEWPID)` makes a
+/// child, or where the parent's children go when it is `None`.
+pub(crate) fn fork_for_check_in(
+    parent: &Arc<Process>,
+    namespace: Option<Arc<PidNamespace>>,
+) -> Result<Arc<Process>, SpaceError> {
     let child = parent
-        .fork_memory(|space| Process::forked(parent, space, false, false))?
+        .fork_memory(|space| Process::forked_into(parent, space, false, false, None, namespace))?
         .map_err(|_| SpaceError::OutOfMemory)?;
-    let child = registry::register(child);
+    let child = registry::register_shared(child);
     attributes::inherit(parent, &child);
     Ok(child)
 }

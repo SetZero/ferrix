@@ -2203,6 +2203,25 @@ pub(crate) static STAGE13_SMALL_NAMESPACES: Explanation = Explanation {
     see: "src/kernel/src/fs/smallns_check.rs; src/kernel/src/syscall/nsproxy.rs; src/kernel/src/fs/nsfs.rs; src/kernel/src/syscall/namespace.rs; src/kernel/src/syscall/system.rs; src/kernel/src/syscall/sem.rs; src/kernel/src/fs/cgroupfs.rs",
 };
 
+/// For `check_pid_namespaces` in `stages_check.rs`, when
+/// `fs::pidns_check::run` fails.
+pub(crate) static STAGE13_PID_NAMESPACES: Explanation = Explanation {
+    code: "FX-0891",
+    title: "A pid namespace failed its self-check",
+    meaning: "`fs::pidns_check::run` makes a namespace with unshare(CLONE_NEWPID) and forks into it. The first process must be pid 1 there and have another number outside, the next 2, and the caller that unshared must not have moved; kill, wait4, getppid, getpgid, getsid and setsid must speak the caller's numbers, refusing a process the namespace cannot see and reading 0 for a parent or group it cannot; an orphan must go to its namespace's init, and the init's end must end the namespace and shut it to new members; an init must ignore SIGTERM, SIGKILL and SIGSTOP from inside, catch a signal it has a handler for, and take SIGSTOP and SIGKILL from an ancestor namespace; si_pid, ssi_pid and SO_PEERCRED must be told in the reader's numbers and 0 for a sender it cannot see; a procfs mounted in a namespace must list only its processes by its numbers, with self, NSpid and ns/pid to match; cgroup.procs must list and take the reader's numbers; and CLONE_NEWPID must need CAP_SYS_ADMIN unless a user namespace comes with it, be refused with CLONE_THREAD or CLONE_PARENT, and stop at 32 levels, each made from a process in the one above; a native child must be numbered in its creator's namespace; and a namespace whose first fork failed must take no later fork (docs/PIDNS.md, P1 to P14).",
+    causes: &[
+        "`pidns::from_user` or `pidns::to_user` is skipped at a call that names or reports a pid.",
+        "`Local::allocate` hands out a number already in use, or does not start at 1 in a namespace.",
+        "`Process::reaper_for_orphans` sends an orphan to the machine's pid 1 instead of its namespace's init.",
+        "`pidns::init_gone` does not shut the namespace or does not kill its members.",
+        "`pidns::discards` lets a signal through to an init that it should not, or keeps SIGKILL from an ancestor namespace out.",
+        "A procfs instance lists or finds processes by their kernel numbers.",
+        "`namespaces_asked` or `sys_unshare` skips CAP_SYS_ADMIN, the CLONE_THREAD and CLONE_PARENT refusals, or the depth limit.",
+        "`launch::load_native` leaves a native child out of its creator's namespace, or `Numbers::drop` leaves a namespace open after its pid 1 went.",
+    ],
+    see: "src/kernel/src/fs/pidns_check.rs; src/kernel/src/syscall/pidns.rs; src/kernel/src/syscall/family.rs; src/kernel/src/syscall/kill.rs; src/kernel/src/fs/procfs.rs",
+};
+
 /// For `check_semaphores` in `stages_check.rs`, when `syscall::sem_check::run`
 /// fails.
 pub(crate) static STAGE7_SEMAPHORES: Explanation = Explanation {
@@ -2731,6 +2750,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE13_MOUNT_NAMESPACES,
     &STAGE13_USER_NAMESPACES,
     &SYSFS,
+    &STAGE13_PID_NAMESPACES,
     &STAGE13_SMALL_NAMESPACES,
     &STAGE9_OBJECTS,
     &STAGE9_ALLOCATION,

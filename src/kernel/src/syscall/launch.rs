@@ -127,7 +127,9 @@ pub(crate) fn load_native(
         }
         None => (Credentials::root(), None),
     };
-    let child = exec::load_native(image, name, credentials, context).map_err(load_status)?;
+    let pids = creator.and_then(Process::children_namespace);
+    let child = exec::load_native_in(image, name, credentials, context, pids.as_ref())
+        .map_err(load_status)?;
     // After `exec::load_native` registered it, so that the entry is not
     // pruned as a pid nothing finds, and before anything can start it.
     if let Some(creator) = creator {
