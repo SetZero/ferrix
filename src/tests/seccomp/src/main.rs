@@ -1084,11 +1084,7 @@ fn kill() -> Step {
             let _ = call0(GETPPID);
             4
         })?;
-        let ended = reap(child);
-        say(&format!(
-            "seccomp: kill: {name} ended a process with {ended}"
-        ));
-        match ended {
+        match reap(child) {
             BY_SIGSYS => {}
             4 => return Err(format!("a {name} call returned")),
             other => {
