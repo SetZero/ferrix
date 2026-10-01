@@ -117,8 +117,16 @@ pub(crate) fn monotonic_nanos(nanos: &mut u64) -> usize {
 /// assignment -- which is the whole of what `asm!` is here, and what
 /// `tools/common/data/asm-allowlist.json` admits.
 fn trap(number: usize, args: [usize; 6]) -> usize {
+    trap_words(number, args).0
+}
+
+/// [`trap`], and the second, third and fourth argument registers as the call
+/// left them: where `channel_write_read` hands back the words of the message
+/// it received. Every other call leaves them as they went in.
+pub(crate) fn trap_words(number: usize, args: [usize; 6]) -> (usize, [usize; 3]) {
     let [a0, a1, a2, a3, a4, a5] = args;
     let result;
+    let (w0, w1, w2);
     // SAFETY: `raw` was built by `src/lib/proto/native`, which puts in a pointer
     // argument only the address of a slice `raw` borrows — shared if the
     // kernel reads it, exclusive if it writes — and `raw` outlives this trap.
@@ -130,15 +138,15 @@ fn trap(number: usize, args: [usize; 6]) -> usize {
             "svc #0",
             in("x8") number,
             inlateout("x0") a0 => result,
-            in("x1") a1,
-            in("x2") a2,
-            in("x3") a3,
+            inlateout("x1") a1 => w0,
+            inlateout("x2") a2 => w1,
+            inlateout("x3") a3 => w2,
             in("x4") a4,
             in("x5") a5,
             options(nostack),
         );
     }
-    result
+    (result, [w0, w1, w2])
 }
 
 /// `dsb sy`: complete every access before this, to memory of any type and

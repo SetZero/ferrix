@@ -169,6 +169,18 @@ fn native_call(args: &SyscallArgs) -> Outcome {
         .as_deref()
         .and_then(sched::Task::thread)
         .map(|thread| thread.process());
+    // The one call that answers in more than one register.
+    if args.number == ferrix_native_abi::nr::CHANNEL_WRITE_READ
+        && let Some(caller) = caller
+    {
+        return match native::dispatch_write_read(args, caller) {
+            Ok((count, words)) => Outcome::ReturnWords {
+                value: errno::encode(Ok(count)),
+                words,
+            },
+            Err(refused) => Outcome::Return(errno::encode(Err(refused))),
+        };
+    }
     Outcome::Return(errno::encode(native::dispatch(args, caller)))
 }
 

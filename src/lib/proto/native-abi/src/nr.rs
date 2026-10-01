@@ -31,6 +31,13 @@ pub const CHANNEL_CREATE: usize = 0x1010;
 pub const CHANNEL_WRITE: usize = 0x1011;
 /// [`NativeCall::ChannelRead`].
 pub const CHANNEL_READ: usize = 0x1012;
+/// [`NativeCall::ChannelWriteRead`].
+pub const CHANNEL_WRITE_READ: usize = 0x1013;
+/// The most bytes a [`NativeCall::ChannelWriteRead`] carries each way: three
+/// words, which travel in registers.
+pub const CHANNEL_WRITE_READ_BYTES: usize = 3 * size_of::<usize>();
+/// [`NativeCall::ChannelWriteRead`]'s `count` for a call that only receives.
+pub const WRITE_READ_NOTHING: usize = usize::MAX;
 
 /// [`NativeCall::PortCreate`].
 pub const PORT_CREATE: usize = 0x1018;
@@ -155,6 +162,21 @@ pub enum NativeCall {
     /// actual: *ReadActual)`. Receive one message. If it does not fit, it stays
     /// queued and `actual` reports what it needs. Needs `READ`.
     ChannelRead,
+    /// `(channel, count, w0, w1, w2)` → count. Send `count` bytes, at most
+    /// [`CHANNEL_WRITE_READ_BYTES`], taken from the words `w0`, `w1`, `w2` as
+    /// they would lie in memory, unless `count` is [`WRITE_READ_NOTHING`];
+    /// then block until a message is readable on the same end, and receive
+    /// it the same way if it carries no handles and fits in three words. The
+    /// answer is its size in bytes, and its words come back in the second,
+    /// third and fourth argument registers. One call where a round trip took
+    /// a write, a wait and a read, and no copy through the program's memory:
+    /// seL4's register messages under Zircon's `channel_call`. `PEER_CLOSED`
+    /// when nothing more will come; `BUFFER_TOO_SMALL` for a message that
+    /// needs [`NativeCall::ChannelRead`], left queued; `TIMED_OUT` never, as
+    /// the call waits as long as it takes; and whatever a write is refused
+    /// for, before it waits. A signal or a kill ends the wait with `EINTR`.
+    /// Needs `WRITE` to send and `READ` to receive.
+    ChannelWriteRead,
     /// `()` → handle. Make a port.
     PortCreate,
     /// `(port, packet: *PortPacket)`. Queue a user packet. Needs `WRITE`.
@@ -378,7 +400,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 46] = [
+pub const ALL: [NativeCall; 47] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -387,6 +409,7 @@ pub const ALL: [NativeCall; 46] = [
     NativeCall::ChannelCreate,
     NativeCall::ChannelWrite,
     NativeCall::ChannelRead,
+    NativeCall::ChannelWriteRead,
     NativeCall::PortCreate,
     NativeCall::PortQueue,
     NativeCall::PortWait,
@@ -448,6 +471,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         CHANNEL_CREATE => NativeCall::ChannelCreate,
         CHANNEL_WRITE => NativeCall::ChannelWrite,
         CHANNEL_READ => NativeCall::ChannelRead,
+        CHANNEL_WRITE_READ => NativeCall::ChannelWriteRead,
         PORT_CREATE => NativeCall::PortCreate,
         PORT_QUEUE => NativeCall::PortQueue,
         PORT_WAIT => NativeCall::PortWait,
@@ -503,6 +527,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::ChannelCreate => CHANNEL_CREATE,
         NativeCall::ChannelWrite => CHANNEL_WRITE,
         NativeCall::ChannelRead => CHANNEL_READ,
+        NativeCall::ChannelWriteRead => CHANNEL_WRITE_READ,
         NativeCall::PortCreate => PORT_CREATE,
         NativeCall::PortQueue => PORT_QUEUE,
         NativeCall::PortWait => PORT_WAIT,

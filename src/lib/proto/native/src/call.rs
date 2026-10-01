@@ -40,6 +40,17 @@ pub trait Syscall: Copy {
     /// Make the call `raw` describes and return the result register as the
     /// kernel left it: a value, or `-errno` in `-4095..=-1`.
     fn call(self, raw: Raw<'_>) -> usize;
+
+    /// Make the call `raw` describes and return the result register and
+    /// the second, third and fourth argument registers as the kernel left
+    /// them: where `channel_write_read` hands back the message it received.
+    /// `None` for a way of calling that cannot see them -- a C library's
+    /// `syscall`, which returns one register -- and then the call is not
+    /// made at all.
+    fn call_words(self, raw: Raw<'_>) -> Option<(usize, [usize; 3])> {
+        let _ = raw;
+        None
+    }
 }
 
 /// A piece of the caller's memory that a pointer argument names.
@@ -200,6 +211,12 @@ impl<'a> Call<'a> {
     /// Make the call through `sys`.
     pub(crate) fn make<S: Syscall>(self, sys: S) -> usize {
         sys.call(self.raw)
+    }
+
+    /// Make the call through `sys`, reading back three more registers: see
+    /// [`Syscall::call_words`].
+    pub(crate) fn make_words<S: Syscall>(self, sys: S) -> Option<(usize, [usize; 3])> {
+        sys.call_words(self.raw)
     }
 }
 

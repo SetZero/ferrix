@@ -32,6 +32,10 @@ use super::task::{BLOCKED, RUNNABLE, Task};
 /// Belt and braces against a missing notify: see `wait_until_deadline`.
 const RECHECK_NANOS: u64 = 5_000_000;
 
+/// How many waiters a wake moves out without taking the list's buffer: see
+/// [`WaitQueue::wake_all_with`].
+const WAKE_BATCH: usize = 4;
+
 /// Tasks waiting for one thing.
 #[derive(Debug)]
 pub(crate) struct WaitQueue {
@@ -319,10 +323,30 @@ impl WaitQueue {
     /// Wake everything waiting, each as `how` allows: see
     /// [`super::wake_with`]. At most the first can find room on the waker's
     /// processor; the rest are woken where they are.
+    ///
+    /// # Kept, not given away
+    ///
+    /// The list keeps its buffer. Taking the whole `Vec` left the queue an
+    /// empty one, so the next waiter's push allocated a buffer and this wake
+    /// freed it: an allocation and a free for every wait, on the path a
+    /// round trip between two programs takes twice. Up to [`WAKE_BATCH`]
+    /// waiters, the common case by far, are moved out by value and the
+    /// buffer stays; a longer list is taken whole, as before.
     pub(crate) fn wake_all_with(&self, how: super::Wake) {
         let _ = self.wakes.fetch_add(1, Ordering::Relaxed);
-        let waiters = core::mem::take(&mut *self.waiters.lock());
-        for task in &waiters {
+        let mut few: [Option<Arc<Task>>; WAKE_BATCH] = [const { None }; WAKE_BATCH];
+        let many = {
+            let mut waiters = self.waiters.lock();
+            if waiters.len() <= WAKE_BATCH {
+                for (slot, task) in few.iter_mut().zip(waiters.drain(..)) {
+                    *slot = Some(task);
+                }
+                Vec::new()
+            } else {
+                core::mem::take(&mut *waiters)
+            }
+        };
+        for task in few.iter().flatten().chain(&many) {
             super::wake_with(task, how);
         }
     }

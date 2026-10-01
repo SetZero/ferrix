@@ -488,6 +488,19 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
             }
             Ok(())
         }
+        // The value in R0, the words in R1 to R3: 32 bits each, which is
+        // all a 32-bit program's words are.
+        Outcome::ReturnWords { value, words } => {
+            if let Some(registers) = frame.r.get_mut(..4) {
+                registers.copy_from_slice(&[
+                    value as u32,
+                    words[0] as u32,
+                    words[1] as u32,
+                    words[2] as u32,
+                ]);
+            }
+            Ok(())
+        }
         // `execve`: the registers belong to a program that no longer exists, so
         // they are replaced rather than returned into. The stack pointer is
         // banked and set directly; Thumb follows the entry point's bit 0.

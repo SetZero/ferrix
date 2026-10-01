@@ -72,6 +72,10 @@ impl Syscall for Kernel {
     fn call(self, raw: Raw<'_>) -> usize {
         arch::call(&raw)
     }
+
+    fn call_words(self, raw: Raw<'_>) -> Option<(usize, [usize; 3])> {
+        Some(arch::trap_words(raw.number(), raw.args()))
+    }
 }
 
 /// End the process with `status`.
