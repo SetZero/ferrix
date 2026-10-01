@@ -1135,11 +1135,20 @@ conditions.** Nothing found would have blocked it.
   top, as N3's review asked. The map files follow `map_write` and
   `new_idmap_permitted`, stricter in two places.
 * **The gate, as run on the landed tree** (ed8188a2, whose tree the gate's
-  worktree held): `cargo xtask check`, the three boots at `--smp 2`, each
-  with the `userns` line (118 calls, 22 refusals), and `test-init --arch
-  all`, by os-7c; and `test-shell` and `test-vfs` on x86_64 with ferrousli's
-  busybox, by the review. Both Arm targets' `test-shell` and `test-vfs` are
-  queued on the same tree.
+  worktree held): `cargo xtask check`, the boots on x86_64 and aarch64 at
+  four processors and armv7a at `--smp 2`, each with the `userns` line (118
+  calls, 22 refusals), and `test-init --arch all`, by os-7c; and
+  `test-shell` and `test-vfs` on x86_64 with ferrousli's busybox and on
+  aarch64 and armv7a at `--smp 2` with musl's, by the review, all six passing
+  (logs `osad-n4-*` in the gate host's queue logs). No armv7a boot at four
+  processors and no release build ran on any N4 tip (the verification
+  auditor, os-db).
+* **The negative controls.** The commit claims ten. Five have logs, on the
+  earlier tip 5bc2affc (`control-n4-{u8-caps,u5-fs,kmem-charge,si-uid,audit-uid}`);
+  the range test, the writer's check, the chroot test, set-id bits honoured
+  and `privileged()` ignoring the namespace have none anywhere (os-db).
+  Until they are re-run on `main` with their logs kept, the checks they
+  stand for are evidenced by the check alone.
 
 What is owed, in `docs/BACKLOG.md` P2, with the next landing in
 `userns.rs`, `credentials.rs` or `fs/userns_check.rs` (N5 or NP at the
@@ -1159,5 +1168,6 @@ latest):
   check runs after the secondaries and devmgr have started. No other path
   reaches it today; answer only when the current task is the check's.
 * **A quoted message.** The control "`privileged()` ignoring the namespace"
-  stops the boot at `userns_check.rs:326` (the host name), before the
-  message its row quotes.
+  would stop the boot at `userns_check.rs:326` (the host name), before the
+  message its row quotes; it has no log. Run it and quote the message that
+  fires.

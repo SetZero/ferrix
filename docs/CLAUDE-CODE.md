@@ -66,6 +66,20 @@ themselves run only on affected hardware, never under the gates' QEMU. In a
 guest the verdict rests on the CPU model the hypervisor presents, so there
 the host's mitigation is what protects (AoU-11).
 
+**Both negative controls, re-run with their logs (certification consultant
+os-ad, 2026-10-01).** Neither landing kept a log of the control its message
+claims, which the verification auditor (os-db) found. Both were run again on
+`main` 503d65aa, x86_64 under TCG, each a throwaway tree booted once, and both
+fired. With `restore_fpu`'s `set_xstate_bv(components)` and `set_xstate_bv`'s
+`kept = components` (both masks out), the boot stopped at 7.51 s on
+"FERRIX-PANIC general protection fault", vector 13 in ring 0 with the
+frame's all-ones `XSTATE_BV` in `rbx`, before any `xstate` line. With the
+guest rule taken out of `speculation::zenbleed`, it stopped on "side-channel
+defence self-check failed: a processor was given the wrong verdict on
+Zenbleed or GDS". That check is a pure function of the described processors,
+so TCG shows it as well as KVM. The logs are `osad-ctl-xstate.log` and
+`osad-ctl-zenbleed-guest.log` in the gate host's queue logs.
+
 ## 1. What Claude Code is, to an operating system
 
 Since 2.1 Claude Code ships as a native program rather than an npm package:
