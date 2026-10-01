@@ -307,3 +307,4 @@ starts in the code, how landings are gated now, and what cost a gate on
 
 ---
 
+- State 2026-10-01 wind-down, `stage13-bwrap-user` (on an earlier N5 tip, f65ec64ef; needs a rebase onto stage13-n5, conflicts in fsctl.rs and mountperm_check.rs): test-bwrap as uid 1000 PASSED (bwu1-bwrap) once a new tmpfs was made 1777 and the mounter's; that case's control and the consultant's review not done. Lands after N5.
