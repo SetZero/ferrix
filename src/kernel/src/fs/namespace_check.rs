@@ -853,9 +853,18 @@ fn native_child_stays(
     // A child in a namespace that shifts a clock must not map the vDSO that
     // reads the first namespace's clocks: it is how a child would leave.
     let unshifted_vdso = crate::syscall::vdso::mapped_views(child.space())[0].is_some();
-    // Born in its creator's namespace for children: that is its own.
-    same_small &=
-        ns_link(page, child.pid(), b"time")? == ns_link(page, creator.pid(), b"time_for_children")?;
+    // Born in its creator's namespace for children: that is its own. The two
+    // links name it differently (`time:[N]`, `time_for_children:[N]`, as on
+    // Linux), so the numbers are compared.
+    let number = |link: Vec<u8>| {
+        let at = link
+            .iter()
+            .position(|&byte| byte == b'[')
+            .unwrap_or(link.len());
+        link[at..].to_vec()
+    };
+    same_small &= number(ns_link(page, child.pid(), b"time")?)
+        == number(ns_link(page, creator.pid(), b"time_for_children")?);
     tally.report.calls += 1;
     process::kill(&child, 137);
     drop((child, context));
