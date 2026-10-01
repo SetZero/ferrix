@@ -28,9 +28,15 @@
 //! * [`source`] -- the three layered unit directories as something the
 //!   caller fills, drop-ins, masking, aliases and templates, and
 //!   [`Source::load`](source::Source::load), which puts all of it together.
-//!
-//! The dependency graph, operations, the slice tree, the restart policy and
-//! `Manager::step` are landing L2.
+//! * [`event`] -- what goes into [`Manager::step`] and what comes out, and
+//!   the names the backends map: [`UnitId`](event::UnitId),
+//!   [`GroupPath`](event::GroupPath), [`Token`](event::Token),
+//!   [`ClientId`](event::ClientId).
+//! * [`restart`] -- the restart policy of §5.4, shared with `devmgr`.
+//! * [`time`] -- the manager's clock, which the backend reads for it.
+//! * [`Manager`] -- the dependency graph, transactions and operations, the
+//!   slice tree, every kind's state machine, boot and shutdown, as one
+//!   state machine: [`Manager::step`] and [`Manager::deadline`].
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -42,21 +48,27 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
+pub mod event;
 pub mod exec;
 pub mod ini;
 mod keys;
 pub mod kind;
 pub mod limits;
+mod manager;
 pub mod name;
+pub mod restart;
 pub mod source;
 pub mod specifier;
+pub mod time;
 pub mod unit;
 pub mod value;
 
 #[cfg(test)]
 mod tests;
 
+pub use manager::{Manager, Mode, NoProbe, Options, Probe};
 pub use name::UnitName;
+pub use time::Instant;
 
 /// Something wrong with a unit file that does not stop it loading: an
 /// unknown key, a value that does not parse, a setting Ferrix does not have
