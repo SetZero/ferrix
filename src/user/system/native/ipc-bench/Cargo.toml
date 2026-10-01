@@ -1,0 +1,21 @@
+[package]
+name = "ferrix-ipc-bench"
+description = "Times a channel round trip between two native processes: the figure Zircon's IPC is quoted by"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ipc-bench"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-rt.workspace = true
+ferrix-native-abi.workspace = true
+
+[lints]
+workspace = true
