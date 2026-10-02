@@ -37,6 +37,8 @@
 //!   bridges firmware configured, without recursion and without allocation.
 //! * [`virtio`] — the virtio 1.x PCI transport's vendor capabilities, which
 //!   are how a virtio device says where in its BARs its registers are.
+//! * [`window`] — which bytes of a function's configuration space its driver
+//!   may write: the bodies of its vendor capabilities, and nothing else.
 //!
 //! # Totality
 //!
@@ -78,6 +80,7 @@ pub mod msix;
 pub mod topology;
 pub mod virtio;
 pub mod walk;
+pub mod window;
 
 #[cfg(test)]
 mod tests;
