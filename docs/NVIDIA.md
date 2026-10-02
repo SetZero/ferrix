@@ -664,6 +664,7 @@ unit tests.
 | N0d | 64-bit aperture addresses and lengths in `DeviceInfo`; a driver's configuration-space window with the kernel-owned registers (command, BARs, MSI and MSI-X) refused | 3 |
 | N0e | `run-nvidia` and `test-nvidia-probe` (libvirt, the shared-domain guard, capture) | 2 |
 | N0f | Per-driver pin budget in place of the quarantine's fixed cap | 2 |
+| N0g | Interrupt remapping on VT-d, closing F-57: remappable-format MSI and MSI-X messages, an interrupt remapping table with one validated entry per minted vector and source-ID checks, and xtask's q35 with `intremap=on` on a split interrupt controller; before N1 hands the 3060 and its GSP firmware to `nvrm`. Its design goes to the consultant before code | 6 |
 | N1a | `fetch-nvidia.sh`: sources, objects, `.run` extraction, the volume | 3 |
 | N1b | `nvrm` skeleton: a ferrousli static program started by devmgr, with handles over bootstrap | 4 |
 | N1c | The OS layer (§4.2), with the 9k lines of kept C and `ferrix-nvos` | 10 |
@@ -680,13 +681,14 @@ unit tests.
 
 Each milestone's total, and what it shows:
 
-* **N0**: 15 points.
+* **N0**: 21 points, N0g's 6 added after the consultant's review of N0a
+  and N0b.
 * **N1**: 32 points, the exit of §1.
 * **N2**: 14 points. It is where "real driver" becomes "renders".
 * **N3**: 30 points.
 * **N4**: 20 points.
 
-That is **111 points from here to Chrome and Steam on the card**. N5 (CUDA)
+That is **117 points from here to Chrome and Steam on the card**. N5 (CUDA)
 and N6 (its own monitor) are sized apart. CUDA is wanted now, alongside the
 graphics (D7), and has its own feasibility pass and design by a separate
 session; this design only keeps `/dev/nvidia-uvm` servable by the same
@@ -808,6 +810,24 @@ and took the recommended answer for D2, D3 and D5.
   * The probe is a never-land commit on branch `nvidia-probe-wip`.
   * The customer answered §9 the same day. N0, the kernel prerequisites,
     starts next on branch `nvidia-n0`.
+* **2026-10-02 — N0a and N0b reviewed: OK IF.** The certification
+  consultant reviewed DMAR scopes through bridges (N0a) and MSI (N0b) on
+  `nvidia-n0` 0a619332e, with their gate and controls, and accepted them
+  with nine conditions (its ledger, 2026-10-02):
+  * the alias rule on every placement, not only sub-hierarchies;
+  * the command register written under one lock per node;
+  * L.device.22 proven whole: test-boot requires the MSI check's mint and
+    both deliveries, INTx is read back off, and the mask registers move to
+    `ferrix_pci::msi` with host tests (L.device.23);
+  * L.iommu.45 split into the topology rule and the kernel's placement
+    (L.iommu.46);
+  * `ferrix-pci` and `ferrix-acpi` named in ITEM.md §2, with a row to
+    classify them;
+  * coverage re-argued, the documents updated, a new AoU-19;
+  * no MSI vector allocated before a 32-bit capability is refused;
+  * a full gate on the final head.
+  It proposed F-57, pre-existing: x86-64 has no interrupt remapping. N0g
+  closes it before N1.
 * **2026-10-02 — CUDA feasibility and design (§11).** On that day the
   customer asked for CUDA now, alongside graphics.
   * `nvidia-uvm` was built twice against the host kernel's headers in a

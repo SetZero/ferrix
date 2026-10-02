@@ -244,6 +244,15 @@ complexity floors (18 and 22), none recursive, 43 since the conversion
 re-recorded them. Neither crate has an `unsafe` site or a panic
 exemption.
 
+The DMA and interrupt decisions the item makes about PCI rest on two more
+crates the manifest does not classify, `ferrix-pci` and `ferrix-acpi`: the
+DMAR's scopes are parsed by `ferrix_acpi::dmar`, and since 2026-10-02 whether
+a function is its own requester -- the rule that decides whether it gets an
+IOMMU domain (`L.iommu.45`) -- and which of an MSI capability's registers mask
+it (`L.device.23`) are `ferrix_pci::topology` and `ferrix_pci::msi`. Their
+host tests trace to those requirements, but the item-scoped gates do not read
+them; `docs/BACKLOG.md` has the row that classifies them.
+
 Two open points are for the assessor rather than settled here. The two
 allowlisted crates are linked by the core today without being classified at
 all, which this change makes visible rather than causes; classifying them

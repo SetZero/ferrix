@@ -456,7 +456,7 @@
       "lines": "253",
       "category": "absent-hardware",
       "match": "if unfollowed {",
-      "why": "A DMAR device scope this does not follow: a sub-hierarchy, or an endpoint with no single hop. QEMU's DMAR lists single-hop endpoint scopes only."
+      "why": "A DMAR device scope this cannot follow, or a function it reaches only under a bridge's alias: a path with an odd byte or through a function that is not a bridge, or a function behind a PCIe-to-PCI or conventional bridge. Every PCI function of xtask's q35 is placed, two of them below PCIe root ports, and the machine has no PCIe-to-PCI bridge; the rule itself is ferrix_pci::topology's, host-tested (L.iommu.45)."
     },
     {
       "file": "iommu.rs",

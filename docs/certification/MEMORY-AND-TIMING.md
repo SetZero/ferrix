@@ -435,8 +435,12 @@ Real, and narrower than a WCET:
 * **Interrupts that cannot steal unaccounted time.** A line the controller
   holds (level-triggered, or of unknown trigger) is masked from each delivery
   to its acknowledgement, so it runs its handler at most once per
-  acknowledgement. An edge-triggered MSI-X vector is no longer masked per
-  delivery (L.object.41, since 2026-10-01). It is masked only after
+  acknowledgement. An edge-triggered MSI-X or MSI vector is no longer masked
+  per delivery (L.object.41, since 2026-10-01; MSI since 2026-10-02).
+  An MSI vector of a function with no per-vector mask bit is masked by MSI
+  Enable, which drops the device's messages until the acknowledgement
+  rather than deferring them, as an MSI-X entry's pending bit would
+  (AoU-19). It is masked only after
   `STORM_BOUND` = 64 deliveries without an acknowledgement, and stays
   masked until the next one. Acknowledgements come only as fast as the
   holder's task is scheduled. So one MSI-X line's interrupt load is at most
@@ -568,6 +572,19 @@ What bounds the work in them:
   makes at most height + 2 nodes of at most 2 KiB each. A commit makes many
   such inserts, each its own window, all in task context under the volume's
   sleeping lock; none waits. This adds to the masked windows AoU-4 budgets.
+
+### 2.2e The IOMMU's bridge table (`iommu::BRIDGES`)
+
+A spin lock over the bridges PCI enumeration found, written only at stage
+10 (`iommu::learn_bridge`, one push per bridge) and read from then on. It is
+a leaf: nothing is taken under it. The longest hold is a function's first
+domain (`iommu::vtd_unit_for`, under the device node's domain lock): for
+each of the unit's kept DMAR scopes, a path of at most 124 hops each
+matched against every bridge, and then up to 256 steps up the bus numbers,
+each a pass over the bridges -- at most scopes × (hops + 256) × bridges
+comparisons, a few thousand on any machine Ferrix boots, with no
+allocation and no wait. Placement at boot (`iommu::discover`) holds it the
+same way once per function.
 
 ### 2.3 What is missing, per standard
 

@@ -54,7 +54,7 @@ integrator whose system needs something else must say so (§4, AoU-1).
 | ASR-1 | A partition shall not read or write memory belonging to another partition or to the element. | per-process page tables, `user/space.rs` | `spaces` check on every boot; SMEP+SMAP (x86-64), PAN (AArch64) |
 | ASR-2 | No mapping shall be simultaneously writable and executable. | map-time enforcement | every boot sweeps all mappings: *1,874 swept, 387 executable, none writable* |
 | ASR-3 | A partition shall reach a resource only through a capability it holds. | `object/`, handle tables | `object/check.rs`, 135 refusal assertions |
-| ASR-4 | A device shall not access memory outside the region its driver was granted. | VT-d, SMMUv3 | *9 PCI functions behind one unit, 0 bypassing, 0 unresolved* |
+| ASR-4 | A device shall not access memory outside the region its driver was granted. | VT-d, SMMUv3 | *12 PCI functions behind one unit on x86-64, two of them below PCIe root ports, 0 bypassing, 0 unresolved; a function whose DMA arrives under a bridge's alias gets no domain, never one of its own (L.iommu.45, L.iommu.46)* |
 | ASR-5 | Memory released by one partition shall not be readable by the next. | `mm::zero_frame` on allocation | called at three sites in `user/vmo.rs` |
 | ASR-6 | On detecting an inconsistent internal state, the element shall enter its safe state rather than continue. | `panic.rs` with a catalogued explanation | `check-panic-audit.py`; the safe state is defined in §3 |
 | ASR-7 | Data supplied by a partition shall be validated before use. | `syscall/uaccess.rs` | 427 refusal assertions in `syscall/check.rs` |
@@ -371,6 +371,19 @@ before a node it names, and the volume may then not mount after a power cut.
 The integrator shall use storage, and a virtual disk configuration, that
 honours flush and FUA, and shall not run the element over a write cache
 that is volatile and claims otherwise.
+
+### AoU-19 — a driver of a non-maskable MSI function acknowledges before it drains
+A PCI function with MSI and no per-vector mask bit is masked by turning MSI
+off (`L.device.22`, `L.device.23`): what it raises meanwhile is dropped, not
+held pending as an MSI-X entry's pending bit would hold it. The kernel masks
+such a vector only past `STORM_BOUND` unacknowledged deliveries, before a
+driver claims it, and when its holder lets go. A driver that drains its
+device's interrupt status and only then acknowledges can miss an event raised
+in between, and wait until the device's next message -- forever, for a
+device that raises nothing more. The integrator shall use drivers that, for
+such a function, acknowledge the `Interrupt` before draining the device's
+status, and service the device as soon as they claim the interrupt. An
+NVIDIA GPU's re-arm write, in particular, comes after the acknowledgement.
 
 ## 5. Element failure analysis
 
