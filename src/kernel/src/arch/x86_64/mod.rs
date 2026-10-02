@@ -6,6 +6,7 @@ pub(crate) mod console;
 mod cpu;
 pub(crate) use cpu::clean_for_walker;
 pub(crate) use cpu::dma_barrier;
+pub(crate) use cpu::{gs_xadd, read_gs_at};
 mod gdt;
 pub(crate) mod mmio;
 mod msi;

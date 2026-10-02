@@ -281,6 +281,11 @@ pub(crate) use armv7a::dma_barrier;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::dma_barrier;
 
+// A word of this processor's own record, read and changed atomically against
+// interrupts and migration: the preemption count (`sched::preempt`).
+mod percpu;
+pub(crate) use percpu::{this_cpu_add, this_cpu_read};
+
 // Device register accesses, one instruction each that a hypervisor can
 // emulate; `crate::mmio`'s windows are the only caller.
 #[cfg(target_arch = "aarch64")]

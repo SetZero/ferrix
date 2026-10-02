@@ -432,6 +432,12 @@ Real, and narrower than a WCET:
 * **Bounded critical sections on the RT path**, by construction rather than by
   measurement.
 * **Preemptible kernel**, so a long section delays rather than blocks.
+  Taking and letting go of a kernel spin lock masks no interrupts on x86-64:
+  the preemption count it raises is one `GS`-relative `xadd` in the
+  processor's record (L.sched.20, since 2026-10-03). On AArch64 and ARMv7-A
+  the raise and the lower each mask interrupts for a load and a store of that
+  record, a few instructions, where both used to mask for two locked
+  operations.
 * **Interrupts that cannot steal unaccounted time.** A line the controller
   holds (level-triggered, or of unknown trigger) is masked from each delivery
   to its acknowledgement, so it runs its handler at most once per

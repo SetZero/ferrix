@@ -1080,7 +1080,7 @@ pub(crate) static SCHEDULE_WITH_PREEMPTION_HELD: Explanation = Explanation {
          held; the message names the file and line that last raised the count. An enable \
          that finds nothing to lower now stops the machine itself, naming the same site.",
     ],
-    see: "src/kernel/src/sync.rs; src/kernel/src/sched/mod.rs PREEMPT_OFF; src/lib/kernel/sync/src/lib.rs \
+    see: "src/kernel/src/sync.rs; src/kernel/src/sched/preempt.rs; src/lib/kernel/sync/src/lib.rs \
           PreemptSpinLock",
 };
 

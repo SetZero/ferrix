@@ -99,7 +99,23 @@ pub(crate) struct PerCpu {
     /// The last grace period this processor has been outside a read-side
     /// section for.
     gp_seen: AtomicU64,
+    /// The running context's preemption count and locks held, and where each
+    /// was last raised: `sched::preempt`'s, which alone writes them.
+    ///
+    /// Here rather than in an array indexed by the processor's number because
+    /// the count is what keeps a task on its processor, and finding a slot by
+    /// number takes two steps a migration can come between. On x86-64 the
+    /// raise and the lower are one instruction addressed through `GS`
+    /// ([`PREEMPT_WORD_OFFSET`]); on Arm they are made with every exception
+    /// that can take a lock masked. `arch::percpu` argues both.
+    pub(crate) preempt: crate::sched::PreemptState,
 }
+
+/// Where in a [`PerCpu`] record its preemption word is, for
+/// `arch::this_cpu_add`, which raises and lowers it without first finding the
+/// record. `repr(C)` above keeps it fixed.
+pub(crate) const PREEMPT_WORD_OFFSET: usize =
+    core::mem::offset_of!(PerCpu, preempt) + crate::sched::PreemptState::WORD_OFFSET;
 
 impl PerCpu {
     /// Whether this processor has said it is running.
@@ -170,6 +186,7 @@ impl Topology {
                 ipis: AtomicU64::new(0),
                 tlb_seen: AtomicU64::new(0),
                 gp_seen: AtomicU64::new(0),
+                preempt: crate::sched::PreemptState::new(),
             })
             // FATAL-ALLOC: boot only: stage 4 builds the processor table once, before the secondaries start.
             .collect();
@@ -216,6 +233,12 @@ static TOPOLOGY: Once<Topology> = Once::new();
 /// The processors, once [`discover`] has run.
 pub(crate) fn topology() -> Option<&'static Topology> {
     TOPOLOGY.get()
+}
+
+/// Processor `cpu`'s record, by logical number, once [`discover`] has run:
+/// for a reader of another processor's state, as a report is.
+pub(crate) fn record(cpu: usize) -> Option<&'static PerCpu> {
+    TOPOLOGY.get()?.cpus.get(cpu)
 }
 
 /// Set once the boot processor's record is installed.

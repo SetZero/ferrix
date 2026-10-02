@@ -107,4 +107,86 @@ package FerrixSchedRequirements {
                 "sched::task::Task::holds_slots");
         }
     }
+
+    package Preemption {
+        doc /* src/kernel/src/sched/preempt.rs and src/kernel/src/sched/mod.rs:
+             * the preemption count every crate::sync::SpinLock raises, kept in
+             * each processor's record without a locked operation
+             * (docs/OPAQUE-KERNEL.md §9.8, 2b; the consultant's OK IF of
+             * 2026-10-02, condition 2). */
+
+        requirement <'L.sched.20'> theCountStaysWithItsProcessor : ItemLowLevel {
+            attribute :>> statement = "A preemption-disabling lock, and a raise by
+                hand, shall raise and lower the preemption count and, for a lock,
+                the locks held of the processor its holder runs on, in that
+                processor's record and without a locked operation, so that no
+                update is lost to an interrupt and none lands on another
+                processor's record: on x86-64 in one GS-relative instruction, with
+                every entry that can reach it running on the kernel's GS base; on
+                AArch64 and ARMv7-A with every exception that can take a lock
+                masked; and a report reading another processor's count shall read
+                each of the count and the locks held whole.";
+            attribute :>> criterion = "At two processors or more, two tasks per
+                processor, preempted by the timer and moving between processors,
+                take and let go of a lock 100000 times each with raises by hand
+                among them, move at least once, and leave every processor's count
+                and locks held at zero as read there by a task that holds nothing
+                (the `preempt` line).";
+            attribute :>> parent = ("H.SCHED.1", "H.SCHED.2");
+            attribute :>> unit = ("sched::preempt::raise", "sched::preempt::lower",
+                "sched::preempt::Preempt::disable", "sched::preempt::preempt_disable",
+                "sched::preempt::PreemptState::note", "sched::preempt::preempt_count",
+                "sched::preempt::locks_held", "smp::record", "arch::percpu::this_cpu_add",
+                "arch::x86_64::cpu::gs_xadd");
+        }
+        requirement <'L.sched.21'> aCountThatCannotBeKeptStops : ItemLowLevel {
+            attribute :>> statement = "The scheduler shall stop the machine
+                (FX-0503), naming the site that last raised the count, when it is
+                asked to switch with its processor's count raised, and when a
+                release finds the count, or for a lock the locks held, already at
+                zero, having put the word back first; a release that brings the
+                count to zero shall make the decision an interrupt deferred, if
+                interrupts are on.";
+            attribute :>> criterion = "The release's cover test refuses a word
+                whose count, or for a lock whose locks held, is zero, and passes one
+                that covers the release (the stage-5 checks); the negative controls
+                of a task that sleeps holding a lock and of a release with nothing
+                raised each stop the boot on FX-0503's message.";
+            attribute :>> parent = ("H.SCHED.1", "H.SCHED.2");
+            attribute :>> unit = ("sched::preempt::preempt_enable",
+                "sched::preempt::Preempt::enable", "sched::preempt::enable_from",
+                "sched::preempt::unmatched", "sched::preempt::covers",
+                "sched::preempt::decide_deferred", "sched::schedule_from");
+        }
+        requirement <'L.sched.22'> mayBlockReadsItsOwnCount : ItemLowLevel {
+            attribute :>> statement = "may_block shall answer true only when the
+                scheduler runs, interrupts are on, a task is running, and the count
+                of the processor it runs on, read so that the processor and its
+                count are one processor's (one instruction on x86-64, interrupts
+                masked on Arm), is zero.";
+            attribute :>> criterion = "A task holding nothing may block; holding a
+                preemption-disabling lock, or with the count raised by hand, it may
+                not; once it lets go it may again (the stage-5 checks).";
+            attribute :>> parent = "H.SCHED.1";
+            attribute :>> unit = ("sched::may_block", "sched::preempt::count_here",
+                "arch::percpu::this_cpu_read", "arch::x86_64::cpu::read_gs_at");
+        }
+        requirement <'L.sched.23'> aFailedTryLeavesTheCount : ItemLowLevel {
+            attribute :>> statement = "A try_lock of a preemption-disabling lock
+                that fails shall leave its processor's count and locks held as it
+                found them, and with interrupts masked shall not switch; one that
+                succeeds shall raise both by one until its guard drops; and
+                ferrix_sync::SpinLock::try_lock_manually shall take no ticket when
+                it fails.";
+            attribute :>> criterion = "With a lock held, a try_lock of it with
+                interrupts on and with them masked leaves the count and the locks
+                held unchanged and, masked, the task's switches unchanged; a
+                try_lock_manually of a held plain lock fails and changes neither;
+                a successful try_lock raises both by one until it drops (the
+                stage-5 checks, and ferrix-sync's host test of try_lock_manually).";
+            attribute :>> parent = "H.SCHED.1";
+            attribute :>> unit = ("sched::preempt::Preempt::disable",
+                "sched::preempt::Preempt::enable");
+        }
+    }
 }

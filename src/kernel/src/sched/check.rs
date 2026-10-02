@@ -206,6 +206,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     a_reaper_without_memory_frees_one_at_a_time(topology)?;
     a_dead_task_is_not_filed_as_a_sleeper()?;
     made_runnable_here_runs_without_another_interrupt()?;
+    super::preempt_check::run(topology)?;
     mark!(0);
     sleeping(&mut report)?;
     a_running_processor_is_not_idle()?;

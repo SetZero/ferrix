@@ -562,6 +562,60 @@ pub(crate) unsafe fn read_gs_word() -> u64 {
     word
 }
 
+/// The word `offset` bytes into `GS`'s base, in one instruction.
+///
+/// One instruction is the point: the processor finds the record and reads it
+/// as one, so an interrupt, and with it a migration, comes before the read or
+/// after it, never between finding this processor's record and reading it.
+///
+/// # Safety
+///
+/// (SHARED) `GS`'s base must be this processor's per-CPU record and `offset`
+/// the offset of an aligned `u64` inside it.
+#[inline(always)]
+pub(crate) unsafe fn read_gs_at(offset: usize) -> u64 {
+    let word: u64;
+    // SAFETY: (SHARED) the caller guarantees the address is an aligned word of
+    // this processor's record, which lives for the life of the system.
+    unsafe {
+        asm!(
+            "mov {word}, qword ptr gs:[{offset}]",
+            offset = in(reg) offset, word = out(reg) word,
+            options(readonly, nostack, preserves_flags),
+        );
+    }
+    word
+}
+
+/// Add `delta` to the word `offset` bytes into `GS`'s base and return what it
+/// held: one `xadd`, without a `lock` prefix.
+///
+/// One instruction, for [`read_gs_at`]'s reason: an interrupt is taken before
+/// it or after it, and no migration can come between finding the record and
+/// changing it. No `lock`, because only this processor writes the word: the
+/// prefix orders an update against other processors' writes, and there are
+/// none. Another processor reading it sees it before or after, since an
+/// aligned eight-byte access is single-copy atomic.
+///
+/// # Safety
+///
+/// (SHARED) `GS`'s base must be this processor's per-CPU record and `offset`
+/// the offset of an aligned `u64` inside it that no other processor writes.
+#[inline(always)]
+pub(crate) unsafe fn gs_xadd(offset: usize, delta: u64) -> u64 {
+    let mut value = delta;
+    // SAFETY: (SHARED) the caller guarantees the address is an aligned word of
+    // this processor's record that only this processor writes.
+    unsafe {
+        asm!(
+            "xadd qword ptr gs:[{offset}], {value}",
+            offset = in(reg) offset, value = inout(reg) value,
+            options(nostack),
+        );
+    }
+    value
+}
+
 /// This function's frame pointer.
 ///
 /// With `force-frame-pointers` on (see `.cargo/config.toml`) this register
