@@ -42,6 +42,17 @@ checked by host `btrfs check`. What it writes:
   (`NO_HOLES`), orphans for files unlinked while open and their cleanup at the
   next open, and compressed extents cut by overwrites. Every operation either
   completes or aborts the transaction; nothing half-made is committed.
+* **A full volume.** The mount takes room for every page a write dirties
+  against what the volume can still take -- free space in data block groups,
+  and unallocated device space less a headroom kept for the trees -- so a
+  write past it answers `ENOSPC` at the `write`, as Linux's btrfs reserves
+  data space, and `statfs` answers the same room. Running out finds no room
+  before an edit changes anything, which aborts nothing. A transaction that
+  aborts all the same (a disk error) is thrown away, the last commit
+  reloaded, and the mount goes read-only with a console line saying why, as
+  on Linux. Until 2026-10-02 a `dd` into a nearly full /data latched the
+  whole mount into `EIO`; the guest check now fills its disk to `ENOSPC` at
+  every boot.
 
 What it refuses to write, with a reason naming it: more than one device, a
 profile other than `SINGLE` or `DUP`, no free-space tree, no skinny metadata or
