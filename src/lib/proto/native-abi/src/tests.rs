@@ -13,8 +13,8 @@ use crate::rights::{Requested, Rights, SAME_RIGHTS};
 use crate::signals::Signals;
 use crate::status;
 use crate::types::{
-    IoMappingSpec, PROCESS_EXITED, PROCESS_KILLED, PROCESS_RUNNING, PortPacket, ProcessStatus,
-    ReadActual,
+    APERTURE_INFO_BYTES, ApertureInfo, DEVICE_INFO_BYTES, DeviceInfo, IoMappingSpec,
+    PROCESS_EXITED, PROCESS_KILLED, PROCESS_RUNNING, PortPacket, ProcessStatus, ReadActual,
 };
 
 #[test]
@@ -229,6 +229,27 @@ fn layouts_have_no_padding_and_match_on_every_target() {
 
     assert_eq!(size_of::<ProcessStatus>(), 8, "ProcessStatus");
     assert_eq!(offset_of!(ProcessStatus, value), 4, "value");
+
+    assert_eq!(
+        size_of::<ApertureInfo>(),
+        APERTURE_INFO_BYTES,
+        "ApertureInfo"
+    );
+    assert_eq!(offset_of!(ApertureInfo, len), 8, "len");
+    assert_eq!(offset_of!(ApertureInfo, bar), 16, "bar");
+    assert_eq!(offset_of!(ApertureInfo, flags), 17, "flags");
+    assert_eq!(offset_of!(ApertureInfo, offset), 24, "offset");
+}
+
+/// `DeviceInfo` keeps its 96 bytes, which drivers built before
+/// `device_aperture` pass to `device_info`; the new call is beside it.
+#[test]
+fn device_info_keeps_its_size_and_apertures_have_a_call_of_their_own() {
+    assert_eq!(size_of::<DeviceInfo>(), DEVICE_INFO_BYTES);
+    assert_eq!(DEVICE_INFO_BYTES, 96);
+    assert_eq!(nr::decode(0x1054), Some(NativeCall::DeviceAperture));
+    assert_eq!(nr::decode(0x1055), Some(NativeCall::DeviceConfigRead));
+    assert_eq!(nr::decode(0x1056), Some(NativeCall::DeviceConfigWrite));
 }
 
 #[test]

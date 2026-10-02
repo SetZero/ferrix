@@ -151,7 +151,8 @@ pub struct DeviceInfo {
     /// The PCI class code: base class in bits 23:16, subclass in 15:8, the
     /// programming interface in 7:0. Zero for a device tree node.
     pub class: u32,
-    /// Apertures the device has, each an `io_mapping_create` can claim.
+    /// Apertures the device has, each an `io_mapping_create` can claim and
+    /// `device_aperture` describes whole.
     pub apertures: u32,
     /// Vectors the device has, each an `interrupt_create` can claim.
     pub vectors: u32,
@@ -178,6 +179,13 @@ pub struct DeviceInfo {
 }
 
 /// Bytes `device_info` writes: a [`DeviceInfo`], padded to its alignment.
+///
+/// The size is fixed for good: `device_info` takes no length, so a longer
+/// struct would be written past the buffer of every driver built before it.
+/// What a driver needs beyond it comes from another call, as an aperture's
+/// 64-bit address and length come from `device_aperture`. A device tree
+/// node's blocks carry `u32` lengths cut at 4 GiB; `device_aperture` has
+/// the whole length.
 pub const DEVICE_INFO_BYTES: usize = 96;
 /// [`DeviceInfo::location`] of a device that is not a PCI function.
 pub const DEVICE_NOT_PCI: u32 = u32::MAX;
@@ -237,6 +245,43 @@ pub const PROCESS_EXITED: u32 = 1;
 /// fault, or a kill of its job, which is `SIGKILL` -- and
 /// [`ProcessStatus::value`] is the signal, as `WTERMSIG` would read it.
 pub const PROCESS_KILLED: u32 = 2;
+
+/// What `device_aperture` writes: one of the device's apertures as
+/// enumeration minted it. [`APERTURE_INFO_BYTES`] long, laid out as declared
+/// with no padding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub struct ApertureInfo {
+    /// The physical address of its first byte.
+    pub phys: u64,
+    /// Its length in bytes, whole, however far past 4 GiB.
+    pub len: u64,
+    /// The BAR it came from, or [`APERTURE_NOT_BAR`] for a device tree
+    /// node's window. One BAR can give two apertures, either side of the
+    /// MSI-X table's pages, and a BAR whose memory the kernel withheld gives
+    /// none, so this is not the index.
+    pub bar: u8,
+    /// [`APERTURE_PREFETCHABLE`], [`APERTURE_WHOLE_PAGES`] and
+    /// [`APERTURE_BAR_64`], as they hold.
+    pub flags: u8,
+    /// Written zero.
+    pub reserved: [u8; 6],
+    /// Where in its BAR it starts, in bytes; zero for a tree window.
+    pub offset: u64,
+}
+
+/// Bytes `device_aperture` writes.
+pub const APERTURE_INFO_BYTES: usize = 32;
+/// [`ApertureInfo::bar`] of an aperture that is a device tree window.
+pub const APERTURE_NOT_BAR: u8 = 0xFF;
+/// [`ApertureInfo::flags`]: reads have no side effects, so it may be mapped
+/// write-combining (`io_mapping_map_combining`).
+pub const APERTURE_PREFETCHABLE: u8 = 1 << 0;
+/// [`ApertureInfo::flags`]: it starts on a page and is whole pages, so
+/// `io_mapping_create` can claim it whole.
+pub const APERTURE_WHOLE_PAGES: u8 = 1 << 1;
+/// [`ApertureInfo::flags`]: its BAR is 64 bits wide.
+pub const APERTURE_BAR_64: u8 = 1 << 2;
 
 /// The aperture an `io_mapping_create` claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

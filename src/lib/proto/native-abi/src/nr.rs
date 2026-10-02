@@ -117,6 +117,12 @@ pub const LOG_CONTROL_CREATE: usize = 0x1051;
 pub const DEVMGR_START: usize = 0x1052;
 /// [`NativeCall::AuditRead`].
 pub const AUDIT_READ: usize = 0x1053;
+/// [`NativeCall::DeviceAperture`].
+pub const DEVICE_APERTURE: usize = 0x1054;
+/// [`NativeCall::DeviceConfigRead`].
+pub const DEVICE_CONFIG_READ: usize = 0x1055;
+/// [`NativeCall::DeviceConfigWrite`].
+pub const DEVICE_CONFIG_WRITE: usize = 0x1056;
 /// The most records one [`NativeCall::AuditRead`] copies.
 pub const AUDIT_READ_MAX: u64 = 64;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
@@ -385,10 +391,34 @@ pub enum NativeCall {
     /// given (`docs/certification/AUDIT.md` §4). Never blocks: a reader
     /// polls.
     AuditRead,
+    /// `(device, index, info: *ApertureInfo)` → 0. Write the device's
+    /// aperture `index` as an [`crate::types::ApertureInfo`]: its whole
+    /// 64-bit address and length, the BAR it came from and where in it, and
+    /// whether it is prefetchable, whole pages and from a 64-bit BAR
+    /// (`docs/NVIDIA.md` §12.1). `index` runs below
+    /// [`crate::types::DeviceInfo::apertures`]; past it, `INVALID_ARGS`. Any
+    /// device handle will do, as for `DeviceInfo`; `FAULT` for `info`.
+    DeviceAperture,
+    /// `(device, offset, width, value: *u32)` → 0. Read `width` bytes, 1, 2
+    /// or 4, of the PCI function's configuration space at `offset`, a
+    /// multiple of `width` below 4096, into the low bytes of `value`. Every
+    /// byte is readable, the kernel's registers included; a function with
+    /// only 256 bytes reads all ones above them. `INVALID_ARGS` for another
+    /// width or offset, `WRONG_TYPE` for a device that is not a PCI function
+    /// with configuration space, `BAD_STATE` for one the kernel refused.
+    /// Needs `MANAGE`.
+    DeviceConfigRead,
+    /// `(device, offset, width, value)` → 0. Write the low `width` bytes of
+    /// `value`, under the same rules of width and offset as
+    /// [`NativeCall::DeviceConfigRead`]. Only a write every byte of which
+    /// lies in the function's driver-writable ranges -- the bodies of its
+    /// vendor-specific capabilities, virtio's `pci_cfg_data` excepted -- is
+    /// made; any other is `ACCESS_DENIED` and writes nothing. Needs `MANAGE`.
+    DeviceConfigWrite,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 47] = [
+pub const ALL: [NativeCall; 50] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -436,6 +466,9 @@ pub const ALL: [NativeCall; 47] = [
     NativeCall::LogControlCreate,
     NativeCall::DevmgrStart,
     NativeCall::AuditRead,
+    NativeCall::DeviceAperture,
+    NativeCall::DeviceConfigRead,
+    NativeCall::DeviceConfigWrite,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -498,6 +531,9 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         LOG_CONTROL_CREATE => NativeCall::LogControlCreate,
         DEVMGR_START => NativeCall::DevmgrStart,
         AUDIT_READ => NativeCall::AuditRead,
+        DEVICE_APERTURE => NativeCall::DeviceAperture,
+        DEVICE_CONFIG_READ => NativeCall::DeviceConfigRead,
+        DEVICE_CONFIG_WRITE => NativeCall::DeviceConfigWrite,
         _ => return None,
     };
     Some(call)
@@ -554,5 +590,8 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::LogControlCreate => LOG_CONTROL_CREATE,
         NativeCall::DevmgrStart => DEVMGR_START,
         NativeCall::AuditRead => AUDIT_READ,
+        NativeCall::DeviceAperture => DEVICE_APERTURE,
+        NativeCall::DeviceConfigRead => DEVICE_CONFIG_READ,
+        NativeCall::DeviceConfigWrite => DEVICE_CONFIG_WRITE,
     }
 }

@@ -732,6 +732,61 @@ fn a_device_hands_out_interrupts_and_apertures() {
     assert_eq!(calls[5], made(nr::IO_MAPPING_MAP, &[0xA4, 0x6000_0000]));
 }
 
+/// `device_aperture` passes the handle and index in registers and reads the
+/// kernel's 32 bytes back whole, an 8 GiB length above 4 GiB included; the
+/// configuration calls pass handle, offset and width, a read's value comes
+/// back through memory, so a read of all ones is not an error on a 32-bit
+/// machine, and a refused write is the kernel's status.
+///
+/// Verifies: L.device.24
+#[test]
+fn a_device_reports_an_aperture_whole_and_reaches_its_configuration_window() {
+    let sys = Recorder::default();
+    let device = Device::from_owned(owned(&sys, 0xA8));
+    sys.answer(|raw| {
+        let mut bytes = [0_u8; types::APERTURE_INFO_BYTES];
+        bytes[0..8].copy_from_slice(&0x0000_0008_0000_0000_u64.to_ne_bytes());
+        bytes[8..16].copy_from_slice(&0x0000_0002_0000_0000_u64.to_ne_bytes());
+        bytes[16] = 2;
+        bytes[17] = types::APERTURE_PREFETCHABLE | types::APERTURE_BAR_64;
+        bytes[24..32].copy_from_slice(&0x4000_u64.to_ne_bytes());
+        write(raw, raw.args()[2], &bytes);
+        0
+    });
+    let aperture = device.aperture(1).expect("an aperture");
+    assert_eq!(aperture.phys, 0x8_0000_0000, "above 4 GiB");
+    assert_eq!(aperture.len, 0x2_0000_0000, "8 GiB, not cut");
+    assert_eq!((aperture.bar, aperture.offset), (2, 0x4000));
+    assert_eq!(
+        aperture.flags,
+        types::APERTURE_PREFETCHABLE | types::APERTURE_BAR_64
+    );
+
+    sys.answer(|raw| {
+        write(raw, raw.args()[3], &u32::MAX.to_ne_bytes());
+        0
+    });
+    assert_eq!(
+        device.config_read(0x100, 4),
+        Ok(u32::MAX),
+        "all ones is a value"
+    );
+    sys.fails(Errno::EACCES);
+    assert_eq!(device.config_write(0x10, 4, 0), Err(Error::AccessDenied));
+    sys.returns(0);
+    assert_eq!(device.config_write(0x48, 2, 0x1234), Ok(()));
+    let calls = sys.take();
+    assert_eq!(calls[0].number, nr::DEVICE_APERTURE);
+    assert_eq!(calls[0].args[..2], [0xA8, 1]);
+    assert_eq!(calls[1].number, nr::DEVICE_CONFIG_READ);
+    assert_eq!(calls[1].args[..3], [0xA8, 0x100, 4]);
+    assert_eq!(calls[2], made(nr::DEVICE_CONFIG_WRITE, &[0xA8, 0x10, 4, 0]));
+    assert_eq!(
+        calls[3],
+        made(nr::DEVICE_CONFIG_WRITE, &[0xA8, 0x48, 2, 0x1234])
+    );
+}
+
 #[test]
 fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
     let sys = Recorder::default();
@@ -1000,6 +1055,9 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.info();
     let _ = device.quiesce();
     let _ = device.clock(1, false);
+    let _ = device.aperture(0);
+    let _ = device.config_read(0, 4);
+    let _ = device.config_write(0x48, 4, 0);
     let _ = pending::create_process(&job, &vmo, "x");
     let _ = Process::from_owned(handle()).start(handle());
     let _ = Process::from_owned(handle()).status();

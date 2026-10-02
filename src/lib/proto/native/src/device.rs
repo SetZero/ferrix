@@ -1,7 +1,9 @@
 //! A device, and the interrupts and register windows it hands a driver.
 
 use ferrix_native_abi::nr;
-use ferrix_native_abi::types::{DEVICE_INFO_BYTES, DeviceBlock, DeviceInfo, IoMappingSpec};
+use ferrix_native_abi::types::{
+    APERTURE_INFO_BYTES, ApertureInfo, DEVICE_INFO_BYTES, DeviceBlock, DeviceInfo, IoMappingSpec,
+};
 
 use crate::call::{Call, Syscall};
 use crate::channel::Channel;
@@ -88,6 +90,68 @@ impl<S: Syscall> Device<S> {
             .make(self.syscall());
         decode_unit(value)?;
         Ok(device_info(&bytes))
+    }
+
+    /// `device_aperture`: the device's aperture `index`, below
+    /// [`DeviceInfo::apertures`], whole -- its 64-bit address and length, the
+    /// BAR it came from and where in it, and its flags. Any device handle
+    /// will do.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgs`] for an index the device does not have,
+    /// [`Error::WrongType`] for a handle that is not a device.
+    pub fn aperture(&self, index: usize) -> Result<ApertureInfo, Error> {
+        let mut bytes = [0_u8; APERTURE_INFO_BYTES];
+        let value = Call::new(nr::DEVICE_APERTURE)
+            .value(register(self.handle()))
+            .value(index)
+            .output(&mut bytes)
+            .make(self.syscall());
+        decode_unit(value)?;
+        Ok(aperture_info(&bytes))
+    }
+
+    /// `device_config_read`: `width` bytes, 1, 2 or 4, of the function's
+    /// configuration space at `offset`, a multiple of `width` below 4096.
+    /// Every byte is readable. Needs `MANAGE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgs`] for another width or offset,
+    /// [`Error::WrongType`] for a device that is not a PCI function with
+    /// configuration space, [`Error::BadState`] for one the kernel refused,
+    /// [`Error::AccessDenied`] without `MANAGE`.
+    pub fn config_read(&self, offset: u16, width: u8) -> Result<u32, Error> {
+        let mut bytes = [0_u8; 4];
+        let value = Call::new(nr::DEVICE_CONFIG_READ)
+            .value(register(self.handle()))
+            .value(usize::from(offset))
+            .value(usize::from(width))
+            .output(&mut bytes)
+            .make(self.syscall());
+        decode_unit(value)?;
+        Ok(u32::from_ne_bytes(bytes))
+    }
+
+    /// `device_config_write`: the low `width` bytes of `value` at `offset`,
+    /// under the rules of [`Device::config_read`]. Only bytes inside the
+    /// function's vendor-specific capabilities are the driver's; a write
+    /// touching any other byte writes nothing. Needs `MANAGE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AccessDenied`] for a write any byte of which the driver may
+    /// not make, or without `MANAGE`; otherwise as [`Device::config_read`].
+    pub fn config_write(&self, offset: u16, width: u8, value: u32) -> Result<(), Error> {
+        decode_unit(
+            Call::new(nr::DEVICE_CONFIG_WRITE)
+                .value(register(self.handle()))
+                .value(usize::from(offset))
+                .value(usize::from(width))
+                .value(value as usize)
+                .make(self.syscall()),
+        )
     }
 
     /// `device_quiesce`: the device's driver is gone, so turn its bus
@@ -307,6 +371,26 @@ impl<S: Syscall> IoMapping<S> {
             .value(at.unwrap_or(0))
             .make(self.syscall());
         decode(value)
+    }
+}
+
+/// An `ApertureInfo` as `device_aperture` wrote it: field by field, in the
+/// order declared, native-endian.
+fn aperture_info(bytes: &[u8; APERTURE_INFO_BYTES]) -> ApertureInfo {
+    let long = |at: usize| {
+        bytes
+            .get(at..at + 8)
+            .and_then(|word| <[u8; 8]>::try_from(word).ok())
+            .map_or(0, u64::from_ne_bytes)
+    };
+    let byte = |at: usize| bytes.get(at).copied().unwrap_or(0);
+    ApertureInfo {
+        phys: long(0),
+        len: long(8),
+        bar: byte(16),
+        flags: byte(17),
+        reserved: [byte(18), byte(19), byte(20), byte(21), byte(22), byte(23)],
+        offset: long(24),
     }
 }
 
