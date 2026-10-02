@@ -1426,7 +1426,9 @@ impl Process {
     /// first, as [`Process::add_thread`] forgets threads: a process that
     /// starts and joins threads in a loop would otherwise keep a reference,
     /// and with it the task's allocation, for every thread it ever ran.
-    fn add_task(&self, task: &Arc<Task>) {
+    /// Seen by `syscall::check`, whose kernel threads of a check's process
+    /// are listed the same way.
+    pub(super) fn add_task(&self, task: &Arc<Task>) {
         let mut tasks = self.tasks.lock();
         tasks.retain(|listed| listed.strong_count() > 0);
         tasks.push(Arc::downgrade(task));

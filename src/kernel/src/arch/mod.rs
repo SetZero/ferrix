@@ -60,11 +60,11 @@ pub(crate) enum StatLayout {
 // The core's own system call entry, run with a call the boot check chose
 // (`syscall::seccomp_check`).
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::drive_system_call;
+pub(crate) use aarch64::{drive_native_words, drive_system_call};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::drive_system_call;
+pub(crate) use armv7a::{drive_native_words, drive_system_call};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::drive_system_call;
+pub(crate) use x86_64::{drive_native_words, drive_system_call};
 
 // Drivers for the Arm peripherals both Arm architectures can have: the GICv2,
 // the PL011, and the STM32MP1's USART, which is ARMv7-A's.

@@ -4430,6 +4430,34 @@ pub(crate) fn spinner(tag: u8, rounds: u32, status: u32) -> Result<Arc<Process>,
         .map_err(|_| "a spinning program could not be loaded")
 }
 
+/// Run `entry`, a kernel function, as the first thread of `process`, a
+/// process made for a check: listed among its tasks as a program's thread
+/// is, so that the process's end wakes and interrupts it as it would a
+/// program's, and its calls made through the architecture's entry
+/// (`arch::drive_system_call`) are its process's own.
+///
+/// For the checks that need a call to block inside a process and see what
+/// ends the wait: `object::write_read_check`. `entry` ends the thread with
+/// `process::exit_current`.
+///
+/// # Errors
+///
+/// No memory for the thread, or no processor or stack for its task.
+pub(crate) fn spawn_in(
+    process: &Arc<Process>,
+    name: &'static str,
+    entry: fn(usize),
+) -> Result<Arc<crate::sched::Task>, &'static str> {
+    let thread = Arc::new(
+        crate::syscall::thread::Thread::leader(process)
+            .map_err(|_| "no memory for a check's thread")?,
+    );
+    process.add_thread(&thread);
+    let task = crate::sched::spawn_user(name, entry, thread, None, None)?;
+    process.add_task(&task);
+    Ok(task)
+}
+
 /// Two programs pinned to one processor both finish, each with its own
 /// status, and each is switched to more than once.
 ///

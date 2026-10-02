@@ -40,7 +40,7 @@
       "purpose": "NVIDIA C3-K, the kernel's fault windows (docs/NVIDIA.md §11.4, the consultant's OK IF of 2026-10-02): window regions, forwarded faults and their wait, kernel copies that never wait, refused partial operations, the mapping count and UNMAPPED, break-before-make entries, revoke, server death, insert checks and holds, answers only from the server handle; a server-inserted frame unreachable before its hold goes, and a client waiting on a server only by its own mapping"
     },
     {
-      "ids": ["L.object.128-132", "L.sched.5-8"],
+      "ids": ["L.sched.5-8"],
       "owner": "ipc-step1",
       "branch": "ipc-step1",
       "date": "2026-10-02",

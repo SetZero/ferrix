@@ -186,8 +186,9 @@ pub enum NativeCall {
     /// when nothing more will come; `BUFFER_TOO_SMALL` for a message that
     /// needs [`NativeCall::ChannelRead`], left queued; `TIMED_OUT` never, as
     /// the call waits as long as it takes; and whatever a write is refused
-    /// for, before it waits. A signal or a kill ends the wait with `EINTR`.
-    /// Needs `WRITE` to send and `READ` to receive.
+    /// for, before it waits. The end of the caller's process, or another
+    /// thread's `execve`, ends the wait with `EINTR`; a signal does not, as it
+    /// ends no native wait. Needs `WRITE` to send and `READ` to receive.
     ChannelWriteRead,
     /// `()` → handle. Make a port.
     PortCreate,

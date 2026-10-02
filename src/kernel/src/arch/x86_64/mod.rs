@@ -15,7 +15,7 @@ mod smp;
 pub(super) mod speculation;
 mod switch;
 mod syscall;
-pub(crate) use syscall::check::drive_system_call;
+pub(crate) use syscall::check::{drive_native_words, drive_system_call};
 mod trap;
 
 pub(crate) use cpu::hardware_random;

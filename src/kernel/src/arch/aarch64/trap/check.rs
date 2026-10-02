@@ -186,3 +186,38 @@ pub(crate) fn drive_system_call(
     done.ok()?;
     Some(frame.x[0] as i64 as isize)
 }
+
+/// Take the `svc` entry with a native call of `number` and these argument
+/// registers, and answer what the entry left in `x0` and in `x1` to `x3`:
+/// where `channel_write_read` answers a message's words, and what a call
+/// that fails must leave as the program set them.
+///
+/// For the `channel_write_read` check (`object::write_read_check`), run on a
+/// thread of a check's process, as [`drive_system_call`] is run. An entry
+/// that refuses the frame answers `ENOSYS` with the registers as sent.
+pub(crate) fn drive_native_words(number: usize, args: [u64; 6]) -> (isize, [u64; 3]) {
+    use ferrix_sync::IrqControl;
+
+    let mut frame = super::TrapFrame {
+        x: [0; 31],
+        sp: 0x7fff_e000,
+        elr: 0x40_1000,
+        spsr: super::USER_SPSR,
+        // An `svc` from AArch64, class 0b010101, from a lower exception level.
+        esr: 0b01_0101 << 26,
+        far: 0,
+        kind: 8,
+        reserved: 0,
+    };
+    frame.x[..6].copy_from_slice(&args);
+    frame.x[8] = number as u64;
+    let saved = <super::super::Irq as IrqControl>::disable();
+    let done = super::system_call(&mut frame);
+    <super::super::Irq as IrqControl>::restore(saved);
+    let value = if done.is_ok() {
+        frame.x[0] as i64 as isize
+    } else {
+        ferrix_linux_abi::errno::Errno::ENOSYS.as_return_value()
+    };
+    (value, [frame.x[1], frame.x[2], frame.x[3]])
+}

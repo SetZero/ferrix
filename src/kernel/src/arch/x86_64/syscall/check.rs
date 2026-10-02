@@ -156,3 +156,38 @@ pub(crate) fn drive_system_call(
     <super::super::Irq as IrqControl>::restore(saved);
     result
 }
+
+/// Take `SYSCALL`'s entry with a native call of `number` and these argument
+/// registers, and answer what the entry left in `RAX` and in the second,
+/// third and fourth argument registers (`RSI`, `RDX`, `R10`): where
+/// `channel_write_read` answers a message's words, and what a call that
+/// fails must leave as the program set them.
+///
+/// For the `channel_write_read` check (`object::write_read_check`), run on a
+/// thread of a check's process, as [`drive_system_call`] is run.
+pub(crate) fn drive_native_words(number: usize, args: [u64; 6]) -> (isize, [u64; 3]) {
+    use ferrix_sync::IrqControl;
+
+    let mut frame = SyscallFrame {
+        r15: 0,
+        r14: 0,
+        r13: 0,
+        r12: 0,
+        rbp: 0,
+        rbx: 0,
+        r9: args[5],
+        r8: args[4],
+        r10: args[3],
+        rdx: args[2],
+        rsi: args[1],
+        rdi: args[0],
+        rax: number as u64,
+        r11: 0x202,
+        rcx: 0x40_1000,
+        user_rsp: 0x7fff_e000,
+    };
+    let saved = <super::super::Irq as IrqControl>::disable();
+    super::ferrix_syscall_entry(&mut frame);
+    <super::super::Irq as IrqControl>::restore(saved);
+    (frame.rax as i64 as isize, [frame.rsi, frame.rdx, frame.r10])
+}

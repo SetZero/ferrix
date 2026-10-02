@@ -206,6 +206,17 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // would read a stack not yet reaped as a leak.
     let mut after = Counter::default();
     check_a_wait_is_woken_by_what_it_waits_for(&mut after)?;
+    let write_read = object::write_read_check::run()?;
+    crate::console::println!(
+        "  wrread   channel_write_read through the entry: {} answers zero past their message, {} \
+         refusals left registers 2 to 4 as sent, {} messages read in order through the slot, {} \
+         waits ended by a message, the peer's close and a kill, each within {} s",
+        write_read.zeroed,
+        write_read.kept,
+        write_read.ordered,
+        write_read.woken,
+        write_read.within_seconds
+    );
     check_a_job_kill_takes_down_a_process_tree(&mut after)?;
     check_a_long_chain_of_jobs_is_freed_without_recursion()?;
     check_a_job_counts_its_members()?;
