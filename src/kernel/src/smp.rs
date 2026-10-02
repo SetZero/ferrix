@@ -556,16 +556,10 @@ fn on_ipi(_irq: u32) {
     if let Some(me) = this_cpu() {
         let _ = me.ipis.fetch_add(1, Ordering::Relaxed);
         service_tlb(me);
-        // A program that left its speculation domain may have asked this
-        // processor for the switch barrier, and waits for it in the grace
-        // period this interrupt answers below (`arch::leaving_domain`).
-        arch::serve_wanted_barrier();
         // Being here is the answer: an interrupt is never taken inside a
         // read-side section, so this processor is outside one, and was when
         // every grace period requested so far began waiting.
-        let _ = me
-            .gp_seen
-            .fetch_max(GRACE_GENERATION.load(Ordering::SeqCst), Ordering::SeqCst);
+        answer_grace_periods(me);
     }
 }
 
@@ -1413,9 +1407,24 @@ pub(crate) fn synchronize() {
 /// outside a read-side section and interrupts are masked around the answer.
 fn answer_grace(me: &'static PerCpu) {
     service_tlb(me);
-    let _ = me
-        .gp_seen
-        .fetch_max(GRACE_GENERATION.load(Ordering::SeqCst), Ordering::SeqCst);
+    answer_grace_periods(me);
+}
+
+/// Answer every grace period requested so far for `me`, the processor
+/// running this, with interrupts masked: what the interrupt handler and a
+/// waiting processor both do.
+///
+/// The generation is read first, and only then what a program leaving its
+/// speculation domain asked of this processor (`arch::serve_wanted_barrier`)
+/// or published for it to compare (`arch::answer_leaving`). The leave stores
+/// both before it advances the generation, all sequentially consistent, so an
+/// answer that counts for its grace period has seen them, and its barrier is
+/// issued before the leave returns (the certification finding F-60).
+fn answer_grace_periods(me: &PerCpu) {
+    let generation = GRACE_GENERATION.load(Ordering::SeqCst);
+    arch::serve_wanted_barrier();
+    arch::answer_leaving();
+    let _ = me.gp_seen.fetch_max(generation, Ordering::SeqCst);
 }
 
 /// How many grace periods have completed.

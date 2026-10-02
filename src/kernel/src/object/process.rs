@@ -270,8 +270,9 @@ impl Process {
     /// place, and its threads on the processors they are on, whose
     /// predictors its domain's other members may have trained a moment ago.
     /// So every processor that last ran a space of the domain issues the
-    /// barrier before this returns: this one at once, the others at the
-    /// interrupt of the grace period this waits for (`arch::leaving_domain`).
+    /// barrier before this returns: this one at once, the others as they
+    /// answer the grace period this waits for (`arch::leaving_domain`, and
+    /// its local check, the certification finding F-60).
     /// Leaving is rare -- a move between jobs, a loss of dumpability -- and
     /// the wait is the one a grace period costs. Never with a lock held,
     /// which no caller does: see `smp::synchronize`.
@@ -302,8 +303,8 @@ impl Process {
                     }
                 );
             }
+            // Waits for a grace period, the barrier's answers in it.
             crate::arch::leaving_domain(was);
-            crate::smp::synchronize();
         }
     }
 

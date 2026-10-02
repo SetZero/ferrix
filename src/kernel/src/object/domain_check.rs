@@ -28,12 +28,16 @@
 //! 9. a process that left before its birth stays out of its job's domain;
 //! 10. a child job of a marked job, a fork, a process moved in and its
 //!     fork, and a forgotten root;
+//! 11. a processor that records the leaver's domain after the leave's scan
+//!     has passed it, as a processor that read the space's domain before the
+//!     leave could (the certification finding F-60), still issues the
+//!     barrier before the leave returns;
 //!
 //! And inside a domain, no invalidation and, on x86-64, the refill.
 
 use alloc::sync::Arc;
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::status;
@@ -66,6 +70,8 @@ pub(crate) struct Report {
     /// Whether case 8 saw the barrier issued on a second processor, which a
     /// machine with one cannot show.
     pub(crate) elsewhere: bool,
+    /// Whether case 11 ran, which it needs a second processor for.
+    pub(crate) late: bool,
 }
 
 /// Run every case.
@@ -164,6 +170,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_in_domain_path(&first, &second)?;
     check_routes(&first, &marked, &mut made, &mut report)?;
     report.elsewhere = check_leaving_at_once(&first, &marked, &mut made)?;
+    report.late = check_recorded_after_the_scan(&first, &marked, &mut made)?;
 
     for process in made {
         process.kill(job::KILLED_STATUS);
@@ -668,4 +675,193 @@ fn park_elsewhere(
         crate::sched::yield_now();
     }
     Ok(Some((task, other)))
+}
+
+/// What case 11's task on the other processor installs once the leave's scan
+/// has passed: a member's space, so that its processor records the domain.
+static LATE_MEMBER: crate::sync::SpinLock<Option<Arc<AddressSpace>>> =
+    crate::sync::SpinLock::new(None);
+/// A space in no domain, which case 11's task installs first, so that its
+/// processor's last domain is none when the scan reads it.
+static LATE_NONE: crate::sync::SpinLock<Option<Arc<AddressSpace>>> =
+    crate::sync::SpinLock::new(None);
+/// Set by case 11's task once its processor's last domain is none.
+static LATE_READY: AtomicBool = AtomicBool::new(false);
+/// Set by the hook, after the scan, to have the task record the domain.
+static LATE_GO: AtomicBool = AtomicBool::new(false);
+/// Set by the task once it has.
+static LATE_RECORDED: AtomicBool = AtomicBool::new(false);
+/// Set once, by the check, when the hook is to act: the hook does nothing
+/// in any other leave, even one a missing disarm let it see.
+static LATE_ARMED: AtomicBool = AtomicBool::new(false);
+/// The barrier decisions case 11's processor had made once it recorded the
+/// domain, its own install's among them.
+static LATE_DECIDED: AtomicU64 = AtomicU64::new(0);
+/// Set by the hook when the task did not record the domain in time.
+static LATE_TIMED_OUT: AtomicBool = AtomicBool::new(false);
+/// The processor case 11's task runs on.
+static LATE_CPU: AtomicUsize = AtomicUsize::new(0);
+/// That processor's last domain as the hook saw it once the task had
+/// recorded: the leaver's, which the scan before it had not found there.
+static LATE_SEEN: AtomicU64 = AtomicU64::new(0);
+
+/// Case 11's hook, which the leave runs between its scan and its grace
+/// period.
+static LATE_HOOK: arch::CheckHook = arch::CheckHook {
+    armed_by: "the speculation domain check's case 11",
+    run: record_after_the_scan,
+};
+
+/// The hook: let the task on the other processor record the domain now,
+/// after the scan, and wait until it has.
+fn record_after_the_scan() {
+    if !LATE_ARMED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    LATE_GO.store(true, Ordering::SeqCst);
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while !LATE_RECORDED.load(Ordering::SeqCst) {
+        if crate::timer::now_nanos() > deadline {
+            LATE_TIMED_OUT.store(true, Ordering::SeqCst);
+            return;
+        }
+        core::hint::spin_loop();
+    }
+    LATE_SEEN.store(
+        arch::last_domain_on(LATE_CPU.load(Ordering::SeqCst)),
+        Ordering::SeqCst,
+    );
+}
+
+/// The task case 11 runs on the other processor: its last domain made none,
+/// then, at the hook's word, a member's space installed and left, as a
+/// processor that read the leaver's space before the leave would have
+/// recorded it; then it spins with interrupts on, so that it answers the
+/// leave's grace period, until released.
+fn record_late(_: usize) {
+    let none = LATE_NONE.lock().clone();
+    let member = LATE_MEMBER.lock().clone();
+    let (Some(none), Some(member)) = (none, member) else {
+        LATE_READY.store(true, Ordering::SeqCst);
+        return;
+    };
+    let cpu = crate::smp::this_cpu().map_or(0, |cpu| cpu.logical);
+    let saved = <arch::Irq as IrqControl>::disable();
+    // SAFETY: (TRANSLATE) as in `switch_and_back`: the check holds both
+    // spaces past this task's end, interrupts are masked, no user address
+    // is touched, and the processor is back to no user space after.
+    unsafe { none.install(None) };
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { none.uninstall() };
+    <arch::Irq as IrqControl>::restore(saved);
+    LATE_READY.store(true, Ordering::SeqCst);
+    while !LATE_GO.load(Ordering::SeqCst) {
+        if RELEASED.load(Ordering::SeqCst) {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+    let saved = <arch::Irq as IrqControl>::disable();
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { member.install(None) };
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { member.uninstall() };
+    LATE_DECIDED.store(arch::barrier_decisions_on(cpu), Ordering::SeqCst);
+    <arch::Irq as IrqControl>::restore(saved);
+    LATE_RECORDED.store(true, Ordering::SeqCst);
+    while !RELEASED.load(Ordering::SeqCst) {
+        core::hint::spin_loop();
+    }
+}
+
+/// Case 11, the certification finding F-60: a processor that records the
+/// leaver's domain after the leave's scan has passed it -- one that read the
+/// leaver's space before the leave stored `OUT`, as the store-buffer pattern
+/// allows on x86-64 and ARMv7-A -- still issues the barrier before
+/// `leave_speculation_domain` returns, by its own compare as it answers the
+/// grace period. Here the late record is made to happen by a hook between
+/// the scan and the grace period, and the processor's last domain is a
+/// member's, `first`'s, as it would be after a switch from the leaver to a
+/// member. Answers whether it ran, which needs a second processor.
+fn check_recorded_after_the_scan(
+    first: &Arc<Process>,
+    marked: &Arc<Job>,
+    made: &mut alloc::vec::Vec<Arc<Process>>,
+) -> Result<bool, &'static str> {
+    let me = crate::smp::this_cpu().map_or(0, |cpu| cpu.logical);
+    let Some(other) = crate::smp::topology().and_then(|topology| {
+        topology
+            .cpus()
+            .iter()
+            .find(|cpu| cpu.is_online() && cpu.logical != me)
+            .map(|cpu| cpu.logical)
+    }) else {
+        return Ok(false);
+    };
+    let leaver = born_in(marked)?;
+    made.push(Arc::clone(&leaver));
+    let none = AddressSpace::new().map_err(|_| "no address space for case 11")?;
+    *LATE_NONE.lock() = Some(none);
+    *LATE_MEMBER.lock() = Some(Arc::clone(first.core().space()));
+    for flag in [
+        &LATE_READY,
+        &LATE_GO,
+        &LATE_RECORDED,
+        &LATE_TIMED_OUT,
+        &RELEASED,
+    ] {
+        flag.store(false, Ordering::SeqCst);
+    }
+    LATE_CPU.store(other, Ordering::SeqCst);
+    LATE_SEEN.store(0, Ordering::SeqCst);
+    let mut only = CpuSet::empty();
+    only.insert(other)
+        .map_err(|_| "case 11 names a processor out of range")?;
+    let task = crate::sched::spawn_on_in(
+        "domain-late",
+        record_late,
+        0,
+        NICE_0_WEIGHT,
+        other,
+        only,
+        None,
+    )?;
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while !LATE_READY.load(Ordering::SeqCst) {
+        if crate::timer::now_nanos() > deadline {
+            RELEASED.store(true, Ordering::SeqCst);
+            return Err("case 11: the task on the other processor never ran");
+        }
+        crate::sched::yield_now();
+    }
+    if arch::last_domain_on(other) != 0 {
+        RELEASED.store(true, Ordering::SeqCst);
+        return Err("case 11: the other processor's last domain was not none before the leave");
+    }
+
+    LATE_ARMED.store(true, Ordering::SeqCst);
+    arch::arm_leave_hook(&LATE_HOOK);
+    leaver.core().leave_speculation_domain();
+    arch::disarm_leave_hook();
+    LATE_ARMED.store(false, Ordering::SeqCst);
+
+    let recorded = LATE_RECORDED.load(Ordering::SeqCst);
+    let before = LATE_DECIDED.load(Ordering::SeqCst);
+    let after = arch::barrier_decisions_on(other);
+    RELEASED.store(true, Ordering::SeqCst);
+    crate::sched::wait_until_gone(&task, PATIENCE_NANOS)?;
+    *LATE_NONE.lock() = None;
+    *LATE_MEMBER.lock() = None;
+    if LATE_TIMED_OUT.load(Ordering::SeqCst)
+        || !recorded
+        || LATE_SEEN.load(Ordering::SeqCst) != marked.domain()
+    {
+        return Err("case 11: the other processor did not record the domain after the scan");
+    }
+    if after <= before {
+        return Err(
+            "case 11: a processor that recorded the domain after the leave's scan issued no barrier before the leave returned",
+        );
+    }
+    Ok(true)
 }

@@ -315,10 +315,23 @@ fn check_timer_and_start_clocks(view: &BootView<'_>) {
     stages_check::check_waits_before_the_scheduler();
 }
 
+/// Stop the machine if a hook a stage 9 check armed inside the item is still
+/// armed: every one is disarmed by now, before the marker and init (F-60,
+/// `docs/OPAQUE-KERNEL.md` §9.7's rules for such a hook).
+fn require_hooks_disarmed() {
+    if let Some(check) = arch::leave_hook_armed_by() {
+        fatal!(
+            catalog::CHECK_HOOK_LEFT_ARMED,
+            "a check's hook was still armed after stage 9: {check}, in a speculation domain's leave"
+        );
+    }
+}
+
 /// The last line of boot before init: the success marker when every check
 /// ran, and the unchecked one, which no boot test accepts, when they were
 /// skipped.
 fn say_booted() {
+    require_hooks_disarmed();
     panic::mark_booted();
     audit::record(
         audit::BOOTED,

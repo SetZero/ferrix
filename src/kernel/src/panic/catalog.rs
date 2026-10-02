@@ -392,6 +392,29 @@ pub(crate) static SPECULATION_DOMAIN_LEAVE_MAY_NOT_WAIT: Explanation = Explanati
           synchronize; docs/OPAQUE-KERNEL.md §9.3b",
 };
 
+/// For `kmain` in `main.rs`, when a hook a stage 9 check armed inside the
+/// item is still armed after stage 9.
+pub(crate) static CHECK_HOOK_LEFT_ARMED: Explanation = Explanation {
+    code: "FX-0908",
+    title: "a check's hook inside the item was still armed after stage 9",
+    meaning: "Some of stage 9's checks need the item to do something at a point no program \
+              can aim at: the speculation domain check's case 11 makes another processor \
+              record a domain between a leave's scan and its grace period \
+              (`arch::speculation::leaving_domain`, the certification finding F-60). It does \
+              that through a hook only stage 9 arms, which records the check that armed it \
+              and which stage 9 disarms before init starts (`docs/OPAQUE-KERNEL.md` §9.7's \
+              rules for such a hook). A hook left armed would run that check's code in every \
+              later leave, on a machine running programs. So boot stops before the success \
+              marker, naming the check, if one still is.",
+    causes: &[
+        "A check that arms a hook returned, on success or on an error it reports, without \
+         disarming it.",
+        "A new check arms a hook and was written without the disarm.",
+    ],
+    see: "src/kernel/src/arch/speculation.rs CheckHook; src/kernel/src/object/domain_check.rs; \
+          src/kernel/src/main.rs; docs/OPAQUE-KERNEL.md §9.7",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -2861,6 +2884,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE9_QUOTAS,
     &STAGE9_KMEM,
     &SPECULATION_DOMAIN_LEAVE_MAY_NOT_WAIT,
+    &CHECK_HOOK_LEFT_ARMED,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,

@@ -300,11 +300,23 @@ pub(crate) const REFILL_IN_DOMAIN: bool = machine::REFILL_IN_DOMAIN;
 /// Processors asked to issue the barrier at once, by [`leaving_domain`].
 static BARRIER_WANTED: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
+/// How many leaves of a domain may be under way at once before another
+/// waits for one of them to finish.
+const LEAVING_SLOTS: usize = 8;
+
+/// The domains being left now, each by a [`leaving_domain`] that has not yet
+/// returned: zero in a slot no leave holds. What each processor compares its
+/// own [`LAST_DOMAIN`] with as it answers a grace period
+/// ([`answer_leaving`]), the certification finding F-60.
+///
+/// A set rather than one word, so that two leaves of different domains at
+/// once each keep theirs.
+static LEAVING: [AtomicU64; LEAVING_SLOTS] = [const { AtomicU64::new(0) }; LEAVING_SLOTS];
+
 /// A program has left speculation domain `domain` (`docs/OPAQUE-KERNEL.md`
 /// §9.3a, A1, and the consultant's F1): every processor whose last space was
-/// in it issues the barrier before the program runs on, this one at once and
-/// the others at the interrupt the caller's grace period sends
-/// ([`serve_wanted_barrier`], from `smp`'s interrupt handler).
+/// in it issues the barrier before this returns, this one at once and the
+/// others as they answer the grace period this waits for.
 ///
 /// Waiting for the next switch is not enough. A program that rises in
 /// privilege -- a set-id `execve` in place, a change of credentials -- goes
@@ -313,19 +325,91 @@ static BARRIER_WANTED: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) 
 /// running on theirs. The space is already out of every domain when this
 /// runs, so a processor that installs it from now on issues the barrier at
 /// that switch; the ones that had it, or a member's, are found here.
+///
+/// They are found two ways. The scan below asks each processor whose
+/// [`LAST_DOMAIN`] is `domain` now ([`serve_wanted_barrier`]). But nothing
+/// orders the space's store of `OUT` before the scan's loads, so a processor
+/// that read the space's domain before that store may record `domain` after
+/// the scan has passed it -- the store-buffer pattern, open on x86-64 and
+/// ARMv7-A (the certification finding F-60). So the domain is also published
+/// in [`LEAVING`] before the scan and before the grace period's generation
+/// is advanced, both sequentially consistent, and every processor answering
+/// the grace period reads the generation first, then [`LEAVING`], and issues
+/// the barrier itself if its own [`LAST_DOMAIN`] is there
+/// ([`answer_leaving`]). It answers with interrupts masked, so after any
+/// switch it was making, and having read a generation the publish came
+/// before, it cannot miss the domain; and once it has seen the publish, it
+/// reads the space's domain as `OUT` from then on.
+///
+/// Waits for the grace period, so the caller may block: it has checked so
+/// (FX-0907).
 pub(crate) fn leaving_domain(domain: u64) {
     if !HARDENED || domain == 0 {
         return;
     }
+    let slot = publish_leaving(domain);
     let online = crate::smp::count().max(1);
     for (wanted, last) in BARRIER_WANTED.iter().zip(LAST_DOMAIN.iter()).take(online) {
         if last.load(Ordering::SeqCst) == domain {
             wanted.store(true, Ordering::SeqCst);
         }
     }
+    // Between the scan and the grace period: where stage 9 makes another
+    // processor record the domain the scan has just passed (case 11).
+    // Copied out, so that the lock is not held while it runs.
+    let hook = *LEAVE_HOOK.lock();
+    if let Some(hook) = hook {
+        (hook.run)();
+    }
     let saved = <super::Irq as ferrix_sync::IrqControl>::disable();
     serve_wanted_barrier();
     <super::Irq as ferrix_sync::IrqControl>::restore(saved);
+    crate::smp::synchronize();
+    if let Some(published) = LEAVING.get(slot) {
+        published.store(0, Ordering::SeqCst);
+    }
+}
+
+/// Put `domain` in a free slot of [`LEAVING`] and answer the slot. When every
+/// slot is held, each by a leave that gives it back after one grace period,
+/// yield until one is: the caller may block.
+fn publish_leaving(domain: u64) -> usize {
+    loop {
+        for (slot, leaving) in LEAVING.iter().enumerate() {
+            if leaving
+                .compare_exchange(0, domain, Ordering::SeqCst, Ordering::Relaxed)
+                .is_ok()
+            {
+                return slot;
+            }
+        }
+        crate::sched::yield_now();
+    }
+}
+
+/// The local half of [`leaving_domain`] (F-60): if the domain this
+/// processor last ran is one being left, issue the barrier and forget it.
+///
+/// Called as this processor answers a grace period, with interrupts masked,
+/// and after it has read the generation it answers, so that every domain
+/// published before that generation was advanced is seen here.
+pub(crate) fn answer_leaving() {
+    if !HARDENED {
+        return;
+    }
+    let cpu = this_cpu();
+    let Some(last) = LAST_DOMAIN.get(cpu) else {
+        return;
+    };
+    let mine = last.load(Ordering::SeqCst);
+    if mine != 0
+        && LEAVING
+            .iter()
+            .any(|leaving| leaving.load(Ordering::SeqCst) == mine)
+    {
+        last.store(0, Ordering::SeqCst);
+        issue_barrier(cpu);
+    }
 }
 
 /// Issue the barrier [`leaving_domain`] asked of this processor, if it did,
@@ -342,6 +426,49 @@ pub(crate) fn serve_wanted_barrier() {
         }
         issue_barrier(cpu);
     }
+}
+
+/// Code a check runs inside the item, at a point no program can aim at:
+/// what `docs/OPAQUE-KERNEL.md` §9.7's rules for such a hook ask. Only stage
+/// 9 arms one, it disarms it before init starts, and a boot check after
+/// stage 9 stops the machine (FX-0908) naming the check that armed one still
+/// set.
+#[derive(Debug)]
+pub(crate) struct CheckHook {
+    /// The check that armed it, for the boot check's message.
+    pub(crate) armed_by: &'static str,
+    /// What it does where it is called.
+    pub(crate) run: fn(),
+}
+
+/// The hook [`leaving_domain`] calls between its scan and its grace period,
+/// if a check has armed one. Read under a lock rather than by one load: a
+/// leave is rare, and waits for a grace period anyway.
+static LEAVE_HOOK: crate::sync::SpinLock<Option<&'static CheckHook>> =
+    crate::sync::SpinLock::new(None);
+
+/// Arm `hook` in [`leaving_domain`]: stage 9's check only.
+pub(crate) fn arm_leave_hook(hook: &'static CheckHook) {
+    *LEAVE_HOOK.lock() = Some(hook);
+}
+
+/// Disarm whatever hook [`leaving_domain`] holds.
+pub(crate) fn disarm_leave_hook() {
+    *LEAVE_HOOK.lock() = None;
+}
+
+/// The check that armed the hook [`leaving_domain`] still holds, if any: for
+/// the boot check after stage 9.
+pub(crate) fn leave_hook_armed_by() -> Option<&'static str> {
+    LEAVE_HOOK.lock().map(|hook| hook.armed_by)
+}
+
+/// The domain processor `logical` last ran, for stage 9's check: zero for
+/// none.
+pub(crate) fn last_domain_on(logical: usize) -> u64 {
+    LAST_DOMAIN
+        .get(logical)
+        .map_or(0, |domain| domain.load(Ordering::SeqCst))
 }
 
 /// Whether a switch from a space of domain `outgoing` to one of `incoming`

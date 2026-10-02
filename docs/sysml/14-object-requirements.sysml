@@ -1416,17 +1416,31 @@ package FerrixObjectRequirements {
                 for good, and its address space with it, when it moves between jobs,
                 and when it stops being dumpable: a set-id execve, a change of
                 credentials, or PR_SET_DUMPABLE; and every processor whose last space
-                was in the domain shall issue the barrier before the leave returns.";
+                was in the domain shall issue the barrier before the leave returns.
+                The leave shall find them two ways: a scan that asks each processor
+                whose last domain is the leaver's, and a local check by which each
+                processor, answering the leave's grace period with interrupts
+                masked, compares its own last domain with the domains being left
+                and issues the barrier itself on a match. Each domain being left
+                shall be published in a set of its own slot, sequentially consistent
+                and before the scan and before the grace period's generation is
+                advanced, and the answering processor shall read the generation
+                before the set, so that one that records the domain after the scan
+                has passed it is still found (F-60).";
             attribute :>> criterion = "A member moved out of its job, one whose
                 credentials changed and one made not dumpable each decide the
                 barrier both ways with a member left in the domain (the `domain`
                 line, cases 3 and 5); a member that leaves makes this processor and one
                 running a thread in its space each decide the barrier before the
-                leave returns (case 8).";
+                leave returns (case 8); and a processor made, by stage 9's hook
+                between the scan and the grace period, to record the domain after
+                the scan has passed it decides the barrier before the leave returns
+                (case 11), which the local check removed fails.";
             attribute :>> parent = "H.TRAP.17";
             attribute :>> unit = ("object::process::Process::leave_speculation_domain",
                 "object::process::Process::leave_speculation_domain_unstarted",
                 "arch::speculation::leaving_domain", "arch::speculation::serve_wanted_barrier",
+                "arch::speculation::answer_leaving", "smp::answer_grace_periods",
                 "user::space::AddressSpace::leave_domain");
         }
     }
