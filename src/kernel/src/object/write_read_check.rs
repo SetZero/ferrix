@@ -30,6 +30,12 @@
 //! close, and its process's kill -- within [`WOKEN_WITHIN_NANOS`]. The wait
 //! files no recheck, so nothing but those wakes ends it: a wake that is
 //! missing leaves the thread blocked past the bound, and the check says which.
+//!
+//! The Sync wake (at two processors or more): a reader blocked in the call
+//! on one processor and woken by a writer on another is moved onto the
+//! writer's processor, where its affinity allows, and answers there; one
+//! pinned to its processor stays there and is still woken. The boot line
+//! counts the moves, and none in [`SYNC_ROUNDS`] fails the check.
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -79,6 +85,12 @@ pub(crate) struct Report {
     pub(crate) woken: u32,
     /// The bound each wake was held to, in seconds.
     pub(crate) within_seconds: u64,
+    /// Readers a Sync wake moved onto the writer's processor, of
+    /// [`SYNC_ROUNDS`]; and whether the moves and the pinned reader were
+    /// checked, which a machine with one processor cannot.
+    pub(crate) moved: u32,
+    /// See [`Report::moved`].
+    pub(crate) sync_checked: bool,
 }
 
 /// What a call answered: the return register, then the second to fourth.
@@ -102,6 +114,11 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     for ending in [Ending::Message, Ending::Close, Ending::Kill] {
         check_a_wait_is_ended_by(ending)?;
         report.woken += 1;
+    }
+    if crate::smp::count() >= 2 {
+        report.moved = check_a_sync_wake_moves_the_reader()?;
+        check_a_sync_wake_keeps_a_pinned_reader()?;
+        report.sync_checked = true;
     }
     Ok(report)
 }
@@ -318,7 +335,12 @@ fn check_the_registers(report: &mut Report) -> Result<(), &'static str> {
         own: Arc::clone(&own),
         peer,
     });
-    let task = spawn_in(&process, "write_read registers", registers_in_the_process)?;
+    let task = spawn_in(
+        &process,
+        "write_read registers",
+        registers_in_the_process,
+        None,
+    )?;
     let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     if process.wait_for_exit(deadline).is_none() {
         return Err("the write_read check's registers thread never finished");
@@ -535,7 +557,7 @@ fn check_a_wait_is_ended_by(ending: Ending) -> Result<(), &'static str> {
     *WAITED.lock() = None;
     *WAITER.lock() = Some(handle);
     let woken_before = own.waiters().waits_ended_by_a_wake();
-    let task = spawn_in(&process, "write_read waiter", wait_in_the_process)?;
+    let task = spawn_in(&process, "write_read waiter", wait_in_the_process, None)?;
 
     // Listed on the end's queue: blocked, or at its last look before it
     // blocks. Either way only a wake ends the wait from here.
@@ -609,4 +631,194 @@ fn check_a_wait_is_ended_by(ending: Ending) -> Result<(), &'static str> {
     }
     drop(peer);
     Ok(())
+}
+
+/// Rounds of the Sync wake's move.
+pub(crate) const SYNC_ROUNDS: usize = 8;
+
+/// The Sync check's channel: the reader's end's handle in its process, and
+/// the writer's end, which the writer task writes on.
+static SYNC_READER: SpinLock<Option<Handle>> = SpinLock::new(None);
+/// The end the writer task writes on.
+static SYNC_PEER: SpinLock<Option<Arc<Endpoint>>> = SpinLock::new(None);
+/// What the reader saw each round: its call's answer, and the processor it
+/// ran on as the call returned, plus one; zero until it has answered.
+static SYNC_SEEN: SpinLock<[(Option<Answer>, usize); SYNC_ROUNDS]> =
+    SpinLock::new([(None, 0); SYNC_ROUNDS]);
+/// How many rounds the reader makes.
+static SYNC_READS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The reader: [`SYNC_READS`] receive-only calls, each answer and the
+/// processor it came back on recorded, then the end of its process.
+fn read_in_the_process(_argument: usize) {
+    let handle = *SYNC_READER.lock();
+    let rounds = SYNC_READS.load(core::sync::atomic::Ordering::Acquire);
+    if let Some(handle) = handle {
+        for round in 0..rounds {
+            let answer = call(handle, nr::WRITE_READ_NOTHING, [0; 3]);
+            let here = crate::smp::this_cpu().map_or(0, |cpu| cpu.logical + 1);
+            if let Some(seen) = SYNC_SEEN.lock().get_mut(round) {
+                *seen = (Some(answer), here);
+            }
+        }
+    }
+    process::exit_current(0)
+}
+
+/// The writer: one small write on [`SYNC_PEER`], which wakes the reader with
+/// `Wake::Sync`, from the processor it is pinned to; then it ends, as a
+/// waker that blocks next would leave its processor.
+fn write_from_another_processor(_argument: usize) {
+    let peer = SYNC_PEER.lock().clone();
+    if let Some(peer) = peer {
+        let _ = peer.write_small(b"sync");
+    }
+}
+
+/// A Sync writer on the processor `writer_for` names, given the one the
+/// reader waits on, wakes the reader for round `round`: the writer's
+/// processor, and the one the reader answered on, plus one.
+fn wake_from(
+    own: &Endpoint,
+    reader: &Task,
+    round: usize,
+    writer_for: impl Fn(usize) -> usize,
+) -> Result<(usize, usize), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while own.waiters().listed() == 0 {
+        if reader.is_dead() || crate::timer::now_nanos() >= deadline {
+            return Err("sync: the reader never waited");
+        }
+        crate::sched::sleep_for(POLL_NANOS);
+    }
+    // Long enough for the reader to be switched out, asleep at home, the one
+    // state a Sync wake moves a task from.
+    crate::sched::sleep_for(2 * POLL_NANOS);
+    let writer_cpu = writer_for(reader.cpu());
+    let _writer = crate::sched::spawn_on(
+        "write_read sync writer",
+        write_from_another_processor,
+        0,
+        ferrix_sched::NICE_0_WEIGHT,
+        writer_cpu,
+        ferrix_sched::CpuSet::of(writer_cpu),
+    )?;
+    // Asleep while the writer writes: a move needs nothing else queued on
+    // the writer's processor, and at two processors this check's own task,
+    // woken to look, was what was queued there.
+    crate::sched::sleep_for(10 * POLL_NANOS);
+    let bound = crate::timer::now_nanos().saturating_add(WOKEN_WITHIN_NANOS);
+    loop {
+        let seen = SYNC_SEEN.lock().get(round).copied();
+        if let Some((Some(answer), here)) = seen {
+            if answer != (4, words_of(b"sync")) {
+                return Err("sync: a reader woken by a Sync write did not answer it");
+            }
+            return Ok((writer_cpu, here));
+        }
+        if crate::timer::now_nanos() >= bound {
+            return Err(
+                "sync: a reader blocked in channel_write_read was not woken by a Sync \
+                        write from another processor within 10 s",
+            );
+        }
+        crate::sched::sleep_for(POLL_NANOS);
+    }
+}
+
+/// The Sync check's reader: its process, its end, and its thread.
+struct Reader {
+    /// Held for the check's length.
+    _process: Arc<Process>,
+    /// The end it reads.
+    own: Arc<Endpoint>,
+    /// Its thread.
+    task: Arc<Task>,
+}
+
+/// A fresh channel with its reader end in a check's process, the reader
+/// started there making `rounds` calls, placed as a program's thread or
+/// pinned to `pinned`.
+fn start_reader(rounds: usize, pinned: Option<usize>) -> Result<Reader, &'static str> {
+    let process = process::new_for_check().map_err(|_| "no process for the sync check")?;
+    let (own, peer) = Endpoint::pair().map_err(|_| "no memory for the sync check's channel")?;
+    let handle = process
+        .with_handles(|table| table.insert(Object::Channel(Arc::clone(&own)), Rights::CHANNEL))
+        .map_err(|_| "no room in the sync check's table")?;
+    *SYNC_SEEN.lock() = [(None, 0); SYNC_ROUNDS];
+    *SYNC_READER.lock() = Some(handle);
+    *SYNC_PEER.lock() = Some(peer);
+    SYNC_READS.store(rounds, core::sync::atomic::Ordering::Release);
+    let task = spawn_in(
+        &process,
+        "write_read sync reader",
+        read_in_the_process,
+        pinned,
+    )?;
+    Ok(Reader {
+        _process: process,
+        own,
+        task,
+    })
+}
+
+/// Let the check's channel and reader go once its rounds are answered.
+fn finish_reader(task: &Task) -> Result<(), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    wait_dead(task, deadline, "sync: the reader never ended")?;
+    *SYNC_PEER.lock() = None;
+    *SYNC_READER.lock() = None;
+    Ok(())
+}
+
+/// A reader free to run anywhere, blocked on one processor and woken by a
+/// Sync writer pinned to another, is moved onto the writer's processor in
+/// some of [`SYNC_ROUNDS`] rounds -- one where the writer's processor has
+/// something else queued keeps it home, by design -- and answers every time.
+/// Answers how many rounds moved it.
+///
+/// Verifies: L.sched.8
+fn check_a_sync_wake_moves_the_reader() -> Result<u32, &'static str> {
+    let processors = crate::smp::count();
+    let Reader {
+        _process,
+        own,
+        task,
+    } = start_reader(SYNC_ROUNDS, None)?;
+    let mut moved = 0;
+    for round in 0..SYNC_ROUNDS {
+        // Wherever it waits now, the writer runs on the next processor.
+        let (writer, answered_on) = wake_from(&own, &task, round, |home| (home + 1) % processors)?;
+        if answered_on == writer + 1 {
+            moved += 1;
+        }
+    }
+    finish_reader(&task)?;
+    if moved == 0 {
+        return Err("sync: no Sync write from another processor moved a reader free to move");
+    }
+    Ok(moved)
+}
+
+/// A reader pinned to processor 1, woken by a Sync writer on processor 0,
+/// stays on processor 1 and is still woken, in each of [`SYNC_ROUNDS`]
+/// rounds: the move asks the reader's affinity first (`sched::may_place`).
+/// As many rounds as the free reader's, because a round in which processor 0
+/// has something else queued would not move it even if its affinity were
+/// not asked.
+///
+/// Verifies: L.sched.8, H.SCHED.4
+fn check_a_sync_wake_keeps_a_pinned_reader() -> Result<(), &'static str> {
+    let Reader {
+        _process,
+        own,
+        task,
+    } = start_reader(SYNC_ROUNDS, Some(1))?;
+    for round in 0..SYNC_ROUNDS {
+        let (_, answered_on) = wake_from(&own, &task, round, |_| 0)?;
+        if answered_on != 2 {
+            return Err("sync: a Sync write moved a reader pinned to another processor off it");
+        }
+    }
+    finish_reader(&task)
 }

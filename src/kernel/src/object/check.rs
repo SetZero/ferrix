@@ -217,6 +217,18 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         write_read.woken,
         write_read.within_seconds
     );
+    if write_read.sync_checked {
+        crate::console::println!(
+            "  sync     {} of {} Sync writes from another processor moved the reader onto the \
+             writer's processor; a reader pinned to its own was woken there",
+            write_read.moved,
+            object::write_read_check::SYNC_ROUNDS
+        );
+    } else {
+        crate::console::println!(
+            "  sync     not checked: one processor, nowhere to move a reader to"
+        );
+    }
     check_a_job_kill_takes_down_a_process_tree(&mut after)?;
     check_a_long_chain_of_jobs_is_freed_without_recursion()?;
     check_a_job_counts_its_members()?;

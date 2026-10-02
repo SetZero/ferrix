@@ -4438,7 +4438,8 @@ pub(crate) fn spinner(tag: u8, rounds: u32, status: u32) -> Result<Arc<Process>,
 ///
 /// For the checks that need a call to block inside a process and see what
 /// ends the wait: `object::write_read_check`. `entry` ends the thread with
-/// `process::exit_current`.
+/// `process::exit_current`. Placed as a program's thread is, or pinned to
+/// `cpu`.
 ///
 /// # Errors
 ///
@@ -4447,13 +4448,14 @@ pub(crate) fn spawn_in(
     process: &Arc<Process>,
     name: &'static str,
     entry: fn(usize),
+    cpu: Option<usize>,
 ) -> Result<Arc<crate::sched::Task>, &'static str> {
     let thread = Arc::new(
         crate::syscall::thread::Thread::leader(process)
             .map_err(|_| "no memory for a check's thread")?,
     );
     process.add_thread(&thread);
-    let task = crate::sched::spawn_user(name, entry, thread, None, None)?;
+    let task = crate::sched::spawn_user(name, entry, thread, cpu, None)?;
     process.add_task(&task);
     Ok(task)
 }
