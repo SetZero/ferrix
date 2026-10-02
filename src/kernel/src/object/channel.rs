@@ -235,11 +235,15 @@ impl Inbox {
 
     /// Make room for one more queued message.
     fn reserve(&mut self) -> Result<(), SendError> {
+        // FALLIBLE: `MessageQueue::reserve` grows the queue with
+        // `try_reserve_deque` and answers `NoMemory`.
         self.queue.reserve()
     }
 
     /// Queue a message after everything waiting.
     fn push(&mut self, message: ChannelMessage) -> Result<(), (SendError, ChannelMessage)> {
+        // FALLIBLE: `MessageQueue::push` reserves with `try_reserve_deque`
+        // and gives the message back with `NoMemory`.
         self.queue.push(message)
     }
 
@@ -612,17 +616,17 @@ impl Endpoint {
                 return Err(WriteFailure::Full);
             }
             if !inbox.put_small(bytes) {
+                // FALLIBLE: the queue's room, as in `write`.
                 inbox.reserve().map_err(|_| WriteFailure::NoMemory)?;
                 let mut queued =
                     fallible::try_filled(0_u8, bytes.len()).map_err(|_| WriteFailure::NoMemory)?;
                 queued.copy_from_slice(bytes);
+                let message = Message {
+                    bytes: queued,
+                    handles: Vec::new(),
+                };
                 // NOALLOC: the room `reserve` made above.
-                inbox
-                    .push(Message {
-                        bytes: queued,
-                        handles: Vec::new(),
-                    })
-                    .map_err(|_| WriteFailure::NoMemory)?;
+                inbox.push(message).map_err(|_| WriteFailure::NoMemory)?;
             }
             trigger(&mut peer.observers.lock(), Signals::READABLE)
         };
