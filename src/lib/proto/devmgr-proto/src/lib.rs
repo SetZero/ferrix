@@ -46,6 +46,8 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod budget;
+
 /// DEVICES' message type.
 pub const DEVICES: u32 = 1;
 /// REPORT's message type.
@@ -453,3 +455,6 @@ fn put(out: &mut [u8], at: usize, source: &[u8]) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod budget_tests;

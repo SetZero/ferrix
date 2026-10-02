@@ -9,5 +9,10 @@ publish.workspace = true
 
 [dependencies]
 
+[dev-dependencies]
+ferrix-blkring.workspace = true
+ferrix-native-abi.workspace = true
+ferrix-netring.workspace = true
+
 [lints]
 workspace = true

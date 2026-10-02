@@ -167,6 +167,11 @@ dependencies = [
 [[package]]
 name = "ferrix-devmgr-proto"
 version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-native-abi",
+ "ferrix-netring",
+]
 
 [[package]]
 name = "ferrix-displayctl"
