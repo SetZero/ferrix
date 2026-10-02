@@ -31,6 +31,13 @@
       "branch": "nvidia-n0",
       "date": "2026-10-02",
       "purpose": "NVIDIA N0, the kernel prerequisites (docs/NVIDIA.md §7): DMAR scopes through bridges, MSI, the PAT and write-combining, a driver's configuration-space window, a per-driver pin budget"
+    },
+    {
+      "ids": ["L.btrfs.108-116", "L.mm.63-64"],
+      "owner": "btrfs-fallible",
+      "branch": "btrfs-fallible",
+      "date": "2026-10-02",
+      "purpose": "Fallible allocation in the btrfs crates (the consultant's conditions on c51fed2fc): out-of-memory outcomes of a transaction, an open, a log replay and a read; OutOfMemory from a device not retried by the reader or the writer; RangeSet edits unchanged on failure; nothing allocating past the commit point; map nodes within a size class; and the kernel's section for library map inserts"
     }
   ]
 }
