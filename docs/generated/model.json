@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "695ff88079feb595052b51510ec4559df9504122511e87a34c18e6705a4a2d77",
+  "digest": "bf31424c8f37f8fc201329dd6814425ac7ba20e7e1d45d22c6228f443f045c5e",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -104,8 +104,8 @@
     }
   ],
   "summary": {
-    "packages": 122,
-    "elements": 6055,
+    "packages": 123,
+    "elements": 6076,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -32064,6 +32064,75 @@
               ]
             }
           ]
+        },
+        {
+          "name": "DeviceConfiguration",
+          "qualifiedName": "FerrixObjectRequirements::DeviceConfiguration",
+          "kind": "package",
+          "doc": "A published PCI node's configuration space, written by the kernel and, through device_config_write, by its driver: one lock per node, as a type (docs/NVIDIA.md section 12.1).",
+          "source": {
+            "file": "docs/sysml/14-object-requirements.sysml",
+            "line": 1346
+          },
+          "children": [
+            {
+              "name": "oneConfigurationLockPerNode",
+              "qualifiedName": "FerrixObjectRequirements::DeviceConfiguration::oneConfigurationLockPerNode",
+              "kind": "requirement",
+              "shortName": "L.object.117",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/14-object-requirements.sysml",
+                "line": 1351
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::DeviceConfiguration::oneConfigurationLockPerNode",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Every write to a published node's PCI configuration space, by the kernel or by a driver, shall be made holding the node's one configuration lock, through the one type that holds it; enumeration's writers run at stage 10, before any node is published.\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1356
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::DeviceConfiguration::oneConfigurationLockPerNode",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A ConfigWrites is made only by taking the lock, MappedConfig has no write, and bus mastering, an MSI mint and mask, MSI-X's enable and a driver's write go through ConfigWrites. Bus mastering switched on and off on one processor while another makes a driver's configuration writes to the same function, 1,000 rounds, reads back as dma_on says every time (the second config line).\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1363
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::DeviceConfiguration::oneConfigurationLockPerNode",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.DMA.5\", \"H.IRQ.2\")",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1364
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::DeviceConfiguration::oneConfigurationLockPerNode",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"device::DeviceNode::config_writes\", \"device::DeviceNode::config_writes_mapped\", \"device::DeviceNode::set_bus_master\", \"device::DeviceNode::config_mapping\", \"device::ConfigWrites::write\", \"device::ConfigWrites::inside\", \"device::MsiFunction::mint\", \"device::MsiFunction::set_masked\", \"device::MsixTable::open\")",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1369
+                  }
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -57888,7 +57957,7 @@
                   "qualifiedName": "FerrixDeviceRequirements::Nodes::msiMintedMaskedAndDelivered",
                   "kind": "attribute",
                   "redefines": "statement",
-                  "value": "\"A PCI function with an MSI capability and no MSI-X table shall be offered one vector, minted once with INTx off -- written under the node's command-register lock, which bus mastering's writes take too -- and the message masked, none past the one message, and no vector allocated for a 32-bit capability the architecture's message address is above.\"",
+                  "value": "\"A PCI function with an MSI capability and no MSI-X table shall be offered one vector, minted once with INTx off -- written under the node's command-register lock, which bus mastering's writes take too (L.object.117) -- and the message masked, none past the one message, and no vector allocated for a 32-bit capability the architecture's message address is above.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
                     "line": 349
@@ -57921,7 +57990,7 @@
                   "qualifiedName": "FerrixDeviceRequirements::Nodes::msiMintedMaskedAndDelivered",
                   "kind": "attribute",
                   "redefines": "unit",
-                  "value": "(\"device::MsiFunction::mint\", \"device::MsiFunction::of\", \"device::MsiFunction::mapped\", \"device::MsiFunction::intx_off\", \"device::DeviceNode::vector\", \"device::DeviceNode::vector_count\", \"device::DeviceNode::set_bus_master\")",
+                  "value": "(\"device::MsiFunction::mint\", \"device::MsiFunction::of\", \"device::DeviceNode::mapped_config\", \"device::MsiFunction::intx_off\", \"device::DeviceNode::vector\", \"device::DeviceNode::vector_count\", \"device::DeviceNode::set_bus_master\")",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
                     "line": 361
@@ -57987,6 +58056,177 @@
               ]
             },
             {
+              "name": "aperturesReportedWhole",
+              "qualifiedName": "FerrixDeviceRequirements::Nodes::aperturesReportedWhole",
+              "kind": "requirement",
+              "shortName": "L.device.24",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/20-device-requirements.sysml",
+                "line": 381
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::aperturesReportedWhole",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"device_aperture shall report each of a device's apertures with the address, length, BAR, offset in that BAR and flags it was minted with, whole however far past 4 GiB, and refuse an index past them with INVALID_ARGS; DeviceInfo shall keep its 96 bytes.\"",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 386
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::aperturesReportedWhole",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every aperture of every published node is answered as minted, the index past the last INVALID_ARGS, and on x86-64 pci-testdev's 8 GiB 64-bit BAR above 4 GiB is answered whole (the first config line's 1 above 4 GiB, which xtask requires). With the length cut to 32 bits the boot fails.\"",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 391
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::aperturesReportedWhole",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.DMA.5\"",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 392
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::aperturesReportedWhole",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"syscall::native::device_aperture\", \"syscall::native::aperture_bytes\", \"device::Aperture::info\", \"device::Aperture::part\", \"device::DeviceNode::aperture_info\", \"device::DeviceNode::mint_from\", \"device::DeviceNode::mint\", \"device::DeviceNode::mint_bar\")",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 397
+                  }
+                }
+              ]
+            },
+            {
+              "name": "configurationWindow",
+              "qualifiedName": "FerrixDeviceRequirements::Nodes::configurationWindow",
+              "kind": "requirement",
+              "shortName": "L.device.25",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/20-device-requirements.sysml",
+                "line": 399
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::configurationWindow",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A driver's configuration write touching any byte outside its function's writable ranges shall be refused whole with ACCESS_DENIED and change nothing, and a malformed access shall be INVALID_ARGS; reads of the function's configuration space shall be answered; and a node whose kernel-owned registers read back other than the kernel made them, at an accepted HELLO or a quiesce, shall have its bus mastering turned off and be refused in one hold of its configuration lock, every call needing MANAGE on it answering BAD_STATE, and its bus mastering never turned on again.\"",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 408
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::configurationWindow",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Header reads answer what enumeration read, and the MSI, MSI-X and extended reads are answered; writes to the command register, a BAR, the MSI and MSI-X capabilities, Device Control, an uncovered byte and ATS where present are refused and read back unchanged; a write spanning a kernel-owned and a writable byte is refused; malformed accesses are INVALID_ARGS; a command register rewritten behind the kernel is found, bus mastering reads off, the node answers BAD_STATE, the line names COMMAND, and an enable_dma after it is refused with bus mastering still off (the config lines). With the allowlist widened, the whole-range test reduced to one byte, verify_config not comparing, or the refused node's enable_dma let through, the boot fails.\"",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 420
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::configurationWindow",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.DMA.5\", \"H.DMA.3\", \"H.DEV.4\")",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 421
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::configurationWindow",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"device::DeviceNode::config_read\", \"device::DeviceNode::config_write\", \"device::config_access\", \"device::ConfigState::first_refusal\", \"device::MappedConfig::read\", \"device::DeviceNode::verify_config\", \"device::DeviceNode::breach\", \"device::DeviceNode::hello_accepted\", \"device::DeviceNode::refuse\", \"device::config_breach\", \"device::command_breach\", \"device::bar_breach\", \"device::msi_breach\", \"device::msix_control_breach\", \"device::MsixTable::rewritten\", \"device::Register::fmt\", \"syscall::native::device_config_read\", \"syscall::native::device_config_write\", \"syscall::native::config_status\", \"syscall::native::device_in\")",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 432
+                  }
+                }
+              ]
+            },
+            {
+              "name": "writableRangesAllowlisted",
+              "qualifiedName": "FerrixDeviceRequirements::Nodes::writableRangesAllowlisted",
+              "kind": "requirement",
+              "shortName": "L.device.26",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/20-device-requirements.sysml",
+                "line": 434
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::writableRangesAllowlisted",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A function's driver-writable configuration bytes shall be the bodies of its vendor-specific capabilities, a standard one past its three-byte header and a VSEC past its eight, cut at the end of their space, less virtio's pci_cfg_data, computed at stage 10 from both capability lists; a list that loops, holds a capability starting inside a vendor body, or holds more capabilities or vendor bodies than the walk records, shall leave the function nothing writable.\"",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 442
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::writableRangesAllowlisted",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"ferrix_pci::window's host tests: the header, MSI, power management, PCI Express, MSI-X, ATS, AER and uncovered bytes are refused and vendor bodies writable; pci_cfg_data is refused and virtio's bar, offset and length writable; a body past its space is cut; overlapping and looping lists, 65 VSECs and an extended list past 304 capabilities leave nothing writable. With the extended list skipped the VSEC test fails. At boot virtio-rng's offset field is written and read back and its pci_cfg_data refused (the second config line).\"",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 450
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::writableRangesAllowlisted",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.DMA.5\", \"H.DMA.3\")",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 451
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixDeviceRequirements::Nodes::writableRangesAllowlisted",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"discovery::pci::check_host\", \"discovery::pci::for_the_window\", \"device::DeviceNode::pci\", \"device::DeviceNode::window\")",
+                  "source": {
+                    "file": "docs/sysml/20-device-requirements.sysml",
+                    "line": 453
+                  }
+                }
+              ]
+            },
+            {
               "name": "oneDescriptionAnsweredOnce",
               "qualifiedName": "FerrixDeviceRequirements::Nodes::oneDescriptionAnsweredOnce",
               "kind": "requirement",
@@ -57994,7 +58234,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/20-device-requirements.sysml",
-                "line": 381
+                "line": 455
               },
               "children": [
                 {
@@ -58005,7 +58245,7 @@
                   "value": "\"description::of shall read a machine by its ACPI tables when they open, whether or not a device tree came too, by its device tree when the tables do not open and the tree parses, and by neither otherwise; and shall not parse the tree when the tables open.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 386
+                    "line": 460
                   }
                 },
                 {
@@ -58016,7 +58256,7 @@
                   "value": "\"For ACPI only, both, tables that fail to open beside a tree, a tree only, and neither, the description is ACPI, ACPI with the tree unopened, the tree, the tree and neither.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 389
+                    "line": 463
                   }
                 },
                 {
@@ -58027,7 +58267,7 @@
                   "value": "(\"H.DMA.1\", \"H.DMA.5\")",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 390
+                    "line": 464
                   }
                 },
                 {
@@ -58038,7 +58278,7 @@
                   "value": "\"discovery::description::of\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 391
+                    "line": 465
                   }
                 }
               ]
@@ -58052,7 +58292,7 @@
           "doc": "The quiesce in src/kernel/src/syscall/native.rs: every core that serves a device waited out, its DMA turned off, and the claims a core keeps past its driver let go, before the next driver is given it.",
           "source": {
             "file": "docs/sysml/20-device-requirements.sysml",
-            "line": 395
+            "line": 469
           },
           "children": [
             {
@@ -58063,7 +58303,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/20-device-requirements.sysml",
-                "line": 401
+                "line": 475
               },
               "children": [
                 {
@@ -58074,7 +58314,7 @@
                   "value": "\"device_quiesce shall be refused with ACCESS_DENIED through a device handle without MANAGE.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 403
+                    "line": 477
                   }
                 },
                 {
@@ -58085,7 +58325,7 @@
                   "value": "\"A quiesce through a handle to the device without MANAGE answers ACCESS_DENIED.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 405
+                    "line": 479
                   }
                 },
                 {
@@ -58096,7 +58336,7 @@
                   "value": "\"H.OBJ.2\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 406
+                    "line": 480
                   }
                 },
                 {
@@ -58107,7 +58347,7 @@
                   "value": "\"syscall::native::device_quiesce\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 407
+                    "line": 481
                   }
                 }
               ]
@@ -58120,7 +58360,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/20-device-requirements.sysml",
-                "line": 409
+                "line": 483
               },
               "children": [
                 {
@@ -58131,7 +58371,7 @@
                   "value": "\"A quiesce shall answer BAD_STATE, changing nothing, while a driver serves the device.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 411
+                    "line": 485
                   }
                 },
                 {
@@ -58142,7 +58382,7 @@
                   "value": "\"A quiesce of the device a running driver serves answers BAD_STATE, and the driver goes on serving it.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 413
+                    "line": 487
                   }
                 },
                 {
@@ -58153,7 +58393,7 @@
                   "value": "\"H.DEV.2\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 414
+                    "line": 488
                   }
                 },
                 {
@@ -58164,7 +58404,7 @@
                   "value": "\"syscall::native::quiesce_while\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 415
+                    "line": 489
                   }
                 }
               ]
@@ -58177,7 +58417,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/20-device-requirements.sysml",
-                "line": 417
+                "line": 491
               },
               "children": [
                 {
@@ -58188,7 +58428,7 @@
                   "value": "\"A quiesce made as a driver dies shall wait for every core serving the device to let go, turn the device's DMA off, let go the claims a core keeps past its driver, and answer success.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 421
+                    "line": 495
                   }
                 },
                 {
@@ -58199,7 +58439,7 @@
                   "value": "\"A quiesce the instant a block driver's handles close answers success, and the next driver is given a ring on the device.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 424
+                    "line": 498
                   }
                 },
                 {
@@ -58210,7 +58450,7 @@
                   "value": "\"H.DEV.4\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 425
+                    "line": 499
                   }
                 },
                 {
@@ -58221,7 +58461,7 @@
                   "value": "\"syscall::native::quiesce_while\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 426
+                    "line": 500
                   }
                 }
               ]
@@ -58234,7 +58474,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/20-device-requirements.sysml",
-                "line": 428
+                "line": 502
               },
               "children": [
                 {
@@ -58245,7 +58485,7 @@
                   "value": "\"The kernel shall quiesce every device a dead devmgr's drivers served before a devmgr started again is handed them.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 431
+                    "line": 505
                   }
                 },
                 {
@@ -58256,7 +58496,7 @@
                   "value": "\"Restarting devmgr.service starts a second devmgr, which is given the devices and starts their drivers.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 433
+                    "line": 507
                   }
                 },
                 {
@@ -58267,7 +58507,7 @@
                   "value": "\"H.DEV.4\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 434
+                    "line": 508
                   }
                 },
                 {
@@ -58278,7 +58518,7 @@
                   "value": "\"syscall::native::quiesce\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 435
+                    "line": 509
                   }
                 }
               ]
@@ -58291,7 +58531,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/20-device-requirements.sysml",
-                "line": 437
+                "line": 511
               },
               "children": [
                 {
@@ -58302,7 +58542,7 @@
                   "value": "\"A quiesce whose device a core has not let go within its patience shall answer TIMED_OUT, and one whose DMA cannot be turned off BAD_STATE.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 440
+                    "line": 514
                   }
                 },
                 {
@@ -58313,7 +58553,7 @@
                   "value": "\"A quiesce with a core that never lets go answers TIMED_OUT; one on a function whose configuration space cannot be mapped answers BAD_STATE.\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 443
+                    "line": 517
                   }
                 },
                 {
@@ -58324,7 +58564,7 @@
                   "value": "\"H.DEV.4\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 444
+                    "line": 518
                   }
                 },
                 {
@@ -58335,7 +58575,7 @@
                   "value": "\"syscall::native::quiesce_while\"",
                   "source": {
                     "file": "docs/sysml/20-device-requirements.sysml",
-                    "line": 445
+                    "line": 519
                   }
                 }
               ]

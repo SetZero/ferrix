@@ -96,6 +96,7 @@ Causes are listed most likely first.
 | [FX-1008](#fx-1008) | the log core did not serve the kernel log to a driver |
 | [FX-1009](#fx-1009) | a devmgr pid 1 started did not keep device authority to itself |
 | [FX-1010](#fx-1010) | two cores enabling neighbouring interrupt lines lost one's setting |
+| [FX-1011](#fx-1011) | a driver's configuration window or device_aperture did not answer as specified |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
@@ -2370,6 +2371,35 @@ silently; a lost edge bit is an MSI that never arrives (F-50).
 See: src/kernel/src/arch/arm_common/gicv2.rs rmw;
 src/kernel/src/arch/arm_common/gicv2/check.rs; docs/certification/FINDINGS.md
 F-50.
+
+<a id="fx-1011"></a>
+
+## FX-1011 — a driver's configuration window or device_aperture did not answer as specified
+
+A driver reads its PCI function's configuration space through
+`device_config_read` and writes it through `device_config_write`, which makes a
+write only when every byte of it lies in a vendor-specific capability's body and
+refuses any other whole, under the node's one configuration lock.
+`device_aperture` reports each aperture's 64-bit address and length as minted.
+`DeviceNode::verify_config` reads the registers the kernel owns back at each
+accepted HELLO and each quiesce, and refuses a node whose registers were
+rewritten. `device::config_check` holds all of it on the published nodes
+(`docs/NVIDIA.md` §12.1, checks W1 to W7).
+
+1. `device_aperture` cut an address or a length, or reported a BAR, offset or
+   flag other than the minted aperture's.
+2. `ferrix_pci::window::writable` let a kernel-owned byte through -- the header,
+   MSI, MSI-X, PCI Express, ATS, device-dependent space or virtio's
+   `pci_cfg_data` -- or refused a vendor capability's body.
+3. `Writable::allows` tested fewer than all of a write's bytes.
+4. A kernel write of the command register was made outside `ConfigWrites`, or
+   the state `verify_config` reads back against was not updated with it.
+5. `DeviceNode::verify_config` did not compare a register, or did not turn bus
+   mastering off and refuse the node on a mismatch.
+
+See: src/kernel/src/device.rs ConfigWrites, config_write, verify_config;
+src/kernel/src/device/config_check.rs; src/lib/platform/pci/src/window.rs;
+docs/NVIDIA.md §12.1; docs/certification/SAFETY-MANUAL.md AoU-22.
 
 <a id="fx-1101"></a>
 
