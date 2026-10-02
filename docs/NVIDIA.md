@@ -665,10 +665,11 @@ unit tests.
 | N0a | DMAR sub-hierarchy scopes followed through bridges; `xtask`'s q35 gets a root port to prove it | 2 |
 | N0b | MSI next to MSI-X: enumeration, vectors, delivery, and a boot check on an emulated MSI-only device | 3 |
 | N0c | PAT programmed; write-combining `IoMapping`s and client windows | 3 |
-| N0d | 64-bit aperture addresses and lengths, by a new `device_aperture` call beside an unchanged `DeviceInfo`; a driver's configuration-space window with every kernel-owned register refused, and every configuration write under one lock per node (§12.1) | 4 |
+| N0d | 64-bit aperture addresses and lengths, by a new `device_aperture` call beside an unchanged `DeviceInfo`; a driver's configuration-space window, writable only in vendor-capability bodies, every configuration write under one lock per node, and a read-back that refuses a node whose kernel-owned registers were rewritten (§12.1) | 5 |
 | N0e | `run-nvidia` and `test-nvidia-probe` (libvirt, the shared-domain guard, capture) | 2 |
-| N0f | A per-device pin budget, set by devmgr through `SET_LIMIT`, in place of the quarantine's fixed cap (§12.2) | 3 |
-| N0g | Interrupt remapping on VT-d, closing F-57: queued invalidation for everything, remappable-format MSI, MSI-X and I/O APIC messages, an interrupt remapping table with one validated entry per minted vector and source-ID checks, compatibility format blocked, the coherency flushes the existing tables lacked, and xtask's q35 with `intremap=on` on a split interrupt controller; before N1 hands the 3060 and its GSP firmware to `nvrm` (§12.3). Its design was reviewed OK IF; the revised design and then its code go back to the consultant | 9 |
+| N0f | A per-device pin budget, set by devmgr through `SET_LIMIT`, in place of the quarantine's fixed cap, with `2B` a hard bound per device (§12.2) | 3 |
+| F-58 | Not NVIDIA's: VT-d table-walk coherency, a pre-existing defect in the item, fixed on its own by another agent before N0g (§12.3). Not counted in N0 | 2 |
+| N0g | Interrupt remapping on VT-d, closing F-57: queued invalidation for everything, remappable-format MSI, MSI-X and I/O APIC messages, an interrupt remapping table with one validated entry per minted vector and source-ID checks, compatibility format blocked, a patched QEMU that implements that block for the gates and the `ferrix-3060` domain, and xtask's q35 with `intremap=on` on a split interrupt controller; before N1 hands the 3060 and its GSP firmware to `nvrm` (§12.3). Design reviewed twice, OK IF; its code goes back to the consultant | 10 |
 | N1a | `fetch-nvidia.sh`: sources, objects, `.run` extraction, the volume | 3 |
 | N1b | `nvrm` skeleton: a ferrousli static program started by devmgr, with handles over bootstrap | 4 |
 | N1c | The OS layer (§4.2), with the 9k lines of kept C and `ferrix-nvos` | 10 |
@@ -685,17 +686,18 @@ unit tests.
 
 Each milestone's total, and what it shows:
 
-* **N0**: 26 points. N0g was added at 6 after the consultant's review of
-  N0a and N0b, and its design review raised it to 8, plus 1 for the
-  coherency flushes the review uncovered. N0d went from 3 to 4 and N0f
-  from 2 to 3 once designed (§12). They land in the order N0d, N0f, N0g,
-  then N1.
+* **N0**: 28 points. N0g was added at 6 after the consultant's review of
+  N0a and N0b. Its first design review raised it to 8, and the second to
+  10, for the patched QEMU and for the console's conversion, per-processor
+  x2APIC and the set-once mark. N0d went from 3 to 5 and N0f from 2 to 3
+  once designed and reviewed (§12). The F-58 fix (2) is the item's own
+  defect and is not counted. The order is F-58, N0d, N0f, N0g, then N1.
 * **N1**: 32 points, the exit of §1.
 * **N2**: 14 points. It is where "real driver" becomes "renders".
 * **N3**: 30 points.
 * **N4**: 20 points.
 
-That is **122 points from here to Chrome and Steam on the card**. N5 (CUDA)
+That is **124 points from here to Chrome and Steam on the card**. N5 (CUDA)
 and N6 (its own monitor) are sized apart. CUDA is wanted now, alongside the
 graphics (D7), and has its own feasibility pass and design by a separate
 session; this design only keeps `/dev/nvidia-uvm` servable by the same
@@ -1056,6 +1058,38 @@ and took the recommended answer for D2, D3 and D5.
   * N0f's budget is set by devmgr through `SET_LIMIT`.
   * The ids are reserved in this branch's first commit (§12.4).
   * N0 is now 26 points, and the road 122.
+* **2026-10-02 — N0d, N0f and N0g reviewed: OK IF; the customer's
+  answers.** The consultant reviewed `nvidia-n0-designs` adb49fdfe
+  (its ledger, 2026-10-02):
+  * the reservation 82d0aae59 is OK to land as docs-only;
+  * N0d is OK IF D1–D4: a smaller allowlist (vendor-capability bodies
+    only, virtio's `pci_cfg_data` refused), AoU-22 widened to every BAR
+    path with a read-back that refuses a rewritten node, the refusal line
+    outside the lock, and `MsixTable::open` through the guard;
+  * N0f is OK IF F1–F5. The first bound leaked to `3B − 1`; it is now a
+    hard `2B`, with `live` reserved under the lock, pages kept for good
+    still counted, and devmgr's handling of a refused budget named;
+  * N0g is OK IF G1–G9. The decisive one: QEMU implements no
+    compatibility-format blocking at all, in 10.2.1 as in 9.2, so a
+    patched QEMU is needed for F-57 to close on any QEMU configuration.
+    The rest: the console's live line converted at bring-up, isolation
+    judged over every unit, a set-once mark, x2APIC per processor, Arm
+    files untouched, and F-58's flushes;
+  * it confirmed **F-58**, VT-d table-walk coherency (Moderate,
+    pre-existing), which lands as its own fix before N0g, by another
+    agent.
+  
+  The customer answered the same day:
+  * `nvrm`'s budget is an eighth of RAM, at least 1 GiB, and the floor
+    yields to the ceiling, with named lines;
+  * the patched QEMU is accepted, for the gates and as the `ferrix-3060`
+    domain's emulator;
+  * no accepting boot option for now;
+  * a firmware-locked x2APIC stops the boot by name.
+  
+  §12 now folds in every condition, with a table of where each is met
+  per slice; the checks are renamed W, P and R. N0 is 28 points, and the
+  road 124.
 
 ## 11. CUDA (N5)
 
@@ -1625,20 +1659,29 @@ All five were answered on 2026-10-02:
 
 N0a, N0b and N0c are on `main` (§10). Three kernel pieces stay before N1
 can hand the RTX 3060 to `nvrm`. All three are inside the certified item,
-so each design goes to the certification consultant before any code. They
-land in this order (the consultant's condition C6):
+so each design went to the certification consultant before any code. The
+consultant reviewed this section on 2026-10-02 (`nvidia-n0-designs`
+adb49fdfe): N0d OK IF D1–D4, N0f OK IF F1–F5, N0g OK IF G1–G9. Each
+condition is folded in below, where it applies, and each slice's condition
+table says where. They land in this order:
 
-1. **N0d**, the configuration window and 64-bit apertures (§12.1);
-2. **N0f**, a pin budget per device (§12.2);
-3. **N0g**, interrupt remapping on VT-d, which closes F-57 (§12.3);
-4. then **N1**.
+1. **The F-58 fix**, VT-d table-walk coherency, which is not NVIDIA's work
+   and is done by another agent. It may go in parallel with N0d and N0f,
+   but it must land before N0g (ruling 1);
+2. **N0d**, the configuration window and 64-bit apertures (§12.1);
+3. **N0f**, a pin budget per device (§12.2);
+4. **N0g**, interrupt remapping on VT-d, which closes F-57 (§12.3);
+5. then **N1**.
 
 N0d and N0f are small, need no card, and do not depend on each other.
-N0g is the largest and the only one with a design verdict already given
-(OK IF). It goes last so that its code review is not held up by the other
-two, and it needs N0f's per-device limit call for its degraded-mode mark
-(§12.3, "Degraded mode"). All three are built and gated under QEMU only.
-The card is used again only at N1.
+N0g is the largest. It goes last so that its code review is not held up by
+the other two, and it needs N0f's per-device limit call for its
+isolated-interrupts mark (§12.3, "Unisolated interrupts"). All three are
+built and gated under QEMU only, with N0g's x86-64 boots on the patched
+QEMU of §12.3. The consultant's conditions keep its letters (D, F, G), so
+the boot checks are named W (N0d), P (N0f) and R (N0g) to keep the two
+apart. The card is used again only at N1. The code of each goes
+back to the consultant before `land.sh take`.
 
 Their requirement ids are reserved on this branch in its own commit,
 `tools/common/data/requirement-reservations.json`. That commit is to land
@@ -1717,7 +1760,9 @@ cannot refuse a write to one register beside another.
   after stage 10.
 
 **Reads.** Every byte of the function's own 4 KiB, legacy and extended,
-is readable, the kernel-owned registers included. A configuration read
+is readable, the kernel-owned registers included, the MSI and MSI-X
+capabilities among them (ruling 5b: the message is not a secret, and
+refusing it buys nothing). A configuration read
 has no side effect in PCI, and a driver learning its BARs or its MSI
 capability from it learns nothing it could abuse: the addresses are
 already its apertures, and the message is the kernel's. Reads of a
@@ -1742,15 +1787,18 @@ below):
 | Power management (0x01), whole | no | D3hot and back can reset the BARs (`No_Soft_Reset` clear) behind the kernel |
 | PCI Express (0x10), whole | no | Device Control's function-level reset and No Snoop, Link Control's retrain and ASPM |
 | Every other standard capability, whole | no | not needed until a driver shows otherwise |
-| Vendor-specific capability (0x09), past its first three bytes | **yes** | the device's own registers. RM's PBI mailbox is one (`pci_pbi.c`) |
+| Vendor-specific capability (0x09), past its first three bytes | **yes**, except virtio's `pci_cfg_data` window | the device's own registers. RM's PBI mailbox is one (`pci_pbi.c`). Within virtio's `VIRTIO_PCI_CAP_PCI_CFG` (vendor 0x1AF4, `cfg_type` 5) the 4-byte `pci_cfg_data` window is refused: it reaches the BARs, including the MSI-X table pages `DeviceNode::pci` withheld. Its `bar`, `offset` and `length` fields stay writable (D1), which check W3 uses |
 | Extended: ATS, PRI, PASID, SR-IOV, ACS, resizable BAR, VF resizable BAR, DPC, AER, every other | no | ATS, PRI and PASID would bypass translation (SAFETY-MANUAL AoU-12); SR-IOV makes functions enumeration never saw; resizable BAR changes an aperture's size |
 | Extended vendor-specific (VSEC, 0x000B), past its 8-byte header | **yes** | as 0x09 |
-| Bytes 0x40–0xFFF that no capability of either list covers | **yes** | device-dependent space, the device's own |
+| Bytes 0x40–0xFFF that no capability of either list covers | no | device-dependent space. Refused until a driver names a register and a reason; it is then added for that `vendor:device` alone, with review (D1, ruling 5) |
 
 Each refusal is printed once per node and offset, as
 `config   pci 01:00.0 refused a 4-byte write at 0x10 (BAR 0)`. N1 then
 finds which of RM's writes need a decision, rather than discovering them
-one failed boot at a time.
+one failed boot at a time. The line is printed after the IRQ lock is
+dropped, never under it. The once-per-offset record is a bitmap of 1,024
+bits per PCI node, one per dword, allocated at stage 10 with the node and
+only read and set under the lock (D3).
 
 **What RM writes, read from 580.173.02 before any boot.** Grepping
 `osPciWrite*` in `src/nvidia` finds three kinds of write:
@@ -1789,13 +1837,40 @@ do:
   mappings, which still point at the old address. But the device could
   answer another device's driver's accesses, and break that driver.
 
-So this is an obligation, and not something the kernel enforces. It goes
-in the SAFETY-MANUAL as **AoU-22**: a driver of a device that mirrors its
-configuration space in an aperture does not write the kernel-owned
-registers through the mirror. For NVIDIA that is `nvrm`'s OS layer, which
-routes `NV_PCFG` writes to the config window, where they are refused.
-QEMU's own `vfio-pci` traps the same mirror for the same reason (its
-NVIDIA BAR0 quirk).
+So this is an obligation, and the kernel cannot prevent it. It goes in
+the SAFETY-MANUAL as **AoU-22**, widened by the consultant (D2, ruling 6):
+**a driver writes no kernel-owned register or structure through any BAR
+path.** That covers configuration mirrors (`NV_PCFG`, and any other mirror
+RM uses, which N1 lists from the sources) and the MSI-X table and its
+pending-bit array. For NVIDIA it is `nvrm`'s OS layer, which routes
+`NV_PCFG` writes to the config window, where they are refused. QEMU's own
+`vfio-pci` traps the same mirror for the same reason (its NVIDIA BAR0
+quirk). The device's own firmware (GSP) can rewrite its configuration
+without the driver, so the AoU rests on the device as much as on the
+driver.
+
+**The kernel detects a breach (D2).** It cannot prevent one, so before N1
+hands the card over it checks for one. `DeviceNode::verify_config` reads
+back what the kernel minted and compares:
+
+* the command register's memory-decoding, bus-master and `INTx`-disable
+  bits against the kernel's state (`dma_on`, the mint);
+* every BAR against the address its apertures were minted from;
+* the MSI capability's control, address and data, or the MSI-X
+  capability's control, and the address and data of every minted MSI-X
+  table entry.
+
+It runs at each accepted HELLO, beside `quarantine_release`, in every core
+that calls it, and in `device_quiesce`, which devmgr calls after every
+driver's death (and the kernel's own `quiesce`). On a mismatch:
+
+* bus mastering goes off;
+* the node is **refused**: a flag after which every call that needs
+  `MANAGE` on it answers `BAD_STATE`, until reboot;
+* one line names the register:
+  `device   pci 01:00.0 refused: BAR1 reads 0x… where 0x… was minted (a driver or its firmware rewrote a kernel-owned register)`.
+
+Check W7 below shows it, with a control.
 
 **One lock per node, as a type.** The consultant asked for every write of
 a function's configuration space under one lock per node. Today's
@@ -1812,8 +1887,15 @@ writer takes it:
 * `set_bus_master`;
 * `MsiFunction::mint`, for `INTx` off and `Msi::program`;
 * `set_masked`;
-* `MsixTable::open`, for enable and function mask;
+* `MsixTable::open`, for enable and function mask. It loses its own
+  `vmap` of configuration space and goes through the node's mapping and
+  the guard like the rest (D4);
 * `device_config_write`.
+
+Enumeration's writers, BAR sizing (`ferrix_pci::bar`) and the virtio
+entropy check, run at stage 10 before the node is published, through
+enumeration's own mapping and outside the type. So `L.object.117` speaks of
+a *published* node, and is exact (D4).
 
 It is a leaf lock. Nothing inside it allocates, maps, sleeps or takes
 another lock. The mappings are made before it is taken, as
@@ -1837,21 +1919,23 @@ control's FIRED count:
 
 | Check | What it shows | Its control |
 |---|---|---|
-| D1 | `device_aperture` for every aperture of every node equals what enumeration minted, and one aperture above 4 GiB, longer than 4 GiB, is reported whole. That is a `pci-testdev,membar=8G` on xtask's q35, whose 64-bit prefetchable BAR can only go above 4 GiB (if OVMF's 64-bit window is too small for it, `-fw_cfg opt/ovmf/X-PciMmio64Mb` widens it; the first boot tells) | the length cut to `u32` |
-| D2 | a read of every header field equals what enumeration read; reads of the MSI capability and of extended space are answered | — |
-| D3 | a write to a driver-writable byte sticks: virtio-rng's `VIRTIO_PCI_CAP_PCI_CFG` `offset` field, which QEMU makes writable, read back | the allowlist empty |
-| D4 | writes to `COMMAND`, `BAR0`, the MSI capability (edu, on x86-64) or the MSI-X capability (virtio-rng), the PCIe capability's Device Control (virtio-rng) and the ATS extended capability, if present, are each `ACCESS_DENIED`, and each register reads back unchanged | the allowlist taken as "all but the header" |
-| D5 | a 2-byte write spanning a writable and a kernel-owned byte is refused whole; an unaligned write and offset 0x1000 are `INVALID_ARGS` | the whole-range test reduced to the first byte |
-| D6 | `enable_dma` and `disable_dma` racing `device_config_write`s of a writable byte on another processor, 10,000 rounds: bus mastering always reads back as `dma_on` says | — (the type makes the unlocked writer uncompilable; the check shows the locked one works under load) |
+| W1 | `device_aperture` for every aperture of every node equals what enumeration minted, and one aperture above 4 GiB, longer than 4 GiB, is reported whole. That is a `pci-testdev,membar=8G` on xtask's q35, whose 64-bit prefetchable BAR can only go above 4 GiB (if OVMF's 64-bit window is too small for it, `-fw_cfg opt/ovmf/X-PciMmio64Mb` widens it; the first boot tells) | the length cut to `u32` |
+| W2 | a read of every header field equals what enumeration read; reads of the MSI capability and of extended space are answered | — |
+| W3 | a write to a driver-writable byte sticks: virtio-rng's `VIRTIO_PCI_CAP_PCI_CFG` `offset` field, which QEMU makes writable, read back; a write to that capability's `pci_cfg_data` is `ACCESS_DENIED` | the allowlist empty; and the `pci_cfg_data` exception dropped |
+| W4 | writes to `COMMAND`, `BAR0`, the MSI capability (edu, on x86-64) or the MSI-X capability (virtio-rng), the PCIe capability's Device Control (virtio-rng), a device-dependent byte no capability covers, and the ATS extended capability, if present, are each `ACCESS_DENIED`, and each reads back unchanged | the allowlist taken as "all but the header" |
+| W5 | a 2-byte write spanning a writable and a kernel-owned byte is refused whole; an unaligned write and offset 0x1000 are `INVALID_ARGS` | the whole-range test reduced to the first byte |
+| W6 | `enable_dma` and `disable_dma` racing `device_config_write`s of a writable byte on another processor, 1,000 rounds (the consultant's advisory, given the test-time priority): bus mastering always reads back as `dma_on` says | — (the type makes the unlocked writer uncompilable; the check shows the locked one works under load) |
+| W7 | the breach detector: the check flips edu's `INTx`-disable bit (or virtio-rng's on AArch64) through enumeration's mapping, as firmware could, then calls `verify_config`: bus mastering reads back off, the node answers `BAD_STATE`, and the line names `COMMAND`. The check then restores the bit and clears the refusal through a check-only path | `verify_config` made to return without comparing: the node stays usable and the check fails |
 
 ARMv7-A has ECAM under the device tree too, but no device with a writable
-vendor capability. Checks D2 to D5 run there with D3 skipped, and the log
-says so.
+vendor capability. Checks W2 to W5 and W7 run there with W3 skipped, and
+the log says so.
 
 **Host tests**, `ferrix_pci::window`, over synthetic configuration
 spaces:
 
-* the table above, row by row;
+* the table above, row by row, virtio's `pci_cfg_data` exception and the
+  refused device-dependent space included;
 * overlapping or looping capability lists, which are refused, and the
   function then gets no writable range;
 * a vendor capability whose length runs past 0xFF, which is cut;
@@ -1862,24 +1946,27 @@ ATS test fails.
 
 **Documents.**
 
-* SAFETY-MANUAL: AoU-22.
+* SAFETY-MANUAL: AoU-22, as widened.
 * MEMORY-AND-TIMING: the `config` lock's section.
-* VULNERABILITY-ANALYSIS: T.DMA gains the mirror residual, under AoU-22.
+* VULNERABILITY-ANALYSIS: T.DMA gains the BAR-path residual, under AoU-22,
+  and the breach detector.
 * ITEM.md §2: `ferrix_pci::window`.
 * `device.rs`'s comments that a driver "cannot walk configuration space"
   (`RegisterBlock`, `PciFunction`) are amended.
 
-**Open, for the consultant.**
+**The consultant's conditions, and where each is met:**
 
-* Whether the allowlist should start smaller: vendor capabilities only,
-  with device-dependent space refused until a driver needs it.
-* Whether `device_config_read` of the MSI capability should be refused
-  for tidiness. Its contents are the kernel's message, which is not a
-  secret.
+| Condition | Met by |
+|---|---|
+| D1: start smaller: vendor-capability bodies only; device-dependent space refused until a driver names a register; virtio's `pci_cfg_data` refused | the allowlist table; checks W3, W4 |
+| D2: AoU-22 widened to every BAR path; the kernel detects a breach at HELLO and at a driver's death | "A residual the window cannot close", "The kernel detects a breach"; check W7 |
+| D3: the refusal line outside the IRQ lock; its record allocated at stage 10 | "Writes: what is kernel-owned" |
+| D4: `MsixTable::open` through the node's mapping and guard; enumeration's writers stated as before publication | "One lock per node, as a type" |
+| Ruling 5b: reads answered in full | "Reads" |
 
-**Points.** 4, up from 3. The ABI call, the guard-type change across five
-writers, the allowlist walker with its host tests, and six checks are
-more than the row was sized for.
+**Points.** 5, up from 3. The ABI call, the guard-type change across five
+writers, the allowlist walker with its host tests, the breach detector,
+and seven checks are more than the row was sized for.
 
 ### 12.2 N0f: a pin budget per device
 
@@ -1907,27 +1994,43 @@ GSP's firmware *before* it can send the HELLO that would release the
 quarantine. Every one of those pins is refused, so the driver can never
 come back. And a cap raised for the GPU would apply to every device.
 
-**The rule.** Each device node gets a pin budget `B`, in pages, and two
-counts:
+**The rule.** Each device node gets a pin budget `B`, in pages, and
+three counts, all kept on the domain and read and changed only under the
+quarantine lock (`QUARANTINE`'s, a leaf lock):
 
-* `live`: pages of live pins into its domain;
+* `live`: pages of live pins into its domain, **reserved** before the pin
+  is made (below);
 * `quarantined`: pages its quarantine holds. Today that is found by
-  walking the global list (`quarantined_pages`); N0f keeps the count on
-  the domain, updated under the quarantine lock.
+  walking the global list (`quarantined_pages`); N0f keeps the count;
+* `kept`: pages kept for good because the unit would not give them back.
+  That covers `Pin::drop`'s failed unpin, `quarantine()`'s
+  could-not-quarantine fallback, and `release()`'s `back.leak()`. These
+  stay counted for the life of the machine (F3), or the bound below would
+  not be one.
 
-A pin of `n` pages is refused:
+A pin of `n` pages is refused, with nothing held, mapped or charged:
 
-* with **`LIMIT_REACHED`**, a new status, when `live + n > B`. There is no
-  overshoot. Before N0f the cap could be passed by the pin that reached
-  it. Nothing is held, mapped or charged.
-* with **`QUARANTINE_FULL`**, as today, when `quarantined ≥ 2B`.
+* with **`LIMIT_REACHED`**, a new status, when `live + n > B`;
+* with **`QUARANTINE_FULL`**, as today, when
+  `quarantined + kept + live + n > 2B` (F1).
 
-A death moves its pins' pages from `live` to `quarantined`, so each death
-adds at most `B`. The second rule is therefore today's argument (two
-drivers' worth: the last that published and one that died before
-publishing, after which devmgr starts no other; `docs/DEVMGR.md` §4) with
-the device's own budget in place of the display's. The most the kernel
-holds for one device is `3B`: `2B` quarantined and `B` live.
+**The bound is `2B` per device, hard.** A death moves its pins' pages
+from `live` to `quarantined` (or `kept`), so the sum of the three never
+grows at a death, and no pin is admitted past `2B`. That is today's
+two-driver argument (the last driver that published, and one that died
+before publishing, after which devmgr starts no other; `docs/DEVMGR.md`
+§4) with the device's own budget in place of the display's. The first
+design's "`quarantined ≥ 2B`" let a quarantine at `2B − 1` admit `B` more
+live pages, so a death could leave `3B − 1`. The consultant found that
+(F1), and the sum above closes it.
+
+**No overshoot (F2).** The check and the count are one step. Under the
+quarantine lock, `vmo_pin` tests both rules and adds `n` to `live`, then
+drops the lock and calls `Domain::pin`. If the pin fails, `n` is given
+back under the lock. A pin can therefore never pass the budget, which
+today's check-then-pin could. `device_set_limit`'s "no live pins" test is
+made under the same lock, so a budget cannot change between a pin's check
+and its count.
 
 **Who sets it: devmgr, by a right the driver never holds.**
 
@@ -1935,91 +2038,131 @@ holds for one device is `3B`: `2B` quarantined and `B` live.
   0. It needs `SET_LIMIT` on the device handle. That is the right
   `job_set_limit` uses (`rights.rs`), and for the same reason: the limit
   is the delegator's, not the delegatee's.
+* New call: `device_get_limit(device, which)` → pages, needing no right.
+  It answers for `DEVICE_LIMIT_PIN_PAGES`, the device's `B`;
+  `DEVICE_LIMIT_PIN_CEILING`, the machine's ceiling below; and
+  `DEVICE_LIMIT_PIN_ROOM`, the ceiling less what raised budgets hold.
+  devmgr reads RAM's share from these, so it needs no memory call of its
+  own.
 * The kernel hands devmgr each device with `DEVICE | SET_LIMIT`. Every
   devmgr launch path already narrows the handle to
   `Requested::Exactly(DEVICE_RIGHTS)` before the hand-off
-  (`devmgr/src/main.rs`, e.g. the blk path), so the driver never holds
-  `SET_LIMIT`. A devmgr host test asserts that for every launch path.
-* devmgr sets `B` from its match table. Every kind gets today's default,
-  `LARGEST_DRIVER_PIN_PAGES + 1024`, unless its entry says otherwise. The
-  `Gpu` kind for `0x10de` (§5) gets the size the customer decides (open
-  question below).
-* `device_set_limit` is `BAD_STATE` while the device has live pins. A
-  budget is never changed under a running driver, so a lowered budget
-  never strands pins already made over it.
+  (`devmgr/src/main.rs`, e.g. the blk path; the consultant checked every
+  path), so the driver never holds `SET_LIMIT`. A devmgr host test asserts
+  that for every launch path.
+* devmgr sets `B` from its match table. Every kind keeps today's default,
+  `LARGEST_DRIVER_PIN_PAGES + 1024`, unless its entry says otherwise. So
+  `2B` at the default is `QUARANTINE_CAP_PAGES`, and nothing changes for
+  existing drivers.
+* `device_set_limit` is `BAD_STATE` while the device has live pins (under
+  the lock, F2). A budget is never changed under a running driver, so a
+  lowered budget never strands pins already made over it.
 * **The kernel's own ceiling.** The sum of `2B` over devices whose budget
-  was set above the default may not exceed a quarter of RAM, counted at
-  stage 10. A `device_set_limit` that would pass it is `NO_MEMORY`. The
-  default is not counted. It is today's per-device cap, and no device
-  holds it without a driver that died. This ceiling is what keeps "the
-  kernel holds memory for no job" bounded once budgets can grow.
+  was raised above the default may not exceed a quarter of RAM, counted at
+  stage 10. A `device_set_limit` that would pass it is `NO_MEMORY`, with
+  nothing changed.
+* **The default is not counted** (F5, ruling 7). It is today's accepted
+  per-device cap (AoU-12, and devmgr's restart rule). T.EXHAUST states the
+  whole formula: the memory the kernel may hold for no job is at most
+  (devices at the default) × 2 × the default, plus the ceiling.
+
+**`nvrm`'s budget, and what devmgr does when the ceiling refuses it.**
+The customer decided on 2026-10-02 that `B` is one eighth of RAM and at
+least 1 GiB. Below 8 GiB of RAM, 1 GiB is more than an eighth, and then
+`2B` is more than the ceiling of a quarter of RAM; the consultant asked
+what happens then (F4). devmgr does this, for the `Gpu` kind, and every
+outcome prints a line:
+
+1. Read `CEILING` and `ROOM`. The budget wanted is
+   `max(CEILING / 2, 1 GiB)`: an eighth of RAM, with the floor.
+2. **The floor yields to the ceiling.** If `2 × wanted > ROOM`, the
+   budget is `ROOM / 2`, and devmgr prints
+   `devmgr   gpu 01:00.0: pin budget 512 MiB, cut from 1024 MiB: the 1 GiB floor yields to the kernel's ceiling (4096 MiB of RAM)`.
+   Otherwise it prints `devmgr   gpu 01:00.0: pin budget 1024 MiB (an eighth of RAM, at least 1 GiB)`.
+3. **Below what `nvrm` can run with, the GPU is not started.**
+   `NVRM_MIN_PIN_PAGES` is the least `nvrm` needs to boot GSP and serve
+   one client: firmware, logs, rings and the first channel. It is a
+   constant in devmgr's `Gpu` entry, set from N1d's measurement, and
+   256 MiB until then. If the budget is under it, the launch fails with
+   `devmgr   gpu 01:00.0 not started: its pin budget of 96 MiB is under the 256 MiB nvrm needs`.
+4. If `device_set_limit` still answers `NO_MEMORY`, because another device
+   took room in between, the launch fails with
+   `devmgr   gpu 01:00.0 not started: the kernel refused its pin budget of 512 MiB (past the ceiling)`.
+
+There is **no silent fallback to the default**, which the consultant
+ruled out. A launch that fails is a named line, and the device stays
+unstarted. devmgr's host tests cover all four outcomes, with RAM of 16,
+4 and 1 GiB and a ceiling already partly taken.
 
 **Across a restart and the quarantine.**
 
 * The budget belongs to the node, not to a process. It survives every
   driver's death and start, and devmgr's own restart, since the node
   outlives devmgr.
-* `quarantine_release` clears `quarantined` as it gives the frames back.
+* `quarantine_release` takes off `quarantined` exactly the pages it gave
+  back. A pin whose unpin it could not complete moves to `kept` (F3).
   `live` is the new driver's.
 * A pin made by `nvrm` over a *client's* pages (`request_pin`, §4.3) is
   `nvrm`'s pin. It counts in `nvrm`'s device's `live`, and is quarantined
   if `nvrm` dies, like `nvrm`'s own.
 * On an untranslated domain (ARMv7-A, or a unit that would not come up)
   there is no quarantine. A closed pin's frames are kept for good
-  (`Pin::drop`). The live budget still applies there, which bounds what
-  each driver's death keeps.
+  (`Pin::drop`), and they count in `kept`. The same `2B` bound then holds
+  what each driver's death keeps.
 * A boot check's pins (`Pin::with_cap`, `quiet`) keep their own budget
-  argument, so the check can drive a budget of one page, as it does the cap
-  today.
+  argument, so the check can drive a budget of one or two pages, as it
+  drives the cap today.
 
 **Failure behaviour.** Both refusals are statuses the driver sees at
 `vmo_pin`, with nothing changed. The first `LIMIT_REACHED` and the first
-`QUARANTINE_FULL` per device are printed, with the device and its
-counts. `quarantine_release`'s line gains the device's `live`,
-`quarantined` and `B`. A driver refused at its budget fails its own
-allocation, as it would on `NO_MEMORY`: RM turns it into
-`NV_ERR_NO_MEMORY`.
+`QUARANTINE_FULL` per device are printed, with the device and its counts.
+`quarantine_release`'s line gains the device's `live`, `quarantined`,
+`kept` and `B`. A driver refused at its budget fails its own allocation,
+as it would on `NO_MEMORY`: RM turns it into `NV_ERR_NO_MEMORY`.
 
 **The boot checks**, stage 10, x86-64 (KVM and TCG) and AArch64. ARMv7-A
-has no translated domain, so the quarantine check is skipped there, as
-today:
+has no translated domain, so the quarantine checks are skipped there, as
+today. Each has a negative control, and the landing message gives each
+control's FIRED count:
 
 | Check | What it shows | Its control |
 |---|---|---|
-| F1 | with `B` = 2 pages: a 2-page pin is taken; another 1-page pin is `LIMIT_REACHED`, and `live` is unchanged | `>` turned into `>=` (an off-by-one) |
-| F2 | the 2-page pin closed by a dead owner: `quarantined` = 2, `live` = 0; a new 2-page pin is taken (`quarantined` < 2B); after its owner dies too (`quarantined` = 4 = 2B) the next pin is `QUARANTINE_FULL` | the quarantine rule left at the old global cap |
-| F3 | after `release`, `quarantined` = 0 and a pin up to `B` is taken again | release not clearing the count |
-| F4 | `device_set_limit` is `ACCESS_DENIED` without `SET_LIMIT`, `BAD_STATE` with live pins, and `NO_MEMORY` past the ceiling | the rights check dropped |
-| F5 | (devmgr, host test) every launch path narrows the device handle to `DEVICE_RIGHTS` | one path left at `SAME_RIGHTS` |
+| P1 | with `B` = 2 pages: a 2-page pin is taken; another 1-page pin is `LIMIT_REACHED`, and `live` is unchanged | `>` turned into `>=` (an off-by-one) |
+| P2 | the 2-page pin closed by a dead owner: `quarantined` = 2, `live` = 0; a new 2-page pin is taken (2 + 0 + 2 ≤ 4); after its owner dies too (`quarantined` = 4) a 1-page pin is `QUARANTINE_FULL`. Then, from `quarantined` = 3, a 2-page pin is `QUARANTINE_FULL` (3 + 2 > 4), which the first design's rule would have taken | the rule left as `quarantined ≥ 2B` (the F1 hole) |
+| P3 | a pin whose `Domain::pin` the check makes fail gives its reserved pages back: `live` is as before | the give-back dropped |
+| P4 | after `release`, `quarantined` = 0 and a pin up to `B` is taken again; an entry `release` cannot unpin (a check-only refusal) moves to `kept` and still counts | release clearing the whole count |
+| P5 | `device_set_limit` is `ACCESS_DENIED` without `SET_LIMIT`, `BAD_STATE` with live pins, and `NO_MEMORY` past the ceiling with nothing changed; `device_get_limit` answers the three values | the rights check dropped |
+| P6 | (devmgr, host tests) every launch path narrows the device handle to `DEVICE_RIGHTS`; the `Gpu` budget's four outcomes print their lines | one path left at `SAME_RIGHTS`; the floor not yielding |
 
-`check_quarantine` becomes F2 and F3. `L.object.47`–`49` are reworded from
-"the cap" to "twice the device's budget", which changes three existing
-requirements and is listed so in the landing.
+`check_quarantine` becomes P2 and P4. `L.object.47`–`49` are reworded from
+"the cap" to "twice the device's budget, counted with live and kept
+pages", which changes three existing requirements and is listed so in the
+landing.
 
 **Documents.**
 
 * SAFETY-MANUAL AoU-12's sentence on the cap.
 * VULNERABILITY-ANALYSIS T.DMA path 5 (the quarantine) and T.EXHAUST: the
-  kernel-held memory is now `3B` per device under a ceiling.
+  kernel-held memory is `2B` per device, and the whole formula with the
+  default and the ceiling (F5).
 * MEMORY-AND-TIMING: the counts under the quarantine lock, with no walk
   of the list on the pin path any more.
-* `docs/DEVMGR.md`: the budget column.
-* §4.3's sentence ("a per-driver budget the driver declares") becomes "a
-  per-device budget devmgr sets".
+* `docs/DEVMGR.md`: the budget column, the `Gpu` budget's rule and its
+  lines.
+* §4.3's sentence becomes "a per-device budget devmgr sets".
 
-**Open for the customer: the size of `nvrm`'s budget.** It is how much
-memory a crashed GPU driver may leave stranded, up to `2B`, until the next
-`nvrm` boots GSP. The recommendation is `B` = one eighth of RAM, rounded
-down to 1 GiB, at least 1 GiB. The stranded memory is then at most a
-quarter of RAM, the ceiling. Bigger means fewer `LIMIT_REACHED` under heavy
-Vulkan or CUDA use. Smaller means less held after a crash.
+**The consultant's conditions, and where each is met:**
 
-**Open for the consultant.** Whether the default should count toward the
-ceiling too, which would need a smaller default for devices with no
-declared kind.
+| Condition | Met by |
+|---|---|
+| F1: the bound was `3B − 1`; refuse on `quarantined + live + n > 2B` | "The rule", "The bound"; check P2 |
+| F2: `live` reserved under the lock before `Domain::pin`, given back on failure; `BAD_STATE` tested under it | "No overshoot"; checks P3, P5 |
+| F3: pages kept for good stay counted; the release clears only what it gave back | `kept`; check P4 |
+| F4: the 1 GiB floor against the ceiling below 8 GiB; no silent fallback | "`nvrm`'s budget"; check P6 (with the customer's decision) |
+| F5 (ruling 7): the default not counted; T.EXHAUST's whole formula | "Who sets it"; Documents |
 
-**Points.** 3, up from 2: a new call and right, the counts moved onto the
-domain, devmgr's table, and five checks.
+**Points.** 3, up from 2: two calls and a right, the counts moved onto the
+domain under one lock, devmgr's table and its budget rule, and six checks.
 
 ### 12.3 N0g: interrupt remapping on VT-d
 
@@ -2030,7 +2173,9 @@ domain, devmgr's table, and five checks.
   `Unit::invalidate_iotlb`). Its module comment says queued invalidation
   and interrupt remapping are not used.
 * `Unit::open` checks the version, three-level tables, `RWBF`, and that
-  firmware did not leave translation on. It checks no coherency bit.
+  firmware did not leave translation on. It checks no coherency bit, and
+  nothing in the kernel issues `clflush`. That is F-58, fixed on its own
+  before N0g (below).
 * `Unit::command` repeats the standing enables in `STANDING`, which
   includes `CFI` (bit 23). A `CFI` that firmware left set would be carried
   into every later `GCMD` write.
@@ -2038,74 +2183,106 @@ domain, devmgr's table, and five checks.
   compatibility-format message from a 64-slot vector bitmap (`TAKEN`,
   vectors 0x40–0x7F). It already takes the requester ID, and ignores it.
 * `src/kernel/src/arch/x86_64/apic.rs`: `IoApicInput::route` writes a
-  compatibility RTE. Its one user is the console's receive line
-  (`console_receive_irq`). The kernel's own vectors are `IPI_VECTOR`
-  0xFD, `TIMER_VECTOR` 0xFE and `SPURIOUS_VECTOR` 0xFF.
+  compatibility RTE. Its one user is the console's receive line. That line
+  is live from stage 3 (`main.rs`: `start_console_input`, before
+  `iommu::bring_up`). The kernel's own vectors are `IPI_VECTOR` 0xFD,
+  `TIMER_VECTOR` 0xFE and `SPURIOUS_VECTOR` 0xFF.
 * `Unit::take_fault` reads `F`, the source ID and the page, and ignores
   the fault-reason byte. An interrupt-remapping fault would be counted
   today as a DMA access fault on page 0.
 * xtask's q35 has `intel-iommu,intremap=off` and an in-kernel irqchip
   (`tools/common/xtask/src/qemu.rs`).
+* **QEMU implements no compatibility-format blocking at all.** The
+  consultant read both the gates' 10.2.1 (upstream tag; Ubuntu's package
+  patches nothing in `intel_iommu`) and 9.2.4.
+  * `vtd_handle_gcmd_write` ignores `GCMD` bit 23, and nothing sets
+    `GSTS.CFIS`. So "`CFIS`=0 read back" is constant on QEMU and proves
+    nothing.
+  * `vtd_interrupt_remap_msi` passes a compatibility-format message
+    through ("This is compatible mode.") and never raises fault 0x25.
+  * The KVM route fix-up (`kvm_arch_fixup_msi_route` to `int_remap`) goes
+    through the same function and passes such messages too.
 
-**What the consultant required, and where each is met below** (its
-verdict C on the first N0g text, 2026-10-02):
+**What the consultant required, and where each is met below.** It gave
+two verdicts on 2026-10-02: C on the first N0g text (C1–C6, points
+(i)–(xi)), and G on this revision (G1–G9, rulings 1–4 and 8).
 
 | Condition | Met by |
 |---|---|
-| C1: ids reserved first | §12.4, and this branch's reservation commit |
-| (i) every register invalidation to the queue, including domain teardown, unpin and the quarantine | "The invalidation queue" |
-| (ii) a wait that does not complete, IQE or ITE, is a failed invalidation; nothing released | "The invalidation queue" |
-| (iii) DMAR `INTR_REMAP`, `ECAP.QI`, `ECAP.IR`, `ECAP.C` checked; `C`=0 flushed | "What a unit must offer" |
-| (iv) firmware left IR, QI or x2APIC on | "Firmware's state" |
-| (v) `CFI`=0, `CFIS`=0 read back before `IRE`; the boot line says so | "Bring-up order" |
-| (vi) remappable I/O APIC RTEs; RTE vector = IRTE vector; SID by I/O APIC ID | "The I/O APIC" |
+| C1: ids reserved first | §12.4, and this branch's reservation commit (the consultant: OK to land as docs-only) |
+| (i) every register invalidation to the queue, including domain teardown, unpin and the quarantine | "The invalidation queue"; check R6 |
+| (ii) a wait that does not complete, IQE or ITE, is a failed invalidation; nothing released | "The invalidation queue"; check R7 |
+| (iii) DMAR `INTR_REMAP`, `ECAP.QI`, `ECAP.IR`, `ECAP.C` checked | "What a unit must offer"; `C`=0 handled by F-58's fix |
+| (iv) firmware left IR, QI or x2APIC on | "Firmware's state"; check R8 |
+| (v) `CFI`=0, `CFIS`=0 read back before `IRE`; the boot line says so | "Bring-up order", with G1's correction |
+| (vi) remappable I/O APIC RTEs; RTE vector = IRTE vector; SID by I/O APIC ID | "The I/O APIC"; check R5 |
 | (vii) the HPET needs no IRTE | "The HPET" |
-| (viii) F-57 adds NMI, SMI and INIT; a forged-NMI check | "F-57" and check G2 |
+| (viii) F-57 adds NMI, SMI and INIT; a forged-NMI check | "F-57's text"; check R2 |
 | (ix) IRT and queue pages, the allocator, memory and timing | "Memory and timing" |
 | (x) IR faults 0x20–0x26 apart from DMA faults | "Faults" |
-| (xi) 6 → 8 points | §7, and "Points" below |
-| C3: degraded mode refused for the GPU unless a logged boot option accepts it | "Degraded mode" |
-| C4: seven boot checks on KVM (split irqchip) and TCG, each with a control | "The boot checks" |
+| (xi) 6 → 8 points | "Points" |
+| C3: a GPU refused without isolated interrupts | "Unisolated interrupts" (no accepting boot option, by the customer's call so far) |
+| C4: boot checks on KVM (split irqchip) and TCG, each with a control | "The boot checks", R1–R10 |
 | C5: Arm code unchanged; the GICv2m residual recorded on its own | "Arm" |
-| C6: order N0d, N0f, N0g, N1 | §12 intro |
+| C6: order | §12 intro, with F-58 first (ruling 1) |
 | EIME=0 and the xAPIC destination format | "The table and its entries" |
 | IRTE written high half first, low with Present last; IEC and wait before unmask; a present IRTE never edited | "The table and its entries" |
+| G1: QEMU implements no `CFI`; `CFIS`=0 proves nothing there, and the boot line must not claim "blocked" from it | "The patched QEMU"; "Bring-up order"'s line |
+| G2 (ruling 2): option (a) required, in xtask's QEMU and in the `ferrix-3060` domain's `<emulator>` | "The patched QEMU" (the customer said yes) |
+| G3: the console's line is live before IR bring-up: convert it at bring-up; service the port once; a defined no-scope outcome; no compatibility-format MSI minted by then; IRTE and IEC outside `CONSOLE_INPUT`'s lock | "The I/O APIC"; checks R5, R9 |
+| G4: isolated needs `IRE`=1 and `CFIS`=0 on **every** DMAR unit, refused ones included | "Unisolated interrupts" |
+| G5: the isolated-interrupts mark is set-once; devmgr's GPU launch fails if setting it fails | "Unisolated interrupts"; check R10 |
+| G6: x2APIC checked per processor in `secondary_start` | "Firmware's state"; check R8 |
+| G7: `msi_allocate`'s shared signature stays | "Messages" |
+| G8: on `C`=0, fresh frames flushed whole before they are linked or published | F-58's fix; N0g's own frames through its helper ("The table and its entries", "Bring-up order") |
+| G9: the `SW`=0 wait only through a check-only parameter; its kept frames counted | check R7 |
+| Ruling 3: a dedicated 0xFC | check R1 |
+| Ruling 4: units without QI refused | "What a unit must offer" |
+| Ruling 8: the accepting boot option allowed, advised against | not added (customer still deciding) |
+
+**What comes first: F-58.** The consultant confirmed the coherency gap as
+**F-58** (Moderate, pre-existing). On a unit with `ECAP.C`=0, `vtd.rs`
+writes root and context entries, and `ferrix_paging` writes second-level
+ones, with no `clflush`. A cleared entry may then still be read as present
+after its invalidation, and a fresh table may be read as stale present
+entries. QEMU reports `C`=0 but walks coherently, so no gate shows it. The
+SMMUv3 side (`COHACC`, `CR1`) is to be confirmed in the fix's review. Its
+fix is not N0g's:
+
+* it lands on its own, before N0g, by another agent, with the register
+  invalidations as they are;
+* it adds a flush helper: `clflush` plus `mfence` of every written entry,
+  and of every whole fresh table frame, before its invalidation or link,
+  on `C`=0;
+* it adds a dirty-flag self-check, which runs on QEMU since `C`=0 there.
+
+N0g builds on it:
+
+* every frame N0g allocates for the unit to read is flushed whole through
+  F-58's helper before it is linked or published (G8): the IRT, the queue,
+  the wait-status frame;
+* so is every IRTE and every descriptor N0g writes, before the IEC or the
+  queue tail that publishes it;
+* N0g moves F-58's publish point from the register invalidation to the
+  queue's tail.
 
 **What a unit must offer.** `Unit::open` gains these checks, in this
 order:
 
 * **The DMAR's `INTR_REMAP` flag** (`ferrix_acpi::dmar::FLAG_INTR_REMAP`,
   bit 0) and **`ECAP.IR`** (bit 3). Without both, the unit translates DMA
-  as today but remaps no interrupts: the machine is in degraded interrupt
-  mode (below).
+  as today but remaps no interrupts, and the machine's interrupts are not
+  isolated (below).
 * **`ECAP.QI`** (bit 1). This is now required for the unit to be used at
-  all. Register-based invalidation is removed, not kept as a fallback, so
-  "a register invalidation while `QIE` is set" cannot exist. Every VT-d
-  unit since the first generation with IR has QI, and QEMU's always has it
-  (`intel_iommu.c`: `s->ecap = VTD_ECAP_QI | …`). A unit without it is
-  refused with "it has no invalidation queue", and its functions get
-  untranslated domains, as for any refused unit.
-* **`ECAP.C`** (bit 0, page-walk coherency). QEMU's unit reports `C`=0:
-  it never sets `VTD_ECAP_C`, checked in QEMU 9.2's source. So refusing
-  `C`=0 would refuse every unit the gates boot. N0g flushes instead. On a
-  unit with `C`=0, every entry the kernel writes for the unit to read is
-  written back with `clflush` on its cache line, followed by `mfence`,
-  before the invalidation that publishes it. That covers root, context,
-  second-level and IRT entries. Queue descriptors are flushed too on
-  `C`=0. That costs one `clflush` each, and the design then makes no claim
-  about how a non-coherent unit reads its queue. Under QEMU
-  the flush does nothing visible but runs on every boot, so its lines are
-  covered.
-  
-  **This is a pre-existing gap**, and the reason N0g is 9 points (below):
-  `vtd.rs` writes root and context entries through the direct map
-  (`write_entry`), and `ferrix_paging` writes second-level entries
-  (`mm::map_io`), with no flush. On a real unit with `C`=0, an unpin's
-  cleared entry could still be read from memory as present after its
-  invalidation, so the device could reach a freed frame. This is proposed
-  as a new finding, with its number given on confirmation. The second-level
-  half needs a flush hook in `mm::map_io` and `mm::unmap_io` that only
-  VT-d's `C`=0 path sets.
+  all (ruling 4). Register-based invalidation is removed, not kept as a
+  fallback, so "a register invalidation while `QIE` is set" cannot exist.
+  IR needs QI anyway, since the IEC exists only as a queue descriptor.
+  Every IR-capable unit has QI, and QEMU's always has it
+  (`s->ecap = VTD_ECAP_QI | …`). A unit without it is refused, with "it
+  has no invalidation queue" on its line. Its functions get untranslated
+  domains, so `DMA_TRANSLATED` is clear for them, and the machine's
+  `INTERRUPTS_ISOLATED` is clear (G4).
+* **`ECAP.C`** (bit 0) is read and acted on by F-58's fix.
 
 **Firmware's state.** `Unit::open` already refuses a unit that firmware
 left translating. For the rest:
@@ -2118,47 +2295,57 @@ left translating. For the rest:
   else refused.
 * **A table pointer left behind** (`GSTS.IRTPS`): `IRTA` is overwritten by
   the kernel's own before `SIRTP`, so nothing of firmware's table is used.
-* **`CFI` left set**: removed from `STANDING`, so the first kernel
-  `GCMD` write clears it, and "Bring-up order" reads `CFIS`=0 back.
-* **x2APIC left on** (`IA32_APIC_BASE.EXTD`, bit 10). Ferrix drives the
-  local APIC through its MMIO window (`apic.rs`), which does not exist in
-  x2APIC mode.
-  * `apic::init` reads the MSR first.
+* **`CFI` left set**: removed from `STANDING`, so the first kernel `GCMD`
+  write clears it, and "Bring-up order" reads `CFIS` back.
+* **x2APIC left on** (`IA32_APIC_BASE.EXTD`, bit 10), **on every
+  processor** (G6). Ferrix drives the local APIC through its MMIO window
+  (`apic.rs`), which does not exist in x2APIC mode. INIT does not take a
+  processor out of x2APIC mode, so an AP can be in it whatever the boot
+  processor found.
+  * `apic::init` on the boot processor, and `smp.rs`: `secondary_start`
+    on every AP, read the MSR before touching the MMIO APIC.
   * If `EXTD` is set and `IA32_XAPIC_DISABLE_STATUS` (0xBD, if CPUID
-    enumerates it) does not say legacy xAPIC is disabled, it takes the
+    enumerates it) does not say legacy xAPIC is disabled, they take the
     SDM's path: x2APIC → disabled (`EN`=0, `EXTD`=0) → xAPIC (`EN`=1). The
-    boot line says "firmware left x2APIC on; switched to xAPIC".
+    boot line says "firmware left x2APIC on, on N processors; switched to
+    xAPIC".
   * If xAPIC is disabled (a locked platform), the boot stops with a named
-    reason, "the platform locks the local APIC in x2APIC mode, which this
-    kernel does not drive yet". It does not go on with an APIC it cannot
-    reach.
+    reason, "processor N: the platform locks the local APIC in x2APIC
+    mode, which this kernel does not drive yet". That is the customer's
+    decision 4: fail-safe, and better than today, where such a machine
+    would drive an APIC window that does not exist.
   * The DMAR's `X2APIC_OPT_OUT` flag is read and printed. It changes
     nothing while the kernel runs xAPIC.
 
 **Bring-up order**, per unit, replacing `Unit::enable`:
 
 1. `RTADDR`, then `SRTP`, then wait for `RTPS` (as today).
-2. **The queue**: one zeroed 4 KiB frame, 256 descriptors of 128 bits.
-   `IQA` gets its address with `QS`=0 and `DW`=0 (128-bit descriptors,
-   legacy mode). `IQT` = 0, then `QIE`, then wait for `QIES`. No register
-   invalidation has been issued yet, so none is in flight.
+2. **The queue**: one zeroed 4 KiB frame, flushed whole on `C`=0, of 256
+   descriptors of 128 bits. `IQA` gets its address with `QS`=0 and `DW`=0
+   (128-bit descriptors, legacy mode). `IQT` = 0, then `QIE`, then wait
+   for `QIES`. No register invalidation has been issued yet, so none is in
+   flight.
 3. A queued global context-cache invalidation, a global IOTLB
    invalidation and a wait (below). This replaces today's two register
    commands.
 4. **The table** (below): `IRTA` = its address, `EIME`=0, `S`=7 (256
    entries). Then `SIRTP`, wait for `IRTPS`, then a queued global IEC with
    a wait.
-5. `GCMD` with `IRE` and *without* `CFI`. Wait for `IRES`, then read
-   `GSTS` back and require `CFIS`=0. If `CFIS` reads 1, the unit's IR is
-   turned off again and the machine is in degraded interrupt mode, with
+5. **The console's line is converted** (below, "The I/O APIC"), if one is
+   routed.
+6. `GCMD` with `IRE` and *without* `CFI`. Wait for `IRES`, then read
+   `GSTS` back and require `CFIS`=0. If `CFIS` reads 1, IR is turned off
+   again on that unit, and the machine's interrupts are not isolated, with
    "compatibility format still accepted" as the reason.
-6. `TE`, as today.
+7. `TE`, as today.
 
 The boot line per unit becomes
-`iommu    vt-d unit 0xfed90000: translating, queue on, remapping on (256 entries, xAPIC format), compatibility format blocked (CFIS=0), coherent: no (flushing)`.
-test-boot requires the clause "remapping on … compatibility format
-blocked" on x86-64 boots, and it requires it again by name in the IR
-checks' line.
+`iommu    vt-d unit 0xfed90000: translating, queue on, remapping on (256 entries, xAPIC format), CFIS=0 read back`.
+It states the read-back, a register fact, and not "blocked" (G1). On
+QEMU that read-back is meaningful only with the patched QEMU below, where
+`CFIS` follows `CFI`. That compatibility format **is** blocked is check
+R1's line, which test-boot requires on every x86-64 boot together with
+the bring-up line.
 
 **The invalidation queue.** `Unit::invalidate_context` and
 `Unit::invalidate_iotlb` keep their signatures. Their bodies become a
@@ -2178,9 +2365,8 @@ A third, `invalidate_interrupt_entry(index)`, adds the IEC.
 The wait descriptor (type 5) has `SW`=1 and `FN`=1. It writes a status
 word into a kernel frame. The word's value is a per-unit sequence number,
 so a late completion of an earlier, timed-out wait is never taken for the
-current one. The wait succeeds only
-when that word is written within `PATIENCE`, 100 ms as today. **A
-failed invalidation** is any of:
+current one. The wait succeeds only when that word is written within
+`PATIENCE`, 100 ms as today. **A failed invalidation** is any of:
 
 * the word not written within `PATIENCE`;
 * `FSTS.IQE` (bit 4), `ICE` (bit 5) or `ITE` (bit 6) set at any poll.
@@ -2189,12 +2375,12 @@ It is returned as `Err`, and every caller already treats an `Err` from
 an invalidation as "the unit may still reach it":
 
 * `Domain::unpin` hands the pin back, and `Pin::drop` then keeps its
-  frames for good;
-* `object::pin::release` leaks the entry back into the quarantine
-  (`back.leak()`);
+  frames for good, in N0f's `kept` count;
+* `object::pin::release` leaks the entry back (`back.leak()`), also into
+  `kept`;
 * `Unit::detach` keeps the root table.
 
-N0g adds that **an IRTE index whose IEC failed is never reused**: vectors
+N0g adds that **an IRTE index whose IEC failed is never reused**. Vectors
 are never freed today in any case (below). After `IQE` the queue has
 stopped at a bad descriptor and the unit takes no further invalidation.
 The unit is then marked **failed**. Every later invalidation on it fails
@@ -2206,21 +2392,20 @@ side.
 
 **The table and its entries.**
 
-* **Size and index.** One table per unit, one zeroed 4 KiB frame: 256
-  entries of 128 bits. An IRTE's index is the vector's slot in `TAKEN`
-  (`vector − 0x40`). Every vector the arch layer hands out, MSI, MSI-X or
-  an I/O APIC input, already comes from those 64 slots
-  (`msi::allocate_vector`). So no second allocator and no second lock is
-  needed: the index is taken by the existing compare-and-swap, and two
-  vectors never share an index. Indexes 64–255 are never present, and a
-  message naming one faults with 0x21 or 0x22.
+* **Size and index.** One table per unit, one zeroed 4 KiB frame, flushed
+  whole on `C`=0 before `SIRTP` (G8): 256 entries of 128 bits. An IRTE's
+  index is the vector's slot in `TAKEN` (`vector − 0x40`). Every vector
+  the arch layer hands out, MSI, MSI-X or an I/O APIC input, already comes
+  from those 64 slots (`msi::allocate_vector`). So no second allocator and
+  no second lock is needed: the index is taken by the existing
+  compare-and-swap, and two vectors never share an index. Indexes 64–255
+  are never present, and a message naming one faults with 0x21 or 0x22.
 * **EIME=0, xAPIC format.** Ferrix runs xAPIC and refuses APIC IDs above
   255 (`apic.rs`: `send`; `smp.rs`). The destination is built by one
   function, `irte_destination(apic_id) -> Result<u32>`, which puts the ID
   in bits 15:8 of the IRTE's 32-bit destination field and refuses an ID
   above 255. **The later x2APIC work must set `IRTA.EIME`=1 and widen this
-  function to the full 32 bits**. Its doc comment says so, and so does the
-  SAFETY-MANUAL AoU-21 text (below).
+  function to the full 32 bits.** Its doc comment says so.
 * **The fields**, fixed by the IRTE builder and checked by a host test:
   * `P`=1, `FPD`=0 (faults are recorded), `DM`=0 (physical), `RH`=0;
   * `TM` edge for MSI/MSI-X, or the input's trigger for an I/O APIC
@@ -2240,7 +2425,7 @@ side.
   3. `write_volatile` the low qword, with `P` last in the same store.
      x86's write-back stores are seen in program order, so the unit never
      reads a present entry with a stale `SID`.
-  4. On `C`=0, `clflush` the entry's line, then `mfence`.
+  4. On `C`=0, F-58's helper flushes the entry's line.
   5. IEC, index-selective (`G`=1, `IIDX`=index, `IM`=0), then a wait.
      This is required under QEMU's caching mode too, after
      not-present → present.
@@ -2254,53 +2439,75 @@ side.
   It must never be two plain stores to a present entry. The builder
   module's doc states the rule.
 
-**Messages.** `arch::msi_allocate(requester: u32)` becomes
-`msi_allocate(function: Address)`, adding the segment, so the arch layer
-can ask `iommu` for the function's unit. Then:
+**Messages.** `arch::msi_allocate(device: u32)` keeps the signature the
+three architectures share (G7). The Arm implementations
+(`arch/aarch64/mod.rs`, `arch/armv7a/mod.rs`, `gic.rs`, `gicv2.rs`) are
+untouched, and "no Arm file changes" holds. x86-64's implementation
+resolves the unit inside itself: it asks `iommu` for the unit whose
+placement holds that requester ID on segment 0, the only segment x86-64
+Ferrix enumerates. Then:
 
-* **Remapping on for that unit**: `iommu::remap(function, slot, vector,
+* **Remapping on for that unit**: `iommu::remap(requester, slot, vector,
   apic_id)` writes the IRTE as above. The message is
   `address = 0xFEE0_0000 | (index & 0x7FFF) << 5 | 1 << 4 | (index >> 15)
   << 2` (format bit 4 set, `SHV` bit 3 clear) and `data = 0`. The 32-bit
-  MSI capability holds it; it is below 4 GiB, so N0b's
-  `Msi::reaches` passes.
+  MSI capability holds it; it is below 4 GiB, so N0b's `Msi::reaches`
+  passes.
 * **A function `iommu` places as aliased** (its requester ID is not its
-  own; `topology::Behind::Aliased`) gets **no vector** while remapping is
-  on: `mint` returns "the function's messages arrive under another's
-  source ID". Its DMA is already blocked: it has no context entry.
-  Matching an aliased requester by `SVT`=10 (bus range) is deferred until a
-  driver needs a device behind a PCIe-to-PCI bridge.
-* **Remapping off for the machine** (degraded, below): today's
-  compatibility message, unchanged.
+  own; `topology::Behind::Aliased`), or found on no unit while the machine
+  remaps, gets **no vector**. `mint` returns "the function's messages
+  arrive under another's source ID". Its DMA is already blocked: it has
+  no context entry. Matching an aliased requester by `SVT`=10 (bus range)
+  is deferred until a driver needs a device behind a PCIe-to-PCI bridge.
+* **No unit remaps** (no IR anywhere): today's compatibility message,
+  unchanged, and `INTERRUPTS_ISOLATED` is clear (below).
 * MSI-X entries are written the same way, with each entry's address
   carrying its own handle.
 
-**The I/O APIC.** `IoApicInput` gains the I/O APIC's MADT ID
-(`ferrix_acpi::IoApic::id`) and its source ID:
+**The I/O APIC (G3).** `IoApicInput` gains the I/O APIC's MADT ID
+(`ferrix_acpi::IoApic::id`) and its source ID. The source ID comes from
+matching that ID against the `enumeration_id` of a DMAR scope of type
+`SCOPE_IOAPIC` (`ferrix_acpi::dmar::DeviceScope`), never by order. Under
+QEMU this is bus 0, devfn 0xF7 (`Q35_PSEUDO_DEVFN_IOAPIC`).
 
-* The source ID is found by matching that ID against the
-  `enumeration_id` of a DMAR scope of type `SCOPE_IOAPIC`
-  (`ferrix_acpi::dmar::DeviceScope`). It is never matched by order. Under
-  QEMU this is bus 0, devfn 0xF7 (`Q35_PSEUDO_DEVFN_IOAPIC`).
-* **No matching scope**: the input is left masked and the console stays
-  polled (`console_receive_irq` returns `None`, today's fallback). IR
-  stays on for everything else. This is the consultant's suggestion: no
-  `INTx` is used on x86-64 (every device signals by MSI or MSI-X), so the
-  I/O APIC is not needed, and compatibility format stays blocked.
-* **A matching scope**: `route` becomes a sequence.
-  1. Write the RTE masked (bit 16).
-  2. Write the IRTE (`TM` and polarity from the input, `SID` = the I/O
-     APIC's), then IEC and wait.
-  3. Rewrite the RTE in remappable format: bit 48 set, handle bits 14:0
-     in 63:49, handle bit 15 in bit 11, bits 10:8 zero. The **vector field
-     is the IRTE's vector**, because the I/O APIC matches EOIs to RTEs by
-     vector for level-triggered lines (VT-d §5.1.5.1). The trigger bit
-     equals the IRTE's `TM`.
-  4. Unmask in a later call, as `enable_console_receive` does now.
-* QEMU 9.2's I/O APIC sends without a source ID (`X86_IOMMU_SID_INVALID`,
-  `vtd_mem_ir_write`), so QEMU checks no SID for it. The SID match is
-  therefore shown by the host test over QEMU's DMAR, and argued for
-  hardware.
+**The console's line is converted at IR bring-up, not routed afresh.** It
+has been live in compatibility format since stage 3, and `console::input`
+has no way back to polling once its interrupt has started. So at step 5
+of the bring-up order:
+
+1. Under `CONSOLE_INPUT`'s lock, mask the RTE (bit 16), and read the
+   vector and destination it is routed to now. Drop the lock.
+2. Outside that lock (the gate spins there), write the IRTE with that
+   vector and destination, `TM` and polarity from the input, and `SID` =
+   the I/O APIC's. Then an IEC and a wait.
+3. Set `IRE` and read back `CFIS` (step 6).
+4. Under the lock again, write the RTE in remappable format: bit 48 set,
+   handle bits 14:0 in 63:49, handle bit 15 in bit 11, bits 10:8 zero.
+   The **vector field is the IRTE's vector**, because the I/O APIC matches
+   EOIs to RTEs by vector for level-triggered lines (VT-d §5.1.5.1). The
+   trigger bit equals the IRTE's `TM`. Then unmask, and drop the lock.
+5. **Service the port once**, as its interrupt handler would. An edge
+   raised while the line was masked is lost, and a byte left in the UART
+   would otherwise wait for the next one.
+
+**No matching scope.** If a routed input's I/O APIC has no DMAR scope,
+the conversion cannot be done, and the console cannot go back to polling.
+So IR is **not enabled** on that unit. The console keeps its
+compatibility RTE, the machine's interrupts are not isolated, and the
+line says why: `iommu    vt-d unit …: remapping not enabled: no DMAR scope names I/O APIC 0, which carries the console`.
+Only when no input is routed at all (no MADT, no I/O APIC covering IRQ 4)
+is the I/O APIC unused, and IR goes on without it (the consultant's
+earlier suggestion).
+
+**No compatibility-format MSI exists when IR goes on.** The mints are at
+stage 10, after `bring_up`. Bring-up asserts it: every slot taken in
+`TAKEN` at step 6 must be an I/O APIC input that bring-up converted, or
+the boot stops by name ("a vector was minted in compatibility format
+before interrupt remapping"). That is check R9.
+
+QEMU's I/O APIC sends without a source ID (`X86_IOMMU_SID_INVALID`,
+`vtd_mem_ir_write`), so QEMU checks no SID for it. The SID match is shown
+by a host test over QEMU's DMAR, and argued for hardware.
 
 **The HPET.** Ferrix reads the HPET only as a counter
 (`arch/x86_64/clock.rs`), and never programs a comparator or an FSB
@@ -2321,45 +2528,112 @@ of the dword at `+12`) once `F` is set:
   registers the one it provokes, and `audit_faults` counts any other as
   stray. FX-1007 then fails the boot, as for DMA.
 * xtask's `dma_faults` parser splits the two kinds. The IR checks' line
-  must show exactly the faults they provoked: 0x25 for G1 and G2, and
-  0x26 for G3. Any other reason, 0x20–0x24, fails test-boot by name.
+  must show exactly the faults they provoked: 0x25 for R1 and R2, and
+  0x26 for R3. Any other reason, 0x20–0x24, fails test-boot by name.
 
-**Degraded mode (C3).** Remapping is a machine property for compatibility
-format: one device behind a unit without IR, or behind no unit, can send a
-compatibility message that no unit blocks. So:
+**Unisolated interrupts (C3, G4, G5).** Compatibility format is a
+machine property: one device behind a unit that does not remap, or behind
+no unit, can send a compatibility message that no unit blocks. So:
 
 * **`device_isolation(device)`** → bits, a new call with no buffer. Any
   device handle will do.
   * Bit 0, `DMA_TRANSLATED`: the device's domain is translated.
-  * Bit 1, `INTERRUPTS_ISOLATED`: every translating unit has `IRE`=1 and
-    `CFIS`=0, no PCI function is counted as bypassing every unit, and
-    this device's vectors are remapped.
-  * Bit 2, `UNISOLATED_ACCEPTED`: the boot accepted the residual
-    (below).
-  * x86-64 only sets bit 1 after N0g. On AArch64 bit 1 is set for a device
-    behind a GICv3 ITS, and never for GICv2m (below). ARMv7-A never sets
+  * Bit 1, `INTERRUPTS_ISOLATED`. It is set only when **every** unit the
+    DMAR lists, refused units included (no QI, `RWBF`, left translating,
+    would not stop remapping), has `IRE`=1 and `CFIS`=0, no PCI function
+    is counted as bypassing every unit, and this device's vectors are
+    remapped (G4). A refused unit blocks nothing, so one clears the bit
+    for the whole machine.
+  * x86-64 sets bit 1 only after N0g. On AArch64 it is set for a device
+    behind a GICv3 ITS, and never under GICv2m (below). ARMv7-A never sets
     it.
 * **`DEVICE_LIMIT_ISOLATED_INTERRUPTS`**, a second limit for N0f's
-  `device_set_limit` (`SET_LIMIT`, devmgr only). With it set on a node,
-  the kernel refuses `interrupt_create` and `vmo_pin` for that node with
-  `ACCESS_DENIED` while bit 1 is clear and bit 2 is clear. The refusal is
-  the kernel's, not devmgr's. devmgr sets the limit for every kind whose
-  device runs firmware of its own; the `Gpu` kind is the first. `nvrm`
-  also checks bit 1 or 2 at start, as a second guard.
-* **The boot option** `ferrix.interrupts=isolated|accept-unisolated`.
-  The default and the reference is `isolated`. Under `accept-unisolated`
-  the boot prints, once:
-  `iommu    interrupts are NOT isolated (reason: …), and the boot option accepts it: a device with firmware of its own can raise any interrupt (F-57)`.
-  The audit record carries the option. It is the second boot option that
-  changes the item's work, so ITEM.md §5's "Boot options" row goes from
-  one to two. Claims are made of `isolated` alone (SAFETY-MANUAL AoU-8's
-  wording extends to it).
+  `device_set_limit` (`SET_LIMIT`, devmgr only).
+  * With it set, the kernel refuses `interrupt_create` and `vmo_pin` for
+    that node with `ACCESS_DENIED` while bit 1 is clear. The refusal is
+    the kernel's, not devmgr's.
+  * It is **set-once** (G5): a `device_set_limit` that would clear it is
+    `ACCESS_DENIED`, and nothing else clears it.
+  * devmgr sets it for every kind whose device runs firmware of its own;
+    the `Gpu` kind is the first. **If setting it fails, devmgr does not
+    start the GPU's driver**, and prints
+    `devmgr   gpu 01:00.0 not started: the kernel refused its isolated-interrupts mark`.
+    A devmgr host test and its control show that (R10).
+  * `nvrm` also checks bit 1 at start, as a second guard.
+* **No accepting boot option.** A device marked this way on a machine
+  whose interrupts are not isolated is simply refused. The customer is
+  still deciding whether a logged option to accept the residual should
+  exist, and the consultant advised "not yet" (ruling 8). If it is wanted,
+  it can come later as its own reviewed change. ITEM.md §5 keeps one boot
+  option.
 * Disk, net, sound, input and display drivers are not marked, and work
   as today without IR. The consultant accepted that for the machine as a
   whole, with ARMv7-A's V-03 as the precedent.
-* **F-57 stays open for the unisolated configuration.** The Security
+* **F-57 stays open where interrupts are not isolated.** The Security
   Target's T.DMA claim and O.DMA's interrupt half become conditional on
   bit 1: "where interrupt remapping is active".
+
+**The patched QEMU (G1, G2; the customer's yes to option (a)).**
+
+* **The patch** is
+  `tools/common/data/qemu/0002-intel_iommu-honour-CFI-and-block-compatibility-format.patch`.
+  It sits beside the virtio-gpu-gl fix that the Windows build already
+  carries from that directory (`tools/common/fetch/fetch-qemu-windows.sh`).
+  Against v10.2.1 it does two things:
+  * `vtd_handle_gcmd_write` honours `GCMD.CFI` and sets or clears
+    `GSTS.CFIS` to match, as `VTD_GSTS_CFIS` names it;
+  * `vtd_interrupt_remap_msi`, on a compatibility-format message with IR
+    on and `CFIS` clear, reports `VTD_FR_IR_REQ_COMPAT` (0x25) against the
+    source ID (when `do_fault`) and returns `-EINVAL`, so the message is
+    dropped.
+  
+  The same function serves `vtd_mem_ir_write` (TCG, and a device's own
+  writes) and the KVM route fix-up (`int_remap`). So under the split
+  irqchip a compatibility route is refused too: no route, no delivery, and
+  no fault recorded at route time, since QEMU calls it with
+  `do_fault=false` there. The patch is offered upstream. Once a release
+  has it, the patch is dropped and the pin moves to that release.
+* **The build** is a new `tools/common/fetch/fetch-qemu-linux.sh`, shaped
+  like the Windows script:
+  * it fetches the v10.2.1 release tarball by its pinned sha256, and
+    applies the patches named in `tools/common/data/qemu/series-10.2.1`;
+  * it configures `--target-list=x86_64-softmmu
+    --with-pkgversion=ferrix-cfi`, with the display features the gates use
+    from Ubuntu's build: GTK, OpenGL, virglrenderer, VNC, and spice
+    protocol for `qemu-vdagent`;
+  * it installs into `~/.local/share/ferrix/qemu`.
+* **How xtask selects it.** `paths.rs`: `own_qemu` already looks in
+  `~/.local/share/ferrix/qemu` before `PATH`, on any host. With only
+  `qemu-system-x86_64` built there, x86-64 boots take it, and AArch64 and
+  ARMv7-A keep the QEMU on `PATH`. Nothing else needs choosing.
+  `FERRIX_QEMU` still overrides, as today.
+* **How xtask refuses an unpatched QEMU.** Before an x86-64 boot,
+  `qemu.rs` reads the chosen binary's `--version`. If it lacks
+  `(ferrix-cfi`, the boot is refused with
+  `x86-64 boots need a QEMU that blocks compatibility-format interrupts (F-57); run tools/common/fetch/fetch-qemu-linux.sh`.
+  The kernel's check R1 decides independently: on an unpatched QEMU the
+  forged message arrives, and R1 fails by name.
+* **CI** runs the same script. Its build is cached by the hash of the
+  script and the patch series.
+* **The `ferrix-3060` domain's `<emulator>`.** libvirt's `qemu:///system`
+  runs QEMU as its own user under its AppArmor profile, which does not
+  let it run a binary from a home directory. So:
+  * the same build is installed once by the user, as root, to
+    `/usr/local/lib/ferrix/qemu/`. The script prints the `sudo install`
+    line and never runs it. It never touches `/usr/local/bin`, which
+    holds the root-installed 9.2.4.
+  * The domain's XML (`~/ferrix-nvidia-vm/ferrix-3060-rootport.xml`, N0e's
+    template) names `/usr/local/lib/ferrix/qemu/bin/qemu-system-x86_64`.
+  * `run-nvidia` refuses to start the domain unless its `<emulator>` is
+    that path and that binary's `--version` says `ferrix-cfi`.
+  
+  This matters there as much as in the gates. `nvrm` could produce a
+  compatibility message through vfio's emulated MSI capability, by way of
+  the `NV_PCFG` mirror quirk, and the host QEMU's route fix-up would pass
+  it. With the patched emulator, F-57's closure covers the 3060 VM.
+* Customer and consultant agree that without the patch,
+  `INTERRUPTS_ISOLATED` would never be set under QEMU. With it, R1 shows
+  the block on every x86-64 gate boot.
 
 **F-57's text.** FINDINGS.md is changed with N0g's landing, not here.
 The new text:
@@ -2368,12 +2642,15 @@ The new text:
   as well as its vector: NMI, SMI and INIT, not only fixed. A device could
   send an INIT and stop a processor, or an SMI into firmware. IR closes
   that, because an IRTE's `DLM` is always fixed and compatibility format
-  is blocked.
+  is blocked;
 * replaces "a GICv2m frame raises only the SPIs it owns" with the
-  residual below, kept out of F-57's closure.
+  residual below, kept out of F-57's closure;
+* names the QEMU patch as part of the reference configuration's evidence
+  on QEMU.
 
-F-57 closes when N0g lands with checks G1 to G7 and their controls, for
-the `isolated` configuration on x86-64.
+F-57 closes when N0g lands with checks R1 to R10 and their controls,
+where `INTERRUPTS_ISOLATED` holds on x86-64. That covers bare metal with
+VT-d IR, the gates' patched QEMU, and the `ferrix-3060` domain on it.
 
 **Arm (C5).** No Arm code changes. The documents gain T.DMA **path 6's
 GICv2m residual**, recorded apart from F-57:
@@ -2390,86 +2667,66 @@ GICv2m residual**, recorded apart from F-57:
 
 **Memory and timing (ix).**
 
-* The table and the queue are kernel frames that no domain maps. Each is
-  one 4 KiB frame per unit, plus one frame of wait-status words. They are
-  allocated at stage 10's bring-up, not 64 KiB and not contiguous beyond
-  a frame.
+* The table, the queue and the wait-status words are kernel frames that
+  no domain maps: three 4 KiB frames per unit, allocated at stage 10's
+  bring-up.
 * The IRTE index needs no new lock (the `TAKEN` CAS).
 * The queue is under the unit's `commands` gate. Its hold is one
   descriptor pair plus the wait, bounded by `PATIENCE` (100 ms) per
   invalidation, as the register wait is today.
-* The `IoApicInput` sequence runs under `CONSOLE_INPUT`'s lock and the
-  gate, in that order.
-* MEMORY-AND-TIMING gains the queue's wait, the gate's order with
-  `Domain`'s `changing` gate (`changing` then `commands`, as today), and
-  the failed-unit state.
+* The console's conversion takes `CONSOLE_INPUT`'s lock twice, for one
+  RTE write each, and the gate between, never both at once (G3's
+  advisory).
+* MEMORY-AND-TIMING gains:
+  * the queue's wait;
+  * the gate's order with `Domain`'s `changing` gate (`changing` then
+    `commands`, as today);
+  * the failed-unit state.
 
 **xtask's machine.**
 
-* x86-64 boots get `-device intel-iommu,intremap=on,eim=off`.
+* x86-64 boots get `-device intel-iommu,intremap=on,eim=off`, on the
+  patched QEMU.
   * `eim=off` keeps QEMU from offering what the kernel does not use.
     QEMU's `auto` turns EIM on under an in-kernel irqchip.
-  * Under KVM, `-machine q35,kernel-irqchip=split`. QEMU refuses
-    `intremap=on` with a whole in-kernel irqchip (`x86-iommu.c`). TCG
-    needs no change.
+  * Under KVM they also get `-machine q35,kernel-irqchip=split`. QEMU
+    refuses `intremap=on` with a whole in-kernel irqchip (`x86-iommu.c`).
+    TCG needs no change.
   * `seam.rs`'s machine gets the same, so measurements stay comparable.
 * The `ferrix-3060` domain (N0e) gets
-  `<iommu model='intel'><driver intremap='on' caching_mode='on' eim='off'/></iommu>`
-  and `<ioapic driver='qemu'/>`. There, the GPU's own messages are also
-  checked by the host's VT-d, through VFIO. In the guest, Ferrix's IR
-  isolates the vectors QEMU's vIOMMU translates.
+  `<iommu model='intel'><driver intremap='on' caching_mode='on' eim='off'/></iommu>`,
+  `<ioapic driver='qemu'/>`, and the `<emulator>` above. There, the GPU's
+  own DMA writes are also checked by the host's VT-d, through VFIO. In the
+  guest, Ferrix's IR isolates the vectors QEMU's vIOMMU translates.
 * The split irqchip moves the I/O APIC and PIC into QEMU. Ferrix uses
   neither on the hot path (MSI-X and the local APIC timer), so the
   boot-time cost should be small. It is measured on the gate and reported
   in the landing, given the test-time priority.
 
-**A gap in QEMU that two of the checks depend on.** QEMU 9.2's
-`vtd_interrupt_remap_msi` passes a compatibility-format message through
-untranslated whenever IR is on, whatever `CFIS` says ("This is
-compatible mode."). It never raises fault 0x25. On QEMU, therefore:
-
-* checks G1 and G2 below **cannot fire**;
-* their controls cannot be told from their checks;
-* the `CFIS`=0 read-back is the only evidence that compatibility format
-  is blocked.
-
-QEMU 10.2.1, the gates' QEMU, is to be read for the same code at the start
-of N0g's code; it is not checked here. Two ways forward, for the
-consultant (and the customer, since it changes what the gates run):
-
-* **(a)** A ten-line QEMU patch: in compatibility mode, if the unit's
-  `CFIS` is clear, report `VTD_FR_IR_REQ_COMPAT` and drop the message. It
-  is carried in xtask's QEMU build and offered upstream. G1 and G2 then
-  run with controls on both accelerators. This is the recommendation.
-* **(b)** G1 and G2 are argued from the `CFIS` read-back on QEMU. They are
-  run with real faults only on hardware with VT-d IR (none in CI), and
-  F-57's closure says so.
-
 **The boot checks (C4)**, x86-64 under KVM with the split irqchip and
-under TCG, both in test-boot. Each has a negative control, and the landing
-message gives each control's FIRED count:
+under TCG, both in test-boot, on the patched QEMU. Each has a negative
+control, and the landing message gives each control's FIRED count:
 
 | Check | What it shows | Its control |
 |---|---|---|
-| G1 | edu's MSI capability programmed by the check in **compatibility format**, aimed at a vector in the kernel's own range (0xFC, a counting handler standing beside the IPI vector 0xFD), then raised: fault 0x25 from edu's SID, and no delivery | IR left off (`IRE` not set): the message arrives |
-| G2 | the same in compatibility format with **delivery mode NMI**: fault 0x25, and `paranoid`'s `NMIS` count unchanged | IR left off: the NMI arrives and `NMIS` moves. INIT is never forged: a delivered INIT would stop a processor |
-| G3 | edu's MSI programmed in remappable format with **virtio-rng's IRTE handle** (rng at 01:00.0, edu at 02:00.0), then raised: fault 0x26 from SID 0x200, and no delivery on rng's vector | `SVT`=0 in the builder: rng's vector receives edu's message |
-| G4 | edu's **own** vector through its own handle (N0b's `check_msi`, now remappable): delivered unmasked, not delivered masked | `SID` written as rng's: 0x26, and `check_msi` fails "nothing arrived" |
-| G5 | the console's **I/O APIC line** through a remappable RTE: COM1 put in loopback for one byte; one delivery on the console's vector | the IRTE left not present: fault 0x22 and no delivery |
-| G6 | **every invalidation is queued**: the boot's invalidations counted by kind (context, IOTLB, IEC), none by register. With QI on, QEMU leaves a register invalidation pending (`vtd_handle_ccmd_write`) | one `flush` left on the old register path: QEMU never clears `IVT`, and the boot fails "never finished invalidating" |
-| G7 | **a failed invalidation releases nothing**: the check submits its unpin's wait descriptor with `SW`=0, so no status is ever written. `Domain::unpin` fails after `PATIENCE`, the pin is kept, and its frames stay held (counted). | the `Err` mapped to `Ok`: the frames are released, and the check fails "frames released after a failed invalidation" |
+| R1 | edu's MSI capability programmed by the check in **compatibility format**, aimed at **0xFC**, then raised: fault 0x25 from edu's SID, and no delivery. Per ruling 3, 0xFC is outside `TAKEN` (0x40–0x7F) and the IRT-indexed range; its handler only counts and sends EOI; and a 0xFC delivered outside the check's window is counted and fails test-boot | IR left off (`IRE` not set): the message arrives. A second forged message after the window: test-boot fails on the stray count |
+| R2 | the same in compatibility format with **delivery mode NMI**: fault 0x25, and `paranoid`'s `NMIS` count unchanged | IR left off: the NMI arrives and `NMIS` moves. INIT is never forged: a delivered INIT would stop a processor |
+| R3 | edu's MSI programmed in remappable format with **virtio-rng's IRTE handle** (rng at 01:00.0, edu at 02:00.0), then raised: fault 0x26 from SID 0x200, and no delivery on rng's vector | `SVT`=0 in the builder: rng's vector receives edu's message |
+| R4 | edu's **own** vector through its own handle (N0b's `check_msi`, now remappable): delivered unmasked, not delivered masked | `SID` written as rng's: 0x26, and `check_msi` fails "nothing arrived" |
+| R5 | the console's **I/O APIC line**, converted at bring-up: after it, COM1 put in loopback for one byte gives one delivery on the console's vector through the remappable RTE; and a byte left in the UART during the masked window is read by the one service | the IRTE left not present: fault 0x22 and no delivery; and the service after unmasking dropped: the byte is not read |
+| R6 | **every invalidation is queued**: the boot's invalidations counted by kind (context, IOTLB, IEC), none by register. With QI on, QEMU leaves a register invalidation pending (`vtd_handle_ccmd_write`) | one `flush` left on the old register path: QEMU never clears `IVT`, and the boot fails "never finished invalidating" |
+| R7 | **a failed invalidation releases nothing**. The check submits its unpin's wait descriptor with `SW`=0, through a check-only parameter of the submission (as `quiet` is for pins), never a runtime switch (G9). No status is ever written, `Domain::unpin` fails after `PATIENCE`, the pin is kept, and its frames are held and counted in `kept` | the `Err` mapped to `Ok`: the frames are released, and the check fails "frames released after a failed invalidation" |
+| R8 | **x2APIC per processor** (G6): every processor reports `EXTD` clear before its MMIO APIC is used. The control path is exercised by the check build turning x2APIC on, on one AP, before its `secondary_start` check (QEMU offers x2APIC under KVM, and under TCG since 8.1). That AP must report "switched to xAPIC" and come up | the `secondary_start` check removed: the AP touches the MMIO window in x2APIC mode and never comes up, and the boot fails on the processor count |
+| R9 | **no compatibility-format MSI before IR**: bring-up's assertion over `TAKEN` holds, and its line counts the converted inputs (1, the console) | edu's vector minted before `bring_up` in a check build: the boot stops by name |
+| R10 | **the isolated-interrupts mark** (G5): set on edu, `interrupt_create` is allowed while isolated, and refused with `ACCESS_DENIED` when the check forces the machine's bit 1 clear through a check-only path; a `device_set_limit` that would clear the mark is `ACCESS_DENIED`. devmgr's host test: setting the mark failing stops the GPU launch with its line | the refusal skipped: `interrupt_create` succeeds; devmgr ignoring the failure: the launch goes on |
 
 There is no check for **the IEC skipped**. QEMU does not cache IRTEs:
 `vtd_interrupt_remap_msi` reads the entry from memory on every message,
 and KVM's routes are rebuilt on the IEC notifier. So the first delivery
 after unmask would succeed with or without the IEC, and a check would
-prove nothing. The IEC's presence is argued from the code: one function
-writes an IRTE, and its last statement before returning is the IEC and
-wait. A host test over a mock unit asserts the descriptor order.
-
-test-boot additionally requires the bring-up line's "remapping on …
-compatibility format blocked" on every x86-64 boot, and refuses a boot
-whose IR checks' line is missing.
+prove nothing. The consultant accepted the argument from the code: one
+function writes an IRTE, and its last statement before returning is the
+IEC and wait. A host test over a mock unit asserts the descriptor order.
 
 **Host tests.** These are new, in `ferrix_paging::vtd` or a new
 `ferrix_pci`-style host crate for the encodings:
@@ -2482,66 +2739,51 @@ whose IR checks' line is missing.
   spec's layouts;
 * the DMAR IOAPIC-scope match by enumeration ID, over QEMU's DMAR
   (`ferrix_acpi`'s test table) and over one with two I/O APICs listed out
-  of order.
+  of order;
+* the `INTERRUPTS_ISOLATED` rule over a list of units, one refused (G4).
 
 **Requirements.** See §12.4: `L.iommu.47`–`55`, `L.x86_64.129`–`132`,
 `L.device.27`–`28` and `H.DMA.9`. `H.DMA.9`: "a device raises only the
-interrupt vectors minted for it". On x86-64 it holds under `isolated`
-with IR active, and on AArch64 under a GICv3 ITS. GICv2m and ARMv7-A are
-its stated residuals.
+interrupt vectors minted for it". On x86-64 it holds where
+`INTERRUPTS_ISOLATED` holds, and on AArch64 under a GICv3 ITS. GICv2m,
+ARMv7-A and machines without VT-d IR are its stated residuals.
 
 **Documents in N0g's landing.**
 
 * **SAFETY-MANUAL**:
-  * **AoU-21**: an integrator who boots with
-    `ferrix.interrupts=accept-unisolated` accepts that a device marked for
-    isolated interrupts can raise any interrupt, NMI, SMI and INIT
-    included. devmgr's match table marks every device with firmware of its
-    own. The later x2APIC work sets `EIME`=1.
+  * **AoU-21**: the integrator's devmgr marks every device that runs
+    firmware of its own (its match table), and accepts that on a machine
+    whose interrupts are not isolated such a device is not started.
   * ASR-4 names `H.DMA.9`.
+  * The reference configuration on QEMU is the patched QEMU.
 * **VULNERABILITY-ANALYSIS**:
-  * T.DMA path 6 is resisted on x86-64 under `isolated` with IR active,
-    is residual under `accept-unisolated`, and keeps its GICv2m residual;
-  * the coherency finding;
+  * T.DMA path 6 is resisted on x86-64 where interrupts are isolated, is
+    residual elsewhere for unmarked devices, and keeps its GICv2m
+    residual;
   * a sentence that DMA and interrupt isolation both rest on the requester
     ID, and that root ports' ACS source validation is not enabled. This
     is pre-existing and shared with H.DMA.1, recorded as an advisory.
-* **FINDINGS**: F-57's text as above, and its closure. The new coherency
-  finding.
+* **FINDINGS**: F-57's text as above, and its closure.
 * **SECURITY-TARGET**: T.DMA's and O.DMA's claims conditional on IR.
-* **ITEM.md §5**: two boot options.
+* **SOUP.md** and ITEM.md §5: the patched QEMU as test infrastructure
+  of the reference configuration.
 * **MEMORY-AND-TIMING**: as above.
 * **TRACEABILITY**: the new ids.
 
-**Rings.** `iommu/vtd.rs`, `iommu.rs`, `arch/x86_64/msi.rs` and `apic.rs`
-are `core`. `device_isolation` and the limit are `item`'s native calls.
-No Arm file changes.
+**Rings.** `iommu/vtd.rs`, `iommu.rs`, `arch/x86_64/msi.rs`, `apic.rs`
+and `smp.rs` are `core`. `device_isolation` and the mark are `item`'s
+native calls. No Arm file changes (G7).
 
-**Points.** 9, recorded in §7. It is 8 for interrupt remapping, the
-consultant's estimate, and 1 for the coherency flushes of the existing
-root, context and second-level tables, which the review uncovered and
-which no gate can be green without once `C` is read.
+**Points.** 10, recorded in §7.
 
-**Open, for the consultant.**
+* 8 for interrupt remapping, the consultant's estimate.
+* 1 for the QEMU patch, its Linux build script, xtask's version gate and
+  the domain's emulator.
+* 1 for what this review added: the console's live conversion, the
+  per-processor x2APIC check, and the set-once mark with devmgr's
+  refusal.
 
-* (a) or (b) for G1 and G2 (QEMU's compatibility-format gap).
-* Whether G1 may use a dedicated kernel vector, 0xFC, instead of the IPI
-  vector 0xFD itself. The remapping decision is made on the message's
-  format and handle before any vector is looked at, so the vector does
-  not change the outcome. A forged 0xFD in the control would run the IPI
-  handler on a processor with no IPI pending, which it tolerates, but its
-  arrival cannot be told from a real IPI's.
-* Whether units without `ECAP.QI` should be refused (this design) or kept
-  with register invalidation and no IR.
-
-**Open, for the customer.**
-
-* Whether the gates may run a patched QEMU (option (a)).
-* Whether `ferrix.interrupts=accept-unisolated` should exist at all. The
-  consultant allows it, logged. Without it, a GPU on a machine without IR
-  is simply refused.
-* That machines whose firmware locks x2APIC on stop at boot until the
-  x2APIC work.
+The coherency flushes left N0g for F-58's own row.
 
 ### 12.4 The requirement ids
 
@@ -2562,7 +2804,9 @@ What each states:
     length, BAR, offset and flags as minted.
   * `L.device.25`: a configuration write touching any byte outside the
     function's writable ranges is refused whole and changes nothing; reads
-    of the function's 4 KiB are answered.
+    of the function's 4 KiB are answered; a node whose kernel-owned
+    registers read back other than minted, at a HELLO or a driver's death,
+    is refused with bus mastering off.
   * `L.device.26`: the writable ranges are the allowlist of §12.1,
     computed from both capability lists (verified by
     `ferrix_pci::window`'s host tests).
@@ -2573,9 +2817,11 @@ What each states:
   * `L.object.118`: a device's pin budget is set only through
     `SET_LIMIT`, never under live pins, and never past the ceiling.
   * `L.object.119`: a pin past the budget is refused with nothing pinned.
-  * `L.object.120`: a pin is refused while the quarantine holds twice the
-    budget, and the counts carry across a driver's death and are cleared
-    only by the release.
+  * `L.object.120`: a pin is refused when quarantined, kept, live and new
+    pages would pass twice the budget; `live` is reserved under the
+    quarantine lock before the pin and given back on failure; the counts
+    carry across a driver's death, and the release takes off only what it
+    gave back.
   * `L.object.47`–`49` are reworded.
 * **N0g.**
   * `L.iommu.47`: only queued invalidation, and a unit without QI is
@@ -2583,8 +2829,10 @@ What each states:
   * `L.iommu.48`: a failed invalidation (no status within `PATIENCE`, or
     `IQE`, `ICE` or `ITE`) releases nothing, and after `IQE` the unit
     takes none.
-  * `L.iommu.49`: on `C`=0 every entry is flushed before its
-    invalidation.
+  * `L.iommu.49`: on `C`=0, every frame N0g gives the unit (table, queue,
+    status words) is flushed whole before it is linked, and every IRTE and
+    descriptor before the IEC or tail that publishes it, through F-58's
+    helper. F-58's own fix reserves its own ids.
   * `L.iommu.50`: IR only with `INTR_REMAP` and `ECAP.IR`, `EIME`=0,
     `IRES`=1 and `CFIS`=0 read back.
   * `L.iommu.51`: firmware's IR or QI turned off and read back, or the
@@ -2597,21 +2845,25 @@ What each states:
   * `L.iommu.55`: `INTERRUPTS_ISOLATED` set exactly when its conditions
     hold.
   * `L.x86_64.129`: remappable-format messages with remapping on.
-  * `L.x86_64.130`: I/O APIC lines through remappable RTEs, the SID
-    matched by MADT ID, an unmatched input left masked.
-  * `L.x86_64.131`: firmware's x2APIC switched to xAPIC, or the boot
-    stopped by name.
+  * `L.x86_64.130`: a routed I/O APIC line is converted to a remappable
+    RTE at IR bring-up (masked, IRTE and IEC outside the console's lock,
+    RTE vector = IRTE vector, unmasked, the port serviced once), its SID
+    matched by MADT ID; with no matching scope IR is not enabled on that
+    unit; no compatibility-format MSI exists when IR goes on.
+  * `L.x86_64.131`: firmware's x2APIC switched to xAPIC on every
+    processor before its MMIO APIC is used, or the boot stopped by name.
   * `L.x86_64.132`: one destination encoder, refusing IDs above 255.
   * `L.device.27`: a node marked for isolated interrupts is refused
-    vectors and pins while not isolated, unless the boot accepted it.
+    vectors and pins while the machine's interrupts are not isolated, and
+    the mark, once set, cannot be cleared.
   * `L.device.28`: no vector for an aliased function while remapping is
     on.
   * `H.DMA.9`: as in §12.3.
 
-AoU numbers are not in the reservation file. `AoU-20` is left to N0c's
-condition B1, should it take one. N0g proposes `AoU-21`, and N0d proposes
-`AoU-22`. The coherency finding is numbered by the consultant on
-confirmation.
+AoU numbers are not in the reservation file. `AoU-20` stays with N0c's
+condition B1. `AoU-21` is N0g's, and `AoU-22` is N0d's. The coherency
+finding is **F-58**, recorded in FINDINGS.md's "reserved and not yet
+filed" paragraph by this branch, and filed with its fix.
 
 ---
 
