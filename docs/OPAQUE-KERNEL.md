@@ -1265,9 +1265,24 @@ the sorted samples. The guest TSC runs at 4,400 MHz.
 These are quiet runs, with the SMT sibling of core 11 under 20% busy. A busy
 sibling adds 15 to 20%, so only ratios taken back to back are compared.
 
-**The target is 0.66 us, not 0.37.** 1.5 times the matched figure is about
-2,900 ticks. The *guess* of §9.5 assumed seL4's published cycle count, and
-the virtual machine adds to it.
+**The target: as good as seL4 or better (the customer, 2026-10-02).** The
+matched figure, 1,936 ticks (440 ns), is the target itself, not 1.5 times
+it. The customer raised it from §9.5's 1.5 times once the measurement put
+1.5 times at about 0.66 us. The *guess* of §9.5 had assumed seL4's
+published cycle count, and the virtual machine adds to it. The ratio is
+taken as §9.5 says: both kernels in one run, alternated, protections
+matched, inside a domain.
+
+What the new target changes:
+- Step 5's perf row fails above 1.10 times seL4, not 1.65; the margin is
+  for the spread of a busy host (a busy SMT sibling adds 15 to 20%).
+- Ferrix's software outside the switch must come to about seL4's, some
+  90 ns a direction (its 220 ns one way, less the 130 ns switch below),
+  where §9.5's 1.5 times left about 200.
+- The items below under *what seL4 does not do* are part of the plan now,
+  as step 5's means to the target, not things for later.
+- If the consultant refuses the fast path, the plan stops at the direct
+  switch, as §9.5 says, and this target is out of reach.
 
 What this changes in §9.5:
 - **nazuna has no PCID.** CPUID leaf 1 ECX bit 17 is clear on the host, so
@@ -1298,7 +1313,7 @@ is the refill. The rest is the `CR3` write and the user TLB refilled after it,
 each miss a two-level walk under nested paging. The budget's 20 ns for "`CR3`
 with a PCID" is about 110 ns on nazuna, for both kernels.
 
-**Later: what seL4 does not do** (after steps 1 to 4, which carry the
+**What seL4 does not do** (step 5, after steps 1 to 4, which carry the
 2 us; each is measured with the timing build's ablations first):
 - *ERAPS in place of the refill* (about 40 ns a round trip). Zen 5 clears
   the return-address predictor on every `MOV CR3` (CPUID 0x8000_0021 EAX
