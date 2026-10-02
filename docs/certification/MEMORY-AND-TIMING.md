@@ -719,7 +719,10 @@ good and counted in the device's `kept`. After `IQE` or `ITE` the unit is
 marked failed: every later invalidation on it fails at once, without
 entering the gate or touching the queue, so a broken unit costs nothing
 more than holding what its domains held, and the boot's fault audit fails
-on it (FX-1007). Check R7 makes one invalidation fail on purpose with a
+on it (FX-1007). A completion error (`ICE`) is cleared and counted as it is
+taken, so it fails one invalidation and never every later one; queue errors
+firmware left are cleared at bring-up, or the unit is refused. Check R7 makes
+one invalidation fail on purpose with a
 patience of its own, 2 ms, rather than spend the unit's 100 ms of every
 boot on an answer known in advance.
 

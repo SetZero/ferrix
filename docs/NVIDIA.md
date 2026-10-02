@@ -1117,7 +1117,14 @@ and took the recommended answer for D2, D3 and D5.
     the unit failed (`Cause::Queue`, FX-1007);
   * checks R6 and R7 run, and a check that firmware's queue is turned
     off (`L.iommu.51`), which the design did not list; each control
-    fired. R7 waits 2 ms rather than the unit's 100 ms.
+    fired. R7 waits 2 ms rather than the unit's 100 ms. R6's control is
+    caught first by the PCI check's pin refusal ("virtio-rng: the
+    check's own domain refused its pin"), the first unpin to flush.
+  * the consultant's review (OK IF): a completion error (`ICE`) is now
+    cleared and counted as it is taken, never left to fail every later
+    wait, and a check plants one on every unit; queue errors firmware
+    left in `FSTS` are cleared at bring-up, or the unit is refused;
+    `L.iommu.49` is released to F-58's `L.iommu.56`/`57`.
 
   The rest of N0g (the IRT onward) continues on the same branch.
 
@@ -2498,7 +2505,9 @@ Ferrix enumerates. Then:
 (`ferrix_acpi::IoApic::id`) and its source ID. The source ID comes from
 matching that ID against the `enumeration_id` of a DMAR scope of type
 `SCOPE_IOAPIC` (`ferrix_acpi::dmar::DeviceScope`), never by order. Under
-QEMU this is bus 0, devfn 0xF7 (`Q35_PSEUDO_DEVFN_IOAPIC`).
+QEMU this is source ID 0xFF00: the scope's start bus is
+`Q35_PSEUDO_BUS_PLATFORM` (0xFF) and its one hop is devfn 0
+(`Q35_PSEUDO_DEVFN_IOAPIC`), in QEMU 9.2.4 and 10.2.1 alike.
 
 **The console's line is converted at IR bring-up, not routed afresh.** It
 has been live in compatibility format since stage 3, and `console::input`
@@ -2776,7 +2785,7 @@ control, and the landing message gives each control's FIRED count:
 | R3 | edu's MSI programmed in remappable format with **virtio-rng's IRTE handle** (rng at 01:00.0, edu at 02:00.0), then raised: fault 0x26 from SID 0x200, and no delivery on rng's vector | `SVT`=0 in the builder: rng's vector receives edu's message |
 | R4 | edu's **own** vector through its own handle (N0b's `check_msi`, now remappable): delivered unmasked, not delivered masked | `SID` written as rng's: 0x26, and `check_msi` fails "nothing arrived" |
 | R5 | the console's **I/O APIC line**, converted at bring-up: after it, COM1 put in loopback for one byte gives one delivery on the console's vector through the remappable RTE; and a byte left in the UART during the masked window is read by the one service | the IRTE left not present: fault 0x22 and no delivery; and the service after unmasking dropped: the byte is not read |
-| R6 | **every invalidation is queued**: the boot's invalidations counted by kind (context, IOTLB, IEC), none by register. With QI on, QEMU leaves a register invalidation pending (`vtd_handle_ccmd_write`) | one `flush` left on the old register path: QEMU never clears `IVT`, and the boot fails "never finished invalidating" |
+| R6 | **every invalidation is queued**: the boot's invalidations counted by kind (context, IOTLB, IEC), none by register. With QI on, QEMU leaves a register invalidation pending (`vtd_handle_ccmd_write`) | one `flush` left on the old register path: QEMU never clears `IVT`, and the boot fails at the first unpin that flushes. That is the PCI check's out-of-domain probe, so the line the control expects is the PCI check's pin refusal, "virtio-rng: the check's own domain refused its pin", which fires before R6's own line is reached |
 | R7 | **a failed invalidation releases nothing**. The check submits its unpin's wait descriptor with `SW`=0, through a check-only parameter of the submission (as `quiet` is for pins), never a runtime switch (G9). No status is ever written, `Domain::unpin` fails after `PATIENCE`, the pin is kept, and its frames are held and counted in `kept` | the `Err` mapped to `Ok`: the frames are released, and the check fails "frames released after a failed invalidation" |
 | R8 | **x2APIC per processor** (G6): every processor reports `EXTD` clear before its MMIO APIC is used. The control path is exercised by the check build turning x2APIC on, on one AP, before its `secondary_start` check (QEMU offers x2APIC under KVM, and under TCG since 8.1). That AP must report "switched to xAPIC" and come up | the `secondary_start` check removed: the AP touches the MMIO window in x2APIC mode and never comes up, and the boot fails on the processor count |
 | R9 | **no compatibility-format MSI before IR**: bring-up's assertion over `TAKEN` holds, and its line counts the converted inputs (1, the console) | edu's vector minted before `bring_up` in a check build: the boot stops by name |
@@ -2889,12 +2898,12 @@ What each states:
   * `L.iommu.47`: only queued invalidation, and a unit without QI is
     refused.
   * `L.iommu.48`: a failed invalidation (no status within `PATIENCE`, or
-    `IQE`, `ICE` or `ITE`) releases nothing, and after `IQE` the unit
-    takes none.
-  * `L.iommu.49`: on `C`=0, every frame N0g gives the unit (table, queue,
-    status words) is flushed whole before it is linked, and every IRTE and
-    descriptor before the IEC or tail that publishes it, through F-58's
-    helper. F-58's own fix reserves its own ids.
+    `IQE`, `ICE` or `ITE`) releases nothing; `ICE` is cleared and counted
+    as it is taken; after `IQE` or `ITE` the unit takes none.
+  * `L.iommu.49`: **released** in slice 1's landing. Its meaning -- on
+    `C`=0 every frame and entry N0g gives the unit flushed before it is
+    published -- is F-58's `L.iommu.56` and `L.iommu.57`, whose
+    `write_entry`, `table` and `publish` N0g's queue and table go through.
   * `L.iommu.50`: IR only with `INTR_REMAP` and `ECAP.IR`, `EIME`=0,
     `IRES`=1 and `CFIS`=0 read back.
   * `L.iommu.51`: firmware's IR or QI turned off and read back, or the
