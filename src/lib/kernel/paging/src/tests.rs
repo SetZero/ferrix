@@ -182,6 +182,23 @@ fn a_32_bit_address_is_canonical_exactly_when_it_fits() {
 // The walk, run against every architecture
 // ---------------------------------------------------------------------------
 
+/// A mapping's leaf reads back with the flags it was made with, and an
+/// unmapped address has none.
+#[test]
+fn a_leaf_reads_back_its_flags() {
+    let (mut memory, mapper) = Memory::with_root::<X86_64>();
+    let at = high::<X86_64>(0x7000_0000);
+    let flags = MapFlags {
+        write_combining: true,
+        ..MapFlags::USER_DATA
+    };
+    mapper
+        .map_range(&mut memory, at, PhysAddr(0x20_0000), PAGE_SIZE, flags)
+        .unwrap();
+    assert_eq!(mapper.leaf_flags(&memory, at), Some(flags));
+    assert_eq!(mapper.leaf_flags(&memory, VirtAddr(at.0 + PAGE_SIZE)), None);
+}
+
 /// A 4 KiB mapping resolves, offset and all, and costs one table per level.
 fn maps_a_page<E: Encoding>() {
     let (mut memory, mapper) = Memory::with_root::<E>();
@@ -1101,6 +1118,7 @@ mod x86_bits {
     const PRESENT: u64 = 1 << 0;
     const WRITABLE: u64 = 1 << 1;
     const USER: u64 = 1 << 2;
+    const WRITE_THROUGH: u64 = 1 << 3;
     const CACHE_DISABLE: u64 = 1 << 4;
     const PAGE_SIZE_BIT: u64 = 1 << 7;
     const GLOBAL: u64 = 1 << 8;
@@ -1171,6 +1189,40 @@ mod x86_bits {
             0,
             "at level 3 bit 7 is the PAT bit and selects a memory type"
         );
+    }
+
+    /// Write-combining selects PAT entry 1 -- write-through alone -- which
+    /// the kernel programs write-combining, reads back as itself, and loses
+    /// to `device`, whose entry 3 is uncacheable.
+    ///
+    /// Verifies: L.x86_64.127
+    #[test]
+    fn write_combining_selects_pat_entry_one_and_reads_back() {
+        let flags = MapFlags {
+            write_combining: true,
+            ..MapFlags::USER_DATA
+        };
+        let entry = X86_64::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, flags);
+        assert_eq!(entry & (WRITE_THROUGH | CACHE_DISABLE), WRITE_THROUGH);
+        assert_eq!(entry & PAGE_SIZE_BIT, 0, "the PAT bit stays clear");
+        assert_eq!(X86_64::leaf_flags(entry), flags);
+        // Entry 1 of the table the kernel programs is write-combining (0x01);
+        // entries 0 and 3 stay write-back (0x06) and uncacheable (0x00).
+        assert_eq!(X86_PAT & 0xFF, 0x06);
+        assert_eq!((X86_PAT >> 8) & 0xFF, 0x01);
+        assert_eq!((X86_PAT >> 24) & 0xFF, 0x00);
+
+        let device = MapFlags {
+            write_combining: true,
+            ..MapFlags::KERNEL_DEVICE
+        };
+        let entry = X86_64::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, device);
+        assert_eq!(
+            entry & (WRITE_THROUGH | CACHE_DISABLE),
+            WRITE_THROUGH | CACHE_DISABLE,
+            "device wins over write-combining"
+        );
+        assert!(!X86_64::leaf_flags(entry).write_combining);
     }
 
     #[test]
@@ -1364,6 +1416,7 @@ mod aarch64_bits {
     fn uncached_memory_is_normal_non_cacheable_and_reads_back() {
         let flags = MapFlags {
             uncached: true,
+            write_combining: false,
             ..MapFlags::USER_DATA
         };
         let entry = AArch64::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, flags);
@@ -1373,10 +1426,23 @@ mod aarch64_bits {
 
         let device = MapFlags {
             uncached: true,
+            write_combining: false,
             ..MapFlags::KERNEL_DEVICE
         };
         let entry = AArch64::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, device);
         assert_eq!(attr_index(entry), MAIR_DEVICE, "device wins over uncached");
+    }
+
+    /// Write-combining on AArch64 is normal non-cacheable memory, which may
+    /// gather stores.
+    #[test]
+    fn write_combining_is_normal_non_cacheable() {
+        let flags = MapFlags {
+            write_combining: true,
+            ..MapFlags::USER_DATA
+        };
+        let entry = AArch64::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, flags);
+        assert_eq!(attr_index(entry), MAIR_NORMAL_NC);
     }
 }
 
@@ -1543,6 +1609,7 @@ mod armv7a_bits {
     fn uncached_memory_is_normal_non_cacheable_and_reads_back() {
         let flags = MapFlags {
             uncached: true,
+            write_combining: false,
             ..MapFlags::USER_DATA
         };
         let entry = Armv7a::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, flags);
@@ -1603,6 +1670,7 @@ fn a_physical_address_wider_than_a_descriptor_is_refused() {
 const DOORBELL: MapFlags = MapFlags {
     device: true,
     uncached: false,
+    write_combining: false,
     ..MapFlags::DMA
 };
 

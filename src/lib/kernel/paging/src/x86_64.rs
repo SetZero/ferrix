@@ -70,6 +70,10 @@ impl Encoding for X86_64 {
         }
         if flags.device {
             entry |= CACHE_DISABLE | WRITE_THROUGH;
+        } else if flags.write_combining {
+            // PAT entry 1, which the kernel programs write-combining
+            // (`X86_PAT`).
+            entry |= WRITE_THROUGH;
         }
         if !flags.execute {
             entry |= NO_EXECUTE;
@@ -111,6 +115,7 @@ impl Encoding for X86_64 {
             global: entry & GLOBAL != 0,
             device: entry & CACHE_DISABLE != 0,
             uncached: false,
+            write_combining: entry & (WRITE_THROUGH | CACHE_DISABLE) == WRITE_THROUGH,
         }
     }
 }

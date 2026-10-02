@@ -297,6 +297,7 @@ fn insert_rejects_an_unusable_file_offset() {
                     physical: u64::MAX - 0xFFF,
                     id: 0,
                     cached: false,
+                    combining: false,
                 }
             )
             .err(),
@@ -1065,16 +1066,19 @@ fn device_regions_merge_only_when_the_physical_pages_are_contiguous() {
         physical: 0x8000_0000,
         id: 0,
         cached: false,
+        combining: false,
     };
     let next = Backing::Device {
         physical: 0x8000_2000,
         id: 0,
         cached: false,
+        combining: false,
     };
     let far = Backing::Device {
         physical: 0x9000_0000,
         id: 0,
         cached: false,
+        combining: false,
     };
 
     space
@@ -1111,11 +1115,22 @@ fn device_windows_merge_only_with_their_own_keeper_and_caching() {
         physical,
         id,
         cached,
+        combining: false,
     };
     for (next, merges, why) in [
         (window(0x8000_2000, 7, true), true, "the same window"),
         (window(0x8000_2000, 8, true), false, "another keeper"),
         (window(0x8000_2000, 7, false), false, "another caching"),
+        (
+            Backing::Device {
+                physical: 0x8000_2000,
+                id: 7,
+                cached: true,
+                combining: true,
+            },
+            false,
+            "write-combining beside the same window cached",
+        ),
         (
             window(0x8000_2000, 0, true),
             false,
@@ -1386,6 +1401,7 @@ fn clone_for_fork_leaves_device_registers_alone() {
                 physical: 0x8000_0000,
                 id: 0,
                 cached: false,
+                combining: false,
             },
         )
         .expect("valid");

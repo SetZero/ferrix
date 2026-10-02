@@ -1697,6 +1697,23 @@ package FerrixMemoryRequirements {
                 "user::space::AddressSpace::resolve",
                 "user::space::AddressSpace::fork");
         }
+        requirement <'L.user.108'> aPrefetchableApertureMapsWriteCombining : ItemLowLevel {
+            attribute :>> statement = "io_mapping_map_combining shall map an
+                aperture the device says is prefetchable write-combining, its pages
+                faulted in to the device's own memory, and shall refuse an aperture
+                of registers with INVALID_ARGS.";
+            attribute :>> criterion = "On a machine with a whole-page prefetchable
+                aperture, its write-combining mapping reaches the aperture's
+                physical address and its page table entry reads write-combining
+                (normal non-cacheable on the Arm architectures), not device; a
+                register aperture's is refused with INVALID_ARGS.";
+            attribute :>> parent = ("H.MEM.1", "H.DMA.5");
+            attribute :>> unit = ("syscall::native::io_mapping_map",
+                "object::io_mapping::IoMapping::map_into",
+                "object::io_mapping::IoMapping::prefetchable",
+                "user::space::AddressSpace::map_device",
+                "user::space::AddressSpace::fault_device", "mm::flags_in");
+        }
         requirement <'L.user.107'> aCopyThroughADevicePageIsRefused : ItemLowLevel {
             attribute :>> statement = "with_page and with_present_page shall refuse
                 a copy to or from a page of a device region with Refused, before the

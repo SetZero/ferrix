@@ -480,7 +480,7 @@ fn check_the_kernel_image_is_no_device_memory() -> Result<(), &'static str> {
     let (image, _) = mm::image_span();
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
 
-    match space.map_device(None, PAGE_SIZE, image, VmaFlags::READ_WRITE) {
+    match space.map_device(None, PAGE_SIZE, image, VmaFlags::READ_WRITE, false) {
         Err(SpaceError::Refused(_)) => {}
         _ => return Err("a user device mapping of the kernel's image was not refused"),
     }
@@ -517,7 +517,7 @@ fn check_a_device_range_that_wraps_is_refused() -> Result<(), &'static str> {
     // The last page's address, and as a length the most whole pages there are.
     let top = !(PAGE_SIZE - 1);
     for (physical, len) in [(top, PAGE_SIZE), (PAGE_SIZE, top)] {
-        match space.map_device(None, len, physical, VmaFlags::READ_WRITE) {
+        match space.map_device(None, len, physical, VmaFlags::READ_WRITE, false) {
             Err(SpaceError::BadRange) => {}
             _ => return Err("a user device mapping whose range wraps was not a bad range"),
         }

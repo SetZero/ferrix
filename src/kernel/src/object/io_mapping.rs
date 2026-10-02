@@ -55,8 +55,14 @@ impl IoMapping {
         crate::fallible::try_arc(IoMapping { aperture }).map_err(|_| IoMappingError::NoMemory)
     }
 
+    /// Whether the device says reads of it have no side effects: a
+    /// prefetchable BAR, which alone may be mapped write-combining.
+    pub(crate) const fn prefetchable(&self) -> bool {
+        self.aperture.cacheable()
+    }
+
     /// Map it into `space`, at `at` or wherever it fits, readable and
-    /// writable. Returns where.
+    /// writable, write-combining if `combining`. Returns where.
     ///
     /// # Errors
     ///
@@ -65,12 +71,14 @@ impl IoMapping {
         &self,
         space: &AddressSpace,
         at: Option<u64>,
+        combining: bool,
     ) -> Result<u64, SpaceError> {
         space.map_device(
             at,
             self.aperture.len(),
             self.aperture.phys(),
             VmaFlags::READ_WRITE,
+            combining,
         )
     }
 }

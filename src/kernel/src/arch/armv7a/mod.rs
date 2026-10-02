@@ -1102,6 +1102,7 @@ pub(crate) fn hardware_random() -> Option<u64> {
 pub(crate) const FRAMEBUFFER_FLAGS: ferrix_paging::MapFlags = ferrix_paging::MapFlags {
     device: false,
     uncached: true,
+    write_combining: false,
     ..ferrix_paging::MapFlags::KERNEL_DEVICE
 };
 

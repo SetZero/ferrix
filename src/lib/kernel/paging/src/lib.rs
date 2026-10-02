@@ -202,7 +202,22 @@ pub struct MapFlags {
     /// still needs a barrier before the device may look. Ignored where
     /// `device` is set, and on x86-64, whose devices all snoop.
     pub uncached: bool,
+    /// Write-combining memory: neither cached nor strongly ordered, so the
+    /// processor may gather stores into bursts. What a GPU's aperture onto
+    /// its own memory is mapped as (`docs/NVIDIA.md` §4.3). Ignored where
+    /// `device` is set. On x86-64 it selects the PAT entry the kernel
+    /// programs as write-combining ([`X86_PAT`]); on the Arm architectures it
+    /// is normal non-cacheable memory, as `uncached` is.
+    pub write_combining: bool,
 }
+
+/// The x86-64 page attribute table the kernel programs into `IA32_PAT`: the
+/// power-on table with entry 1, which a descriptor selects with only its
+/// write-through bit, made write-combining (0x01) in place of
+/// write-through. Entries 0 and 3 -- write-back and uncacheable, the only
+/// ones a descriptor selected before -- are unchanged, and entries 4 to 7,
+/// reached through the PAT bit, are left as at power-on.
+pub const X86_PAT: u64 = 0x0007_0406_0007_0106;
 
 impl MapFlags {
     /// Kernel text: read and execute, never writable.
@@ -214,6 +229,7 @@ impl MapFlags {
         global: true,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     /// A page a device may read and write through an IOMMU: a DMA buffer.
@@ -228,6 +244,7 @@ impl MapFlags {
         global: false,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     /// A page a device may read but not write through an IOMMU.
@@ -239,6 +256,7 @@ impl MapFlags {
         global: false,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     /// Kernel constants: read only, never executable.
@@ -250,6 +268,7 @@ impl MapFlags {
         global: true,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     /// Kernel data, stacks and the direct map: read and write, never
@@ -263,6 +282,7 @@ impl MapFlags {
         global: true,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     /// A device register window.
@@ -274,6 +294,7 @@ impl MapFlags {
         global: true,
         device: true,
         uncached: false,
+        write_combining: false,
     };
 
     /// User text.
@@ -285,6 +306,7 @@ impl MapFlags {
         global: false,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     /// User data and stack.
@@ -296,6 +318,7 @@ impl MapFlags {
         global: false,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     /// The same flags with execute permission removed.
@@ -644,6 +667,26 @@ impl<E: Encoding> Mapper<E> {
             if E::is_leaf(entry, level) {
                 let offset = virt.0 & (level.span() - 1);
                 return E::address(entry).checked_add(offset);
+            }
+            table = E::address(entry);
+            level = level.next()?;
+        }
+    }
+
+    /// The flags of the leaf that maps `virt`, as [`Encoding::leaf_flags`]
+    /// reads them back, or `None` if it is unmapped: how a check sees the
+    /// memory type a mapping was given.
+    pub fn leaf_flags(&self, memory: &impl PhysMem, virt: VirtAddr) -> Option<MapFlags> {
+        let mut table = self.root;
+        let mut level = E::ROOT_LEVEL;
+
+        loop {
+            let entry = memory.read(descriptor_address(table, level.index(virt)));
+            if !E::is_present(entry) {
+                return None;
+            }
+            if E::is_leaf(entry, level) {
+                return Some(E::leaf_flags(entry));
             }
             table = E::address(entry);
             level = level.next()?;

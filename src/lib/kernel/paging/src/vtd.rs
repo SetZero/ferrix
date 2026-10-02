@@ -102,6 +102,7 @@ impl Encoding for VtdSecondLevel {
             global: false,
             device: false,
             uncached: false,
+            write_combining: false,
         }
     }
 }

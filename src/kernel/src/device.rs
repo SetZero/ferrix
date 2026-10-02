@@ -135,7 +135,6 @@ impl Aperture {
     }
 
     /// Whether the range may be mapped cacheable.
-    #[expect(dead_code, reason = "read by stage 9's IoMapping::new")]
     pub(crate) const fn cacheable(self) -> bool {
         self.cacheable
     }

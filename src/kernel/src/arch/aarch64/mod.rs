@@ -135,6 +135,7 @@ pub(crate) unsafe fn init_traps() {
 pub(crate) const FRAMEBUFFER_FLAGS: ferrix_paging::MapFlags = ferrix_paging::MapFlags {
     device: false,
     uncached: true,
+    write_combining: false,
     ..ferrix_paging::MapFlags::KERNEL_DEVICE
 };
 

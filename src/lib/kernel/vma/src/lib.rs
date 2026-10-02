@@ -330,6 +330,9 @@ pub enum Backing {
         /// Whether the pages may be mapped cacheable: memory rather than
         /// registers, as the device said it may be.
         cached: bool,
+        /// Whether the pages are mapped write-combining: memory the device
+        /// said may be prefetched, written in bursts (`docs/NVIDIA.md` §4.3).
+        combining: bool,
     },
 }
 
@@ -356,10 +359,12 @@ impl Backing {
                 physical,
                 id,
                 cached,
+                combining,
             } => Backing::Device {
                 physical: physical.saturating_add(bytes),
                 id,
                 cached,
+                combining,
             },
         }
     }
@@ -452,15 +457,18 @@ fn contiguous_backing(left: Backing, right: Backing, left_len: u64) -> bool {
                 physical: left_base,
                 id: left_id,
                 cached: left_cached,
+                combining: left_combining,
             },
             Backing::Device {
                 physical: right_base,
                 id: right_id,
                 cached: right_cached,
+                combining: right_combining,
             },
         ) => {
             left_id == right_id
                 && left_cached == right_cached
+                && left_combining == right_combining
                 && left_base.checked_add(left_len) == Some(right_base)
         }
         _ => false,

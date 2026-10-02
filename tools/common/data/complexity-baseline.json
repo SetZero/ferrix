@@ -310,8 +310,8 @@
       "recursive": false
     },
     "syscall/native.rs::answer": {
-      "complexity": 33,
-      "lines": 88,
+      "complexity": 34,
+      "lines": 89,
       "recursive": false
     },
     "syscall/native.rs::channel_read": {
@@ -361,7 +361,7 @@
     },
     "user/space.rs::resolve": {
       "complexity": 20,
-      "lines": 84,
+      "lines": 82,
       "recursive": false
     }
   }

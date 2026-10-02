@@ -89,6 +89,8 @@ pub const INTERRUPT_ACK: usize = 0x103A;
 pub const IO_MAPPING_CREATE: usize = 0x1040;
 /// [`NativeCall::IoMappingMap`].
 pub const IO_MAPPING_MAP: usize = 0x1041;
+/// [`NativeCall::IoMappingMapCombining`].
+pub const IO_MAPPING_MAP_COMBINING: usize = 0x1042;
 
 /// [`NativeCall::BlockRingCreate`].
 pub const BLOCK_RING_CREATE: usize = 0x1048;
@@ -298,6 +300,11 @@ pub enum NativeCall {
     IoMappingCreate,
     /// `(mapping, address)` → address. Map an aperture. Needs `MAP`.
     IoMappingMap,
+    /// `(mapping, address)` → address. Map an aperture write-combining, so
+    /// the processor may gather stores into bursts: a GPU's aperture onto
+    /// its own memory (`docs/NVIDIA.md` §4.3). Needs `MAP`, and an aperture
+    /// the device says is prefetchable; `INVALID_ARGS` otherwise.
+    IoMappingMapCombining,
     /// `(device)` → handle. Make the block ring a driver serves the device's
     /// disk through (`docs/BLOCK-RING.md`): the kernel keeps one end of the
     /// ring's control channel and answers with the other, on which the driver
@@ -381,7 +388,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 46] = [
+pub const ALL: [NativeCall; 47] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -416,6 +423,7 @@ pub const ALL: [NativeCall; 46] = [
     NativeCall::InterruptAck,
     NativeCall::IoMappingCreate,
     NativeCall::IoMappingMap,
+    NativeCall::IoMappingMapCombining,
     NativeCall::BlockRingCreate,
     NativeCall::DeviceInfo,
     NativeCall::DeviceQuiesce,
@@ -477,6 +485,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         INTERRUPT_ACK => NativeCall::InterruptAck,
         IO_MAPPING_CREATE => NativeCall::IoMappingCreate,
         IO_MAPPING_MAP => NativeCall::IoMappingMap,
+        IO_MAPPING_MAP_COMBINING => NativeCall::IoMappingMapCombining,
         BLOCK_RING_CREATE => NativeCall::BlockRingCreate,
         NET_RING_CREATE => NativeCall::NetRingCreate,
         DISPLAY_CONTROL_CREATE => NativeCall::DisplayControlCreate,
@@ -532,6 +541,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::InterruptAck => INTERRUPT_ACK,
         NativeCall::IoMappingCreate => IO_MAPPING_CREATE,
         NativeCall::IoMappingMap => IO_MAPPING_MAP,
+        NativeCall::IoMappingMapCombining => IO_MAPPING_MAP_COMBINING,
         NativeCall::BlockRingCreate => BLOCK_RING_CREATE,
         NativeCall::NetRingCreate => NET_RING_CREATE,
         NativeCall::DisplayControlCreate => DISPLAY_CONTROL_CREATE,

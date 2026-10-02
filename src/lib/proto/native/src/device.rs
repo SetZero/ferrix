@@ -286,6 +286,21 @@ impl<S: Syscall> IoMapping<S> {
             .make(self.syscall());
         decode(value)
     }
+
+    /// `io_mapping_map_combining`: map the aperture write-combining, at
+    /// `at` or wherever it fits, and return the address.
+    ///
+    /// # Errors
+    ///
+    /// As [`IoMapping::map`], and [`Error::InvalidArgs`] for an aperture the
+    /// device does not say is prefetchable.
+    pub fn map_combining(&self, at: Option<usize>) -> Result<usize, Error> {
+        let value = Call::new(nr::IO_MAPPING_MAP_COMBINING)
+            .value(register(self.handle()))
+            .value(at.unwrap_or(0))
+            .make(self.syscall());
+        decode(value)
+    }
 }
 
 /// A `DeviceInfo` as `device_info` wrote it: field by field, in the order

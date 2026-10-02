@@ -1087,9 +1087,10 @@ pub(super) fn check_device_objects() {
     };
     println!(
         "  handles  {} device aperture mapped into a process and reached from a forked \
-         child, {} interrupt held from delivery to acknowledgement, {} VMO pages pinned for a \
-         device and found at their device addresses, {} refusals as specified",
-        report.mapped, report.interrupts, report.pinned, report.refusals,
+         child, {} mapped write-combining, {} interrupt held from delivery to acknowledgement, \
+         {} VMO pages pinned for a device and found at their device addresses, {} refusals as \
+         specified",
+        report.mapped, report.combined, report.interrupts, report.pinned, report.refusals,
     );
     // F-55: a copy through any of them is refused, and the boot goes on.
     let copies = match object::device_copy_check::run() {

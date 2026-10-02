@@ -103,7 +103,7 @@ impl Encoding for AArch64 {
             entry |= attr_index(MAIR_DEVICE);
             // Device memory is outer shareable by definition of its type; the
             // shareability field is ignored, so leave it clear.
-        } else if flags.uncached {
+        } else if flags.uncached || flags.write_combining {
             entry |= attr_index(MAIR_NORMAL_NC) | SH_INNER;
         } else {
             entry |= attr_index(MAIR_NORMAL) | SH_INNER;
@@ -177,6 +177,7 @@ impl Encoding for AArch64 {
             global: entry & NOT_GLOBAL == 0,
             device: (entry >> 2) & 0b111 == MAIR_DEVICE,
             uncached: (entry >> 2) & 0b111 == MAIR_NORMAL_NC,
+            write_combining: false,
         }
     }
 }

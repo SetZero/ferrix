@@ -179,6 +179,14 @@ pub(crate) unsafe fn init_traps() {
         "off, as built"
     };
     crate::console::println!("  cpu      descriptor table addresses kept from ring 3: UMIP {umip}");
+    // Each secondary programs its own in `smp::secondary_start`.
+    let pat = if cpu::program_pat() {
+        let _ = PAT_PROGRAMMED.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+        "entry 1 write-combining"
+    } else {
+        "not programmed, so nothing is mapped write-combining"
+    };
+    crate::console::println!("  cpu      page attribute table: {pat}");
     // Before `CpuStarter::new` snapshots `CR4`, so secondaries take
     // `OSXSAVE` with it; each loads `XCR0` in `smp::secondary_start`.
     // Whether AVX would let one program read another's vector registers
@@ -1687,6 +1695,15 @@ pub(crate) fn flush_for_device(start: u64, len: u64) {
 /// processor's stores, so code written is code fetched.
 pub(crate) fn sync_instructions(start: u64, len: u64) {
     let _ = (start, len);
+}
+
+/// Processors whose PAT [`cpu::program_pat`] programmed and read back.
+pub(crate) static PAT_PROGRAMMED: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// How many processors programmed their PAT with its write-combining entry.
+pub(crate) fn write_combining_processors() -> Option<usize> {
+    Some(PAT_PROGRAMMED.load(core::sync::atomic::Ordering::Acquire))
 }
 
 /// How the kernel maps a framebuffer: as a device. Write-combining needs the

@@ -111,6 +111,18 @@ pub(crate) use armv7a::{
     thread_area, timer_arm, timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt,
     user_hwcaps, user_platform, wait_for_interrupt, wait_for_work,
 };
+// How many processors programmed the PAT with its write-combining entry:
+// x86-64's, which the Arm architectures do without, their write-combining
+// being a memory attribute every processor has.
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::write_combining_processors;
+
+/// No PAT to program: write-combining is normal non-cacheable memory here.
+#[cfg(not(target_arch = "x86_64"))]
+pub(crate) const fn write_combining_processors() -> Option<usize> {
+    None
+}
+
 // A signal return page, for an architecture without a vDSO its programs
 // could read: ARMv7-A's (`syscall::sigpage`, F-48).
 #[cfg(target_arch = "arm")]

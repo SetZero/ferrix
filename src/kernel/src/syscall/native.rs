@@ -476,7 +476,8 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
         NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
         NativeCall::DeviceClock => device_clock(process, handle(a[0]), a[1], a[2]),
-        NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
+        NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1], false),
+        NativeCall::IoMappingMapCombining => io_mapping_map(process, handle(a[0]), a[1], true),
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortCreate => port_create(process),
@@ -2126,7 +2127,12 @@ fn vmo_pin_addresses(
 }
 
 /// `io_mapping_map`. A zero address means wherever it fits.
-fn io_mapping_map(process: &Process, mapping: Handle, address: u64) -> Result<usize, Errno> {
+fn io_mapping_map(
+    process: &Process,
+    mapping: Handle,
+    address: u64,
+    combining: bool,
+) -> Result<usize, Errno> {
     let mapping = process.with_handles(|table| {
         let (object, rights) = table.get(mapping).map_err(table_error)?;
         let Object::IoMapping(mapping) = object else {
@@ -2137,9 +2143,14 @@ fn io_mapping_map(process: &Process, mapping: Handle, address: u64) -> Result<us
         }
         Ok(Arc::clone(mapping))
     })?;
+    // Gathered stores reach a register as one burst, or out of order: only
+    // memory the device says reads have no side effects on may combine.
+    if combining && !mapping.prefetchable() {
+        return Err(status::INVALID_ARGS);
+    }
     let at = (address != 0).then_some(address);
     let mapped = mapping
-        .map_into(process.space(), at)
+        .map_into(process.space(), at, combining)
         .map_err(space_status)?;
     usize::try_from(mapped).map_err(|_| status::INVALID_ARGS)
 }

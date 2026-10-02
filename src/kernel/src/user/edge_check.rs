@@ -80,12 +80,12 @@ fn expect<T>(
 /// Verifies: L.user.49
 fn check_device_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
     let mut refused = expect(
-        space.map_device(Some(LOW), opaque(0), P, VmaFlags::READ_WRITE),
+        space.map_device(Some(LOW), opaque(0), P, VmaFlags::READ_WRITE, false),
         SpaceError::BadRange,
         "a device mapping of no length was taken",
     )?;
     refused += expect(
-        space.map_device(Some(LOW), opaque(P / 2), P, VmaFlags::READ_WRITE),
+        space.map_device(Some(LOW), opaque(P / 2), P, VmaFlags::READ_WRITE, false),
         SpaceError::BadRange,
         "a device mapping of half a page was taken",
     )?;
@@ -95,6 +95,7 @@ fn check_device_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
             opaque(2 * P),
             P,
             VmaFlags::READ_WRITE,
+            false,
         ),
         SpaceError::NotUserRange(USER_VIRT_END - P),
         "a device mapping reaching past the user half was taken",

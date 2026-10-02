@@ -474,6 +474,23 @@ package FerrixX8664Requirements {
             attribute :>> unit = ("arch::x86_64::speculation::switch_barrier_in_domain",
                 "arch::x86_64::speculation::fill_return_stack");
         }
+        requirement <'L.x86_64.127'> patEntryOneWriteCombining : ItemLowLevel {
+            attribute :>> statement = "Every processor shall program IA32_PAT with
+                X86_PAT before anything maps write-combining, entry 1 write-combining
+                and entries 0 and 3 write-back and uncacheable as at power-on; and a
+                leaf the kernel maps write-combining shall select entry 1 by its
+                write-through bit alone, with device memory's uncacheable entry
+                winning where both are asked.";
+            attribute :>> criterion = "Host tests: a write-combining leaf has PWT
+                and not PCD, reads back as itself, and loses to device; X86_PAT's
+                entries 0, 1 and 3 are 0x06, 0x01 and 0x00. On x86-64 the boot's
+                cpu line says entry 1 is write-combining, and every processor read
+                its PAT back, or stage 9's check fails.";
+            attribute :>> parent = "H.MEM.1";
+            attribute :>> unit = ("arch::x86_64::cpu::program_pat",
+                "arch::x86_64::write_combining_processors", "arch::x86_64::init_traps",
+                "arch::x86_64::smp::secondary_start");
+        }
         requirement <'L.x86_64.32'> speculationPlanFollowsCpuid : ItemLowLevel {
             attribute :>> statement = "Plan::for_processor shall choose enhanced
                 IBRS where IA32_ARCH_CAPABILITIES offers it, else AutoIBRS, else

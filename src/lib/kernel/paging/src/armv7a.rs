@@ -125,7 +125,7 @@ impl Encoding for Armv7a {
 
         if flags.device {
             entry |= attr_index(MAIR_DEVICE);
-        } else if flags.uncached {
+        } else if flags.uncached || flags.write_combining {
             entry |= attr_index(MAIR_NORMAL_NC) | SH_INNER;
         } else {
             entry |= attr_index(MAIR_NORMAL) | SH_INNER;
@@ -187,6 +187,7 @@ impl Encoding for Armv7a {
             global: entry & NOT_GLOBAL == 0,
             device: (entry >> 2) & 0b111 == MAIR_DEVICE,
             uncached: (entry >> 2) & 0b111 == MAIR_NORMAL_NC,
+            write_combining: false,
         }
     }
 }

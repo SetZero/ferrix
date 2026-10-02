@@ -168,6 +168,7 @@ const PATIENCE_NANOS: u64 = 100_000_000;
 const DOORBELL: MapFlags = MapFlags {
     device: true,
     uncached: false,
+    write_combining: false,
     ..MapFlags::DMA
 };
 

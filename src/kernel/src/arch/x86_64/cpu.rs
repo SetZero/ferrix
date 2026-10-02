@@ -439,6 +439,34 @@ pub(crate) unsafe fn write_msr(msr: u32, value: u64) {
     }
 }
 
+/// `IA32_PAT`: the page attribute table.
+const IA32_PAT: u32 = 0x277;
+
+/// Program this processor's page attribute table with
+/// [`ferrix_paging::X86_PAT`], whose entry 1 is write-combining, and say
+/// whether it reads back so.
+///
+/// Before anything maps write-combining: entry 1 is what a descriptor with
+/// only its write-through bit selects, which no mapping used before, so the
+/// change of type reaches no translation a processor holds. The flush that
+/// follows is for the rule (SDM Vol. 3A §11.12.4), not for one that does.
+/// `false` on a processor whose `CPUID` says it has no PAT, which no x86-64
+/// processor is.
+pub(crate) fn program_pat() -> bool {
+    use core::arch::x86_64::__cpuid;
+
+    // CPUID.(EAX=1):EDX.PAT is bit 16.
+    if __cpuid(1).edx & (1 << 16) == 0 {
+        return false;
+    }
+    // SAFETY: (SYSREG) CPUID reported the PAT, and every entry of the value is
+    // a memory type the SDM defines (0x00, 0x01, 0x04, 0x06, 0x07).
+    unsafe { write_msr(IA32_PAT, ferrix_paging::X86_PAT) };
+    flush_tlb_including_global();
+    // SAFETY: (SYSREG) the register exists, as CPUID said.
+    unsafe { read_msr(IA32_PAT) == ferrix_paging::X86_PAT }
+}
+
 /// Read a model-specific register.
 ///
 /// # Safety

@@ -800,6 +800,13 @@ pub(crate) fn translate_in(root: u64, virt: u64) -> Option<u64> {
         .map(|at| at.0)
 }
 
+/// The flags of the leaf mapping `virt` in the tree rooted at `root`, as
+/// [`translate_in`] finds it: what a check reads a mapping's memory type from.
+pub(crate) fn flags_in(root: u64, virt: u64) -> Option<MapFlags> {
+    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    mapper.leaf_flags(&KernelPhysMem, VirtAddr(virt))
+}
+
 /// Physical address of the kernel's root page table, for a processor about to
 /// install it.
 pub(crate) fn root_table() -> u64 {

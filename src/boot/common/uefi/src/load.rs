@@ -540,6 +540,7 @@ fn map_identity(
         global: false,
         device: false,
         uncached: false,
+        write_combining: false,
     };
     let mapper = match plan.tree {
         IdentityTree::Separate => identity,
@@ -578,6 +579,7 @@ fn map_segment(
         global: true,
         device: false,
         uncached: false,
+        write_combining: false,
     };
 
     let (base, length) = segment_pages(segment);

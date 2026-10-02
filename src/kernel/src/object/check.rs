@@ -153,6 +153,8 @@ struct Counter {
     abandoned: u32,
     /// See [`Report::mapped`].
     mapped: u32,
+    /// See [`DeviceReport::combined`].
+    combined: u32,
     /// See [`Report::interrupts`].
     interrupts: u32,
     /// See [`DeviceReport::pinned`].
@@ -2108,6 +2110,9 @@ fn native_program(role: u8) -> Result<Arc<Process>, &'static str> {
 pub(crate) struct DeviceReport {
     /// Apertures mapped into a process, and reached from a forked child.
     pub(crate) mapped: u32,
+    /// Prefetchable apertures mapped write-combining, and found so in the
+    /// page table.
+    pub(crate) combined: u32,
     /// Interrupts delivered to an object, waited on and acknowledged.
     pub(crate) interrupts: u32,
     /// VMO pages pinned for a device and found at their device addresses.
@@ -2142,6 +2147,7 @@ pub(crate) struct DeviceReport {
 pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
     let mut counter = Counter::default();
     check_a_device_gives_exactly_its_own_memory(&mut counter)?;
+    check_write_combining(&mut counter)?;
     check_an_interrupt_is_held_until_acknowledged(&mut counter)?;
     check_a_pin_gives_a_device_exactly_its_pages(&mut counter)?;
     let has_whole_page = device::devices().iter().any(|node| {
@@ -2166,6 +2172,7 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
     }
     Ok(DeviceReport {
         mapped: counter.mapped,
+        combined: counter.combined,
         interrupts: counter.interrupts,
         pinned: counter.pinned,
         refusals: counter.refusals,
@@ -2505,6 +2512,75 @@ fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<
         counter,
     )?;
     counter.mapped += 1;
+    side.close_everything();
+    Ok(())
+}
+
+/// Every processor programmed its PAT with the write-combining entry, a
+/// prefetchable aperture maps write-combining -- its page table entry says
+/// so, and it reaches the device's own memory -- and an aperture of
+/// registers is refused it.
+///
+/// x86-64 needs the PAT for it; the Arm architectures map normal
+/// non-cacheable memory. Runs where a whole-page aperture of each kind
+/// exists: every x86-64 and AArch64 boot, whose virtio functions have a
+/// prefetchable 64-bit BAR and registers beside it.
+///
+/// Verifies: L.x86_64.127, L.user.108
+fn check_write_combining(counter: &mut Counter) -> Result<(), &'static str> {
+    if let Some(programmed) = arch::write_combining_processors()
+        && programmed != crate::smp::count()
+    {
+        return Err("a processor's PAT was not programmed with its write-combining entry");
+    }
+    let find = |prefetchable: bool| {
+        device::devices().iter().find_map(|node| {
+            node.apertures()
+                .iter()
+                .find(|aperture| aperture.whole_pages() && aperture.cacheable() == prefetchable)
+                .map(|aperture| (Arc::clone(node), *aperture))
+        })
+    };
+    let side = Side::new()?;
+    if let Some((node, aperture)) = find(false) {
+        let handle = device_handle(&side, &node)?;
+        stage_spec(&side, aperture.phys(), aperture.len())?;
+        let mapping = side.handle(
+            nr::IO_MAPPING_CREATE,
+            &[reg(handle), SPEC],
+            "io_mapping_create of a device's registers failed",
+        )?;
+        refused(
+            side.call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0]),
+            status::INVALID_ARGS,
+            "a device's registers were mapped write-combining",
+            counter,
+        )?;
+    }
+    if let Some((node, aperture)) = find(true) {
+        let handle = device_handle(&side, &node)?;
+        stage_spec(&side, aperture.phys(), aperture.len())?;
+        let mapping = side.handle(
+            nr::IO_MAPPING_CREATE,
+            &[reg(handle), SPEC],
+            "io_mapping_create of a prefetchable aperture failed",
+        )?;
+        let at = side
+            .call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0])
+            .map_err(|_| "io_mapping_map_combining of a prefetchable aperture failed")?
+            as u64;
+        if !reaches(side.process.space(), at, aperture.phys())? {
+            return Err("a write-combining mapping does not reach the device's own memory");
+        }
+        let flags = mm::flags_in(side.process.space().root_table(), at)
+            .ok_or("a write-combining mapping has no page table entry")?;
+        // The Arm architectures read write-combining back as what it is
+        // there, normal non-cacheable memory.
+        if !(flags.write_combining || flags.uncached) || flags.device {
+            return Err("a write-combining mapping was not mapped write-combining");
+        }
+        counter.combined += 1;
+    }
     side.close_everything();
     Ok(())
 }

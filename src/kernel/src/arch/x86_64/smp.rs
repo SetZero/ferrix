@@ -385,6 +385,10 @@ extern "C" fn secondary_start(record: u64) -> ! {
     }
     // `XCR0` is each processor's own; `CR4` just gave this one `OSXSAVE`.
     cpu::load_extended_state_on_this_cpu();
+    // So is the PAT: entry 1 write-combining, as on the boot processor.
+    if cpu::program_pat() {
+        let _ = super::PAT_PROGRAMMED.fetch_add(1, Ordering::AcqRel);
+    }
 
     // The IDT before the GDT: every gate names selector 0x10, which is 64-bit
     // kernel code in the trampoline's GDT as much as in the kernel's, so a

@@ -259,6 +259,7 @@ fn build_tables(
         global: false,
         device: false,
         uncached: false,
+        write_combining: false,
     };
     let base = loader.0 & !(PAGE_SIZE - 1);
     let end = (loader.0 + loader.1).next_multiple_of(PAGE_SIZE);
@@ -321,6 +322,7 @@ fn map_segment(
         global: true,
         device: false,
         uncached: false,
+        write_combining: false,
     };
     let (base, length) = segment_pages(segment);
     kernel

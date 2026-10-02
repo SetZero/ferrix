@@ -975,11 +975,8 @@ impl AddressSpace {
                 (id, offset.saturating_add(into_region), true)
             }
             // A device region has no object: its page is the device's own.
-            Backing::Device {
-                physical, cached, ..
-            } => {
-                let physical = physical.saturating_add(into_region);
-                return self.fault_device(page, physical, region.flags, cached);
+            device @ Backing::Device { .. } => {
+                return self.fault_device(page, into_region, region.flags, device);
             }
             // A private file mapping reads the file's pages until it writes
             // one, and writes into a shadow object of its own.
@@ -1093,6 +1090,7 @@ impl AddressSpace {
             device: false,
             // Past the caches if a device shares it (`Vmo::make_coherent`).
             uncached: vmo.is_coherent(),
+            write_combining: false,
         };
 
         mm::map_in(
@@ -1876,6 +1874,7 @@ fn user_page(write: bool, execute: bool) -> MapFlags {
         global: false,
         device: false,
         uncached: false,
+        write_combining: false,
     }
 }
 
@@ -2471,6 +2470,7 @@ impl AddressSpace {
         len: u64,
         physical: u64,
         flags: VmaFlags,
+        combining: bool,
     ) -> Result<u64, SpaceError> {
         check_device_range(physical, len, flags, at.unwrap_or(0))?;
         let mut inner = self.inner.lock();
@@ -2501,6 +2501,7 @@ impl AddressSpace {
                     physical,
                     id: 0,
                     cached: false,
+                    combining,
                 },
             )
             .map_err(map_error)?;
@@ -2564,6 +2565,7 @@ impl AddressSpace {
                     physical,
                     id,
                     cached,
+                    combining: false,
                 },
             )
             .map_err(map_error)?;
@@ -2589,10 +2591,20 @@ impl AddressSpace {
     fn fault_device(
         &self,
         page: u64,
-        physical: u64,
+        into_region: u64,
         flags: VmaFlags,
-        cached: bool,
+        backing: Backing,
     ) -> Result<(), SpaceError> {
+        let Backing::Device {
+            physical,
+            cached,
+            combining,
+            ..
+        } = backing
+        else {
+            return Err(SpaceError::BadRange);
+        };
+        let physical = physical.saturating_add(into_region);
         if mm::translate_in(self.root * PAGE_SIZE, page).is_some() {
             return Ok(());
         }
@@ -2608,9 +2620,11 @@ impl AddressSpace {
                 user: true,
                 global: false,
                 // Registers are device memory. A window the device said may
-                // be cached is ordinary memory to the processor.
-                device: !cached,
+                // be cached is ordinary memory to the processor, and one a
+                // driver asked to combine is write-combining.
+                device: !cached && !combining,
                 uncached: false,
+                write_combining: combining && !cached,
             },
         )
         .map_err(|_| SpaceError::OutOfMemory)
