@@ -1,0 +1,218 @@
+From 019528d98f5254509c4f2a9b06ff739c26d0a312 Mon Sep 17 00:00:00 2001
+From: Sebastian Dauenhauer <info@magical.rocks>
+Date: Fri, 2 Oct 2026 23:56:16 +0200
+Subject: [PATCH] intel_iommu: Honour GCMD.CFI and block compatibility format
+ interrupts
+
+With interrupt remapping enabled, the VT-d specification (5.1.2.1)
+blocks an interrupt request in compatibility format when x2APIC mode is
+enabled (IRTA_REG.EIME) or when compatibility format interrupts are
+disabled (GSTS_REG.CFIS clear), and reports fault reason 0x25.
+Software controls CFIS through GCMD_REG.CFI.
+
+The model ignores GCMD.CFI, so GSTS.CFIS always reads 0, and
+vtd_interrupt_remap_msi() passes every compatibility format request
+through. A guest that clears CFI to stop a device from bypassing the
+interrupt remapping table, and reads CFIS back as the specification
+asks, is told the requests are blocked while they are still delivered.
+
+Set and clear GSTS.CFIS from GCMD.CFI like the other command/status
+pairs, and in vtd_interrupt_remap_msi() refuse a compatibility format
+request when EIME is set or CFIS is clear: record VTD_FR_IR_REQ_COMPAT
+against the source ID when faults are reported, and return -EINVAL so
+the message is dropped. The function also serves the KVM MSI route
+fix-up, so under a split irqchip such a route is refused as well.
+
+Linux clears CFI when it enables interrupt remapping and warns if CFIS
+still reads 1 (iommu_set_irq_remapping()), so its guests are not
+affected.
+
+The new qtest checks that CFIS follows CFI, and that an I/O APIC
+interrupt in compatibility format is blocked with reason 0x25 while CFIS
+is clear and delivered once it is set.
+---
+ hw/i386/intel_iommu.c          | 37 +++++++++++++++
+ hw/i386/trace-events           |  1 +
+ tests/qtest/intel-iommu-test.c | 85 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 123 insertions(+)
+
+diff --git a/hw/i386/intel_iommu.c b/hw/i386/intel_iommu.c
+index 78b142c..6f7068a 100644
+--- a/hw/i386/intel_iommu.c
++++ b/hw/i386/intel_iommu.c
+@@ -2703,6 +2703,21 @@ static void vtd_handle_gcmd_ire(IntelIOMMUState *s, bool en)
+     }
+ }
+ 
++/*
++ * Handle Compatibility Format Interrupt enable/disable.  GSTS.CFIS only
++ * reports the setting; vtd_interrupt_remap_msi() acts on it.
++ */
++static void vtd_handle_gcmd_cfi(IntelIOMMUState *s, bool en)
++{
++    trace_vtd_ir_cfi(en);
++
++    if (en) {
++        vtd_set_clear_mask_long(s, DMAR_GSTS_REG, 0, VTD_GSTS_CFIS);
++    } else {
++        vtd_set_clear_mask_long(s, DMAR_GSTS_REG, VTD_GSTS_CFIS, 0);
++    }
++}
++
+ /* Handle write to Global Command Register */
+ static void vtd_handle_gcmd_write(IntelIOMMUState *s)
+ {
+@@ -2733,6 +2748,11 @@ static void vtd_handle_gcmd_write(IntelIOMMUState *s)
+         /* Interrupt remap enable/disable */
+         vtd_handle_gcmd_ire(s, val & VTD_GCMD_IRE);
+     }
++    if ((changed & VTD_GCMD_CFI) &&
++        x86_iommu_ir_supported(x86_iommu)) {
++        /* Compatibility format interrupts enable/disable */
++        vtd_handle_gcmd_cfi(s, val & VTD_GCMD_CFI);
++    }
+ }
+ 
+ /* Handle write to Context Command Register */
+@@ -4291,6 +4311,23 @@ static int vtd_interrupt_remap_msi(IntelIOMMUState *iommu,
+ 
+     /* This is compatible mode. */
+     if (addr.addr.int_mode != VTD_IR_INT_FORMAT_REMAP) {
++        /*
++         * With interrupt remapping enabled, a compatibility format
++         * request is blocked when x2APIC mode is enabled (IRTA.EIME) or
++         * compatibility format interrupts are disabled (GSTS.CFIS clear).
++         * See VT-d spec 5.1.2.1.
++         */
++        if (iommu->intr_eime ||
++            !(vtd_get_long_raw(iommu, DMAR_GSTS_REG) & VTD_GSTS_CFIS)) {
++            error_report_once("%s: compatibility format interrupt blocked "
++                              "(sid=%u, address=0x%" PRIx64
++                              ", data=0x%" PRIx32 ")",
++                              __func__, sid, origin->address, origin->data);
++            if (do_fault) {
++                vtd_report_ir_fault(iommu, sid, VTD_FR_IR_REQ_COMPAT, 0);
++            }
++            return -EINVAL;
++        }
+         memcpy(translated, origin, sizeof(*origin));
+         goto out;
+     }
+diff --git a/hw/i386/trace-events b/hw/i386/trace-events
+index b704f4f..8671a1b 100644
+--- a/hw/i386/trace-events
++++ b/hw/i386/trace-events
+@@ -61,6 +61,7 @@ vtd_dmar_translate(uint8_t bus, uint8_t slot, uint8_t func, uint64_t iova, uint6
+ vtd_dmar_enable(bool en) "enable %d"
+ vtd_dmar_fault(uint16_t sid, int fault, uint64_t addr, bool is_write) "sid 0x%"PRIx16" fault %d addr 0x%"PRIx64" write %d"
+ vtd_ir_enable(bool en) "enable %d"
++vtd_ir_cfi(bool en) "compatibility format %d"
+ vtd_ir_irte_get(int index, uint64_t lo, uint64_t hi) "index %d low 0x%"PRIx64" high 0x%"PRIx64
+ vtd_ir_remap(int index, int tri, int vec, int deliver, uint32_t dest, int dest_mode) "index %d trigger %d vector %d deliver %d dest 0x%"PRIx32" mode %d"
+ vtd_ir_remap_type(const char *type) "%s"
+diff --git a/tests/qtest/intel-iommu-test.c b/tests/qtest/intel-iommu-test.c
+index c521b37..d0a77b6 100644
+--- a/tests/qtest/intel-iommu-test.c
++++ b/tests/qtest/intel-iommu-test.c
+@@ -22,6 +22,90 @@ static inline uint64_t vtd_reg_readq(QTestState *s, uint64_t offset)
+     return qtest_readq(s, Q35_HOST_BRIDGE_IOMMU_ADDR + offset);
+ }
+ 
++static inline uint32_t vtd_reg_readl(QTestState *s, uint64_t offset)
++{
++    return qtest_readl(s, Q35_HOST_BRIDGE_IOMMU_ADDR + offset);
++}
++
++static inline void vtd_reg_writel(QTestState *s, uint64_t offset,
++                                  uint32_t value)
++{
++    qtest_writel(s, Q35_HOST_BRIDGE_IOMMU_ADDR + offset, value);
++}
++
++static inline void vtd_reg_writeq(QTestState *s, uint64_t offset,
++                                  uint64_t value)
++{
++    qtest_writeq(s, Q35_HOST_BRIDGE_IOMMU_ADDR + offset, value);
++}
++
++#define IOAPIC_BASE           0xfec00000ULL
++#define IOAPIC_PIN            10
++#define IR_TABLE_ADDR         0x100000ULL
++
++static void ioapic_write_rte(QTestState *s, int pin, uint64_t rte)
++{
++    qtest_writel(s, IOAPIC_BASE, 0x10 + 2 * pin);
++    qtest_writel(s, IOAPIC_BASE + 0x10, (uint32_t)rte);
++    qtest_writel(s, IOAPIC_BASE, 0x11 + 2 * pin);
++    qtest_writel(s, IOAPIC_BASE + 0x10, rte >> 32);
++}
++
++static void ioapic_pulse(QTestState *s, int pin)
++{
++    qtest_set_irq_in(s, "/machine/q35/ioapic", NULL, pin, 1);
++    qtest_set_irq_in(s, "/machine/q35/ioapic", NULL, pin, 0);
++}
++
++/*
++ * GCMD.CFI is reflected in GSTS.CFIS, and with interrupt remapping on a
++ * compatibility format interrupt is blocked with fault reason 0x25 unless
++ * CFIS is set.
++ */
++static void test_intel_iommu_cfi(void)
++{
++    QTestState *s;
++    uint64_t frcd_hi;
++
++    s = qtest_init("-M q35 -device intel-iommu,intremap=on");
++
++    g_assert(!(vtd_reg_readl(s, DMAR_GSTS_REG) & VTD_GSTS_CFIS));
++    vtd_reg_writel(s, DMAR_GCMD_REG, VTD_GCMD_CFI);
++    g_assert(vtd_reg_readl(s, DMAR_GSTS_REG) & VTD_GSTS_CFIS);
++    vtd_reg_writel(s, DMAR_GCMD_REG, 0);
++    g_assert(!(vtd_reg_readl(s, DMAR_GSTS_REG) & VTD_GSTS_CFIS));
++
++    /* Interrupt remapping on, with an empty two-entry table. */
++    vtd_reg_writeq(s, DMAR_IRTA_REG, IR_TABLE_ADDR);
++    vtd_reg_writel(s, DMAR_GCMD_REG, VTD_GCMD_SIRTP);
++    g_assert(vtd_reg_readl(s, DMAR_GSTS_REG) & VTD_GSTS_IRTPS);
++    vtd_reg_writel(s, DMAR_GCMD_REG, VTD_GCMD_IRE);
++    g_assert(vtd_reg_readl(s, DMAR_GSTS_REG) & VTD_GSTS_IRES);
++
++    /* A compatibility format RTE: vector 0xfc, fixed, edge, unmasked. */
++    ioapic_write_rte(s, IOAPIC_PIN, 0xfc);
++
++    /* CFIS clear: blocked, and recorded as reason 0x25. */
++    ioapic_pulse(s, IOAPIC_PIN);
++    g_assert(vtd_reg_readl(s, DMAR_FSTS_REG) & VTD_FSTS_PPF);
++    frcd_hi = vtd_reg_readq(s, DMAR_FRCD_REG_0_2);
++    g_assert(frcd_hi & VTD_FRCD_F);
++    g_assert_cmphex((frcd_hi >> 32) & 0xff, ==, VTD_FR_IR_REQ_COMPAT);
++
++    /* Clear the record (write 1 to F), then allow compatibility format. */
++    vtd_reg_writeq(s, DMAR_FRCD_REG_0_2, VTD_FRCD_F);
++    g_assert(!(vtd_reg_readl(s, DMAR_FSTS_REG) & VTD_FSTS_PPF));
++    vtd_reg_writel(s, DMAR_GCMD_REG, VTD_GCMD_IRE | VTD_GCMD_CFI);
++    g_assert(vtd_reg_readl(s, DMAR_GSTS_REG) & VTD_GSTS_CFIS);
++
++    /* CFIS set: passed through, no fault. */
++    ioapic_pulse(s, IOAPIC_PIN);
++    g_assert(!(vtd_reg_readl(s, DMAR_FSTS_REG) & VTD_FSTS_PPF));
++    g_assert(!(vtd_reg_readq(s, DMAR_FRCD_REG_0_2) & VTD_FRCD_F));
++
++    qtest_quit(s);
++}
++
+ static void test_intel_iommu_stage_1(void)
+ {
+     uint8_t init_csr[DMAR_REG_SIZE];     /* register values */
+@@ -59,6 +143,7 @@ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+     qtest_add_func("/q35/intel-iommu/stage-1", test_intel_iommu_stage_1);
++    qtest_add_func("/q35/intel-iommu/cfi", test_intel_iommu_cfi);
+ 
+     return g_test_run();
+ }
+-- 
+2.53.0
+
