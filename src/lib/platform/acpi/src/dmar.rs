@@ -273,7 +273,7 @@ impl<'a> DeviceScope<'a> {
     /// the byte and name the bridge above what firmware meant.
     #[must_use]
     pub const fn path_is_whole(&self) -> bool {
-        !self.path.is_empty() && self.path.len() % 2 == 0
+        !self.path.is_empty() && self.path.len().is_multiple_of(2)
     }
 
     /// `(bus, device, function)` when the path is a single hop, which names a
