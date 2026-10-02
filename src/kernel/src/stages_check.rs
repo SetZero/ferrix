@@ -256,9 +256,9 @@ pub(super) fn check_shared_memory() {
     println!(
         "  shm      {} shared memory calls answered as Linux answers them, {} of them refusals; \
          a removed segment kept, SHM_DEST, until its last detach and then gone; root attached \
-         a stranger's mode-0600 segment; a job refused ENOSPC at {} segments while a sibling \
-         made one",
-        checked.calls, checked.refusals, checked.per_job,
+         a stranger's mode-0600 segment; a key and an id kept to their IPC namespace; a job \
+         refused ENOSPC at {} segments, and at {} reserved pages, while a sibling made one",
+        checked.calls, checked.refusals, checked.per_job, checked.per_job_pages,
     );
 }
 

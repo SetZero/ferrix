@@ -53,7 +53,8 @@
 //! its object to that job's object count, until it is taken out -- a
 //! segment outlives its maker, as on Linux. A job may hold at most
 //! [`SEGMENTS_PER_JOB`] segments, so that one job cannot take every id
-//! from its siblings, and a namespace at most [`SHMALL`] pages of them.
+//! from its siblings, reserving at most [`PAGES_PER_JOB`] pages together,
+//! so that it cannot take every page of the namespace's [`SHMALL`] either.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -153,6 +154,30 @@ pub(crate) const SHMALL: u64 = 1 << 22;
 /// module documentation). Also what `IPC_INFO` reports as `shmmni` and
 /// `shmseg`.
 pub(crate) const SEGMENTS_PER_JOB: usize = 4096;
+/// Pages one job's segments may reserve together: a quarter of [`SHMALL`],
+/// 4 GiB. A reservation takes no frame until it is touched, so the job's
+/// memory limit does not bound it; without this one job could reserve the
+/// whole namespace with a few untouched segments and leave its siblings
+/// `ENOSPC`.
+pub(crate) const PAGES_PER_JOB: u64 = SHMALL / 4;
+
+/// What one job may hold: [`SEGMENTS_PER_JOB`] and [`PAGES_PER_JOB`], or
+/// less for the check, which cannot fill the real bounds.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct JobBounds {
+    /// Segments.
+    pub(crate) segments: usize,
+    /// Pages those segments reserve together.
+    pub(crate) pages: u64,
+}
+
+impl JobBounds {
+    /// The bounds every program runs under.
+    pub(crate) const REAL: JobBounds = JobBounds {
+        segments: SEGMENTS_PER_JOB,
+        pages: PAGES_PER_JOB,
+    };
+}
 
 /// Bits of an id that are its slot, as `sem.rs` numbers sets.
 const SLOT_BITS: u32 = 24;
@@ -364,15 +389,17 @@ fn nattch(state: &State) -> usize {
 /// a size past an existing segment's; `ENOENT` for a key with no segment and
 /// no [`IPC_CREAT`]; `EEXIST` for one with a segment and both flags;
 /// `EACCES` for a segment whose mode refuses `flags`' permission bits;
-/// `ENOSPC` for a job with [`SEGMENTS_PER_JOB`] segments, or a namespace
-/// past [`SHMALL`] pages or out of slots; `ENOMEM` for a job at its memory
+/// `ENOSPC` for a job with [`SEGMENTS_PER_JOB`] segments or one that would
+/// pass [`PAGES_PER_JOB`] pages, or a namespace past [`SHMALL`] pages or out
+/// of slots; `ENOMEM` for a job at its memory
 /// limit; `ENOSYS` for `SHM_HUGETLB`, as Linux answers without hugetlbfs.
 pub(crate) fn shmget(caller: &Caller, key: i32, size: u64, flags: i32) -> Result<i32, Errno> {
-    shmget_capped(caller, key, size, flags, SEGMENTS_PER_JOB)
+    shmget_capped(caller, key, size, flags, JobBounds::REAL)
 }
 
-/// [`shmget`], with `per_job` in place of [`SEGMENTS_PER_JOB`]: for the
-/// check, which cannot make four thousand segments to show the bound.
+/// [`shmget`], with `per_job` in place of [`JobBounds::REAL`]: for the
+/// check, which cannot make four thousand segments, or reserve 4 GiB, to
+/// show the bounds.
 ///
 /// # Errors
 ///
@@ -382,7 +409,7 @@ pub(crate) fn shmget_capped(
     key: i32,
     size: u64,
     flags: i32,
-    per_job: usize,
+    per_job: JobBounds,
 ) -> Result<i32, Errno> {
     if key == IPC_PRIVATE {
         return create(caller, key, size, flags, per_job);
@@ -430,7 +457,13 @@ pub(crate) fn shmget_capped(
 /// Make a segment of `size` bytes under `key`, charged to the running
 /// task's job. `EEXIST` if `key` is not [`IPC_PRIVATE`] and a segment took
 /// it in the meantime.
-fn create(caller: &Caller, key: i32, size: u64, flags: i32, per_job: usize) -> Result<i32, Errno> {
+fn create(
+    caller: &Caller,
+    key: i32,
+    size: u64,
+    flags: i32,
+    per_job: JobBounds,
+) -> Result<i32, Errno> {
     if flags & SHM_HUGETLB != 0 {
         return Err(Errno::ENOSYS);
     }
@@ -472,13 +505,21 @@ fn create(caller: &Caller, key: i32, size: u64, flags: i32, per_job: usize) -> R
     {
         return Err(Errno::EEXIST);
     }
-    let held = table
+    let (held, reserved) = table
         .slots
         .iter()
         .filter_map(|slot| slot.segment.as_ref())
         .filter(|segment| segment.job == job)
-        .count();
-    if held >= per_job || table.pages.saturating_add(pages) > SHMALL {
+        .fold((0_usize, 0_u64), |(count, pages), segment| {
+            (count + 1, pages.saturating_add(segment.pages))
+        });
+    if held >= per_job.segments {
+        return Err(Errno::ENOSPC);
+    }
+    if reserved.saturating_add(pages) > per_job.pages {
+        return Err(Errno::ENOSPC);
+    }
+    if table.pages.saturating_add(pages) > SHMALL {
         return Err(Errno::ENOSPC);
     }
     let index = match table.slots.iter().position(|slot| slot.segment.is_none()) {

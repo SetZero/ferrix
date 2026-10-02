@@ -280,6 +280,11 @@ even for an instant, and a refused charge takes nothing.
   routing tables and a btrfs transaction's changed nodes are the machine's,
   each with a fixed bound; a VMO's page list is a few dozen bytes per
   charged frame. `memory.stat`'s `kernel` line reads the heap alone.
+  System V shared memory's `shmget` scans every slot of its IPC namespace's
+  table under the table's spin lock -- for a key, and to count the job's
+  segments and reserved pages -- and a table's slots never shrink, as the
+  semaphore table's do not: the time is linear in the most segments the
+  namespace ever held at once, at most 4,096 a job (`syscall/shm.rs`).
 * **Objects** carry a token that uncharges as the object drops.
 * **Tasks** are charged as a process is made and a thread's id chosen, and
   given back at reap.

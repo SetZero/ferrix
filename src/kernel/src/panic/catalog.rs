@@ -2298,14 +2298,18 @@ pub(crate) static STAGE7_SHARED_MEMORY: Explanation = Explanation {
               limits and the use. An attach must be refused without the mode's permission and \
               allowed to root over a stranger's mode-0600 segment. IPC_RMID while attached must \
               free the key and keep the segment, SHM_DEST, until its last detach, and then take \
-              it out. A job must be refused ENOSPC at its per-job bound while a sibling makes \
-              one, and every segment the check made must be gone with its charge.",
+              it out. A key and an id of the first IPC namespace must not be found from a new \
+              one, whose SHM_INFO counts only its own segment. A job must be refused ENOSPC at \
+              its per-job segment bound and at its per-job reserved-page bound while a sibling \
+              makes one, and every segment the check made must be gone with its charge.",
     causes: &[
         "`attach` checks the permission after it counts the attach, or not at all.",
         "`Attachment::drop` does not take a removed segment out, or `remove` takes out one \
          still attached.",
         "`encode_shmid` writes a field at an offset another layout uses.",
-        "`create` counts the segments of every job, or of none, against the per-job bound.",
+        "`create` counts the segments or reserved pages of every job, or of none, against \
+         the per-job bounds.",
+        "A search by key or id looks in another namespace's table than the caller's.",
     ],
     see: "src/kernel/src/syscall/shm_check.rs; src/kernel/src/syscall/shm.rs",
 };

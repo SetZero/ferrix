@@ -32,11 +32,25 @@ pub(crate) struct Report {
     /// Segments a job made before the per-job bound (at the check's bound)
     /// refused one, while a sibling made one.
     pub(crate) per_job: usize,
+    /// Pages a job reserved before the per-job page bound (at the check's
+    /// bound) refused one more segment, while a sibling made one.
+    pub(crate) per_job_pages: u64,
 }
 
-/// The per-job bound the check fills to, standing in for
-/// [`shm::SEGMENTS_PER_JOB`].
-const PER_JOB: usize = 5;
+/// The per-job bounds the check fills to, standing in for
+/// [`shm::JobBounds::REAL`]: five segments of a page, when the pages do not
+/// bind first.
+const PER_JOB: shm::JobBounds = shm::JobBounds {
+    segments: 5,
+    pages: 1 << 20,
+};
+
+/// The same for the page bound: eight pages, which two segments of three
+/// pages fit and a third does not, when the count does not bind first.
+const PER_JOB_PAGES: shm::JobBounds = shm::JobBounds {
+    segments: 1000,
+    pages: 8,
+};
 
 /// A key of the check's own.
 const KEY: i32 = 0x5348_4d31;
@@ -162,7 +176,22 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     removal(&mut report)?;
     {
         let tree = Job::new_root().map_err(|_| "shm: no memory for a job")?;
-        report.per_job = per_job(&tree)?;
+        report.per_job = per_job(
+            &tree,
+            PER_JOB,
+            4096,
+            "shm: a job's segments were not bounded with ENOSPC",
+        )?;
+        let made = per_job(
+            &tree,
+            PER_JOB_PAGES,
+            3 * 4096,
+            "shm: a job's reserved pages were not bounded with ENOSPC",
+        )?;
+        report.per_job_pages = 3 * made as u64;
+    }
+    {
+        namespaces(&mut report)?;
     }
     if shm::segments_in_use() != before {
         return Err("shm: the check's segments were not all removed");
@@ -448,15 +477,25 @@ fn removal(report: &mut Report) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// A job makes segments to the per-job bound and is refused `ENOSPC`,
-/// while a sibling makes one; the heap each took is its maker's, and comes
-/// back.
+/// A job makes segments of `size` bytes to its bound under `bounds` and is
+/// refused `ENOSPC`, while a sibling makes one; the heap each took is its
+/// maker's, and comes back. How many the job made; `unbounded` is the
+/// failure when it was not refused where `bounds` says.
 ///
 /// Verifies: H.QUOTA.7
-fn per_job(tree: &Arc<Job>) -> Result<usize, &'static str> {
+fn per_job(
+    tree: &Arc<Job>,
+    bounds: shm::JobBounds,
+    size: u64,
+    unbounded: &'static str,
+) -> Result<usize, &'static str> {
+    let pages = size.div_ceil(4096);
+    let expected = bounds
+        .segments
+        .min(usize::try_from(bounds.pages / pages).unwrap_or(usize::MAX));
     let job = tree.new_child().map_err(|_| "shm: a job refused a child")?;
     let sibling = tree.new_child().map_err(|_| "shm: a job refused a child")?;
-    let make = || shm::shmget_capped(&root(), 0, 4096, cmd::CREAT | 0o600, PER_JOB).map(Held);
+    let make = || shm::shmget_capped(&root(), 0, size, cmd::CREAT | 0o600, bounds).map(Held);
     let mut held = Vec::new();
     let refused = as_task_of(&job, || {
         loop {
@@ -464,13 +503,13 @@ fn per_job(tree: &Arc<Job>) -> Result<usize, &'static str> {
                 Ok(one) => held.push(one),
                 Err(error) => return error,
             }
-            if held.len() > PER_JOB {
+            if held.len() > expected {
                 return Errno::E2BIG;
             }
         }
     });
-    if refused != Errno::ENOSPC || held.len() != PER_JOB {
-        return Err("shm: a job's segments were not bounded with ENOSPC");
+    if refused != Errno::ENOSPC || held.len() != expected {
+        return Err(unbounded);
     }
     let other = as_task_of(&sibling, make);
     let charged = job.usage(Resource::Kernel).map_or(0, |usage| usage.used);
@@ -498,4 +537,58 @@ fn as_task_of<T>(job: &Job, work: impl FnOnce() -> T) -> T {
     let done = work();
     sched::set_current_group(own);
     done
+}
+
+/// IPC namespaces keep shared memory apart: a key and an id of the first
+/// namespace are not found from a new one, and `SHM_INFO` there counts only
+/// its own segments.
+fn namespaces(report: &mut Report) -> Result<(), &'static str> {
+    let made = shm::shmget(&root(), KEY, 4096, cmd::CREAT | cmd::EXCL | 0o600)
+        .map(Held)
+        .map_err(|_| "shm: no keyed segment for the namespaces")?;
+    let ns = sem::IpcNamespace::empty(Arc::clone(crate::syscall::userns::first()))
+        .map_err(|_| "shm: no memory for an IPC namespace")?;
+    let mut inside = root();
+    inside.ns = Arc::clone(&ns);
+    expect(
+        report,
+        shm::shmget(&inside, KEY, 4096, 0o600),
+        Err(Errno::ENOENT),
+        "shm: a key of the first IPC namespace was found in a new one",
+    )?;
+    expect(
+        report,
+        shm::attach(&inside, made.0, 0).map(|_| ()),
+        Err(Errno::EINVAL),
+        "shm: an id of the first IPC namespace was attached from a new one",
+    )?;
+    let own = shm::shmget(&inside, KEY, 4096, cmd::CREAT | cmd::EXCL | 0o600)
+        .map_err(|_| "shm: a new IPC namespace refused the first one's key")?;
+    let usage = Buffer::new();
+    let counted = shm::shmctl(&inside, &usage, Layout::Generic64, 0, cmd::SHM_INFO, 0);
+    if counted.is_err() || usage.u32_at(0) != 1 || usage.u32_at(8) != 1 {
+        crate::console::println!(
+            "  shm      SHM_INFO in a new IPC namespace: {counted:?}, {} segments of {} pages",
+            usage.u32_at(0),
+            usage.u32_at(8),
+        );
+        return Err("shm: SHM_INFO in a new IPC namespace counted another namespace's segments");
+    }
+    report.calls += 1;
+    expect(
+        report,
+        shm::shmctl(
+            &inside,
+            &Buffer::new(),
+            Layout::Generic64,
+            own,
+            cmd::RMID,
+            0,
+        ),
+        Ok(0),
+        "shm: a new IPC namespace could not remove its own segment",
+    )?;
+    drop(made);
+    drop(ns);
+    Ok(())
 }
