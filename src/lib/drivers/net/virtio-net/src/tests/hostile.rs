@@ -201,6 +201,9 @@ fn a_frame_spread_over_buffers_that_were_never_merged_is_a_device_error() {
     assert_broken(&mut rig);
 }
 
+/// A device that needs a reset says so with a configuration change, which
+/// under MSI-X shares the receive queue's vector: an interrupt that brings
+/// no completion. This one brings none, so the status is read.
 #[test]
 fn a_device_that_says_it_needs_a_reset_stops_the_driver() {
     let mut rig = Setup::new().build();
@@ -295,4 +298,105 @@ fn assert_broken(rig: &mut Rig) {
         }),
         Err(SubmitError::Broken)
     );
+}
+
+/// Send a 64-byte frame and have the device take it.
+fn sent_by_the_device(rig: &mut Rig, id: u64) {
+    assert_eq!(
+        rig.driver.submit(&Frame {
+            id,
+            offset: 0,
+            len: 64
+        }),
+        Ok(())
+    );
+    assert_eq!(rig.device.borrow_mut().transmit_all(), 1);
+}
+
+/// An interrupt that brings completions does not read the status, so a
+/// reset announced with one is seen at the next interrupt that brings none,
+/// with the completions it came with delivered first -- or at once, when a
+/// driver that has waited asks [`crate::Driver::check_needs_reset`].
+#[test]
+fn a_device_that_needs_a_reset_is_failed_at_its_next_quiet_interrupt() {
+    let mut rig = Setup::new().build();
+    assert_eq!(
+        rig.device.borrow().config_vector,
+        1,
+        "configuration changes share the receive queue's vector"
+    );
+    sent_by_the_device(&mut rig, 7);
+    rig.device.borrow_mut().misbehave.needs_reset = true;
+    let reads = rig.device.borrow().status_reads.get();
+    let mut out = [Event::Sent { id: u64::MAX }; 4];
+    let drained = rig.driver.on_interrupt(&mut out).expect("a completion");
+    assert_eq!(drained.events, 1);
+    assert_eq!(out[0], Event::Sent { id: 7 });
+    assert!(!drained.config_changed);
+    assert_eq!(
+        rig.device.borrow().status_reads.get(),
+        reads,
+        "status not read"
+    );
+    assert_eq!(
+        rig.driver.on_interrupt(&mut out),
+        Err(DeviceError::NeedsReset)
+    );
+    assert_eq!(rig.driver.fault(), Some(DeviceError::NeedsReset));
+    assert_ne!(rig.device.borrow().status() & STATUS_FAILED, 0);
+
+    let mut rig = Setup::new().build();
+    sent_by_the_device(&mut rig, 8);
+    assert_eq!(rig.driver.check_needs_reset(), Ok(()));
+    rig.device.borrow_mut().misbehave.needs_reset = true;
+    assert_eq!(rig.driver.check_needs_reset(), Err(DeviceError::NeedsReset));
+    assert_eq!(rig.driver.fault(), Some(DeviceError::NeedsReset));
+    assert_eq!(rig.driver.poll(&mut out), Err(DeviceError::NeedsReset));
+}
+
+/// Interrupts that bring completions read no register but the queues' own
+/// memory, except every [`crate::CONFIG_LOOK_EVERY`]th; one that brings
+/// none, or whose ISR says the configuration changed, reads the status and
+/// says the configuration may have changed. A poll between interrupts reads
+/// nothing and acknowledges nothing.
+#[test]
+fn only_a_quiet_or_a_periodic_interrupt_reads_the_device_status() {
+    let mut rig = Setup::new().build();
+    let before = rig.device.borrow().status_reads.get();
+    let mut looked = 0;
+    let mut out = [Event::Sent { id: u64::MAX }; 4];
+    for id in 0..u64::from(crate::CONFIG_LOOK_EVERY) * 2 {
+        sent_by_the_device(&mut rig, id);
+        let drained = rig.driver.on_interrupt(&mut out).expect("a completion");
+        assert_eq!(drained.events, 1);
+        if drained.config_changed {
+            looked += 1;
+        }
+    }
+    assert_eq!(looked, 2, "every CONFIG_LOOK_EVERYth interrupt looks");
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 2);
+    let drained = rig
+        .driver
+        .on_interrupt(&mut out)
+        .expect("a quiet interrupt");
+    assert!(
+        drained.config_changed,
+        "a quiet interrupt may be a configuration change"
+    );
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 3);
+    sent_by_the_device(&mut rig, 1000);
+    rig.device.borrow_mut().isr |= crate::ISR_CONFIG;
+    let drained = rig.driver.on_interrupt(&mut out).expect("a completion");
+    assert!(drained.config_changed);
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 4);
+
+    sent_by_the_device(&mut rig, 1001);
+    let drained = rig.driver.poll(&mut out).expect("a poll");
+    assert_eq!(drained.events, 1);
+    assert_eq!(out[0], Event::Sent { id: 1001 });
+    assert!(!drained.config_changed);
+    assert_eq!(rig.driver.poll(&mut out).expect("an empty poll").events, 0);
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 4);
+    assert_ne!(rig.device.borrow().isr, 0, "a poll acknowledges nothing");
+    rig.assert_clean();
 }
