@@ -124,8 +124,14 @@ mod tests;
 pub const ISR_QUEUE: u8 = 1;
 
 /// ISR status bit: the device configuration changed. virtio-input gives it
-/// no meaning; it is passed back untouched.
+/// no meaning of its own, but a device that needs a reset announces it with
+/// one (virtio 1.2 §2.1.2); see [`Driver::on_interrupt`].
 pub const ISR_CONFIG: u8 = 2;
+
+/// How many interrupts may bring events before [`Driver::on_interrupt`]
+/// reads the device status anyway: a reset announced together with events
+/// is seen within this many.
+pub const CONFIG_LOOK_EVERY: u32 = 64;
 
 /// The event queue's size, the size QEMU 9.2.4 gives it
 /// (`virtio_add_queue(vdev, 64, …)` in `hw/input/virtio-input.c`): 64 events
@@ -425,6 +431,8 @@ pub struct Driver<T, R, A> {
     caps: Capabilities,
     notify_off: u16,
     reset_polls: u32,
+    /// Interrupts taken while running, for [`CONFIG_LOOK_EVERY`].
+    interrupts: u32,
     fault: Option<DeviceError>,
     phase: Phase,
     /// For each descriptor that heads a posted chain, the slot its buffer is.
@@ -645,6 +653,14 @@ where
         if let Err(error) = enable_status(&mut transport, status) {
             return fail(transport, Rings::Queue(queue), area, error);
         }
+        // Configuration changes on the event queue's vector, so that under
+        // MSI-X a device that needs a reset raises an interrupt that brings
+        // no event, which is when [`Driver::on_interrupt`] reads the status.
+        // A device with no room for it keeps none, and the reset is then
+        // seen at the [`CONFIG_LOOK_EVERY`]th interrupt.
+        if active.vector != pci::NO_VECTOR {
+            let _kept = pci::set_config_vector(&mut transport, active.vector);
+        }
 
         Ok(Self {
             transport,
@@ -660,6 +676,7 @@ where
             hello,
             notify_off: active.notify_off,
             reset_polls: options.reset_polls,
+            interrupts: 0,
             fault: None,
             phase: Phase::Introduced,
             posted: [None; QUEUE_SIZE as usize],
@@ -845,6 +862,16 @@ where
     /// The interrupt is acknowledged first, so a completion landing during
     /// the drain raises another rather than being lost. Before READY, and
     /// after REFUSED or STOP, nothing is taken.
+    ///
+    /// The device status is read for `DEVICE_NEEDS_RESET`, which a device
+    /// announces with a configuration change (virtio 1.2 §2.1.2), only when
+    /// the interrupt may be one: the ISR's [`ISR_CONFIG`] says so, or --
+    /// under MSI-X, which has no ISR byte and raises configuration changes
+    /// on the event queue's vector -- the interrupt brought no event, or it
+    /// is the [`CONFIG_LOOK_EVERY`]th. The read leaves the guest, and under
+    /// KVM waits for QEMU's lock, which QEMU's main thread holds while it
+    /// shows a frame; on every interrupt it was a wait on each pointer
+    /// event.
     pub fn on_interrupt(&mut self) -> Result<Drained, DeviceError> {
         let isr = self.transport.acknowledge_interrupt();
         let mut drained = Drained {
@@ -857,7 +884,11 @@ where
         if self.phase != Phase::Running {
             return Ok(drained);
         }
-        if self.transport.read8(DEVICE_STATUS) & STATUS_DEVICE_NEEDS_RESET != 0 {
+        self.interrupts = self.interrupts.wrapping_add(1);
+        let look = isr & ISR_CONFIG != 0
+            || !self.queue.has_used()
+            || self.interrupts.is_multiple_of(CONFIG_LOOK_EVERY);
+        if look && self.transport.read8(DEVICE_STATUS) & STATUS_DEVICE_NEEDS_RESET != 0 {
             return Err(self.break_down(DeviceError::NeedsReset));
         }
         while self.batch.room() >= PUSH_ROOM {

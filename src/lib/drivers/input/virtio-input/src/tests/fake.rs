@@ -18,10 +18,11 @@ use std::vec::Vec;
 
 use ferrix_virtio::input::{ConfigSelect, DeviceConfig, EVENT_LEN, Event};
 use ferrix_virtio::pci::{
-    CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS, DRIVER_FEATURE,
-    DRIVER_FEATURE_SELECT, FEATURE_ACCESS_PLATFORM, FEATURE_VERSION_1, NO_VECTOR, NUM_QUEUES,
-    QUEUE_DESC, QUEUE_DEVICE, QUEUE_DRIVER, QUEUE_ENABLE, QUEUE_MSIX_VECTOR, QUEUE_NOTIFY_OFF,
-    QUEUE_SELECT, QUEUE_SIZE, STATUS_DEVICE_NEEDS_RESET, STATUS_DRIVER_OK, STATUS_FEATURES_OK,
+    CONFIG_MSIX_VECTOR, CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS,
+    DRIVER_FEATURE, DRIVER_FEATURE_SELECT, FEATURE_ACCESS_PLATFORM, FEATURE_VERSION_1, NO_VECTOR,
+    NUM_QUEUES, QUEUE_DESC, QUEUE_DEVICE, QUEUE_DRIVER, QUEUE_ENABLE, QUEUE_MSIX_VECTOR,
+    QUEUE_NOTIFY_OFF, QUEUE_SELECT, QUEUE_SIZE, STATUS_DEVICE_NEEDS_RESET, STATUS_DRIVER_OK,
+    STATUS_FEATURES_OK,
 };
 use ferrix_virtio::{Descriptor, Layout, PAGE_SIZE, QueueMemory, SplitQueueDevice};
 
@@ -334,6 +335,12 @@ pub(super) struct Device {
     pub(super) inactive: usize,
     pub(super) misbehave: Misbehave,
     pub(super) protocol_errors: Vec<&'static str>,
+    /// The MSI-X vector configuration changes are raised on.
+    pub(super) config_vector: u16,
+    /// How many times the driver read the device status.
+    pub(super) status_reads: core::cell::Cell<u32>,
+    /// ISR bits the next acknowledgement answers besides [`ISR_QUEUE`].
+    pub(super) isr: u8,
 }
 
 impl Device {
@@ -371,6 +378,9 @@ impl Device {
             inactive: 0,
             misbehave: Misbehave::default(),
             protocol_errors: Vec::new(),
+            config_vector: NO_VECTOR,
+            status_reads: core::cell::Cell::new(0),
+            isr: 0,
         }
     }
 
@@ -390,6 +400,7 @@ impl Device {
             },
             NUM_QUEUES => 2,
             DEVICE_STATUS => {
+                self.status_reads.set(self.status_reads.get() + 1);
                 u32::from(self.status)
                     | if self.misbehave.needs_reset && self.status != 0 {
                         u32::from(STATUS_DEVICE_NEEDS_RESET)
@@ -398,6 +409,7 @@ impl Device {
                     }
             }
             QUEUE_SELECT => u32::from(self.queue_select),
+            CONFIG_MSIX_VECTOR => u32::from(self.config_vector),
             QUEUE_SIZE if self.queue_select == 1 => u32::from(self.status_size),
             QUEUE_SIZE if selected => u32::from(self.queue_size),
             QUEUE_MSIX_VECTOR if self.queue_select == 0 => u32::from(self.queue_vector),
@@ -419,6 +431,7 @@ impl Device {
         self.held.clear();
         self.pending.clear();
         self.queue_size = self.queue_max;
+        self.config_vector = NO_VECTOR;
     }
 
     fn set_register(&mut self, offset: u32, value: u32) {
@@ -441,6 +454,9 @@ impl Device {
                 self.status = value as u8;
             }
             QUEUE_SELECT => self.queue_select = value as u16,
+            CONFIG_MSIX_VECTOR if !self.misbehave.drop_vector => {
+                self.config_vector = value as u16;
+            }
             QUEUE_SIZE if self.queue_select == 0 => self.queue_size = value as u16,
             QUEUE_SIZE if self.queue_select == 1 => self.status_size = value as u16,
             QUEUE_MSIX_VECTOR if self.queue_select == 0 && !self.misbehave.drop_vector => {
@@ -751,6 +767,6 @@ impl Transport for Handle {
         1
     }
     fn acknowledge_interrupt(&mut self) -> u8 {
-        ISR_QUEUE
+        ISR_QUEUE | core::mem::take(&mut self.device.borrow_mut().isr)
     }
 }

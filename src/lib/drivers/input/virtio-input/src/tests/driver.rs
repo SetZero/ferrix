@@ -23,7 +23,8 @@ use ferrix_virtio::pci::{
 use super::fake::{Answer, Bus, Device, Handle, keyboard, qemu_abs, tablet};
 use crate::batch::CAPACITY;
 use crate::{
-    Control, ControlError, DeviceError, Driver, InitError, Options, Parts, Phase, Rings, Teardown,
+    CONFIG_LOOK_EVERY, Control, ControlError, DeviceError, Driver, ISR_CONFIG, InitError, Options,
+    Parts, Phase, Rings, Teardown,
 };
 
 type TestDriver = Driver<Handle, Region, Region>;
@@ -380,7 +381,7 @@ fn a_full_batch_leaves_completions_in_the_ring_until_messages_are_taken() {
 #[test]
 fn a_device_that_breaks_the_protocol_is_failed() {
     type Setup = fn(&mut Device);
-    let cases: [(Setup, DeviceError); 3] = [
+    let cases: [(Setup, DeviceError); 2] = [
         (
             |device| device.misbehave.written = Some(4),
             DeviceError::Protocol(InputError::EventWritten(4)),
@@ -388,10 +389,6 @@ fn a_device_that_breaks_the_protocol_is_failed() {
         (
             |device| device.misbehave.written = Some(16),
             DeviceError::Protocol(InputError::EventWritten(16)),
-        ),
-        (
-            |device| device.misbehave.needs_reset = true,
-            DeviceError::NeedsReset,
         ),
     ];
     for (misbehave, expected) in cases {
@@ -404,7 +401,6 @@ fn a_device_that_breaks_the_protocol_is_failed() {
         assert!(rig.device.borrow().status & STATUS_FAILED != 0);
         assert_eq!(rig.driver.on_interrupt(), Err(expected));
         assert!(rig.driver.pop_events().is_none());
-        rig.device.borrow_mut().misbehave.needs_reset = false;
         assert!(matches!(rig.driver.shutdown(), Teardown::Released(_)));
     }
 
@@ -548,4 +544,66 @@ fn a_smaller_queue_is_a_power_of_two_and_a_device_that_will_not_reset_keeps_the_
     let Teardown::Wedged(_parts) = rig.driver.shutdown() else {
         panic!("a device that did not reset may still write");
     };
+}
+
+/// A device that needs a reset says so with a configuration change, which
+/// under MSI-X shares the event queue's vector: an interrupt that brings no
+/// event. The driver reads the status then, and not on an interrupt that
+/// brought one -- but on every [`CONFIG_LOOK_EVERY`]th all the same.
+#[test]
+fn a_device_that_needs_a_reset_is_failed_at_its_next_quiet_interrupt() {
+    let mut rig = running(keyboard(), |_| {});
+    assert_eq!(
+        rig.device.borrow().config_vector,
+        1,
+        "configuration changes share the vector"
+    );
+    rig.device.borrow_mut().misbehave.needs_reset = true;
+    rig.device.borrow_mut().send(event(EV_KEY, KEY_A, 1));
+    rig.device.borrow_mut().send(syn());
+    let reads = rig.device.borrow().status_reads.get();
+    assert_eq!(
+        messages(&mut rig.driver),
+        vec![vec![raw(EV_KEY, KEY_A, 1), raw(EV_SYN, SYN_REPORT, 0)]],
+        "an interrupt with events forwards them"
+    );
+    assert_eq!(
+        rig.device.borrow().status_reads.get(),
+        reads,
+        "status not read"
+    );
+    assert_eq!(rig.driver.on_interrupt(), Err(DeviceError::NeedsReset));
+    assert_eq!(rig.driver.fault(), Some(DeviceError::NeedsReset));
+    assert!(rig.device.borrow().status & STATUS_FAILED != 0);
+    assert!(rig.driver.pop_events().is_none());
+    rig.device.borrow_mut().misbehave.needs_reset = false;
+    assert!(matches!(rig.driver.shutdown(), Teardown::Released(_)));
+}
+
+/// Interrupts that bring events read no register but the queue's own
+/// memory, except every [`CONFIG_LOOK_EVERY`]th; one that brings none, or
+/// whose ISR says the configuration changed, reads the status.
+#[test]
+fn only_a_quiet_or_a_periodic_interrupt_reads_the_device_status() {
+    let mut rig = running(tablet(), |_| {});
+    let before = rig.device.borrow().status_reads.get();
+    for round in 0..CONFIG_LOOK_EVERY * 2 {
+        rig.device
+            .borrow_mut()
+            .send(event(EV_KEY, BTN_LEFT, (round % 2) as i32));
+        rig.device.borrow_mut().send(syn());
+        assert_eq!(messages(&mut rig.driver).len(), 1);
+    }
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 2);
+    assert_eq!(
+        rig.driver.on_interrupt().expect("a quiet interrupt").taken,
+        0
+    );
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 3);
+    rig.device.borrow_mut().send(event(EV_KEY, BTN_LEFT, 1));
+    rig.device.borrow_mut().send(syn());
+    rig.device.borrow_mut().isr = ISR_CONFIG;
+    assert_eq!(messages(&mut rig.driver).len(), 1);
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 4);
+    no_errors(&rig.device);
 }
