@@ -172,6 +172,8 @@ pub mod unistd;
 pub mod utmpx;
 pub mod utsname;
 pub mod va;
+#[cfg(target_arch = "x86_64")]
+pub mod vdso;
 pub mod wait;
 pub mod wchar;
 pub mod wcsto;

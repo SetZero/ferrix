@@ -64,6 +64,13 @@ pub fn get(key: usize) -> Option<usize> {
     }
 }
 
+/// Whether the vector is known yet: false in a shared library's constructor
+/// run before the loader published its copy, when [`get`] answers `None`
+/// for every key, those the kernel gave included.
+pub fn known() -> bool {
+    !AUXV.load(Ordering::Relaxed).is_null() || crate::loader::auxv().is_some()
+}
+
 /// The value for `key`, or zero with `errno` set to `ENOENT`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn getauxval(key: c_ulong) -> c_ulong {

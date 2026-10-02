@@ -1,9 +1,11 @@
 //! `time.h` and `sys/time.h`: reading the clocks and sleeping, and the
 //! `unistd.h` calls built on them, `sleep`, `usleep`, `pause` and `alarm`.
 //!
-//! Every clock is read with a system call. There is no vDSO use yet, so
-//! `clock_gettime` costs a trip into the kernel. `strftime`, `localtime`,
-//! `mktime` and time zones are not here.
+//! On x86-64, `clock_gettime`, `gettimeofday` and `time` read the clock
+//! through the vDSO when the kernel maps one (`vdso`), and make the system
+//! call when it does not, or when its `clock_gettime` answers `ENOSYS` for a
+//! clock it leaves to the kernel. Elsewhere every clock is read with a
+//! system call. `strftime`, `localtime`, `mktime` and time zones are not here.
 
 use core::ffi::{c_int, c_long, c_uint, c_void};
 use core::mem::{offset_of, size_of};
@@ -87,6 +89,14 @@ const NANOS: c_long = 1_000_000_000;
 /// `ts` must be valid for a write of a `struct timespec`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn clock_gettime(clock: c_int, ts: *mut Timespec) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: the caller vouches for `ts`, the one thing the vDSO writes.
+        let ret = unsafe { crate::vdso::clock_gettime(clock, ts) };
+        if let Some(ret) = ret.filter(|&ret| ret != -errno::ENOSYS) {
+            return errno::from_syscall(ret as isize) as c_int;
+        }
+    }
     // SAFETY: the caller vouches for `ts`, the one thing the kernel writes.
     let ret = unsafe { syscall::syscall2(nr::CLOCK_GETTIME, clock as usize, ts.addr()) };
     errno::from_syscall(ret) as c_int
@@ -123,14 +133,24 @@ pub unsafe extern "C" fn clock_settime(clock: c_int, ts: *const Timespec) -> c_i
 /// `t` must be null or valid for a write of a `time_t`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn time(t: *mut i64) -> i64 {
+    let seconds = now_seconds();
+    if !t.is_null() {
+        // SAFETY: the caller vouches for a non-null `t`.
+        unsafe { t.write(seconds) };
+    }
+    seconds
+}
+
+/// The seconds since the Epoch, through the vDSO's `time` when there is one.
+fn now_seconds() -> i64 {
+    #[cfg(target_arch = "x86_64")]
+    if let Some(seconds) = crate::vdso::time() {
+        return seconds;
+    }
     let mut ts = Timespec::default();
     // SAFETY: `ts` is a live local. Reading `CLOCK_REALTIME` cannot fail with
     // a valid pointer, so the result is not checked, as in musl.
     let _ = unsafe { clock_gettime(CLOCK_REALTIME, &raw mut ts) };
-    if !t.is_null() {
-        // SAFETY: the caller vouches for a non-null `t`.
-        unsafe { t.write(ts.tv_sec) };
-    }
     ts.tv_sec
 }
 
@@ -201,6 +221,14 @@ const fn timeval_of(ts: Timespec) -> Timeval {
 pub unsafe extern "C" fn gettimeofday(tv: *mut Timeval, _tz: *mut c_void) -> c_int {
     if tv.is_null() {
         return 0;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: the caller vouches for a non-null `tv`.
+        let ret = unsafe { crate::vdso::gettimeofday(tv) };
+        if let Some(ret) = ret.filter(|&ret| ret != -errno::ENOSYS) {
+            return errno::from_syscall(ret as isize) as c_int;
+        }
     }
     let mut ts = Timespec::default();
     // SAFETY: `ts` is a live local.
