@@ -503,8 +503,6 @@ fn write_ids(process: &Process, at: u64, capacity: u32, ids: &[u32]) -> Result<(
     uaccess::copy_to_user(process.space(), at, &bytes).map_err(|_| Errno::EFAULT)
 }
 
-/// The mode a scanout's preferred size makes: 60 Hz, sync pulses where a
-/// monitor would put them, named `WxH`.
 /// The sizes a connected connector offers beside the one the device prefers.
 ///
 /// A virtio-gpu shows whatever size it is handed a scanout of, so the
@@ -527,9 +525,37 @@ const STANDARD_SIZES: [(u32, u32); 10] = [
     (800, 600),
 ];
 
-/// What a connector whose device prefers `width` by `height` lists: that
-/// mode first and marked preferred, then every standard size that is not it.
-fn listed_modes(width: u32, height: u32) -> Vec<ModeInfo> {
+/// The refreshes a connector lists its preferred size at beside the one its
+/// display reports, in hertz: the 60 every monitor has, and the two rates
+/// fast monitors are sold at, so that a `monitor = , WxH@120, ...` line can
+/// ask for a desktop faster than its host's window shows. A virtio-gpu
+/// takes a flush whenever it is sent one, so nothing about the card stops a
+/// compositor pacing to any of them.
+const OFFERED_REFRESHES_HZ: [u32; 3] = [60, 120, 144];
+
+/// The refresh a display that reported none is listed at, in millihertz:
+/// the 60 Hz every virtual card was listed at before its driver could say.
+const UNKNOWN_REFRESH_MHZ: u32 = 60_000;
+
+/// What a connector whose device prefers `width` by `height` at
+/// `refresh_mhz` (0 when it does not know) lists: that size first, at that
+/// refresh and marked preferred; then the same size at each of
+/// [`OFFERED_REFRESHES_HZ`] it is not listed at already; then every standard
+/// size that is not it, at 60 Hz.
+fn listed_modes(width: u32, height: u32, refresh_mhz: u32) -> Vec<ModeInfo> {
+    let reported = if refresh_mhz == 0 {
+        UNKNOWN_REFRESH_MHZ
+    } else {
+        refresh_mhz
+    };
+    let mut modes = vec![mode_at(width, height, reported)];
+    for hertz in OFFERED_REFRESHES_HZ {
+        if modes.iter().all(|mode| mode.vrefresh != hertz) {
+            let mut mode = mode_at(width, height, hertz * 1000);
+            mode.r#type = drm::MODE_TYPE_DRIVER;
+            modes.push(mode);
+        }
+    }
     let standard = STANDARD_SIZES
         .iter()
         .filter(|&&size| size != (width, height))
@@ -538,9 +564,8 @@ fn listed_modes(width: u32, height: u32) -> Vec<ModeInfo> {
             mode.r#type = drm::MODE_TYPE_DRIVER;
             mode
         });
-    core::iter::once(mode_for(width, height))
-        .chain(standard)
-        .collect()
+    modes.extend(standard);
+    modes
 }
 
 /// A mode a card listed, as DRM has it: its own timing, `preferred` for the
@@ -572,7 +597,18 @@ fn mode_of(timing: &Timing, preferred: bool) -> ModeInfo {
     mode
 }
 
+/// [`mode_at`] 60 Hz.
 fn mode_for(width: u32, height: u32) -> ModeInfo {
+    mode_at(width, height, UNKNOWN_REFRESH_MHZ)
+}
+
+/// The mode a size makes at `refresh_mhz`: sync pulses where a monitor
+/// would put them, the pixel clock the refresh takes over those totals, in
+/// whole kHz rounded down, and `vrefresh` what that clock gives, rounded --
+/// so that the two agree as Linux's `drm_mode_vrefresh` has them agree.
+/// Marked preferred, and named `WxH`, which Linux's names do not add the
+/// refresh to.
+fn mode_at(width: u32, height: u32, refresh_mhz: u32) -> ModeInfo {
     let mut mode = ModeInfo::ZERO;
     let clamp = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
     mode.hdisplay = clamp(width);
@@ -583,8 +619,10 @@ fn mode_for(width: u32, height: u32) -> ModeInfo {
     mode.vsync_start = clamp(height + 3);
     mode.vsync_end = clamp(height + 9);
     mode.vtotal = clamp(height + 23);
-    mode.vrefresh = 60;
-    mode.clock = (width + 160) * (height + 23) * 60 / 1000;
+    let total = u64::from(mode.htotal) * u64::from(mode.vtotal);
+    let clock = total * u64::from(refresh_mhz) / 1_000_000;
+    mode.clock = u32::try_from(clock).unwrap_or(u32::MAX);
+    mode.vrefresh = u32::try_from((clock * 1000 + total / 2) / total.max(1)).unwrap_or(0);
     mode.r#type = drm::MODE_TYPE_PREFERRED | drm::MODE_TYPE_DRIVER;
     let mut name = [0u8; drm::DISPLAY_MODE_LEN];
     let mut cursor = 0;
@@ -1265,7 +1303,8 @@ pub(crate) const fn connector_type(hdmi: bool) -> u32 {
 /// The modes head `head` of `card` lists: none while nothing is connected;
 /// on a board's HDMI output the modes its driver can make a pixel clock for,
 /// the one it chose first, or the one it runs where it said no more; the
-/// preferred size and the standard ones on a virtual card, which shows any.
+/// preferred size at its display's refresh and at the offered ones, and the
+/// standard sizes, on a virtual card, which shows any.
 fn modes_of(card: &Card, head: usize) -> Vec<ModeInfo> {
     card.modes()
         .get(head)
@@ -1281,7 +1320,7 @@ fn modes_of(card: &Card, head: usize) -> Vec<ModeInfo> {
             } else if card.hdmi {
                 vec![mode_for(mode.width, mode.height)]
             } else {
-                listed_modes(mode.width, mode.height)
+                listed_modes(mode.width, mode.height, mode.refresh_mhz)
             }
         })
         .unwrap_or_default()

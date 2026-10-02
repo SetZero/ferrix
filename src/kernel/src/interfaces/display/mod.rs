@@ -429,11 +429,7 @@ impl Card {
                 self.index,
                 mode.width,
                 mode.height,
-                if mode.enabled {
-                    ""
-                } else {
-                    ", nothing attached"
-                }
+                shown_at(mode)
             );
         }
     }
@@ -1189,6 +1185,19 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     Ok(card)
 }
 
+/// What a scanout's boot line says after its size: the refresh its display
+/// reported, to the millihertz, or that it reported none -- which the card
+/// lists as 60 Hz -- or that nothing is attached.
+fn shown_at(mode: &ScanoutMode) -> alloc::string::String {
+    if !mode.enabled {
+        return alloc::string::String::from(", nothing attached");
+    }
+    match mode.refresh_mhz {
+        0 => alloc::string::String::from(", refresh not reported"),
+        rate => alloc::format!(" at {}.{:03} Hz", rate / 1000, rate % 1000),
+    }
+}
+
 /// The boot lines for a card just published.
 fn announce(card: &Card, hello: &Hello) {
     let index = card.index;
@@ -1214,11 +1223,7 @@ fn announce(card: &Card, hello: &Hello) {
             "  display  card{index} scanout {scanout}: {}x{}{}",
             mode.width,
             mode.height,
-            if mode.enabled {
-                ""
-            } else {
-                ", nothing attached"
-            }
+            shown_at(mode)
         );
     }
     if let Some(running) = card.timings().first() {

@@ -2107,12 +2107,19 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args, binary: &Path)
             // compositor's frames to the driver as a fifth of a processor.
             // With it the doorbell is an eventfd, and QEMU takes the queue up
             // in its own loop.
+            //
+            // `edid=on`, QEMU's default for these devices, said rather than
+            // assumed: the EDID `GET_EDID` answers with is the one place QEMU
+            // tells the guest the refresh of the host monitor its window is
+            // on (75 Hz where no window says, as under VNC), and the driver
+            // reports it for the kernel to list the card's modes at.
             let _ = command.args([
                 "-device",
                 // 1024x768 is what every judged boot's pictures are of;
                 // `run-compositor` says another.
                 &format!(
-                    "{card},id={id}{slot},{flags}{venus},ioeventfd=on,xres={wide},yres={tall}",
+                    "{card},id={id}{slot},{flags}{venus},ioeventfd=on,edid=on,\
+                     xres={wide},yres={tall}",
                     card = gl_card,
                     id = crate::display::device_id(index),
                     wide = args.size.map_or(1024, |size| size.0),

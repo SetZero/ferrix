@@ -124,7 +124,7 @@ others.
 
 | Type | Direction | Body | Handles |
 |---|---|---|---|
-| `HELLO` | driver → core | version; scanout count (1 in iteration 1); for each scanout the preferred mode `width, height` from `GET_DISPLAY_INFO` and whether it is enabled; what the card said about 3D; whether it has a cursor plane | driver port (`WRITE \| TRANSFER`) |
+| `HELLO` | driver → core | version; scanout count (1 in iteration 1); for each scanout the preferred mode `width, height` from `GET_DISPLAY_INFO` and whether it is enabled; what the card said about 3D; whether it has a cursor plane; each scanout's refresh in millihertz, 0 when unknown (protocol version 7, 2026-10-02) | driver port (`WRITE \| TRANSFER`) |
 | `READY` | core → driver | card id | card VMO (`READ \| TRANSFER`), core port (`WRITE`) |
 | `REFUSED` | core → driver | reason | — |
 | `ATTACH` | core → driver | buffer id, offset, length, width, height, stride, format (`XRGB8888` only) | — |
@@ -137,7 +137,7 @@ others.
 | `STOP` / `STOPPED` | as blk | | |
 | `CURSOR` | core → driver | scanout, buffer id (64 × 64; 0 for none), sequence, hotspot, place; only to a card whose `HELLO` said it has a cursor plane | — |
 | `MOVE` | core → driver | scanout, place; nothing answers it; the same | — |
-| `MODES` | driver → core | each scanout's preferred mode, as `HELLO` gives it, in `HELLO`'s place; sent unasked when the device's displays change, and nothing answers it (protocol version 6, 2026-09-26) | — |
+| `MODES` | driver → core | each scanout's preferred mode and refresh, as `HELLO` gives them, in `HELLO`'s place; sent unasked when the device's displays change, and nothing answers it (protocol version 6, 2026-09-26; the refresh since 7) | — |
 
 **Each message maps to device commands:**
 
@@ -169,6 +169,17 @@ others.
   `GET_DISPLAY_INFO` and sends what it says. The core takes a list that fits
   the card `HELLO` described and refuses the rest, as it refuses a bad
   `HELLO`.
+* **The refresh** (protocol version 7, 2026-10-02) comes from `GET_EDID`.
+  The driver takes `VIRTIO_GPU_F_EDID` when it is offered and, beside each
+  `GET_DISPLAY_INFO` for `HELLO` and `MODES`, asks every enabled scanout's
+  EDID and reads the refresh its preferred timing makes: the base block's
+  first detailed timing, or a DisplayID extension's first type I timing
+  where QEMU put it there for a clock a descriptor cannot hold
+  (`ferrix_displayctl::edid::preferred_refresh_mhz`). QEMU makes that timing
+  at the refresh of the host monitor its GTK window is on, and at 75 Hz
+  where no window says, as under VNC. A refusal, or an EDID that is short,
+  corrupt or interlaced, is a refresh of 0, never a reason to stop.
+  `xtask` puts `edid=on` on the device rather than rely on QEMU's default.
 
 **Pages the device may still hold are never unpinned.** If the device
 refuses `RESOURCE_DETACH_BACKING`, the driver does not unreference the
@@ -215,7 +226,7 @@ source is committed this time.
 | `DRM_IOCTL_SET_CLIENT_CAP` | `UNIVERSAL_PLANES` takes 0 or 1 (E4) and changes only what `GETPLANERESOURCES` lists; `ATOMIC` refused with `EOPNOTSUPP`, so clients fall back to legacy; the rest `EINVAL` |
 | `DRM_IOCTL_SET_MASTER`, `DROP_MASTER` | succeed; the exclusive open (below) is the master |
 | `MODE_GETRESOURCES` | a CRTC, an encoder and a connector per scanout the driver reported, and the framebuffer ids |
-| `MODE_GETCONNECTOR` | `Virtual-<n>`, connected when the scanout is enabled, the preferred mode from `HELLO` plus the standard modes that fit |
+| `MODE_GETCONNECTOR` | `Virtual-<n>`, connected when the scanout is enabled, the preferred mode from `HELLO` at the refresh the driver reported (60 Hz when it reported none), the same size at 60, 120 and 144 Hz where not listed already, then the standard sizes at 60 Hz; each mode's `clock` is what its refresh takes over its totals and its `vrefresh` what that clock gives |
 | `MODE_GETENCODER`, `MODE_GETCRTC` | the head's own, each encoder driving the one CRTC of its head |
 | `MODE_CREATE_DUMB`, `MODE_MAP_DUMB`, `MODE_DESTROY_DUMB` | §2.1; `bpp` 32 only |
 | `MODE_ADDFB`, `MODE_ADDFB2`, `MODE_RMFB` | `XRGB8888` only; a framebuffer names one dumb buffer |
@@ -325,6 +336,18 @@ resizes its window, which a headless test has nothing to do, so
 `cargo xtask test-compositor --screens 2` gives the guest two virtio-gpu
 *devices* instead: two cards, one screen each, which is the other shape a
 two-monitor machine comes in and the one a test can drive.
+
+**A desktop at its monitor's refresh (2026-10-02).** Until protocol
+version 7 every virtual card's mode was listed at 60 Hz, so a compositor
+pacing to its mode could never run faster on a 120 Hz host monitor. The
+driver now reports each scanout's refresh from the EDID QEMU makes (§2.2),
+and the card lists the preferred size at it first -- `1920x1080` at
+74.998 Hz under VNC, at the host monitor's rate under a GTK window -- with
+60, 120 and 144 Hz of the same size after it, so that a `monitor = ,
+1920x1080@120, auto, 1` line can ask for 120 on any host. The kernel's boot
+line says it: `display  card0 scanout 0: 1920x1080 at 74.998 Hz`, and
+`... is now ...` the same after a `MODES`. Real hardware cards' timings are
+listed as before.
 
 **A desktop the size of its window (2026-09-26).** QEMU's GTK window
 stretched a 1920 × 1080 desktop to whatever size the window was, sampling
