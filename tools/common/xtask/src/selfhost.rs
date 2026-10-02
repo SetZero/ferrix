@@ -102,7 +102,7 @@ const PLAN_LINKS: &[(&str, &str)] = &[
 ];
 
 /// Space on the volume beyond what the staging directory holds. A debug
-/// build's target directory is about 1 GiB and the image 256 MiB; btrfs
+/// build's target directory is about 1 GiB and the image 512 MiB; btrfs
 /// keeps its metadata twice.
 const ROOM: u64 = 8 << 30;
 
