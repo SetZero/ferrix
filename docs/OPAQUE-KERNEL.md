@@ -2454,8 +2454,20 @@ nothing" (the opening, part 2a, part 6). T10 notes that `WRITABLE` and the
 is off and AMX is not enabled (part 5). Part 7's locked operations are to be
 measured before ERAPS is counted on. Step 1 has five conditions (part 5).
 
-**What is left before code.** The customer's two calls (the default of
-`ferrix.fastpath`, and step 4b), steps 1 to 3 landed as part 5 lists, and
+**The customer's calls (2026-10-02).**
+- *The default of `ferrix.fastpath`:* off in the certified configuration the
+  Safety Manual names, for the first certified release, as the consultant
+  recommends. It is on in development builds and in the gate's perf rows. The
+  certified default becomes on once one coverage run has measured the fast
+  path and its vulnerability-analysis entry exists. Until then the switch is a
+  configuration item, read once at boot and printed by stage 9.
+- *Step 4b:* built, after step 5, under a design of its own that goes to the
+  consultant first.
+- *The residual risk:* accepted. That the fast path is a tested equivalence
+  and not a proof is written into the Safety Manual and the vulnerability
+  analysis when its code lands.
+
+**What is left before code.** Steps 1 to 3 landed as part 5 lists, and
 the requirement ids reserved. After that, the code comes back to the
 consultant with the logs of every case and control in part 6, and of the
 `loom` model.
