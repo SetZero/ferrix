@@ -2526,7 +2526,7 @@ fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<
 /// exists: every x86-64 and AArch64 boot, whose virtio functions have a
 /// prefetchable 64-bit BAR and registers beside it.
 ///
-/// Verifies: L.x86_64.127, L.user.108
+/// Verifies: `L.x86_64.127`, L.user.108
 fn check_write_combining(counter: &mut Counter) -> Result<(), &'static str> {
     if let Some(programmed) = arch::write_combining_processors()
         && programmed != crate::smp::count()

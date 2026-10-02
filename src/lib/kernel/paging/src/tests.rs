@@ -1195,7 +1195,7 @@ mod x86_bits {
     /// the kernel programs write-combining, reads back as itself, and loses
     /// to `device`, whose entry 3 is uncacheable.
     ///
-    /// Verifies: L.x86_64.127
+    /// Verifies: `L.x86_64.127`
     #[test]
     fn write_combining_selects_pat_entry_one_and_reads_back() {
         let flags = MapFlags {
