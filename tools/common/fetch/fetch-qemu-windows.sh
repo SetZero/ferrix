@@ -71,7 +71,9 @@ src=$work/qemu
 if [ ! -d "$src" ]; then
     git clone -q --depth 1 --branch "$version" https://gitlab.com/qemu-project/qemu.git "$src"
 fi
-for patch in "$here"/scripts/data/qemu/*.patch; do
+# Only the virtio-gpu-gl fix: 0002 is the Linux build's, against 10.2.1
+# (series-10.2.1, fetch-qemu-linux.sh).
+for patch in "$here"/tools/common/data/qemu/0001-*.patch; do
     if git -C "$src" apply --reverse --check "$patch" 2>/dev/null; then
         echo "qemu: $(basename "$patch") already applied"
     else

@@ -1090,6 +1090,21 @@ and took the recommended answer for D2, D3 and D5.
   §12 now folds in every condition, with a table of where each is met
   per slice; the checks are renamed W, P and R. N0 is 28 points, and the
   road 124.
+* **2026-10-03 — N0g's patched QEMU.** Branch `nvidia-n0g-qemu`:
+  * `0002-intel_iommu-honour-CFI-and-block-compatibility-format.patch`
+    against v10.2.1, with a qtest that fails with either half removed;
+  * `fetch-qemu-linux.sh` builds it, x86-64 only, as
+    `QEMU emulator version 10.2.1 (ferrix-cfi)` into
+    `~/.local/share/ferrix/qemu`, and prints the root line that installs
+    it for the `ferrix-3060` domain;
+  * xtask takes it for x86-64 and refuses any other QEMU on Linux hosts;
+    CI builds and caches it. test-boot passes on it under KVM and TCG.
+  * Found while reading QEMU: under the split irqchip a refused route
+    update leaves KVM's old route delivering (§12.3, "A refused route
+    keeps the old one"), so the console's I/O APIC entry must be masked
+    before it is rewritten.
+  
+  The kernel half of N0g is separate.
 
 ## 11. CUDA (N5)
 
@@ -2583,16 +2598,43 @@ no unit, can send a compatibility message that no unit blocks. So:
   * `vtd_handle_gcmd_write` honours `GCMD.CFI` and sets or clears
     `GSTS.CFIS` to match, as `VTD_GSTS_CFIS` names it;
   * `vtd_interrupt_remap_msi`, on a compatibility-format message with IR
-    on and `CFIS` clear, reports `VTD_FR_IR_REQ_COMPAT` (0x25) against the
+    on and `CFIS` clear (or `IRTA.EIME` set, as VT-d 5.1.2.1 also blocks
+    in x2APIC mode), reports `VTD_FR_IR_REQ_COMPAT` (0x25) against the
     source ID (when `do_fault`) and returns `-EINVAL`, so the message is
-    dropped.
+    dropped. QEMU's stderr then carries, once per run,
+    `vtd_interrupt_remap_msi: compatibility format interrupt blocked (sid=…, address=…, data=…)`,
+    followed by the existing `Interrupt Mask set, irq is not generated`
+    when the fault event is masked. xtask passes both through today; R1's
+    parser work (the `dma_faults` split above) should count them as
+    provoked remarks.
+  * A qtest, `/q35/intel-iommu/cfi`, which the build script runs every
+    time: `CFIS` follows `CFI`, and with IR on a compatibility I/O APIC
+    entry faults 0x25 while `CFIS`=0 and is delivered once `CFI` is set.
+    Each half of the patch removed fails it.
   
   The same function serves `vtd_mem_ir_write` (TCG, and a device's own
   writes) and the KVM route fix-up (`int_remap`). So under the split
-  irqchip a compatibility route is refused too: no route, no delivery, and
-  no fault recorded at route time, since QEMU calls it with
-  `do_fault=false` there. The patch is offered upstream. Once a release
-  has it, the patch is dropped and the pin moves to that release.
+  irqchip a compatibility route is refused too: no new route, and no
+  fault recorded at route time, since QEMU calls it with `do_fault=false`
+  there. The patch is offered upstream. Once a release has it, the patch
+  is dropped and the pin moves to that release.
+  
+  **A refused route keeps the old one (for the kernel half).** Under the
+  split irqchip QEMU recomputes a KVM MSI route only when the guest
+  writes the I/O APIC entry or the MSI message, or invalidates the
+  interrupt entry cache (`SIRTP`, IEC). Setting `IRE` recomputes nothing.
+  When the IOMMU refuses a recomputed route
+  (`kvm_irqchip_update_msi_route` fails in `kvm_arch_fixup_msi_route`),
+  KVM's previous routing entry stays in place and keeps delivering. So an
+  I/O APIC input routed in compatibility format before `IRE` is still
+  delivered after it, by KVM, with no fault, until it is rewritten into a
+  route that succeeds. The console conversion's order in "Bring-up
+  order" (mask; IRTE; IEC and wait; remappable RTE; unmask) is therefore
+  required, not an optimisation: QEMU skips masked inputs when it
+  recomputes, and a masked input is not delivered. An unmasked
+  compatibility entry left across `IRE` is a leak on KVM that TCG does not
+  show. R1 and R2 are unaffected: edu's MSI goes through `msi_notify` and
+  `vtd_mem_ir_write`, which fault 0x25 and drop on KVM and TCG alike.
 * **The build** is a new `tools/common/fetch/fetch-qemu-linux.sh`, shaped
   like the Windows script:
   * it fetches the v10.2.1 release tarball by its pinned sha256, and
@@ -2600,21 +2642,26 @@ no unit, can send a compatibility message that no unit blocks. So:
   * it configures `--target-list=x86_64-softmmu
     --with-pkgversion=ferrix-cfi`, with the display features the gates use
     from Ubuntu's build: GTK, OpenGL, virglrenderer, VNC, and spice
-    protocol for `qemu-vdagent`;
-  * it installs into `~/.local/share/ferrix/qemu`.
-* **How xtask selects it.** `paths.rs`: `own_qemu` already looks in
-  `~/.local/share/ferrix/qemu` before `PATH`, on any host. With only
+    protocol for `qemu-vdagent`, plus slirp, PulseAudio, PipeWire, ALSA
+    and the TCG plugins;
+  * it runs the qtest, then installs into `~/.local/share/ferrix/qemu`
+    (`bin/`, `share/`; QEMU finds its firmware relative to the binary).
+* **How xtask selects it.** `paths.rs`: `own_qemu` looks in
+  `~/.local/share/ferrix/qemu/bin`, or the directory itself for the
+  Windows build's layout, before `PATH`, on any host. With only
   `qemu-system-x86_64` built there, x86-64 boots take it, and AArch64 and
-  ARMv7-A keep the QEMU on `PATH`. Nothing else needs choosing.
-  `FERRIX_QEMU` still overrides, as today.
+  ARMv7-A keep the QEMU on `PATH`. `FERRIX_QEMU` still overrides, as
+  today.
 * **How xtask refuses an unpatched QEMU.** Before an x86-64 boot,
   `qemu.rs` reads the chosen binary's `--version`. If it lacks
   `(ferrix-cfi`, the boot is refused with
   `x86-64 boots need a QEMU that blocks compatibility-format interrupts (F-57); run tools/common/fetch/fetch-qemu-linux.sh`.
-  The kernel's check R1 decides independently: on an unpatched QEMU the
+  On Linux hosts only for now: the Windows build (11.1.0) does not carry
+  the patch yet, which is a BACKLOG row. The kernel's check R1 decides independently: on an unpatched QEMU the
   forged message arrives, and R1 fails by name.
-* **CI** runs the same script. Its build is cached by the hash of the
-  script and the patch series.
+* **CI** runs the same script in the two jobs that boot x86-64 (`boot`'s
+  x86_64 entry and `rustc`). Its build is cached by the hash of the
+  script and of `tools/common/data/qemu/`.
 * **The `ferrix-3060` domain's `<emulator>`.** libvirt's `qemu:///system`
   runs QEMU as its own user under its AppArmor profile, which does not
   let it run a binary from a home directory. So:

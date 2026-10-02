@@ -252,6 +252,17 @@ WSL's default distribution, where `xtask` looks, or point `FERRIX_UBOOT` at a
 so there is no `mtools` or `dosfstools` to install and the image is
 byte-for-byte reproducible.
 
+x86-64 boots on a Linux host need one QEMU more: a build whose VT-d model
+blocks compatibility-format interrupts, which no released QEMU does
+(`docs/NVIDIA.md` §12.3). `tools/common/fetch/fetch-qemu-linux.sh` builds
+QEMU 10.2.1 with that patch, x86-64 only, into
+`~/.local/share/ferrix/qemu`, where `xtask` looks before `PATH`; it takes
+a few minutes and needs the build packages its header lists. Without it
+an x86-64 boot stops with `x86-64 boots need a QEMU that blocks
+compatibility-format interrupts (F-57); run
+tools/common/fetch/fetch-qemu-linux.sh`. AArch64 and ARMv7-A keep the
+distribution's QEMU. `FERRIX_QEMU_JOBS` limits the build's parallelism.
+
 `cargo xtask check --ferrousli` gates the C library too, whose tests build and
 run Linux programs. On Windows those steps run in WSL's default distribution,
 which needs rustup and `build-essential` installed inside it; the first step
