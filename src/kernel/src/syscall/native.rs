@@ -924,7 +924,6 @@ const fn read_refusal(refused: ReadError) -> Errno {
         ReadError::Empty => status::SHOULD_WAIT,
         ReadError::PeerClosed => status::PEER_CLOSED,
         ReadError::TooSmall { .. } | ReadError::NeedsTopology => status::BUFFER_TOO_SMALL,
-        ReadError::NoMemory => status::NO_MEMORY,
     }
 }
 

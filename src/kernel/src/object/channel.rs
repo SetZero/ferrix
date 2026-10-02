@@ -124,21 +124,26 @@ impl Small {
 /// it. Nothing goes in the slot while the queue holds anything, so the slot
 /// is always the oldest message: the order a reader sees is the order the
 /// writers wrote.
+///
+/// # A buffer kept for it
+///
+/// A reader that takes the slot's message as a queued one -- `channel_read`,
+/// or a kernel ring's control loop -- needs it in a buffer of its own. That
+/// buffer is the inbox's `spare`, made when the slot is first filled and
+/// kept: while the slot is full the spare holds room for [`SMALL_BYTES`], so
+/// taking the message, or putting it behind one given back, never allocates
+/// and never fails for memory. A write that finds no spare and cannot make
+/// one queues the message instead, as `channel_write` would, and only the
+/// writer hears of the memory. `channel_write_read`'s own read copies out of
+/// the slot and leaves the spare where it is.
 #[derive(Debug)]
 struct Inbox {
     /// The slot, the head when it is full.
     small: Option<Small>,
+    /// Room for the slot's message, whenever the slot is full.
+    spare: Vec<u8>,
     /// Everything after it.
     queue: MessageQueue<Transfer>,
-}
-
-/// Why [`Inbox::pop_fitting`] gave nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PopError {
-    /// What the queue says.
-    Queue(ReceiveError),
-    /// The slot's message could not be given a buffer of its own; it stays.
-    NoMemory,
 }
 
 impl Inbox {
@@ -146,6 +151,7 @@ impl Inbox {
     fn new() -> Inbox {
         Inbox {
             small: None,
+            spare: Vec::new(),
             queue: MessageQueue::new(LIMITS),
         }
     }
@@ -166,13 +172,34 @@ impl Inbox {
         self.queue.accepts(bytes, handles)
     }
 
-    /// Hold `bytes` in the slot, if they fit and nothing is waiting.
+    /// Hold `bytes` in the slot, if they fit, nothing is waiting, and the
+    /// spare has room for them or can be made to.
     fn put_small(&mut self, bytes: &[u8]) -> bool {
         if !self.is_empty() {
             return false;
         }
-        self.small = Small::of(bytes);
-        self.small.is_some()
+        let Some(small) = Small::of(bytes) else {
+            return false;
+        };
+        if self.spare.capacity() < SMALL_BYTES {
+            let Ok(spare) = fallible::try_with_capacity(SMALL_BYTES) else {
+                return false;
+            };
+            self.spare = spare;
+        }
+        self.small = Some(small);
+        true
+    }
+
+    /// The slot's message `small` in the spare, now a buffer of its own; the
+    /// spare is made again by the next write the slot takes.
+    fn take_spare(&mut self, small: &Small) -> Vec<u8> {
+        let mut bytes = core::mem::take(&mut self.spare);
+        bytes.clear();
+        // NOALLOC: the spare holds room for `SMALL_BYTES` whenever the slot
+        // is full (`put_small`), and a slot message is at most that.
+        bytes.extend_from_slice(small.as_bytes());
+        bytes
     }
 
     /// The waiting messages' handles' carriers, oldest first: the queue's,
@@ -197,26 +224,22 @@ impl Inbox {
         &mut self,
         byte_capacity: usize,
         handle_capacity: usize,
-    ) -> Result<ChannelMessage, PopError> {
+    ) -> Result<ChannelMessage, ReceiveError> {
         if let Some(small) = self.small {
             if small.len > byte_capacity {
-                return Err(PopError::Queue(ReceiveError::TooSmall {
+                return Err(ReceiveError::TooSmall {
                     bytes: small.len,
                     handles: 0,
-                }));
+                });
             }
-            let mut bytes =
-                fallible::try_filled(0_u8, small.len).map_err(|_| PopError::NoMemory)?;
-            bytes.copy_from_slice(small.as_bytes());
+            let bytes = self.take_spare(&small);
             self.small = None;
             return Ok(Message {
                 bytes,
                 handles: Vec::new(),
             });
         }
-        self.queue
-            .pop_fitting(byte_capacity, handle_capacity)
-            .map_err(PopError::Queue)
+        self.queue.pop_fitting(byte_capacity, handle_capacity)
     }
 
     /// The oldest message, if it is small and carries no handles, held in
@@ -254,15 +277,13 @@ impl Inbox {
     /// queue behind the one coming back.
     fn unpop(&mut self, message: ChannelMessage) -> Result<(), ChannelMessage> {
         if let Some(small) = self.small {
-            let Ok(mut bytes) = fallible::try_filled(0_u8, small.len) else {
-                return Err(message);
-            };
-            bytes.copy_from_slice(small.as_bytes());
             let younger = Message {
-                bytes,
+                bytes: self.take_spare(&small),
                 handles: Vec::new(),
             };
-            if self.queue.unpop(younger).is_err() {
+            if let Err(younger) = self.queue.unpop(younger) {
+                // Still the slot's, with its room back.
+                self.spare = younger.bytes;
                 return Err(message);
             }
             self.small = None;
@@ -271,9 +292,10 @@ impl Inbox {
     }
 
     /// Take everything, as a side closes. The slot's message holds nothing
-    /// to free.
+    /// to free, and its spare goes now.
     fn drain(&mut self) -> VecDeque<ChannelMessage> {
         self.small = None;
+        self.spare = Vec::new();
         self.queue.drain()
     }
 }
@@ -322,9 +344,6 @@ pub(crate) enum ReadError {
         /// How many handles it carries.
         handles: usize,
     },
-    /// The next message is held in place and there was no memory to give it
-    /// a buffer of its own. Still queued.
-    NoMemory,
 }
 
 /// Which of a channel's two sides an [`Endpoint`] is.
@@ -582,12 +601,11 @@ impl Endpoint {
         }
         match taken {
             Ok(message) => Ok(message),
-            Err(PopError::Queue(ReceiveError::TooSmall { bytes, handles })) => {
+            Err(ReceiveError::TooSmall { bytes, handles }) => {
                 Err(ReadError::TooSmall { bytes, handles })
             }
-            Err(PopError::Queue(ReceiveError::Empty)) if peer_closed => Err(ReadError::PeerClosed),
-            Err(PopError::Queue(ReceiveError::Empty)) => Err(ReadError::Empty),
-            Err(PopError::NoMemory) => Err(ReadError::NoMemory),
+            Err(ReceiveError::Empty) if peer_closed => Err(ReadError::PeerClosed),
+            Err(ReceiveError::Empty) => Err(ReadError::Empty),
         }
     }
 
