@@ -244,13 +244,18 @@ complexity floors (18 and 22), none recursive, 43 since the conversion
 re-recorded them. Neither crate has an `unsafe` site or a panic
 exemption.
 
-The DMA and interrupt decisions the item makes about PCI rest on two more
-crates the manifest does not classify, `ferrix-pci` and `ferrix-acpi`: the
-DMAR's scopes are parsed by `ferrix_acpi::dmar`, and since 2026-10-02 whether
-a function is its own requester -- the rule that decides whether it gets an
-IOMMU domain (`L.iommu.45`) -- and which of an MSI capability's registers mask
-it (`L.device.23`) are `ferrix_pci::topology` and `ferrix_pci::msi`. Their
-host tests trace to those requirements, but the item-scoped gates do not read
+The DMA and interrupt decisions the item makes about PCI rest on three more
+crates the manifest does not classify, `ferrix-pci`, `ferrix-acpi` and
+`ferrix-paging`: the DMAR's scopes are parsed by `ferrix_acpi::dmar`, and
+since 2026-10-02 whether a function is its own requester -- the rule that
+decides whether it gets an IOMMU domain (`L.iommu.45`) -- and which of an MSI
+capability's registers mask it (`L.device.23`) are `ferrix_pci::topology` and
+`ferrix_pci::msi`. Also since 2026-10-02 (F-58), which VT-d table writes are
+cleaned to memory before a unit that does not snoop is told of them is
+`ferrix_paging::coherence`: `Unpublished`, the record of writes not yet
+cleaned, and `Walked`, the `unsafe impl PhysMem` that puts the mapper's own
+writes and fresh tables through it (`L.iommu.56`, `L.iommu.57`). Their host
+tests trace to those requirements, but the item-scoped gates do not read
 them; `docs/BACKLOG.md` has the row that classifies them.
 
 Two open points are for the assessor rather than settled here. The two

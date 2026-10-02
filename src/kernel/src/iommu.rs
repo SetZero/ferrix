@@ -875,7 +875,10 @@ fn map_all(
             continue;
         };
         let mut tables = mm::UnlinkedTables::of(mm::TableOwner::Device);
-        for &mapped in addresses.iter().take(done) {
+        // A map refused for a write not cleaned (finding F-58) has written
+        // its page into the tables, so the unwind takes that page out too.
+        let written = done + usize::from(error == MapError::NotCleaned);
+        for &mapped in addresses.iter().take(written) {
             let _ = translation.unmap(mapped, &mut tables);
         }
         if translation.flush(false).is_ok() {

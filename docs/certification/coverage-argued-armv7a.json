@@ -43,21 +43,21 @@
     },
     {
       "file": "arch/armv7a/mod.rs",
-      "lines": "157",
+      "lines": "160",
       "category": "defensive",
       "match": "Err(_) => cpu::flush_tlb(),",
       "why": "A page address past 4 GiB asked to be invalidated, which on this architecture cannot be a translation; everything is flushed rather than a truncated page. Every caller passes a virtual address, all of which are below 4 GiB here."
     },
     {
       "file": "arch/armv7a/mod.rs",
-      "lines": "1308",
+      "lines": "1311",
       "category": "defensive",
       "match": "shutdown()",
       "why": "Firmware whose PSCI `SYSTEM_RESET` returned instead of resetting: the machine is powered off rather than carrying on as though it had reset. The suite's `boot-reset` gate takes the reset, and QEMU and the DK1 both reset."
     },
     {
       "file": "arch/armv7a/mod.rs",
-      "lines": "1338",
+      "lines": "1341",
       "category": "defensive",
       "match": "return Err(\"this GIC is not a GICv2, and GICv3 support is not written yet\");",
       "why": "A device tree describing a GICv3 on ARMv7-A, which this kernel has no driver for here: interrupt bring-up is refused by name and the kernel stops (FX-0303). The machines it runs on -- QEMU's `virt` as the suite boots it, the STM32MP157 -- have a GICv2; a `virt` given a GICv3 would be a boot that stops, which is not coverage evidence."
@@ -925,7 +925,7 @@
     },
     {
       "file": "iommu.rs",
-      "lines": "848, 857, 881-882",
+      "lines": "848, 857, 884-885",
       "category": "absent-hardware",
       "match": ".any(|&iova| self.translation.unmap(iova, &mut tables).is_er",
       "why": "The translated branches of an unpin and of a pin's undo, taken only for a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
@@ -960,252 +960,245 @@
     },
     {
       "file": "iommu.rs",
-      "lines": "878",
-      "category": "absent-hardware",
-      "match": "for &mapped in addresses.iter().take(done) {",
-      "why": "Maps pages into the tables of a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
-    },
-    {
-      "file": "iommu.rs",
-      "lines": "998",
+      "lines": "1001",
       "category": "other-architecture",
       "match": "if let Ok(table) = tables.dmar() {",
       "why": "The branch for the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1001",
+      "lines": "1004",
       "category": "other-architecture",
       "match": "if let Ok(table) = tables.iort() {",
       "why": "The branch for ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1012-1013",
+      "lines": "1015-1016",
       "category": "other-architecture",
       "match": "for structure in table.structures() {",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1017-1018",
+      "lines": "1020-1021",
       "category": "other-architecture",
       "match": "vtd::Unit::open(unit.register_base).and_then(|opened| opened",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1020",
+      "lines": "1023",
       "category": "other-architecture",
       "match": "let index = programmed.vtd.len();",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1024",
+      "lines": "1027",
       "category": "other-architecture",
       "match": ".extend(endpoints(&unit).map(|address| (address, index)));",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1046",
+      "lines": "1049",
       "category": "other-architecture",
       "match": "report.vtd += 1;",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1049",
+      "lines": "1052",
       "category": "other-architecture",
       "match": "report.refused += 1;",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1066-1067",
+      "lines": "1069-1070",
       "category": "other-architecture",
       "match": "for node in table.nodes() {",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1070-1072",
+      "lines": "1073-1075",
       "category": "other-architecture",
       "match": "let opened = smmuv3::Unit::open(smmu.base_address, doorbell)",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1075",
+      "lines": "1078",
       "category": "other-architecture",
       "match": "offsets.push((node.offset, programmed.smmu.len()));",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1078",
+      "lines": "1081",
       "category": "other-architecture",
       "match": "report.smmu_v3 += 1;",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1081",
+      "lines": "1084",
       "category": "other-architecture",
       "match": "report.refused += 1;",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1086-1087",
+      "lines": "1089-1090",
       "category": "other-architecture",
       "match": "for node in table.nodes() {",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1090",
+      "lines": "1093",
       "category": "other-architecture",
       "match": "let Ok(segment) = u16::try_from(complex.segment) else {",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1095-1096",
+      "lines": "1098-1099",
       "category": "other-architecture",
       "match": "node.id_mappings()",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1098",
+      "lines": "1101",
       "category": "other-architecture",
       "match": "let &(_, unit) = offsets",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1100",
+      "lines": "1103",
       "category": "other-architecture",
       "match": ".find(|(offset, _)| *offset == mapping.output_reference)?;",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1102",
+      "lines": "1105",
       "category": "other-architecture",
       "match": "segment,",
       "why": "Programs the SMMUv3s the IORT describes, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1115-1116",
+      "lines": "1118-1119",
       "category": "other-architecture",
       "match": "let segment = unit.segment;",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1118-1119",
+      "lines": "1121-1122",
       "category": "other-architecture",
       "match": ".filter_map(|scope| scope.endpoint())",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1130",
+      "lines": "1133",
       "category": "other-architecture",
       "match": "unit.attach(function).map(|attached| Translation::VtD {",
       "why": "The VT-d branch, for the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1136",
+      "lines": "1139",
       "category": "absent-hardware",
       "match": "unit.attach(stream).map(|attached| Translation::SmmuV3 {",
       "why": "Attaching a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
     },
     {
       "file": "iommu.rs",
-      "lines": "1144-1146",
+      "lines": "1147-1149",
       "category": "absent-hardware",
       "match": "match translation {",
       "why": "Attaching a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
     },
     {
       "file": "iommu.rs",
-      "lines": "1186-1188",
+      "lines": "1189-1191",
       "category": "other-architecture",
       "match": "programmed.streams.iter().find_map(|map| {",
       "why": "Streams recorded from the IORT, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1192-1193",
+      "lines": "1195-1196",
       "category": "other-architecture",
       "match": "programmed.smmu.get(map.unit)?,",
       "why": "Streams recorded from the IORT, one of ACPI's tables: ARMv7-A boots through U-Boot with a device tree, and this kernel reads no ACPI there."
     },
     {
       "file": "iommu.rs",
-      "lines": "1251",
+      "lines": "1254",
       "category": "absent-hardware",
       "match": "matches!(fault.cause, Cause::Access | Cause::Overflow)",
       "why": "Asked only of a fault a unit recorded, for a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
     },
     {
       "file": "iommu.rs",
-      "lines": "1255",
+      "lines": "1258",
       "category": "absent-hardware",
       "match": ".any(|&(stream, page)| fault.stream == stream && fault.page ",
       "why": "Asked only of a fault a unit recorded, for a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
     },
     {
       "file": "iommu.rs",
-      "lines": "1262",
+      "lines": "1265",
       "category": "absent-hardware",
       "match": "if stray {",
       "why": "Counts a fault a unit recorded, only for a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
     },
     {
       "file": "iommu.rs",
-      "lines": "1264",
+      "lines": "1267",
       "category": "defensive",
       "match": "if fault.cause != Cause::Access {",
       "why": "A stray fault that is not a refused access: an SMMUv3 event of another kind. The audit requires none; a device whose DMA stops for another reason, or tables the unit refused, would be one."
     },
     {
       "file": "iommu.rs",
-      "lines": "1341-1342",
+      "lines": "1344-1345",
       "category": "absent-hardware",
       "match": "fn drain(mut take: impl FnMut() -> Option<Fault>, audit: &mu",
       "why": "Reads a unit's faults, only for a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
     },
     {
       "file": "iommu.rs",
-      "lines": "1344",
+      "lines": "1347",
       "category": "absent-hardware",
       "match": "let Some(fault) = take() else {",
       "why": "Reads a unit's faults, only for a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
     },
     {
       "file": "iommu.rs",
-      "lines": "1348",
+      "lines": "1351",
       "category": "defensive",
       "match": "audit.first = audit.first.or(Some(fault));",
       "why": "The first stray fault the audit read: a DMA fault no check provoked, which the boot then fails on (STAGE10_DMA_FAULT)."
     },
     {
       "file": "iommu.rs",
-      "lines": "1350",
+      "lines": "1353",
       "category": "absent-hardware",
       "match": "audit.provoked += 1;",
       "why": "The out-of-domain probe's own fault, still recorded when the audit reads the unit: a unit that records it after the probe stopped looking. QEMU's VT-d and SMMUv3 record every fault of the probe's before its completion is seen, and the probe drains them then; every suite boot reports 0 late faults."
     },
     {
       "file": "iommu.rs",
-      "lines": "1353",
+      "lines": "1356",
       "category": "absent-hardware",
       "match": "}",
       "why": "Reads a unit's faults, only for a translated domain, which needs an IOMMU unit the kernel programs: on ARMv7-A it programs none -- bring_up_smmu reads only the IORT, and the SMMUv3 virt's device tree describes is left alone by design, since U-Boot keeps its virtio devices from offering the platform's translation and they would bypass it anyway."
@@ -1394,91 +1387,84 @@
     },
     {
       "file": "mm.rs",
-      "lines": "329",
+      "lines": "330",
       "category": "defensive",
       "match": "frames.insert_free(start / PAGE_SIZE, (hole - start) / PAGE_SIZE);",
       "why": "The head of the host region in front of the per-frame array. `BootView::page_array_host` places the array at the front of the usable region it chooses, so on every machine the region has a tail after the array and no head before it; the branch keeps a later placement policy from silently losing the head. Reaching it would take the array placed other than where `init` puts it."
     },
     {
       "file": "mm.rs",
-      "lines": "478, 480, 482, 488, 491",
+      "lines": "479, 481, 483, 489, 492",
       "category": "other-architecture",
       "match": "pub(crate) fn disown_frame(frame: Frame) {",
       "why": "`disown_frame`'s only caller is `object::pin`'s quarantine. ARMv7-A's kernel programs no IOMMU unit, by design: `bring_up_smmu` reads only the IORT, which ARMv7-A's firmware does not provide, and the SMMUv3 its `virt` describes is left alone, since U-Boot keeps its virtio devices from offering the platform's translation. Every device domain there is untranslated, and a pin's quarantine exists only for a translated domain (`Pin::with_cap`, `Pin::drop`): the quarantine, its release, its cap and its boot check are x86-64's and AArch64's code, compiled into ARMv7-A's kernel and never asked there. `check_quarantine` returns at its first line on ARMv7-A, as it says it does with no translated domain."
     },
     {
       "file": "mm.rs",
-      "lines": "511",
+      "lines": "512",
       "category": "failure-path",
       "match": "pub(crate) fn print_frame_delta(check: &str, leaked: i64) {",
       "why": "Prints which way a frame window moved, and is called only by a self-check that has just found its count wrong and is about to return the error that stops the boot (`fatal!` in `main.rs`). A passing run never calls it; a run that did would be a failing boot."
     },
     {
       "file": "mm.rs",
-      "lines": "517",
+      "lines": "518",
       "category": "failure-path",
       "match": "leaked.unsigned_abs()",
       "why": "Prints which way a frame window moved, and is called only by a self-check that has just found its count wrong and is about to return the error that stops the boot (`fatal!` in `main.rs`). A passing run never calls it; a run that did would be a failing boot."
     },
     {
       "file": "mm.rs",
-      "lines": "520",
+      "lines": "521",
       "category": "failure-path",
       "match": "}",
       "why": "Prints which way a frame window moved, and is called only by a self-check that has just found its count wrong and is about to return the error that stops the boot (`fatal!` in `main.rs`). A passing run never calls it; a run that did would be a failing boot."
     },
     {
       "file": "mm.rs",
-      "lines": "1057",
+      "lines": "1064",
       "category": "absent-hardware",
       "match": "mapper.map_range(",
       "why": "The IOMMU page tables: only a translating unit's domain maps, unmaps and translates through them. ARMv7-A's `virt` is given no SMMU (COVERAGE-RESIDUAL.md files `iommu/smmuv3.rs` under hardware absent for the same reason), so every device domain here is untranslated and these are never asked; AArch64's GICv3 boot has the SMMU and reaches them."
     },
     {
       "file": "mm.rs",
-      "lines": "1080",
-      "category": "absent-hardware",
-      "match": "let _ = mapper.unmap_range(&mut KernelPhysMem, VirtAddr(iova), PAGE_SI",
-      "why": "The IOMMU page tables: only a translating unit's domain maps, unmaps and translates through them. ARMv7-A's `virt` is given no SMMU (COVERAGE-RESIDUAL.md files `iommu/smmuv3.rs` under hardware absent for the same reason), so every device domain here is untranslated and these are never asked; AArch64's GICv3 boot has the SMMU and reaches them."
-    },
-    {
-      "file": "mm.rs",
-      "lines": "1094",
+      "lines": "1117",
       "category": "absent-hardware",
       "match": ".translate(&KernelPhysMem, VirtAddr(iova))",
       "why": "The IOMMU page tables: only a translating unit's domain maps, unmaps and translates through them. ARMv7-A's `virt` is given no SMMU (COVERAGE-RESIDUAL.md files `iommu/smmuv3.rs` under hardware absent for the same reason), so every device domain here is untranslated and these are never asked; AArch64's GICv3 boot has the SMMU and reaches them."
     },
     {
       "file": "mm.rs",
-      "lines": "1162",
+      "lines": "1185",
       "category": "credited-elsewhere",
       "match": "if !pages.make_room(page_bound) || !tables.make_room(table_bound) {",
       "why": "The statement runs in every kernel unmap, and its refusal runs too: the allocation sweep's `stacks` scenario (`user/alloc_check.rs`) frees two stacks under one shootdown, whose table reservation spills past the eight inline slots, and on the run that fails that reservation the unmap goes on in pieces (seen with a print on the branch, `8 12`, and in `unmap_kernel_in_pieces`'s rows, which are reached). The line's only statement rows are on the other way the reservation fails -- the heap refusing after the injection let it through, which needs the size class out of slab pages at that moment -- inside the inlined `try_reserve`."
     },
     {
       "file": "mm.rs",
-      "lines": "1255",
+      "lines": "1278",
       "category": "defensive",
       "match": "}",
       "why": "The return of a piece the kernel's tables refused to unmap. `unmap_range` refuses only a range that is not page aligned or that would cut a block mapping in half, and the arena maps every stack and buffer page by page at page-aligned addresses, so no piece is refused; the row on this build is that error's way out of the function."
     },
     {
       "file": "mm.rs",
-      "lines": "1712-1714",
+      "lines": "1735-1737",
       "category": "failure-path",
       "match": "pub(crate) fn report(&self, check: &str) {",
       "why": "`FrameWindow::report`, called only by a self-check whose frame count came out wrong, just before it returns the error that stops the boot. A passing run never calls it."
     },
     {
       "file": "mm.rs",
-      "lines": "1730-1733",
+      "lines": "1753-1756",
       "category": "failure-path",
       "match": "let bytes = i64::try_from(now.heap_bytes).unwrap_or(i64::MAX)",
       "why": "The body of `FrameWindow::report_at`, which only `report` calls, only from a self-check about to fail the boot on its frame count."
     },
     {
       "file": "mm.rs",
-      "lines": "1743-1749",
+      "lines": "1766-1772",
       "category": "failure-path",
       "match": "routes(Route::Allocated),",
       "why": "The body of `FrameWindow::report_at`, which only `report` calls, only from a self-check about to fail the boot on its frame count."

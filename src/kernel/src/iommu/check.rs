@@ -81,10 +81,18 @@ pub(crate) fn check_iommu() {
     }
     let domains = match check_domains(device::devices()) {
         Ok(report) => report,
-        Err(problem) => fatal!(
-            catalog::STAGE10_IOMMU,
-            "stage 10 self-check failed: {problem}"
-        ),
+        // A change refused for a write not cleaned fails the domains'
+        // check too; the cause is named first.
+        Err(problem) => match check_cleaning(super::vtd::cleaning()) {
+            Err(cause) => fatal!(
+                catalog::STAGE10_IOMMU,
+                "stage 10 self-check failed: {cause} ({problem})"
+            ),
+            Ok(_) => fatal!(
+                catalog::STAGE10_IOMMU,
+                "stage 10 self-check failed: {problem}"
+            ),
+        },
     };
     println!(
         "  iommu    {} pages pinned and unpinned through a device's {} domain, {} refusals \
@@ -98,6 +106,14 @@ pub(crate) fn check_iommu() {
         domains.refusals,
         domains.waits,
     );
+    match check_cleaning(super::vtd::cleaning()) {
+        Ok(Some(line)) => println!("  iommu    {line}"),
+        Ok(None) => {}
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    }
     match object::pin::check::check_quarantine(device::devices()) {
         Ok(true) => println!(
             "  iommu    a dead driver's pin was quarantined, a pin past the quarantine's cap \
@@ -109,6 +125,54 @@ pub(crate) fn check_iommu() {
             "stage 10 self-check failed: {problem}"
         ),
     }
+}
+
+/// Every VT-d change on a unit whose walk does not snoop found its table
+/// writes cleaned to memory before its own publish point (finding F-58): no
+/// attach, detach, map or unmap was refused for a write noted and not
+/// cleaned, and the boot's domains made some to clean. QEMU's unit reports
+/// `ECAP.C` clear, so this runs on every x86-64 boot test. That every write
+/// is noted rests on construction (`vtd.rs`'s module documentation), not on
+/// this check.
+///
+/// `None` on a machine with no such unit.
+///
+/// # Errors
+///
+/// A change refused for a write not cleaned, or a unit that cleaned nothing
+/// over a boot that attached and pinned through it.
+///
+/// Verifies: L.iommu.56
+/// Verifies: L.iommu.57
+fn check_cleaning(
+    cleaning: super::vtd::Cleaning,
+) -> Result<Option<alloc::string::String>, alloc::string::String> {
+    if cleaning.uncleaned != 0 {
+        return Err(alloc::format!(
+            "{} of {} VT-d changes were refused for a table write not cleaned to memory",
+            cleaning.uncleaned,
+            cleaning.checked
+        ));
+    }
+    if cleaning.units == 0 {
+        return Ok(None);
+    }
+    if cleaning.entries == 0 || cleaning.tables == 0 || cleaning.checked == 0 {
+        return Err(alloc::format!(
+            "a VT-d unit that does not snoop cleaned {} entries and {} tables over {} changes",
+            cleaning.entries,
+            cleaning.tables,
+            cleaning.checked
+        ));
+    }
+    Ok(Some(alloc::format!(
+        "{} entry writes and {} fresh tables noted and cleaned to memory on {} VT-d units that \
+         do not snoop; {} changes each found them cleaned before its own publish point",
+        cleaning.entries,
+        cleaning.tables,
+        cleaning.units,
+        cleaning.checked
+    )))
 }
 
 /// What the domain check found.

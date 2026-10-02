@@ -1033,3 +1033,50 @@ pub(crate) fn hardware_random() -> Option<u64> {
 pub(crate) fn dma_barrier() {
     core::sync::atomic::compiler_fence(Ordering::SeqCst);
 }
+
+/// Write the cache lines covering `start..start + len` back to memory, and
+/// wait until they are there.
+///
+/// For an IOMMU whose table walk does not snoop the caches -- VT-d's
+/// `ECAP.C` clear -- which reads its root, context and second-level entries
+/// from memory, past every processor's cache (finding F-58). `CLFLUSH` writes
+/// one line back and drops it, by virtual address, and is ordered with every
+/// earlier store to that line. `MFENCE` then waits for every flush before it,
+/// so the register write that publishes the entries to the unit comes after
+/// they are in memory, as the SDM's description of `CLFLUSH` and Linux's
+/// `clflush_cache_range` both have it.
+///
+/// The line size is `CPUID` leaf 1's `CLFLUSH` size, in eight-byte units,
+/// and 64 bytes if it reports none, read once ([`clflush_line`]): `CPUID` is
+/// a VM exit under KVM, and this runs on every map and unmap a unit that
+/// does not snoop makes.
+pub(crate) fn clean_for_walker(start: u64, len: u64) {
+    let line = clflush_line();
+    let mut at = start - start % line;
+    let end = start.saturating_add(len);
+    while at < end {
+        // SAFETY: (SYSREG) `clflush` writes one line back to memory and drops it
+        // from the caches; it changes no data, and the caller's range is mapped.
+        unsafe { asm!("clflush [{}]", in(reg) at, options(nostack, preserves_flags)) };
+        at += line;
+    }
+    // SAFETY: (SYSREG) a barrier, completing every flush above before any later
+    // store -- in particular the register write that publishes the entries.
+    unsafe { asm!("mfence", options(nostack, preserves_flags)) };
+}
+
+/// The `CLFLUSH` line size, once `CPUID` has been asked; zero until then.
+static CLFLUSH_LINE: AtomicU64 = AtomicU64::new(0);
+
+/// The bytes one `CLFLUSH` covers, asked of `CPUID` the first time only. Two
+/// processors asking at once both store the same answer.
+fn clflush_line() -> u64 {
+    let known = CLFLUSH_LINE.load(Ordering::Relaxed);
+    if known != 0 {
+        return known;
+    }
+    let reported = u64::from((core::arch::x86_64::__cpuid(1).ebx >> 8) & 0xFF) * 8;
+    let line = if reported == 0 { 64 } else { reported };
+    CLFLUSH_LINE.store(line, Ordering::Relaxed);
+    line
+}
