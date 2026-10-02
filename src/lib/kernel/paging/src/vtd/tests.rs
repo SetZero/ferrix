@@ -151,3 +151,22 @@ fn a_full_queue_is_never_mistaken_for_an_empty_one() {
         "across the wrap"
     );
 }
+
+/// Verifies: `L.iommu.48`
+#[test]
+fn a_queue_error_is_never_mistaken_for_a_completion() {
+    use super::queue::{FSTS_ICE, FSTS_IQE, FSTS_ITE, FSTS_QUEUE_ERRORS, Outcome};
+    assert_eq!(queue::outcome(0, true), Outcome::Completed);
+    assert_eq!(queue::outcome(0, false), Outcome::TimedOut);
+    assert_eq!(
+        queue::outcome(1 << 0 | 1 << 1, true),
+        Outcome::Completed,
+        "PFO and PPF are DMA's"
+    );
+    assert_eq!(queue::outcome(FSTS_ICE, true), Outcome::CompletionError);
+    assert_eq!(queue::outcome(FSTS_ICE, false), Outcome::CompletionError);
+    for stopped in [FSTS_IQE, FSTS_ITE, FSTS_IQE | FSTS_ICE, FSTS_ITE | FSTS_ICE] {
+        assert_eq!(queue::outcome(stopped, true), Outcome::QueueStopped);
+    }
+    assert_eq!(FSTS_QUEUE_ERRORS, 0b111 << 4, "IQE, ICE and ITE, bits 6:4");
+}

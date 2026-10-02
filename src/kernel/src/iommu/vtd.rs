@@ -74,7 +74,10 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_paging::coherence::Unpublished;
 use ferrix_paging::vtd::VtdSecondLevel;
-use ferrix_paging::vtd::queue::{self, Completion, ContextScope, Descriptor, IotlbScope};
+use ferrix_paging::vtd::queue::{
+    self, Completion, ContextScope, Descriptor, FSTS_ICE, FSTS_IQE, FSTS_QUEUE_ERRORS, IotlbScope,
+    Outcome,
+};
 use ferrix_paging::{MapError, MapFlags, PhysAddr};
 use ferrix_pci::Address;
 use ferrix_sync::IrqSpinLock;
@@ -133,13 +136,6 @@ const STANDING: u32 = TE | QIE | IRE;
 /// goes on: the event's message registers are never programmed, and the only
 /// wait that raises it is check R7's.
 const IECTL_MASKED: u32 = 1 << 31;
-
-/// FSTS: invalidation queue error, the unit stopped at a bad descriptor.
-const FSTS_IQE: u32 = 1 << 4;
-/// FSTS: invalidation completion error.
-const FSTS_ICE: u32 = 1 << 5;
-/// FSTS: invalidation time-out error; the unit stops its queue as for IQE.
-const FSTS_ITE: u32 = 1 << 6;
 
 /// ECAP: page-walk coherency, the unit's walk snoops the processors' caches.
 /// Clear, every table write is cleaned to memory before it is published.
@@ -212,6 +208,8 @@ static QUEUED_IOTLB: AtomicU64 = AtomicU64::new(0);
 static INVALIDATIONS_FAILED: AtomicU64 = AtomicU64::new(0);
 /// Units marked failed after their queue stopped.
 static UNITS_FAILED: AtomicU64 = AtomicU64::new(0);
+/// Invalidation completion errors taken and cleared.
+static COMPLETION_ERRORS: AtomicU64 = AtomicU64::new(0);
 
 /// Why an invalidation on a failed unit is refused at once.
 const FAILED_WHY: &str = "its invalidation queue stopped at a bad descriptor, so it takes no \
@@ -228,6 +226,9 @@ pub(crate) struct Invalidations {
     pub(crate) failed: u64,
     /// Units marked failed.
     pub(crate) units_failed: u64,
+    /// Completion errors (`ICE`) taken and cleared, each a failed
+    /// invalidation.
+    pub(crate) completion_errors: u64,
 }
 
 /// What every unit's invalidation queue has done since boot.
@@ -237,6 +238,7 @@ pub(crate) fn invalidations() -> Invalidations {
         iotlb: QUEUED_IOTLB.load(Ordering::Relaxed),
         failed: INVALIDATIONS_FAILED.load(Ordering::Relaxed),
         units_failed: UNITS_FAILED.load(Ordering::Relaxed),
+        completion_errors: COMPLETION_ERRORS.load(Ordering::Relaxed),
     }
 }
 
@@ -292,6 +294,11 @@ pub(crate) struct Unit {
     failed: AtomicBool,
     /// Whether the end-of-boot audit has been told of the failure.
     failure_reported: AtomicBool,
+    /// Queue errors a boot check planted, read as if `FSTS` held them and
+    /// cleared as `FSTS`'s are: only `check_planted_completion_error` sets
+    /// any. QEMU's unit never raises `ICE` and ignores a write to it, so
+    /// the clearing path would otherwise never run.
+    planted: AtomicU32,
     /// Offset of the first fault recording register.
     faults: u64,
     /// Offset of the IOTLB invalidation register.
@@ -408,6 +415,7 @@ impl Unit {
             sequence: AtomicU32::new(0),
             failed: AtomicBool::new(false),
             failure_reported: AtomicBool::new(false),
+            planted: AtomicU32::new(0),
             faults: ((cap >> 24) & 0x3FF) * 16,
             iotlb: ((ecap >> 8) & 0x3FF) * 16 + 8,
             caching: cap & CAP_CM != 0,
@@ -888,29 +896,44 @@ impl Unit {
     /// A queue error -- which for `IQE` or `ITE` also marks the unit failed --
     /// or a status not written in time.
     fn await_completion(&self, sequence: u32, wait: Wait) -> Result<(), &'static str> {
-        let errors = FSTS_IQE | FSTS_ICE | FSTS_ITE;
         let patience = match wait {
             Wait::Status => PATIENCE_NANOS,
             Wait::Unwritten => UNWRITTEN_PATIENCE_NANOS,
         };
         let deadline = timer::now_nanos().saturating_add(patience);
-        let done = gate::poll(
-            || self.status_word() == sequence || self.registers.read32(FSTS) & errors != 0,
+        let _ = gate::poll(
+            || self.status_word() == sequence || self.fault_status() & FSTS_QUEUE_ERRORS != 0,
             deadline,
         );
-        let status = self.registers.read32(FSTS);
-        if status & (FSTS_IQE | FSTS_ITE) != 0 {
-            self.fail(status);
-            return Err(FAILED_WHY);
+        let status = self.fault_status();
+        match queue::outcome(status, self.status_word() == sequence) {
+            Outcome::Completed => Ok(()),
+            Outcome::TimedOut => Err("it never finished an invalidation"),
+            Outcome::QueueStopped => {
+                self.fail(status);
+                Err(FAILED_WHY)
+            }
+            // Cleared at once, write-one-to-clear: left set, it would fail
+            // every later wait on a unit never marked failed.
+            Outcome::CompletionError => {
+                self.clear_errors(FSTS_ICE);
+                let _ = COMPLETION_ERRORS.fetch_add(1, Ordering::Relaxed);
+                Err("it reported an invalidation completion error")
+            }
         }
-        if status & FSTS_ICE != 0 {
-            return Err("it reported an invalidation completion error");
-        }
-        if done && self.status_word() == sequence {
-            Ok(())
-        } else {
-            Err("it never finished an invalidation")
-        }
+    }
+
+    /// The fault status register, with any queue error a boot check
+    /// planted.
+    fn fault_status(&self) -> u32 {
+        self.registers.read32(FSTS) | self.planted.load(Ordering::Relaxed)
+    }
+
+    /// Clear the write-one-to-clear queue errors in `bits`, in the register
+    /// and among those a check planted.
+    fn clear_errors(&self, bits: u32) {
+        self.registers.write32(FSTS, bits & FSTS_QUEUE_ERRORS);
+        let _ = self.planted.fetch_and(!bits, Ordering::Relaxed);
     }
 
     /// The word the queue's wait descriptors write their status to.
@@ -999,13 +1022,15 @@ pub(super) fn leave_queue_on_and_stop(unit: &Unit) -> Result<(), &'static str> {
 
 /// Turn off what firmware left on that the kernel sets up itself: interrupt
 /// remapping, then the invalidation queue once it is idle. Each must read
-/// back off within [`PATIENCE_NANOS`]. A table pointer firmware left
-/// (`IRTPS`) needs nothing here: the kernel's own replaces it before
+/// back off within [`PATIENCE_NANOS`]. Then any queue error firmware left
+/// in `FSTS` is cleared ([`clear_stale_errors`]). A table pointer firmware
+/// left (`IRTPS`) needs nothing here: the kernel's own replaces it before
 /// anything uses it.
 ///
 /// # Errors
 ///
-/// What firmware left on and would not stop.
+/// What firmware left on and would not stop, or a queue error that would
+/// not clear.
 fn stop_firmware(registers: Mmio) -> Result<(), &'static str> {
     let status = registers.read32(GSTS);
     if status & IRE != 0 {
@@ -1025,6 +1050,60 @@ fn stop_firmware(registers: Mmio) -> Result<(), &'static str> {
             || registers.read32(GSTS) & QIE == 0,
             "firmware left its invalidation queue on and it would not stop",
         )?;
+    }
+    clear_stale_errors(registers)
+}
+
+/// Clear any queue error -- `IQE`, `ICE`, `ITE` -- firmware left in
+/// `FSTS`, each write-one-to-clear, and read the register back clear: a
+/// stale bit would fail the kernel's first invalidation.
+///
+/// # Errors
+///
+/// A queue error that would not clear.
+fn clear_stale_errors(registers: Mmio) -> Result<(), &'static str> {
+    let stale = registers.read32(FSTS) & FSTS_QUEUE_ERRORS;
+    if stale == 0 {
+        return Ok(());
+    }
+    registers.write32(FSTS, stale);
+    if registers.read32(FSTS) & FSTS_QUEUE_ERRORS != 0 {
+        return Err("firmware left an invalidation queue error that would not clear");
+    }
+    Ok(())
+}
+
+/// Plant an invalidation completion error (`ICE`) on `unit`, as if the
+/// unit had raised one, and require an invalidation to fail on it, the
+/// error to be cleared and counted, and the next invalidation to succeed
+/// with the unit not marked failed (the consultant's condition 1 on N0g's
+/// slice 1). For `iommu/check.rs`; QEMU's unit never raises `ICE`.
+///
+/// # Errors
+///
+/// What did not hold.
+pub(super) fn check_planted_completion_error(unit: &Unit) -> Result<(), &'static str> {
+    let cleared = COMPLETION_ERRORS.load(Ordering::Relaxed);
+    let _ = unit.planted.fetch_or(FSTS_ICE, Ordering::Relaxed);
+    if unit
+        .invalidate_iotlb(IotlbScope::Global, None, Wait::Status)
+        .is_ok()
+    {
+        unit.clear_errors(FSTS_ICE);
+        return Err("an invalidation succeeded with a completion error set");
+    }
+    if COMPLETION_ERRORS.load(Ordering::Relaxed) != cleared + 1 {
+        unit.clear_errors(FSTS_ICE);
+        return Err("a completion error was not counted");
+    }
+    if unit
+        .invalidate_iotlb(IotlbScope::Global, None, Wait::Status)
+        .is_err()
+    {
+        return Err("an invalidation after a cleared completion error failed");
+    }
+    if unit.failed.load(Ordering::Acquire) {
+        return Err("a completion error marked the unit failed");
     }
     Ok(())
 }

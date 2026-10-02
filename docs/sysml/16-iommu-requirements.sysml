@@ -641,21 +641,30 @@ package FerrixIommuRequirements {
                 written within the unit's patience, or during which FSTS reads IQE,
                 ICE or ITE, shall answer an error, and its caller shall release
                 nothing the unit may still reach: an unpin hands the pin back and
-                its frames are kept and counted in kept. After IQE or ITE the unit
-                shall be marked failed: every later invalidation on it answers an
-                error without touching the queue, and the failure is reported once
-                to the end-of-boot fault audit as a stray fault.";
+                its frames are kept and counted in kept. ICE shall be cleared
+                (written one) and counted as soon as it is taken, so that it fails
+                that invalidation only. After IQE or ITE the unit shall be marked
+                failed: every later invalidation on it answers an error without
+                touching the queue, and the failure is reported once to the
+                end-of-boot fault audit as a stray fault.";
             attribute :>> criterion = "On x86-64 under KVM and TCG check R7 unpins a
                 two-page pin whose wait descriptor, through the check-only
                 Wait::Unwritten, writes no status: the invalidation fails, the two
                 pages move from live to kept and the frames stay held, and the iommu
                 line says exactly one invalidation failed, as R7 made it; with
                 Pin::drop taking the error for success the boot panics with 'frames
-                released after a failed invalidation'. Host test: a wait writes its
-                sequence number, or with Unwritten nothing, as a valid descriptor.";
+                released after a failed invalidation'. On every unit an ICE the
+                check plants fails one invalidation, is cleared and counted, and the
+                next invalidation completes with the unit not failed; with the clear
+                dropped the boot panics with 'an invalidation after a cleared
+                completion error failed'. Host tests: a wait writes its sequence
+                number, or with Unwritten nothing, as a valid descriptor; a stopped
+                queue is never taken for a completion, nor a completion error for a
+                timeout.";
             attribute :>> parent = ("H.DMA.8", "H.DMA.3");
             attribute :>> unit = ("iommu::vtd::Unit::submit",
-                "iommu::vtd::Unit::await_completion", "iommu::vtd::Unit::fail",
+                "iommu::vtd::Unit::await_completion", "iommu::vtd::Unit::fault_status",
+                "iommu::vtd::Unit::clear_errors", "iommu::vtd::Unit::fail",
                 "iommu::vtd::Unit::take_fault", "iommu::vtd::Unit::flush",
                 "iommu::Domain::unpin_waiting", "iommu::Translation::flush");
         }
@@ -664,8 +673,10 @@ package FerrixIommuRequirements {
                 interrupts shall have IRE cleared and read back clear, and one whose
                 invalidation queue firmware left on shall have the queue drained,
                 QIE cleared and read back clear, each within the unit's patience,
-                before the kernel's own setup; a unit that does not shall be left
-                alone with the reason printed. GCMD writes shall not repeat CFI.";
+                before the kernel's own setup; then any IQE, ICE or ITE firmware left
+                in FSTS shall be cleared and FSTS read back clear of them. A unit that
+                does not shall be left alone with the reason printed. GCMD writes
+                shall not repeat CFI.";
             attribute :>> criterion = "On x86-64 under KVM and TCG, before each
                 unit's enable, the check turns its queue on as firmware would and
                 ends it with a completed wait, and open's path turns it off and
@@ -674,6 +685,7 @@ package FerrixIommuRequirements {
                 its invalidation queue on and it would not stop'.";
             attribute :>> parent = "H.DMA.2";
             attribute :>> unit = ("iommu::vtd::stop_firmware", "iommu::vtd::wait_for",
+                "iommu::vtd::clear_stale_errors",
                 "iommu::vtd::Unit::command");
         }
         requirement <'L.iommu.56'> aWriteIsInMemoryBeforeItIsPublished : ItemLowLevel {

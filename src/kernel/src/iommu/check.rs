@@ -139,7 +139,14 @@ pub(crate) fn check_iommu() {
             "stage 10 self-check failed: {problem}"
         ),
     };
-    match check_queue(super::invalidations(), failed_kept) {
+    let planted = match check_completion_errors() {
+        Ok(planted) => planted,
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    };
+    match check_queue(super::invalidations(), failed_kept, planted) {
         Ok(Some(line)) => println!("  iommu    {line}"),
         Ok(None) => {}
         Err(problem) => fatal!(
@@ -257,6 +264,7 @@ pub(crate) fn check_firmware_left_on(unit: &super::vtd::Unit) {
 fn check_queue(
     queued: super::Invalidations,
     failed_kept: usize,
+    planted: u64,
 ) -> Result<Option<alloc::string::String>, alloc::string::String> {
     let (units, pending) = super::register_invalidations_pending();
     if units == 0 {
@@ -280,10 +288,19 @@ fn check_queue(
             queued.units_failed
         ));
     }
-    let provoked = u64::from(failed_kept != 0);
-    if queued.failed != provoked {
+    if queued.completion_errors != planted || planted != units as u64 {
         return Err(alloc::format!(
-            "{} VT-d invalidations failed where check R7 made {provoked} fail",
+            "{} completion errors were cleared where the check planted {planted} on {units} \
+             VT-d units",
+            queued.completion_errors
+        ));
+    }
+    let provoked = u64::from(failed_kept != 0);
+    let unplanted = queued.failed.saturating_sub(planted);
+    if unplanted != provoked || queued.failed < planted {
+        return Err(alloc::format!(
+            "{} VT-d invalidations failed where check R7 made {provoked} fail and the planted \
+             completion errors {planted}",
             queued.failed
         ));
     }
@@ -296,12 +313,34 @@ fn check_queue(
     }
     Ok(Some(alloc::format!(
         "{} context-cache and {} IOTLB invalidations queued and each waited for, none by \
-         register on {units} VT-d units; {} failed as check R7 made it, its {failed_kept} pages \
-         kept; a queue left on as firmware leaves it turned off on {stopped}",
+         register on {units} VT-d units; {unplanted} failed as check R7 made it, its \
+         {failed_kept} pages kept; {planted} completion errors planted, cleared, and the next \
+         invalidation completed; a queue left on as firmware leaves it turned off on {stopped}",
         queued.context,
         queued.iotlb,
-        queued.failed
     )))
+}
+
+/// The consultant's condition 1 on N0g's slice 1: on every translating
+/// VT-d unit, an invalidation completion error (`ICE`) the check plants
+/// fails that invalidation, is cleared and counted, and the next
+/// invalidation completes on a unit not marked failed -- so a completion
+/// error is a failed invalidation, never a sticky bit that fails every
+/// later one. Answers how many were planted.
+///
+/// # Errors
+///
+/// What did not hold, as a sentence.
+///
+/// Verifies: L.iommu.48
+fn check_completion_errors() -> Result<u64, &'static str> {
+    let Some(programmed) = super::PROGRAMMED.get() else {
+        return Ok(0);
+    };
+    for unit in &programmed.vtd {
+        super::vtd::check_planted_completion_error(unit)?;
+    }
+    Ok(programmed.vtd.len() as u64)
 }
 
 /// What the domain check found.

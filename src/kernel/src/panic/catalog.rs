@@ -1671,6 +1671,9 @@ pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
          unpin with a wait that writes no status did not fail, or released its frames, or left \
          them counted live rather than kept (`object/pin/check.rs` \
          check_failed_invalidation).",
+        "A completion error (`ICE`) the check planted on a unit did not fail its invalidation, \
+         was not cleared and counted, or left the next invalidation failing or the unit marked \
+         failed (`iommu/check.rs` check_completion_errors).",
         "A unit's invalidation queue, turned on as firmware leaves one, was not turned off and \
          read back off by the path `open` takes on such a unit (`iommu/check.rs` \
          check_firmware_left_on).",

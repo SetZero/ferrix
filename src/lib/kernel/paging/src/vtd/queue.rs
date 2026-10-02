@@ -181,3 +181,47 @@ pub const fn free_slots(head: u32, tail: u32) -> u32 {
     let used = (tail + QUEUE_LENGTH - head % QUEUE_LENGTH) % QUEUE_LENGTH;
     QUEUE_LENGTH - 1 - used
 }
+
+/// `FSTS`: invalidation queue error, the unit stopped at a descriptor it
+/// would not take. Write one to clear.
+pub const FSTS_IQE: u32 = 1 << 4;
+/// `FSTS`: invalidation completion error, a device-TLB invalidation that
+/// did not complete. Write one to clear.
+pub const FSTS_ICE: u32 = 1 << 5;
+/// `FSTS`: invalidation time-out error; the unit stops its queue as for
+/// [`FSTS_IQE`]. Write one to clear.
+pub const FSTS_ITE: u32 = 1 << 6;
+/// The three queue errors, each write-one-to-clear.
+pub const FSTS_QUEUE_ERRORS: u32 = FSTS_IQE | FSTS_ICE | FSTS_ITE;
+
+/// What a wait for a submission came to, from the fault status register
+/// read after it and whether its status word was written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Outcome {
+    /// The status word was written and no queue error is set.
+    Completed,
+    /// The status word was not written within the patience.
+    TimedOut,
+    /// `ICE`: the invalidation failed, the queue goes on. The bit is to be
+    /// cleared at once, or it would fail every later wait without the unit
+    /// ever being marked failed.
+    CompletionError,
+    /// `IQE` or `ITE`: the unit stopped its queue, and is to be marked
+    /// failed.
+    QueueStopped,
+}
+
+/// What a wait came to: a stopped queue first, whatever else is set, then a
+/// completion error, then the status word.
+#[must_use]
+pub const fn outcome(fsts: u32, completed: bool) -> Outcome {
+    if fsts & (FSTS_IQE | FSTS_ITE) != 0 {
+        Outcome::QueueStopped
+    } else if fsts & FSTS_ICE != 0 {
+        Outcome::CompletionError
+    } else if completed {
+        Outcome::Completed
+    } else {
+        Outcome::TimedOut
+    }
+}
