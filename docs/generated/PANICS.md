@@ -2178,10 +2178,25 @@ sends a device's writes somewhere its driver did not choose.
    QEMU's reports), a table entry or a fresh table was written and not cleaned
    to memory before the invalidation or map that published it, so the unit could
    walk a stale entry (finding F-58; `iommu/check.rs` check_cleaning).
+6. A VT-d invalidation was not made through the unit's queue: a unit reads back
+   a register-based invalidation pending, which QEMU leaves set for good once
+   the queue is on; or the boot queued no context-cache or no IOTLB invalidation
+   (check R6, `iommu/check.rs` check_queue).
+7. An invalidation failed that check R7 did not make fail, a unit's queue
+   stopped, or R7's unpin with a wait that writes no status did not fail, or
+   released its frames, or left them counted live rather than kept
+   (`object/pin/check.rs` check_failed_invalidation).
+8. A completion error (`ICE`) the check planted on a unit did not fail its
+   invalidation, was not cleared and counted, or left the next invalidation
+   failing or the unit marked failed (`iommu/check.rs` check_completion_errors).
+9. A unit's invalidation queue, turned on as firmware leaves one, was not turned
+   off and read back off by the path `open` takes on such a unit
+   (`iommu/check.rs` check_firmware_left_on).
 
 See: src/kernel/src/iommu.rs Domain; src/kernel/src/iommu/check.rs
-check_domains; src/kernel/src/device.rs DeviceNode::domain; docs/ARCHITECTURE.md
-section 7; docs/ROADMAP.md stage 10.
+check_domains; src/kernel/src/device.rs DeviceNode::domain;
+src/kernel/src/iommu/vtd.rs Unit::submit; docs/NVIDIA.md section 12.3;
+docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10.
 
 <a id="fx-1004"></a>
 
@@ -2314,6 +2329,11 @@ DMA it was not given, and a unit whose faults nobody reads would hide it.
    probe's own fault, when the lost one may have been the probe's next; the
    `first read here` line names the record that was full. QEMU's unit never
    overflows on one device's faults, so there it means a second device faulted.
+8. A VT-d unit's invalidation queue stopped (`FSTS.IQE` or `ITE`) and the unit
+   was marked failed: it takes no invalidation again, and nothing its domains
+   may reach is released until reboot. The line before names the unit and which
+   error stopped it; a descriptor the unit would not take is a kernel encoding
+   fault (`ferrix_paging::vtd::queue`).
 
 See: src/kernel/src/iommu.rs audit_faults; src/kernel/src/iommu/check.rs
 check_dma_faults; src/kernel/src/discovery/pci/virtio.rs probe_out_of_domain;

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "60cd632addb15fd1f3b7f829bc0dca048f4027783f2df89b22f02cb4266f8540",
+  "digest": "e23313903014dc8d44655e007a663b71d90b35174f896b5f6fdbd7c0e6065221",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -105,7 +105,7 @@
   ],
   "summary": {
     "packages": 125,
-    "elements": 6153,
+    "elements": 6168,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -35785,6 +35785,177 @@
               ]
             },
             {
+              "name": "onlyQueuedInvalidation",
+              "qualifiedName": "FerrixIommuRequirements::Faults::onlyQueuedInvalidation",
+              "kind": "requirement",
+              "shortName": "L.iommu.47",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/16-iommu-requirements.sysml",
+                "line": 609
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::onlyQueuedInvalidation",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A VT-d unit without ECAP.QI shall be left alone, with the reason printed. On a unit brought up, every context-cache and IOTLB invalidation -- at enable, attach, detach, after an unmap or a caching-mode map, and the quarantine's release -- shall be made through the unit's invalidation queue: the descriptor and a fenced wait descriptor behind it are written and cleaned to memory, the tail is moved past both, and the invalidation completes only when the wait's status word reads that submission's own sequence number. No register-based invalidation shall be issued.\"",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 619
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::onlyQueuedInvalidation",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On x86-64 under KVM and TCG the iommu line counts the context-cache and IOTLB invalidations queued, both more than 0, and no unit reads back a register-based invalidation pending; test-boot requires the line. With one flush put back on the register path, QEMU never performs it while the queue is on and the boot fails at stage 10. Host tests: each descriptor is laid out as the specification says and passes QEMU's reserved-bit masks; the queue registers name sixteen-byte slots; a full queue is never taken for an empty one.\"",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 628
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::onlyQueuedInvalidation",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.DMA.2\", \"H.DMA.8\")",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 629
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::onlyQueuedInvalidation",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"iommu::vtd::Unit::open\", \"iommu::vtd::Unit::enable\", \"iommu::vtd::Unit::start_queue\", \"iommu::vtd::Unit::submit\", \"iommu::vtd::Unit::submit_and_wait\", \"iommu::vtd::Unit::write_descriptors\", \"iommu::vtd::Unit::await_completion\", \"iommu::vtd::Unit::status_word\", \"iommu::vtd::Unit::invalidate_context\", \"iommu::vtd::Unit::invalidate_iotlb\", \"iommu::vtd::Unit::register_invalidation_pending\", \"iommu::register_invalidations_pending\", \"iommu::vtd::invalidations\")",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 637
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aFailedInvalidationReleasesNothing",
+              "qualifiedName": "FerrixIommuRequirements::Faults::aFailedInvalidationReleasesNothing",
+              "kind": "requirement",
+              "shortName": "L.iommu.48",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/16-iommu-requirements.sysml",
+                "line": 639
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::aFailedInvalidationReleasesNothing",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A VT-d invalidation whose wait status is not written within the unit's patience, or during which FSTS reads IQE, ICE or ITE, shall answer an error, and its caller shall release nothing the unit may still reach: an unpin hands the pin back and its frames are kept and counted in kept. ICE shall be cleared (written one) and counted as soon as it is taken, so that it fails that invalidation only. After IQE or ITE the unit shall be marked failed: every later invalidation on it answers an error without touching the queue, and the failure is reported once to the end-of-boot fault audit as a stray fault.\"",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 649
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::aFailedInvalidationReleasesNothing",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On x86-64 under KVM and TCG check R7 unpins a two-page pin whose wait descriptor, through the check-only Wait::Unwritten, writes no status: the invalidation fails, the two pages move from live to kept and the frames stay held, and the iommu line says exactly one invalidation failed, as R7 made it; with Pin::drop taking the error for success the boot panics with 'frames released after a failed invalidation'. On every unit an ICE the check plants fails one invalidation, is cleared and counted, and the next invalidation completes with the unit not failed; with the clear dropped the boot panics with 'an invalidation after a cleared completion error failed'. Host tests: a wait writes its sequence number, or with Unwritten nothing, as a valid descriptor; a stopped queue is never taken for a completion, nor a completion error for a timeout.\"",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 663
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::aFailedInvalidationReleasesNothing",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.DMA.8\", \"H.DMA.3\")",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 664
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::aFailedInvalidationReleasesNothing",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"iommu::vtd::Unit::submit\", \"iommu::vtd::Unit::await_completion\", \"iommu::vtd::Unit::fault_status\", \"iommu::vtd::Unit::clear_errors\", \"iommu::vtd::Unit::fail\", \"iommu::vtd::Unit::take_fault\", \"iommu::vtd::Unit::flush\", \"iommu::Domain::unpin_waiting\", \"iommu::Translation::flush\")",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 669
+                  }
+                }
+              ]
+            },
+            {
+              "name": "firmwaresQueueTurnedOff",
+              "qualifiedName": "FerrixIommuRequirements::Faults::firmwaresQueueTurnedOff",
+              "kind": "requirement",
+              "shortName": "L.iommu.51",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/16-iommu-requirements.sysml",
+                "line": 671
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::firmwaresQueueTurnedOff",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A VT-d unit firmware left remapping interrupts shall have IRE cleared and read back clear, and one whose invalidation queue firmware left on shall have the queue drained, QIE cleared and read back clear, each within the unit's patience, before the kernel's own setup; then any IQE, ICE or ITE firmware left in FSTS shall be cleared and FSTS read back clear of them. A unit that does not shall be left alone with the reason printed. GCMD writes shall not repeat CFI.\"",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 679
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::firmwaresQueueTurnedOff",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On x86-64 under KVM and TCG, before each unit's enable, the check turns its queue on as firmware would and ends it with a completed wait, and open's path turns it off and reads it off; the iommu line counts it on every unit. With the QIE clear dropped from that path, the boot panics with 'firmware left its invalidation queue on and it would not stop'.\"",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 685
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::firmwaresQueueTurnedOff",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.DMA.2\"",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 686
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixIommuRequirements::Faults::firmwaresQueueTurnedOff",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"iommu::vtd::stop_firmware\", \"iommu::vtd::wait_for\", \"iommu::vtd::clear_stale_errors\", \"iommu::vtd::Unit::command\")",
+                  "source": {
+                    "file": "docs/sysml/16-iommu-requirements.sysml",
+                    "line": 689
+                  }
+                }
+              ]
+            },
+            {
               "name": "aWriteIsInMemoryBeforeItIsPublished",
               "qualifiedName": "FerrixIommuRequirements::Faults::aWriteIsInMemoryBeforeItIsPublished",
               "kind": "requirement",
@@ -35792,7 +35963,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/16-iommu-requirements.sysml",
-                "line": 609
+                "line": 691
               },
               "children": [
                 {
@@ -35803,7 +35974,7 @@
                   "value": "\"On a VT-d unit whose ECAP.C is clear, every root, context and second-level entry the kernel writes shall be noted and cleaned from the processor's caches to memory (clflush of each line written, then mfence) before the change that wrote it is published: before the context-cache or IOTLB invalidation that publishes an attach or a detach, and before a map or an unmap returns. A change whose record still holds a write not cleaned at that point shall be refused -- an attach or detach before its invalidation, a map or unmap with an error, so that the pin unwinds or the frames are kept -- and counted. That every write to memory the unit walks is noted rests on construction: write_entry, table and the mapper's writes through Walked are vtd.rs's only writers of that memory. On a unit whose ECAP.C is set, nothing shall be noted or cleaned.\"",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 623
+                    "line": 705
                   }
                 },
                 {
@@ -35814,7 +35985,7 @@
                   "value": "\"On x86-64 under KVM and TCG, where QEMU's unit reports ECAP.C clear, the iommu line counts the entry writes noted and cleaned and the changes that each found them cleaned before their own publish point, and test-boot requires the line; the check proves each change's noted writes were cleaned, not that every write was noted. With the clean before an unmap's return dropped, the unmap is refused with the line 'a VT-d change was refused: a table write was not cleaned to memory before it was published' and the boot stops at stage 10's next pin; with the clean before an attach's invalidation dropped, both attaches are refused and the boot panics naming the VT-d changes refused for a table write not cleaned to memory. Host tests: every entry the mapper writes, on a map and on an unmap, is cleaned after it is written; a walker that snoops cleans nothing; a write noted and not cleaned reads as unpublished, and a full record cleans early.\"",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 638
+                    "line": 720
                   }
                 },
                 {
@@ -35825,7 +35996,7 @@
                   "value": "(\"H.DMA.2\", \"H.DMA.3\")",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 639
+                    "line": 721
                   }
                 },
                 {
@@ -35836,7 +36007,7 @@
                   "value": "(\"iommu::vtd::Unit::open\", \"iommu::vtd::Unit::writes\", \"iommu::vtd::Unit::publish\", \"iommu::vtd::Unit::map\", \"iommu::vtd::Unit::unmap\", \"iommu::vtd::Unit::detach\", \"iommu::vtd::Unit::invalidate_context\", \"iommu::vtd::Unit::invalidate_iotlb\", \"iommu::vtd::write_entry\", \"iommu::vtd::require_published\", \"iommu::vtd::settle\", \"iommu::vtd::cleaning\", \"iommu::map_all\", \"mm::WalkerClean::clean\", \"arch::x86_64::cpu::clean_for_walker\", \"arch::x86_64::cpu::clflush_line\")",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 647
+                    "line": 729
                   }
                 }
               ]
@@ -35849,7 +36020,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/16-iommu-requirements.sysml",
-                "line": 649
+                "line": 731
               },
               "children": [
                 {
@@ -35860,7 +36031,7 @@
                   "value": "\"On a VT-d unit whose ECAP.C is clear, every table frame the kernel zeroes for the unit to walk -- the root table, a context table, a domain's second-level root and each second-level table the mapper adds -- shall be cleaned to memory whole before any entry that links it is written.\"",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 654
+                    "line": 736
                   }
                 },
                 {
@@ -35871,7 +36042,7 @@
                   "value": "\"On x86-64 under KVM and TCG the iommu line counts the fresh tables cleaned, more than 0. Host tests: each table the mapper adds below the root is cleaned whole before the entry that links it is written.\"",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 658
+                    "line": 740
                   }
                 },
                 {
@@ -35882,7 +36053,7 @@
                   "value": "(\"H.DMA.2\", \"H.DMA.3\")",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 659
+                    "line": 741
                   }
                 },
                 {
@@ -35893,7 +36064,7 @@
                   "value": "(\"iommu::vtd::table\", \"iommu::vtd::Unit::attach\", \"iommu::vtd::Unit::install\", \"mm::map_io\")",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 661
+                    "line": 743
                   }
                 }
               ]
@@ -35906,7 +36077,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/16-iommu-requirements.sysml",
-                "line": 663
+                "line": 745
               },
               "children": [
                 {
@@ -35917,7 +36088,7 @@
                   "value": "\"An SMMUv3 whose IDR0.COHACC is clear shall be left alone, with the reason printed. One that is brought up shall have CR1 set, while its queues and translation are off, to write-back cacheable, inner shareable accesses to its stream table and queues, read back as written, and each stream table entry's stage-2 walk shall be write-back cacheable and inner shareable.\"",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 669
+                    "line": 751
                   }
                 },
                 {
@@ -35928,7 +36099,7 @@
                   "value": "\"On AArch64 the SMMUv3 is brought up and the out-of-domain write is faulted through it; with COHACC's test inverted, the unit is left alone as not snooping and test-boot fails on no write outside a translated domain faulted.\"",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 673
+                    "line": 755
                   }
                 },
                 {
@@ -35939,7 +36110,7 @@
                   "value": "(\"H.DMA.2\", \"H.DMA.3\")",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 674
+                    "line": 756
                   }
                 },
                 {
@@ -35950,7 +36121,7 @@
                   "value": "(\"iommu::smmuv3::Unit::open\", \"iommu::smmuv3::Unit::program\", \"iommu::smmuv3::Unit::attach\")",
                   "source": {
                     "file": "docs/sysml/16-iommu-requirements.sysml",
-                    "line": 676
+                    "line": 758
                   }
                 }
               ]

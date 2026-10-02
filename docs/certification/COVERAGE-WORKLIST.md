@@ -23,7 +23,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`vmap`](#vmap) | 2 | 2 | 4 | 1 |
 | [`sched`](#sched) | 2 | 3 | 3 | 2 |
 | [`arch/armv7a`](#archarmv7a) | - | - | 2 | 2 |
-| [`iommu`](#iommu) | 2 | - | - | 1 |
+| [`iommu`](#iommu) | 2 | 1 | 1 | 1 |
 | [`irq`](#irq) | 2 | - | 1 | 1 |
 | [`random`](#random) | 2 | 2 | 2 | 1 |
 | [`audit`](#audit) | 1 | - | - | 1 |
@@ -31,7 +31,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
 | [`user`](#user) | - | - | 1 | 1 |
-| **Total** | **133** | **176** | **233** | 38 |
+| **Total** | **133** | **177** | **234** | 38 |
 
 ---
 
@@ -48,6 +48,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 | F-59 (an untranslated domain's live close given back, its dead pins quarantined; branch f59-untranslated-pins) | x86_64, aarch64, armv7a | carried from 342b8a48e, 2 anchors dropped as unmeasured: armv7a residual object/pin.rs 505-507 at the old numbering (Pin::map's spare, now made on every domain). The armv7a other-architecture argument over the quarantine (Pin::drop's dead arm, quarantine, quarantine_release, release and fold) is withdrawn: those lines are reached on ARMv7-A now, by P8 and by every dead driver's pins. | On armv7a, measure object/pin.rs's quarantine, release, fold and Pin::drop's dead arm, which P8 reaches, and object/pin/check.rs's check_untranslated, check_live_close, check_dead_close, watched_pin, freed and untranslated_domain; argue their refusal arms as defensive (each only a negative control reaches). On x86_64 and aarch64, where every domain made is translated, argue check_untranslated's lines past untranslated_domain as other-architecture. |
 | OPAQUE-KERNEL.md §9.5 step 1, channel_write_read and the round trip (branch ipc-step1, with the consultant's conditions 1-4 of 2026-10-02) | x86_64, aarch64, armv7a | Carried from 5e1341d35: 0 anchors dropped on every architecture. Nothing measured was edited; what is owed is new code no run has measured. | Measure, and test or argue, the new and edited lines on each architecture: object::channel's slot (Small, Inbox::put_small, take_spare, pop_fitting's slot arm, pop_small, unpop's younger-slot arm and its refusal, drain, Endpoint::write_small and its refusals, read_small, readable_or_closed); syscall::native's channel_write_read, send_words, receive_words, read_refusal and dispatch_write_read, and syscall::native_call's 0x1013 arm; the entries' ReturnWords arms (x86-64's ferrix_syscall_entry and int $0x80 system_call, aarch64's system_call, armv7a's store_words); sched's IN_CALL (call_entered, call_left, carry_in_call, resched_here's call arm), the Sync wake (wake_with, may_place, asleep_at_home, wake_onto and its Declined and NotBlocked arms, wake_at_home's deferral, kick_after_wake), Task::holds_slots and swap_in_call; sched::wait's wait_trusting, wait_sliced's no-recheck and unlisted arms and its fence, WaitQueue::wake_all_with's batch and long-list arms; timer's ARMED (after's skip, stop's one-shot arm, on_tick's clear, every), ticks_to_nanos; x86-64's apic LVT_UNMASKED and timer_disarm_fired; and trap::system_call's call_entered and call_left. The new check files are object/write_read_check.rs, the drive_native_words functions in each entry's check file, and stages_check's check_a_skipped_arm. |
 | F-60, a speculation domain's leave checked locally at each grace-period answer (branch f60-domain-leave) | x86_64, aarch64, armv7a | Carried from 265ef1a67: 0 anchors dropped on every architecture. Nothing measured was edited; what is owed is new and moved code no run has measured. | Measure, and test or argue, the new and edited lines on each architecture: arch::speculation's leaving_domain (its publish, hook call and grace-period wait), publish_leaving and its full-set yield, answer_leaving, arm_leave_hook, disarm_leave_hook, leave_hook_armed_by and last_domain_on; smp's answer_grace_periods and the on_ipi and answer_grace that call it; object::process::leave_speculation_domain's call; and main.rs's require_hooks_disarmed and its FX-0908 arm. The new check code is object/domain_check.rs's case 11. |
+| NVIDIA N0g step 1, every VT-d invalidation through the queue (branch nvidia-n0g, docs/NVIDIA.md section 12.3) | x86_64, aarch64, armv7a | Carried from 045d6d11a: 10 anchors dropped. aarch64: iommu/vtd.rs 591-592, 594, 610, 612, 621 and iommu.rs 638, 1033 (residual), with the other-architecture arguments iommu.rs 638 and 1033-1034 (the latter's kept half dropped too, its anchor text having changed). armv7a: the same vtd.rs lines and iommu.rs 638, 867, 897, 1033 (residual), with the other-architecture arguments iommu.rs 638 and 1033-1034 (kept half dropped as on aarch64) and the absent-hardware arguments iommu.rs 867 and 897 (861, 870 and 898 kept). x86_64: none. | Measure on x86-64, and argue as other-architecture on aarch64 and armv7a, the new and edited VT-d lines: vtd.rs's Unit::open (the ECAP.QI refusal, the queue and status frames and their failure arms), stop_firmware and wait_for, enable and start_queue, register_invalidation_pending, invalidate_context, invalidate_iotlb, submit, submit_and_wait, write_descriptors, await_completion (no room, the sequence wrap, IQE/ITE/ICE and the timeout arms), fault_status, clear_errors, clear_stale_errors (firmware's queue errors), status_word, fail, take_fault's Cause::Queue arm, flush's wait, leave_queue_on_and_stop and check_planted_completion_error; iommu.rs's Wait, Domain::unpin_waiting and queued, Translation::flush, map_all's flush calls, register_invalidations_pending, bring_up_vtd's checks arm and the Display of Cause::Queue; object::pin's wait field in Pin::drop. Arms only a broken unit reaches (IQE, ITE, ICE, a full queue, firmware's IR or QI that will not stop) are absent-hardware on QEMU. The new check code is iommu/check.rs's check_queue, check_completion_errors and check_firmware_left_on and object/pin/check.rs's check_failed_invalidation. |
 
 ---
 
@@ -176,7 +177,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `iommu.rs` | `core` | 2 | 0 | 0 | 0 | - |
+| `iommu.rs` | `core` | 2 | 1 | 1 | 0 | - |
 
 ---
 
