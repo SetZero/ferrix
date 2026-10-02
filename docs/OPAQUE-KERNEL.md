@@ -795,6 +795,41 @@ required**. What each finding changed:
   benchmark's resolution: its percentiles are an eighth of a power of two,
   so a p50 can read below the minimum.
 
+### 9.3c The leave's local check (F-60, 2026-10-02)
+
+The consultant's review of the step 2 and 3 design found F1's leave open to
+the store-buffer pattern. `leave_domain` stores `OUT` with a Release store,
+and the scan then loads each processor's `LAST_DOMAIN`, with nothing ordering
+the store before the loads. A processor that read the space's domain before
+the store could therefore record the domain after the scan had passed it, and
+then switch P → M2 → P with no barrier: open on x86-64 and ARMv7-A, and in
+the Rust model, and closed on AArch64. The accepted fix is a local check:
+- **Publish.** `leaving_domain` puts the domain in a free slot of `LEAVING`,
+  a set of eight (condition a), with a SeqCst compare-exchange before the scan
+  and before `smp::synchronize`'s SeqCst increment and its interrupt
+  (condition b). The leave then waits for the grace period inside
+  `leaving_domain` and gives the slot back after it. A ninth leave yields
+  until a slot is free.
+- **Answer.** `smp::answer_grace_periods`, which both the interrupt handler
+  and a waiting processor run with interrupts masked, reads the generation
+  first, then serves `BARRIER_WANTED`, then runs `answer_leaving`. That
+  compares this processor's `LAST_DOMAIN` with every slot and, on a match,
+  issues the barrier and clears it (condition b). Reading the generation
+  first also closes a smaller gap the old order had: the handler served
+  `BARRIER_WANTED` before it read the generation it answered.
+- **Case 11** (condition c). The check parks a kernel task on another
+  processor and makes that processor's last domain none. It arms a hook
+  (`arch::CheckHook`, named for the check that armed it) that `leaving_domain`
+  runs between its scan and its grace period. The hook has the task install
+  and leave a member's space, so its processor records the domain the scan
+  has just passed. The leave must still see that processor decide the
+  barrier before it returns. The check disarms the hook, and a boot check
+  before the marker stops the machine with FX-0908 if a hook is still armed.
+- **Controls.** `answer_leaving` made a no-op stops the boot on case 11's
+  own message. The case's disarm removed stops it on FX-0908.
+- **L.object.116** names the scan, the local check and the ordering
+  (condition d).
+
 ### 9.4 The rest of the branch, for its own review
 
 These are reviewed separately, once rebased and gated, as the consultant asked.

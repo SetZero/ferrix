@@ -474,6 +474,16 @@ KVM, 5.1 s under `tcg` and 32 s under the plugin. The residual is a host that
 starves one virtual processor while it runs the waiter; that ends the wait
 early, which costs availability and never integrity.
 
+A program leaving its speculation domain (`speculation::leaving_domain`,
+SPECULATION.md §3) waits for one grace period under this bound, and holds
+one of eight slots in the set of domains being left for that long, which
+each processor answering compares its own last domain with (F-60). A ninth
+leave at once yields until a slot is given back, each slot being held for
+one grace period; no order among such waiters is promised, so this is a
+bound only on what each holder takes, not on a waiter's place. Leaves are rare -- a move between jobs,
+a loss of dumpability -- and each answer of a grace period reads the eight
+slots once, with interrupts masked.
+
 ### 2.2b The filter a program supplies (seccomp, landing S2)
 
 Every system call of every program now passes a function the personality

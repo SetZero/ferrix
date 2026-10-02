@@ -153,6 +153,27 @@ so no defence of the kernel can lean on the switch barrier, and every program
 → kernel row above stands as it is (`docs/OPAQUE-KERNEL.md` §9.3a, A2). The
 `domain` boot line checks the rule.
 
+**A leave takes effect before it returns.** A member that leaves its domain
+-- a move between jobs, a set-id `execve`, a change of credentials,
+`PR_SET_DUMPABLE` -- puts its space out of every domain and then
+(`speculation::leaving_domain`) has every processor whose last space was in
+the domain issue the invalidation before the leave returns: this one at
+once, and the others as they answer the grace period the leave waits for.
+They are found two ways. A scan asks each processor whose recorded domain
+is the leaver's. And since nothing orders the space's store of `OUT` before
+the scan's loads, a processor that read the space's domain before that store
+may record the domain after the scan has passed it (the store-buffer
+pattern, open on x86-64 and ARMv7-A; certification finding F-60). So the
+leaving domain is first published in a set of eight slots, sequentially
+consistent, before the scan and before the grace period's generation is
+advanced, and every processor answering the grace period, with interrupts
+masked, reads the generation and then the set, and issues the invalidation
+itself when its own recorded domain is in it (`speculation::answer_leaving`,
+from `smp::answer_grace_periods`). The `domain` line's case 11 makes another
+processor record the domain between the scan and the grace period, through
+a hook only stage 9 arms (FX-0908 if it is still armed after stage 9), and
+fails if that processor decided no barrier before the leave returned.
+
 **No retpolines.** rustc 1.97.1 accepts
 `-C target-feature=+retpoline-indirect-calls` only with *"this was previously
 accepted by the compiler but is being phased out; it will become a hard error
