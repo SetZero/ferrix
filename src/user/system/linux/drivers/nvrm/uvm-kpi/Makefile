@@ -3,9 +3,13 @@
 # objects for nvrm (docs/NVIDIA.md §11.3).
 #
 #   make NVSRC=<tree> OUT=<dir> [CC=gcc]
+#   make NVSRC=<tree> OUT=<dir> ferrix
 #
 # NVSRC is the open-gpu-kernel-modules checkout at 580.173.02; OUT is a
-# build directory outside the checkout.
+# build directory outside the checkout. `all` links uvm-selftest against
+# the host's C library, to run on the host; `ferrix` links it statically
+# against ferrousli, Ferrix's own C library, to boot as init on Ferrix
+# (`cargo xtask test-uvm`), together with its negative control.
 
 NVSRC ?= $(HOME)/.local/share/ferrix/nvidia-ref/ogkm-580.173.02
 OUT   ?= $(HOME)/.local/share/ferrix/target-nvidia-cuda/uvm-kpi
@@ -69,10 +73,47 @@ $(OUT)/selftest/%.o: $(KPI)/selftest/%.c $(wildcard $(KPI)/include/*.h $(KPI)/in
 $(OUT)/uvm-selftest: $(SELFTEST_OBJECTS) $(OUT)/libuvm.a $(OUT)/libuvmkpi.a
 	$(CC) -pthread -o $@ $(SELFTEST_OBJECTS) $(OUT)/libuvm.a $(OUT)/libuvmkpi.a $(OUT)/libuvm.a
 
+# The same program for Ferrix: static, and against ferrousli alone, whose
+# release library cargo builds in $(FERROUSLI_TARGET). The objects are the
+# ones above: nothing in them includes a C library header (kpi/libc.h).
+FERROUSLI        := $(abspath $(KPI)/../../../ferrousli)
+FERROUSLI_TARGET ?= $(OUT)/ferrousli
+FERROUSLI_LIB    := $(FERROUSLI_TARGET)/release/libferrousli.a
+
+# cargo decides whether the library is stale, so this always runs; the
+# programs below are linked again when it wrote a new one.
+$(FERROUSLI_LIB): FORCE
+	cd $(FERROUSLI) && cargo build --release --lib --target-dir $(FERROUSLI_TARGET)
+
+define link-ferrousli
+	crt1=$$(ls -t $(FERROUSLI_TARGET)/release/build/ferrousli-*/out/crt1.o | head -1) && \
+	$(CC) -static -no-pie -nostdlib -o $@ $$crt1 $(SELFTEST_OBJECTS) \
+		-Wl,--start-group $(OUT)/libuvm.a $(1) $(FERROUSLI_LIB) -lgcc -Wl,--end-group
+endef
+
+$(OUT)/uvm-selftest-ferrousli: $(SELFTEST_OBJECTS) $(OUT)/libuvm.a $(OUT)/libuvmkpi.a $(FERROUSLI_LIB)
+	$(call link-ferrousli,$(OUT)/libuvmkpi.a)
+
+# The negative control: kpi's krealloc built with a realloc to size 0 that
+# keeps the block, the kind of bug UVM's KVMALLOC test found in C0a, which
+# that test must fail on.
+$(OUT)/negative/mm.o: $(KPI)/kpi/mm.c $(wildcard $(KPI)/kpi/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(KPI_CFLAGS) -DKPI_NEGATIVE_CONTROL -c $< -o $@
+
+$(OUT)/libuvmkpi-negative.a: $(filter-out $(OUT)/kpi/mm.o,$(KPI_OBJECTS)) $(OUT)/negative/mm.o
+	rm -f $@ && ar rcs $@ $^
+
+$(OUT)/uvm-selftest-ferrousli-negative: $(SELFTEST_OBJECTS) $(OUT)/libuvm.a $(OUT)/libuvmkpi-negative.a $(FERROUSLI_LIB)
+	$(call link-ferrousli,$(OUT)/libuvmkpi-negative.a)
+
+ferrix: $(OUT)/uvm-selftest-ferrousli $(OUT)/uvm-selftest-ferrousli-negative
+
 test: $(OUT)/uvm-selftest
 	$(OUT)/uvm-selftest
 
 clean:
 	rm -rf $(OUT)
 
-.PHONY: all clean test
+.PHONY: all clean test ferrix FORCE
+FORCE:

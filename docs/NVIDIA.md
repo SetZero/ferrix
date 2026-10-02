@@ -873,11 +873,40 @@ and took the recommended answer for D2, D3 and D5.
     groups, thread context sanity and perf, and CPU chunk sizes.
   * **Two shim bugs** were found by those tests and fixed: `krealloc` to
     size 0, and an inode without a mapping.
-  * **Not done.** The run under Ferrix (a static build booted with
-    `xtask test-shell --init`) is not done: the host had 5.8 GB free when
-    C0a's build finished, under the 6 GB stop line, so no Ferrix image was
-    built. Linking into `nvrm` waits for N1b; `uvm-selftest` stands in for
-    it.
+  * **Not done then.** The run under Ferrix waited for disk space: the
+    host had 5.8 GB free when C0a's build finished, under the 6 GB stop
+    line, so no Ferrix image was built. It is the next entry. Linking into
+    `nvrm` waits for N1b; `uvm-selftest` stands in for it.
+* **2026-10-02 — C0a: the same tests pass under Ferrix.** On branch
+  `nvidia-c0b`:
+  * **The build.** `uvm-selftest` is linked statically against ferrousli,
+    Ferrix's own C library, and nothing else: `crt1.o`, the objects above,
+    `libferrousli.a` and `libgcc`. No object changed, because no UVM or
+    `uvm-kpi` unit includes a C library header (`kpi/libc.h` declares the
+    27 calls `uvm-kpi` makes). It linked with nothing undefined at the
+    first try. `uvm-kpi`'s Makefile builds it as `make ferrix`.
+  * **The run.** Booted as init on x86-64, it passes all 15 GPU-free tests
+    and its four range-group setups, as on the host, and exits 0. This
+    held under KVM and under TCG, at four processors. The times under KVM
+    match the host's: `UVM_TEST_RB_TREE_RANDOM` took 6.3 s against 5.8 s,
+    and `UVM_TEST_NV_KTHREAD_Q` 0.5–0.6 s against 0.3 s. Under TCG,
+    `RB_TREE_RANDOM` took 90–137 s.
+  * **Nothing was missing.** Every call `uvm-kpi` makes behaved as on
+    Linux: futex waits and wakes, `memfd_create` with `ftruncate` and a
+    shared `mmap` that `vmap` maps again, `getrandom`, `sched_getcpu`,
+    `clock_nanosleep` and threads. The serial log shows no `ENOSYS` from
+    the program. No bug was found in `uvm-kpi`, and no gap in Ferrix.
+  * **The gate.** `cargo xtask test-uvm` builds the program with `make`
+    from the tree `FERRIX_NVIDIA_SRC` names (by default the fetched one
+    above) and boots it. It requires every test line to say PASS, in order,
+    the summary line, and exit 0. Then it boots a negative control: the
+    same program with `uvm-kpi`'s `krealloc` keeping a block that it is
+    asked to shrink to nothing (`-DKPI_NEGATIVE_CONTROL`, `kpi/mm.c` only).
+    That build must fail `UVM_TEST_KVMALLOC` alone, at UVM's own check
+    `uvm_kvrealloc(new_p, 0) == ZERO_SIZE_PTR`, and exit 1, and it does.
+    The gate waits 400 s for a boot unless `--timeout` says otherwise,
+    because of TCG. It is x86-64 only, like `uvm-kpi`. Its unit tests
+    judge the two recorded runs.
 
 ## 11. CUDA (N5)
 

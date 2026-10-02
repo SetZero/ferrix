@@ -65,6 +65,11 @@ void *krealloc(const void *p, size_t size, gfp_t flags)
     if (ZERO_OR_NULL_PTR(p))
         return kmalloc(size, flags);
     if (size == 0) {
+#ifdef KPI_NEGATIVE_CONTROL
+        /* test-uvm's negative control: a realloc to size 0 that keeps
+         * the block, which UVM_TEST_KVMALLOC must refuse. */
+        return (void *)p;
+#endif
         kfree(p);
         return ZERO_SIZE_PTR;
     }

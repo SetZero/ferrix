@@ -12,6 +12,7 @@
 //! cargo xtask test-sem --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-shm --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-procfs --arch all [--i686] [--timeout SECONDS]
+//! cargo xtask test-uvm  [--arch x86_64] [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
 //! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
 //! cargo xtask builds-execute --plan DIR
@@ -138,6 +139,7 @@ mod threads;
 mod uboot_env;
 mod uefi_vars;
 mod uutils;
+mod uvm;
 mod vfs;
 mod vnc;
 mod wallpaper;
@@ -243,6 +245,8 @@ COMMANDS:
                   ipc(117) and 395-398)
     test-procfs   Boot procfs-test as init and require /proc/self/fd links to stat as fstat (sockets, anonymous files, a pipe,
                   a memfd), /proc/net/tcp's inode to match, and every /proc inode number to fit 32 bits (--i686: 32-bit x86)
+    test-uvm      Build NVIDIA's UVM against uvm-kpi and ferrousli (FERRIX_NVIDIA_SRC names the 580.173.02 tree), boot it as init,
+                  and require its 15 GPU-free self-tests to pass; then a krealloc control that must fail one (x86_64)
     test-rustc    Attach the rustc volume tools/common/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume tools/common/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-claude-code  Attach the volume tools/common/fetch/fetch-claude-code.sh makes, and require Claude Code to start and,
@@ -573,7 +577,7 @@ fn run() -> Result<()> {
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-install" => installer::test_install(&args),
         "test-threads" | "test-sem" | "test-shm" => sem::run(command, &args),
-        "test-procfs" => procfs::test_procfs(&args),
+        "test-procfs" | "test-uvm" => sem::run(command, &args),
         "test-apps" => apps::test_apps(&args),
         "test-pkg" => pkg::test_pkg(&args),
         "coverage" => coverage::run(&args),
