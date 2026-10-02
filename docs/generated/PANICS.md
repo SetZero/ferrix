@@ -52,6 +52,7 @@ Causes are listed most likely first.
 | [FX-0503](#fx-0503) | a task tried to block while holding a lock that disables preemption |
 | [FX-0504](#fx-0504) | console output did not go out by interrupt |
 | [FX-0505](#fx-0505) | the kernel log lost track of what it keeps |
+| [FX-0506](#fx-0506) | the preemption count would start before every processor has its record |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0602](#fx-0602) | a page taken from a mapped object stayed reachable, or was not taken as it should be |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
@@ -912,7 +913,7 @@ machine instead, and the message says how many such locks were held.
    last raised the count. An enable that finds nothing to lower now stops the
    machine itself, naming the same site.
 
-See: src/kernel/src/sync.rs; src/kernel/src/sched/mod.rs PREEMPT_OFF;
+See: src/kernel/src/sync.rs; src/kernel/src/sched/preempt.rs;
 src/lib/kernel/sync/src/lib.rs PreemptSpinLock.
 
 <a id="fx-0504"></a>
@@ -963,6 +964,27 @@ was meant to stay on the port: the kernel's layout.
 
 See: src/kernel/src/console/log_check.rs; src/kernel/src/console/log.rs;
 src/kernel/src/console.rs.
+
+<a id="fx-0506"></a>
+
+## FX-0506 — the preemption count would start before every processor has its record
+
+The preemption count lives in each processor's per-CPU record and is changed
+through the per-CPU register (`GS` on x86-64, `TPIDR_EL1` or `TPIDRPRW` on Arm)
+without first checking that the register names a record. So the count may start
+only once the boot processor's register leads to its own record and every other
+processor has marked itself online, which it does only after checking its own. A
+processor counting without its record would write the count at a zero or garbage
+address.
+
+1. The scheduler was started before `smp::start_secondaries` brought every
+   processor online, or a processor's start path stopped short of
+   `secondary_main`.
+2. The boot processor's per-CPU register no longer holds the record
+   `smp::discover` installed.
+
+See: src/kernel/src/sched/preempt.rs start_counting; src/kernel/src/smp.rs
+install_secondary_record, secondary_main.
 
 <a id="fx-0601"></a>
 

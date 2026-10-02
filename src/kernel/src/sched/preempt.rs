@@ -167,7 +167,37 @@ impl PreemptState {
 static COUNTING: AtomicBool = AtomicBool::new(false);
 
 /// Begin keeping the count. Once, as the scheduler starts.
+///
+/// **Only once every processor has its record** (the consultant's condition 1
+/// on 2b): the count is changed through the per-CPU register with no check
+/// that it names a record, so a processor counting before its install would
+/// write at a zero or garbage base. The secondaries take locks before they
+/// install theirs (the interrupt controller's, on Arm), which is safe only
+/// because the count is not kept yet. So this stops the machine, FX-0506,
+/// unless the boot processor's register leads to its own record and every
+/// processor is online, which a secondary marks only after checking its own
+/// register (`smp::secondary_main`).
 pub(super) fn start_counting() {
+    let topology = crate::smp::topology();
+    let boot = crate::smp::record(0);
+    let missing = topology.map_or(Some(0), |topology| {
+        topology
+            .cpus()
+            .iter()
+            .find(|cpu| !cpu.is_online())
+            .map(|cpu| cpu.logical)
+    });
+    let boot_installed = boot.is_some_and(|boot| {
+        crate::smp::this_cpu().is_some_and(|me| core::ptr::eq(me, boot))
+            && arch::cpu_local_register() == core::ptr::from_ref(boot) as u64
+    });
+    if let Some(cpu) = missing.or(if boot_installed { None } else { Some(0) }) {
+        crate::panic::fatal!(
+            crate::panic::catalog::PREEMPT_COUNT_WITHOUT_RECORD,
+            "the preemption count would start while processor {cpu} has not installed its \
+             per-CPU record"
+        );
+    }
     COUNTING.store(true, Ordering::Release);
 }
 

@@ -1084,6 +1084,28 @@ pub(crate) static SCHEDULE_WITH_PREEMPTION_HELD: Explanation = Explanation {
           PreemptSpinLock",
 };
 
+/// For `sched::preempt::start_counting`, when a processor has not installed
+/// its record.
+pub(crate) static PREEMPT_COUNT_WITHOUT_RECORD: Explanation = Explanation {
+    code: "FX-0506",
+    title: "the preemption count would start before every processor has its record",
+    meaning: "The preemption count lives in each processor's per-CPU record and is changed \
+              through the per-CPU register (`GS` on x86-64, `TPIDR_EL1` or `TPIDRPRW` on \
+              Arm) without first checking that the register names a record. So the count may \
+              start only once the boot processor's register leads to its own record and every \
+              other processor has marked itself online, which it does only after checking its \
+              own. A processor counting without its record would write the count at a zero or \
+              garbage address.",
+    causes: &[
+        "The scheduler was started before `smp::start_secondaries` brought every processor \
+         online, or a processor's start path stopped short of `secondary_main`.",
+        "The boot processor's per-CPU register no longer holds the record `smp::discover` \
+         installed.",
+    ],
+    see: "src/kernel/src/sched/preempt.rs start_counting; src/kernel/src/smp.rs \
+          install_secondary_record, secondary_main",
+};
+
 /// For `start_scheduler` in `main.rs`, when `sched::run_checks` fails.
 pub(crate) static STAGE5_SCHEDULER: Explanation = Explanation {
     code: "FX-0502",
@@ -2869,6 +2891,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SCHEDULE_WITH_PREEMPTION_HELD,
     &CONSOLE_OUTPUT,
     &CONSOLE_LOG,
+    &PREEMPT_COUNT_WITHOUT_RECORD,
     &STAGE6_USER_MEMORY,
     &STAGE6_REVERSE_MAP,
     &STAGE7_SYSCALLS,

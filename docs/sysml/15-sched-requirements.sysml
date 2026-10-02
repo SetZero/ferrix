@@ -129,9 +129,15 @@ package FerrixSchedRequirements {
             attribute :>> criterion = "At two processors or more, two tasks per
                 processor, preempted by the timer and moving between processors,
                 take and let go of a lock 100000 times each with raises by hand
-                among them, move at least once, and leave every processor's count
-                and locks held at zero as read there by a task that holds nothing
-                (the `preempt` line).";
+                among them and move at least once (the `preempt` line). The
+                stress provokes a lost or misplaced update; what detects one is
+                FX-0503's test at the release, which stops the boot when the locks
+                held or the count it lowers is already zero, and, behind it, every
+                processor's count and locks held read zero there by a task that
+                holds nothing. The three atomicity controls (x86-64's record found
+                before the add, the Arm mask removed on aarch64 and on armv7a at
+                two processors) each stop the boot on FX-0503's held-zero
+                message.";
             attribute :>> parent = ("H.SCHED.1", "H.SCHED.2");
             attribute :>> unit = ("sched::preempt::raise", "sched::preempt::lower",
                 "sched::preempt::Preempt::disable", "sched::preempt::preempt_disable",
@@ -149,8 +155,9 @@ package FerrixSchedRequirements {
                 interrupts are on.";
             attribute :>> criterion = "The release's cover test refuses a word
                 whose count, or for a lock whose locks held, is zero, and passes one
-                that covers the release (the stage-5 checks); the negative controls
-                of a task that sleeps holding a lock and of a release with nothing
+                that covers the release (the stage-5 checks). That held-zero test is
+                the detector L.sched.20's stress relies on; the negative controls of
+                a task that sleeps holding a lock and of a release with nothing
                 raised each stop the boot on FX-0503's message.";
             attribute :>> parent = ("H.SCHED.1", "H.SCHED.2");
             attribute :>> unit = ("sched::preempt::preempt_enable",

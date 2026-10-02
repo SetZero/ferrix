@@ -75,28 +75,28 @@
     },
     {
       "file": "arch/x86_64/cpu.rs",
-      "lines": "645, 651",
+      "lines": "699, 705",
       "category": "defensive",
       "match": "let empty = [0_u8; 10];",
       "why": "The triple fault is `reset`'s last way, taken only after the FADT's reset register and ten pulses of the keyboard controller's reset line have each failed to reset the machine. On q35 the FADT names port 0xCF9, which resets it at once: the suite's `boot-reset` gate shows the loader starting again. Reaching this would take a machine that ignores both documented resets."
     },
     {
       "file": "arch/x86_64/mod.rs",
-      "lines": "146",
+      "lines": "147",
       "category": "failure-path",
       "match": "}",
       "why": "The closing brace of `check_exception_entry` is only the early return of a `?`, when the NMI, breakpoint or saved-register check has failed; the passing path leaves by the tail jump to `trap::check::run` (objdump of the measured image: `pop %rbp; ret` under line 140, `pop %rbp; jmp trap::check::run` under 139). A failed check stops the boot with `STAGE3_TRAPS`."
     },
     {
       "file": "arch/x86_64/mod.rs",
-      "lines": "1452, 1454",
+      "lines": "1453, 1455",
       "category": "defensive",
       "match": "for _ in 0..1000 {",
       "why": "The keyboard controller's reset pulse, tried only when the FADT's reset register did not reset the machine. q35's register resets it at once (`boot-reset`), so the wait for the 8042's input buffer never starts. What it defends against is firmware that names a reset register that does nothing, which Linux's reboot order also allows for."
     },
     {
       "file": "arch/x86_64/mod.rs",
-      "lines": "1515",
+      "lines": "1516",
       "category": "failure-path",
       "match": "cpu::hlt();",
       "why": "`halt`'s loop runs on a processor that stops for good: after a panic, on the stop IPI a panic sends, or on a boot that could not build a console. A passing boot ends through `shutdown`, whose `debug_exit` ends QEMU before `halt` is entered, and the suite's one deliberate panic (`test-shell`'s `ferrix.onexit=panic`) exits QEMU from the panic report without its trace showing this instruction run."
@@ -1090,119 +1090,105 @@
     },
     {
       "file": "sched/mod.rs",
-      "lines": "257-258",
-      "category": "failure-path",
-      "match": "site.map_or(\"?\", |site| site.file()),",
-      "why": "The count of preemption-disabling locks went below zero: a lock taken on one processor was released on another. The arm names where the count was last raised and stops the machine with SCHEDULE_WITH_PREEMPTION_HELD; a kernel that releases every lock where it took it never takes it."
-    },
-    {
-      "file": "sched/mod.rs",
-      "lines": "266",
-      "category": "failure-path",
-      "match": "let pointer = PREEMPT_SITE.get()?.get(cpu)?.load(Ordering::A",
-      "why": "Where a processor's preemption count was last raised, read only by the two failure reports that name it (a lock released on the wrong processor, and a task that blocked holding one); neither runs in a passing boot."
-    },
-    {
-      "file": "sched/mod.rs",
-      "lines": "1347",
+      "lines": "1123",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The debug assertion's own row is its panic call: a prepared task dropped with interrupts masked, which would free its stack waiting on every processor with interrupts off. The condition is evaluated under line 1105's and 1113's rows, which are reached (an unstarted child's drop at stage 9)."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "1562",
+      "lines": "1338",
       "category": "defensive",
       "match": "arch::wait_for_interrupt();",
       "why": "After the switch away from a dead task, which never returns to it: a dead task is never picked again (stage 5's a_dead_task_is_not_filed_as_a_sleeper, and check_invariants' DEAD_STILL_QUEUED, hold that). If it ever were picked, halting here is the only answer that corrupts nothing."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2113-2115",
+      "lines": "1898-1900",
       "category": "failure-path",
       "match": "preempt_count(cpu),",
       "why": "FX-0503: a task blocked or yielded while holding a lock that disables preemption, which the preemption count cannot survive. The report names the lock's site and stops the machine; a kernel that never blocks under a spin lock never takes it."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2171",
+      "lines": "1956",
       "category": "defensive",
       "match": "queue.insert(previous);",
       "why": "A task going to sleep with no sleep slot to be filed in: its slot is lent to a sleeper set or the reaper and returned when it leaves, so a task switching away to sleep always has it back. Were it lent twice, the task runs on and its sleep returns early and asks again (CpuQueue::file_sleeper)."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2888-2889",
+      "lines": "2673-2674",
       "category": "failure-path",
       "match": "pub(crate) fn report_queues() {",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2893",
+      "lines": "2678",
       "category": "failure-path",
       "match": "for (cpu, lock) in queues.iter().enumerate() {",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2898-2899",
+      "lines": "2683-2684",
       "category": "failure-path",
       "match": "queue.len(),",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2902-2903",
+      "lines": "2687-2688",
       "category": "failure-path",
       "match": ".and_then(|flags| flags.get(cpu))",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2907",
+      "lines": "2692",
       "category": "failure-path",
       "match": "}",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2910-2911",
+      "lines": "2695-2696",
       "category": "failure-path",
       "match": "pub(crate) fn print_picks(cpu: usize) {",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2916",
+      "lines": "2701",
       "category": "failure-path",
       "match": "let Ok(mut picks) = fallible::try_with_capacity::<queue::Pic",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2920",
+      "lines": "2705",
       "category": "failure-path",
       "match": "for pick in lock.lock().picks() {",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2927",
+      "lines": "2712",
       "category": "failure-path",
       "match": "pick.at / 1000,",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2932",
+      "lines": "2717",
       "category": "failure-path",
       "match": "for seen in pick.seen.iter().take(pick.count) {",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2942",
+      "lines": "2727",
       "category": "failure-path",
       "match": "}",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
@@ -1258,28 +1244,28 @@
     },
     {
       "file": "smp.rs",
-      "lines": "732, 736-737",
+      "lines": "755, 759-760",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The failure arm of a `debug_assert!` and its message's arguments: a shootdown requested while holding a lock that disables preemption, which the assertion exists to stop on. It holds on every run of the suite."
     },
     {
       "file": "smp.rs",
-      "lines": "758",
+      "lines": "781",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The failure arm of a `debug_assert!`: a shootdown that has to wait for other processors requested with interrupts masked, which no other processor could answer. It holds on every run."
     },
     {
       "file": "smp.rs",
-      "lines": "799",
+      "lines": "822",
       "category": "failure-path",
       "match": "stood / 1_000_000",
       "why": "The millisecond count in the `fatal!` a processor raises when no shootdown turn started for the timeout while it waited, printed as the kernel stops."
     },
     {
       "file": "smp.rs",
-      "lines": "855",
+      "lines": "878",
       "category": "failure-path",
       "match": "waited / 1_000_000",
       "why": "The millisecond count in the `fatal!` raised when a processor never answered a shootdown or a grace period, printed as the kernel stops."
@@ -1528,6 +1514,27 @@
       "category": "defensive",
       "match": "let _ = mm::unmap_kernel(stack.base, allocation.len, |_, _| {});",
       "why": "A device window among the stacks being freed. Stacks are made only by `allocate_stack`, as anonymous memory, and callers free only stacks they made; the arm frees such a window without giving its frames to the buddy allocator, since they are a device's."
+    },
+    {
+      "file": "sched/preempt.rs",
+      "lines": "249-250",
+      "category": "failure-path",
+      "match": "let _ = unsafe { arch::this_cpu_add(crate::smp::PREEMPT_WORD_OFFSET, delta) };",
+      "why": "The release's add-back: a release found the count, or for a lock the locks held, already zero, so the word is put back before unmatched() stops the machine with SCHEDULE_WITH_PREEMPTION_HELD (FX-0503). A kernel that releases every lock on the processor that took it never takes it. Shown reached by the negative controls on 3bb22d1bf, logs in ~/.local/share/ferrix/logs/step2a/: 2b-ctl-unmatched-enable (a release with nothing raised) and the three atomicity controls 2b-ctl-x86-address-then-add, 2b-ctl-arm-unmasked-a64 and 2b-ctl-arm-unmasked-a32-smp2, each of which reached this path and stopped the boot on FX-0503's message."
+    },
+    {
+      "file": "sched/preempt.rs",
+      "lines": "353-354",
+      "category": "failure-path",
+      "match": "site.map_or(\"?\", |site| site.file()),",
+      "why": "unmatched(), carried from sched/mod.rs 257-258 where the same arm stood before 2b: a lock taken on one processor was released on another, or a release had nothing to lower. It names where the count was last raised and stops the machine with SCHEDULE_WITH_PREEMPTION_HELD; a kernel that releases every lock where it took it never takes it. Shown reached by the negative controls on 3bb22d1bf, logs in ~/.local/share/ferrix/logs/step2a/: 2b-ctl-unmatched-enable (a release with nothing raised) and the three atomicity controls 2b-ctl-x86-address-then-add, 2b-ctl-arm-unmasked-a64 and 2b-ctl-arm-unmasked-a32-smp2, each of which reached this path and stopped the boot on FX-0503's message."
+    },
+    {
+      "file": "sched/preempt.rs",
+      "lines": "402",
+      "category": "failure-path",
+      "match": "let pointer = state_of(cpu)?.site.load(Ordering::Relaxed);",
+      "why": "preempt_site, carried from sched/mod.rs 266: where a processor's count was last raised, read only by the two failure reports that name it (unmatched(), and schedule_from's switch with the count raised); neither runs in a passing boot. Shown reached by the negative controls on 3bb22d1bf, logs in ~/.local/share/ferrix/logs/step2a/: 2b-ctl-unmatched-enable (a release with nothing raised) and the three atomicity controls 2b-ctl-x86-address-then-add, 2b-ctl-arm-unmasked-a64 and 2b-ctl-arm-unmasked-a32-smp2, each of which reached this path and stopped the boot on FX-0503's message. The switch's report was reached by 2b-ctl-sleep-holding-lock."
     }
   ]
 }

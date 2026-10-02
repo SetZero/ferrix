@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "e23313903014dc8d44655e007a663b71d90b35174f896b5f6fdbd7c0e6065221",
+  "digest": "b83eb08a5523e348dae259e5b66f19416f1d9569086af4739bcf926383e8218b",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -104,8 +104,8 @@
     }
   ],
   "summary": {
-    "packages": 125,
-    "elements": 6168,
+    "packages": 126,
+    "elements": 6189,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -33087,6 +33087,246 @@
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
                     "line": 107
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Preemption",
+          "qualifiedName": "FerrixSchedRequirements::Preemption",
+          "kind": "package",
+          "doc": "src/kernel/src/sched/preempt.rs and src/kernel/src/sched/mod.rs: the preemption count every crate::sync::SpinLock raises, kept in each processor's record without a locked operation (docs/OPAQUE-KERNEL.md §9.8, 2b; the consultant's OK IF of 2026-10-02, condition 2).",
+          "source": {
+            "file": "docs/sysml/15-sched-requirements.sysml",
+            "line": 111
+          },
+          "children": [
+            {
+              "name": "theCountStaysWithItsProcessor",
+              "qualifiedName": "FerrixSchedRequirements::Preemption::theCountStaysWithItsProcessor",
+              "kind": "requirement",
+              "shortName": "L.sched.20",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 118
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::theCountStaysWithItsProcessor",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A preemption-disabling lock, and a raise by hand, shall raise and lower the preemption count and, for a lock, the locks held of the processor its holder runs on, in that processor's record and without a locked operation, so that no update is lost to an interrupt and none lands on another processor's record: on x86-64 in one GS-relative instruction, with every entry that can reach it running on the kernel's GS base; on AArch64 and ARMv7-A with every exception that can take a lock masked; and a report reading another processor's count shall read each of the count and the locks held whole.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 128
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::theCountStaysWithItsProcessor",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"At two processors or more, two tasks per processor, preempted by the timer and moving between processors, take and let go of a lock 100000 times each with raises by hand among them and move at least once (the `preempt` line). The stress provokes a lost or misplaced update; what detects one is FX-0503's test at the release, which stops the boot when the locks held or the count it lowers is already zero, and, behind it, every processor's count and locks held read zero there by a task that holds nothing. The three atomicity controls (x86-64's record found before the add, the Arm mask removed on aarch64 and on armv7a at two processors) each stop the boot on FX-0503's held-zero message.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 140
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::theCountStaysWithItsProcessor",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.SCHED.1\", \"H.SCHED.2\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 141
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::theCountStaysWithItsProcessor",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::preempt::raise\", \"sched::preempt::lower\", \"sched::preempt::Preempt::disable\", \"sched::preempt::preempt_disable\", \"sched::preempt::PreemptState::note\", \"sched::preempt::preempt_count\", \"sched::preempt::locks_held\", \"smp::record\", \"arch::percpu::this_cpu_add\", \"arch::x86_64::cpu::gs_xadd\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 146
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aCountThatCannotBeKeptStops",
+              "qualifiedName": "FerrixSchedRequirements::Preemption::aCountThatCannotBeKeptStops",
+              "kind": "requirement",
+              "shortName": "L.sched.21",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 148
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aCountThatCannotBeKeptStops",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The scheduler shall stop the machine (FX-0503), naming the site that last raised the count, when it is asked to switch with its processor's count raised, and when a release finds the count, or for a lock the locks held, already at zero, having put the word back first; a release that brings the count to zero shall make the decision an interrupt deferred, if interrupts are on.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 155
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aCountThatCannotBeKeptStops",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The release's cover test refuses a word whose count, or for a lock whose locks held, is zero, and passes one that covers the release (the stage-5 checks). That held-zero test is the detector L.sched.20's stress relies on; the negative controls of a task that sleeps holding a lock and of a release with nothing raised each stop the boot on FX-0503's message.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 161
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aCountThatCannotBeKeptStops",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.SCHED.1\", \"H.SCHED.2\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 162
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aCountThatCannotBeKeptStops",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::preempt::preempt_enable\", \"sched::preempt::Preempt::enable\", \"sched::preempt::enable_from\", \"sched::preempt::unmatched\", \"sched::preempt::covers\", \"sched::preempt::decide_deferred\", \"sched::schedule_from\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 166
+                  }
+                }
+              ]
+            },
+            {
+              "name": "mayBlockReadsItsOwnCount",
+              "qualifiedName": "FerrixSchedRequirements::Preemption::mayBlockReadsItsOwnCount",
+              "kind": "requirement",
+              "shortName": "L.sched.22",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 168
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::mayBlockReadsItsOwnCount",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"may_block shall answer true only when the scheduler runs, interrupts are on, a task is running, and the count of the processor it runs on, read so that the processor and its count are one processor's (one instruction on x86-64, interrupts masked on Arm), is zero.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 173
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::mayBlockReadsItsOwnCount",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A task holding nothing may block; holding a preemption-disabling lock, or with the count raised by hand, it may not; once it lets go it may again (the stage-5 checks).\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 176
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::mayBlockReadsItsOwnCount",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 177
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::mayBlockReadsItsOwnCount",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::may_block\", \"sched::preempt::count_here\", \"arch::percpu::this_cpu_read\", \"arch::x86_64::cpu::read_gs_at\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 179
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aFailedTryLeavesTheCount",
+              "qualifiedName": "FerrixSchedRequirements::Preemption::aFailedTryLeavesTheCount",
+              "kind": "requirement",
+              "shortName": "L.sched.23",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 181
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aFailedTryLeavesTheCount",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A try_lock of a preemption-disabling lock that fails shall leave its processor's count and locks held as it found them, and with interrupts masked shall not switch; one that succeeds shall raise both by one until its guard drops; and ferrix_sync::SpinLock::try_lock_manually shall take no ticket when it fails.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 187
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aFailedTryLeavesTheCount",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"With a lock held, a try_lock of it with interrupts on and with them masked leaves the count and the locks held unchanged and, masked, the task's switches unchanged; a try_lock_manually of a held plain lock fails and changes neither; a successful try_lock raises both by one until it drops (the stage-5 checks, and ferrix-sync's host test of try_lock_manually).\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 193
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aFailedTryLeavesTheCount",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 194
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Preemption::aFailedTryLeavesTheCount",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::preempt::Preempt::disable\", \"sched::preempt::Preempt::enable\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 196
                   }
                 }
               ]
