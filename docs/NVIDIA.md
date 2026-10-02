@@ -1105,6 +1105,21 @@ and took the recommended answer for D2, D3 and D5.
     before it is rewritten.
   
   The kernel half of N0g is separate.
+* **2026-10-03 — N0g step 1 built: every VT-d invalidation through the
+  queue** (branch `nvidia-n0g`, for the consultant before the rest of
+  N0g). The first of §12.3's steps, as its own slice:
+  * register-based invalidation is gone; each invalidation is one
+    descriptor and a fenced, sequence-numbered wait through F-58's
+    helpers (`ferrix_paging::vtd::queue`, six host tests);
+  * a unit without `ECAP.QI` is refused; firmware's `IRE` and `QIE` are
+    turned off and read back; `CFI` is no longer a standing bit;
+  * a failed invalidation releases nothing, and `IQE` or `ITE` marks
+    the unit failed (`Cause::Queue`, FX-1007);
+  * checks R6 and R7 run, and a check that firmware's queue is turned
+    off (`L.iommu.51`), which the design did not list; each control
+    fired. R7 waits 2 ms rather than the unit's 100 ms.
+
+  The rest of N0g (the IRT onward) continues on the same branch.
 
 ## 11. CUDA (N5)
 
