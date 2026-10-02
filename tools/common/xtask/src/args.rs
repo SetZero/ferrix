@@ -103,6 +103,10 @@ pub(crate) struct Args {
     /// `--tmpfs-root`: boot `run` and `run-compositor` with `/` in memory,
     /// as the test boots are, and leave the btrfs root off the bus.
     pub(crate) tmpfs_root: bool,
+    /// `--persistent`: boot `run` and `run-compositor` with `/data` on a
+    /// copy of the volume that keeps what the guest writes, and Chrome's
+    /// profile on it (`crate::persistent`).
+    pub(crate) persistent: bool,
     /// `--btrfs-root`: boot `test-chrome-window` with `/` on a btrfs root
     /// disk, made fresh from the fixture for the run, as the desktop's is.
     pub(crate) btrfs_root: bool,
@@ -402,6 +406,14 @@ pub(crate) struct Args {
     pub(crate) boot: Option<String>,
 }
 
+/// The flags [`Args::root`] takes.
+const ROOT_FLAGS: [&str; 4] = [
+    "--reset-root",
+    "--tmpfs-root",
+    "--btrfs-root",
+    "--persistent",
+];
+
 impl Args {
     /// `--everything`: the flags it stands for, set as if each were given,
     /// but for `--gl` beside a `--no-gl`, before or after it.
@@ -487,14 +499,27 @@ impl Args {
         }
     }
 
-    /// `--reset-root`, `--tmpfs-root` and `--btrfs-root`: where `/` is for
-    /// the boot, and whether it starts over.
+    /// `--reset-root`, `--tmpfs-root`, `--btrfs-root` and `--persistent`:
+    /// where `/` is for the boot, whether it starts over, and whether
+    /// `/data` is kept too.
     fn root(&mut self, flag: &str) {
         match flag {
             "--reset-root" => self.reset_root = true,
             "--tmpfs-root" => self.tmpfs_root = true,
+            "--persistent" => self.persistent = true,
             _ => self.btrfs_root = true,
         }
+    }
+
+    /// These arguments, unless they ask for a root that is both kept and
+    /// in memory.
+    fn root_agrees(self) -> Result<Self> {
+        if self.persistent && self.tmpfs_root {
+            return Err(Error::new(
+                "--persistent keeps / on the btrfs root disk, which --tmpfs-root leaves off",
+            ));
+        }
+        Ok(self)
     }
 
     /// `--auth-seed`, `--auth-seed-file` and `--sabotage` (`crate::auth`).
@@ -542,7 +567,7 @@ impl Args {
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--compositor" => args.compositor = true,
-                "--reset-root" | "--tmpfs-root" | "--btrfs-root" => args.root(&item),
+                flag if ROOT_FLAGS.contains(&flag) => args.root(flag),
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
                 "--no-dotfiles" => args.no_dotfiles = true,
@@ -625,7 +650,7 @@ impl Args {
             }
         }
 
-        Ok(args)
+        args.root_agrees()
     }
 
     /// `--seeds` and `--jobs`: how many of something a command makes or runs.

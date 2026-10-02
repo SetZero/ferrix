@@ -112,6 +112,7 @@ mod orphans;
 mod parallel;
 mod paths;
 mod pe;
+mod persistent;
 mod pkg;
 mod ports;
 mod powerfail;
@@ -462,6 +463,9 @@ OPTIONS:
     --jobs <N>                           miri: crates interpreted at once, by default one per core up to 8
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
     --tmpfs-root                         run, run-compositor: / in memory instead of on the btrfs root disk
+    --persistent                         run, run-compositor: keep /data too, and Chrome's profile on it, so a
+                                         Steam sign-in or a Chrome extension is there at the next boot;
+                                         with --reset-root, start /data over as well
     --btrfs-root                         test-chrome-window: / on a btrfs root disk made fresh for the run
     --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
                                          build, run: put that CMDLINE.TXT in the image

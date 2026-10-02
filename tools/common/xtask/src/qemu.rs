@@ -2082,7 +2082,7 @@ fn qemu_command(
     attach_btrfs_disk(&mut command, arch)?;
     attach_install_disks(&mut command, arch, image, args);
     attach_root_disk(&mut command, arch, args)?;
-    attach_data_image(&mut command, arch, args);
+    attach_data_image(&mut command, arch, args)?;
     let network = attach_network(&mut command, arch, args)?;
 
     attach_firmware(&mut command, arch, &firmware)?;
@@ -2565,12 +2565,23 @@ fn attach_btrfs_disk(command: &mut Command, arch: Arch) -> Result<()> {
 /// default boot. It carries no root label, so the kernel mounts it at
 /// `/data`. Under `snapshot=on` unless [`Args::data_image_kept`]: what the
 /// guest writes goes to a file QEMU throws away, so the next run reads the
-/// volume as this one did.
-fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
+/// volume as this one did. Under `--persistent`, `run` and `run-compositor`
+/// attach the machine's own copy of the volume instead, and keep what is
+/// written to it (`crate::persistent`).
+fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) -> Result<()> {
     let Some(volume) = &args.data_image else {
-        return;
+        return Ok(());
     };
-    let (snapshot, said) = if args.data_image_kept {
+    let persistent =
+        args.persistent && matches!(args.command.as_deref(), Some("run" | "run-compositor"));
+    let copy;
+    let volume = if persistent {
+        copy = crate::persistent::data_volume(volume, args.reset_root)?;
+        &copy
+    } else {
+        volume
+    };
+    let (snapshot, said) = if args.data_image_kept || persistent {
         ("", "kept")
     } else {
         (",snapshot=on", "snapshot")
@@ -2592,6 +2603,7 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
         "virtio-blk-pci,drive=btrfsdata,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", device]);
+    Ok(())
 }
 
 /// `test-install`'s disks, after the three every boot has: the live disk and

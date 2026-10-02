@@ -121,6 +121,7 @@ cargo xtask run       --arch x86_64           # boot it, serial on your terminal
 cargo xtask run       --arch x86_64 --net     # ...with a network, 10.0.2.15 behind a NAT
 cargo xtask run       --arch x86_64 --reset-root  # ...on a freshly installed btrfs root
 cargo xtask run       --arch x86_64 --tmpfs-root  # ...with / in memory instead
+cargo xtask run       --arch x86_64 --persistent  # ...keeping /data between boots too
 cargo xtask test-boot --arch all              # boot it and assert it came up
 cargo xtask test-boot --accel auto            # ...on the real MMU, where it can
 cargo xtask check                             # every gate CI runs
@@ -201,6 +202,17 @@ it. Without the fetched disk, those boots still start and say why rustc is
 absent. The FAT boot image and 1 GiB `root.img` do not contain the 1.7 GiB
 toolchain; the sysroot is a companion disk, so copying the FAT image alone
 will not carry rustc to another host.
+
+`--persistent` keeps `/data` as well, for `run` and for `run-compositor`
+(with `--chrome` or `--everything` too): the first such boot copies the volume
+to `~/.local/share/ferrix/persistent/` and attaches the copy without
+snapshot mode, so a Steam sign-in, a game, files under `/data/home` and
+Chrome's profile, which moves from `/dev/shm` to `/data/home/chrome`, are
+all still there at the next boot. What the guest writes reaches the disk at
+its next commit, every 30 seconds, so closing the window loses at most the
+last half minute. The copy does not follow the volume: when a fetch script
+remakes the volume, the boot says so. `--persistent --reset-root` then starts
+both the root and the copy over, and everything on them is lost.
 
 `cargo xtask test-selfhost --accel kvm` is stage 20's gate, on a Linux host
 with `btrfs-progs`. It stages the sysroot's tree, every file git tracks here

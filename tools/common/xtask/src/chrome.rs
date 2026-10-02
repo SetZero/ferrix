@@ -407,6 +407,13 @@ pub(crate) fn window_command(page: &str) -> String {
 /// Testing's on x86-64, Debian's Chromium on AArch64. Chromium keeps its own
 /// user agent, which says `aarch64` truly; [`USER_AGENT`] says x86-64.
 pub(crate) fn window_command_for(arch: Arch, page: &str) -> String {
+    window_command_with_profile(arch, page, "/dev/shm/chrome")
+}
+
+/// [`window_command_for`] with the profile in `profile` rather than in
+/// `/dev/shm`: `run-compositor --persistent`'s, on the volume it keeps
+/// (`crate::persistent::CHROME_PROFILE`).
+pub(crate) fn window_command_with_profile(arch: Arch, page: &str, profile: &str) -> String {
     let (program, agent) = if arch == Arch::AArch64 {
         ("/data/usr/lib/chromium/chromium", String::new())
     } else {
@@ -417,7 +424,7 @@ pub(crate) fn window_command_for(arch: Arch, page: &str) -> String {
     };
     format!(
         "{program} --no-sandbox --ozone-platform=wayland \
-         --user-data-dir=/dev/shm/chrome --no-first-run --disable-gpu --disable-crash-reporter \
+         --user-data-dir={profile} --no-first-run --disable-gpu --disable-crash-reporter \
          --disable-breakpad --enable-logging=stderr --disable-infobars \
          --alsa-output-device=default --audio-buffer-size=960 \
          --autoplay-policy=no-user-gesture-required{agent} {page}"
