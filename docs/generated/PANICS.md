@@ -86,6 +86,7 @@ Causes are listed most likely first.
 | [FX-0905](#fx-0905) | a job quota did not bound what it claims to |
 | [FX-0906](#fx-0906) | the kernel heap a job drove through the Linux calls was not bounded by its job |
 | [FX-0907](#fx-0907) | a process left its speculation domain where it may not wait |
+| [FX-0908](#fx-0908) | a check's hook inside the item was still armed after stage 9 |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
@@ -2067,6 +2068,28 @@ the site.
 
 See: src/kernel/src/object/process.rs leave_speculation_domain;
 src/kernel/src/smp.rs synchronize; docs/OPAQUE-KERNEL.md §9.3b.
+
+<a id="fx-0908"></a>
+
+## FX-0908 — a check's hook inside the item was still armed after stage 9
+
+Some of stage 9's checks need the item to do something at a point no program can
+aim at: the speculation domain check's case 11 makes another processor record a
+domain between a leave's scan and its grace period
+(`arch::speculation::leaving_domain`, the certification finding F-60). It does
+that through a hook only stage 9 arms, which records the check that armed it and
+which stage 9 disarms before init starts (`docs/OPAQUE-KERNEL.md` §9.7's rules
+for such a hook). A hook left armed would run that check's code in every later
+leave, on a machine running programs. So boot stops before the success marker,
+naming the check, if one still is.
+
+1. A check that arms a hook returned, on success or on an error it reports,
+   without disarming it.
+2. A new check arms a hook and was written without the disarm.
+
+See: src/kernel/src/arch/speculation.rs CheckHook;
+src/kernel/src/object/domain_check.rs; src/kernel/src/main.rs;
+docs/OPAQUE-KERNEL.md §9.7.
 
 <a id="fx-1001"></a>
 

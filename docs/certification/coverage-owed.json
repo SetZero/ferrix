@@ -68,6 +68,16 @@
       ],
       "dropped": "Carried from 5e1341d35: 0 anchors dropped on every architecture. Nothing measured was edited; what is owed is new code no run has measured.",
       "what": "Measure, and test or argue, the new and edited lines on each architecture: object::channel's slot (Small, Inbox::put_small, take_spare, pop_fitting's slot arm, pop_small, unpop's younger-slot arm and its refusal, drain, Endpoint::write_small and its refusals, read_small, readable_or_closed); syscall::native's channel_write_read, send_words, receive_words, read_refusal and dispatch_write_read, and syscall::native_call's 0x1013 arm; the entries' ReturnWords arms (x86-64's ferrix_syscall_entry and int $0x80 system_call, aarch64's system_call, armv7a's store_words); sched's IN_CALL (call_entered, call_left, carry_in_call, resched_here's call arm), the Sync wake (wake_with, may_place, asleep_at_home, wake_onto and its Declined and NotBlocked arms, wake_at_home's deferral, kick_after_wake), Task::holds_slots and swap_in_call; sched::wait's wait_trusting, wait_sliced's no-recheck and unlisted arms and its fence, WaitQueue::wake_all_with's batch and long-list arms; timer's ARMED (after's skip, stop's one-shot arm, on_tick's clear, every), ticks_to_nanos; x86-64's apic LVT_UNMASKED and timer_disarm_fired; and trap::system_call's call_entered and call_left. The new check files are object/write_read_check.rs, the drive_native_words functions in each entry's check file, and stages_check's check_a_skipped_arm."
+    },
+    {
+      "landing": "F-60, a speculation domain's leave checked locally at each grace-period answer (branch f60-domain-leave)",
+      "architectures": [
+        "x86_64",
+        "aarch64",
+        "armv7a"
+      ],
+      "dropped": "Carried from 265ef1a67: 0 anchors dropped on every architecture. Nothing measured was edited; what is owed is new and moved code no run has measured.",
+      "what": "Measure, and test or argue, the new and edited lines on each architecture: arch::speculation's leaving_domain (its publish, hook call and grace-period wait), publish_leaving and its full-set yield, answer_leaving, arm_leave_hook, disarm_leave_hook, leave_hook_armed_by and last_domain_on; smp's answer_grace_periods and the on_ipi and answer_grace that call it; object::process::leave_speculation_domain's call; and main.rs's require_hooks_disarmed and its FX-0908 arm. The new check code is object/domain_check.rs's case 11."
     }
   ]
 }
