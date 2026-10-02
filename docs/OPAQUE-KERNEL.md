@@ -1232,3 +1232,65 @@ consultant, and at this writing that seat is empty.
    certified item, is acceptable at all, with the consultant's view. Without
    it the plan stops at the direct switch.
 4. Who takes the certification consultant's seat.
+
+The customer's answers (2026-10-02):
+1. The promise is the matched figure: every mitigation on, both programs in
+   one speculation domain, against seL4 with the same protections.
+   `--mitigations off` is reported beside it and not gated.
+2. Yes: native calls that block may destroy the vector registers, under the
+   contract in step 3.
+3. Yes to a fast path for 0x1013, if the consultant accepts its design
+   before any code is written.
+4. The session running this plan spawns its own consultant subagent. Its
+   verdicts go in the consultant's ledger, as on 2026-10-02 for NVIDIA and
+   btrfs.
+
+### 9.6 Step 0: seL4 measured on nazuna (2026-10-02)
+
+seL4 was built and timed under the gate's QEMU and KVM, with one virtual
+processor pinned to host core 11. Each figure is a full round trip: one
+`seL4_Call` and one `seL4_ReplyRecv` between two address spaces at one
+priority, on the fast path, with one word in a register. A root task times
+20,000 trips per sample run with `lfence; rdtsc; lfence`, and takes p50 from
+the sorted samples. The guest TSC runs at 4,400 MHz.
+
+| seL4 configuration | p50 round trip |
+|---|---|
+| matched: no skim window, return-stack refill, no `IBPB` | 1,936 ticks, 440 ns |
+| seL4's defaults (skim window on) | 2,860 ticks, 650 ns |
+| `IBPB` at every switch | 3,960 ticks, 900 ns |
+| matched, fast path off (control) | 2,244 ticks, 510 ns |
+| matched without the refill (extra) | 1,760–1,804 ticks, 400–410 ns |
+
+These are quiet runs, with the SMT sibling of core 11 under 20% busy. A busy
+sibling adds 15 to 20%, so only ratios taken back to back are compared.
+
+**The target is 0.66 us, not 0.37.** 1.5 times the matched figure is about
+2,900 ticks. The *guess* of §9.5 assumed seL4's published cycle count, and
+the virtual machine adds to it.
+
+What this changes in §9.5:
+- **nazuna has no PCID.** CPUID leaf 1 ECX bit 17 is clear on the host, so
+  KVM cannot offer it, and a seL4 built with `KernelSupportPCID` refuses to
+  boot. Every seL4 figure above is without PCIDs. Step 3's PCIDs, and
+  `+pcid,+invpcid` in step 0's CPU model, cannot be done under KVM here. The
+  allowance of 20 ns for `CR3` in the budget becomes a full flush on both
+  kernels. The PCIDs still belong to the plan for hardware that has them.
+- **`IBPB` costs about 230 ns a switch under KVM here**, (3,960 − 1,936) / 2,
+  not the 2 us that §9.1 gives. §9.1's account of the gap between its two
+  columns needs a recheck once step 1 is in.
+- **The return-stack refill costs about 20 ns a switch**, within the budget's
+  40.
+- The gate's CPU model clears `RDCL_NO` in `IA32_ARCH_CAPABILITIES`, so the
+  seL4 runs add `+rdctl-no` (true for Zen 5) and `+rdtscp`.
+- sel4bench's own one-way figures read a `cpuid` beside every sample, which
+  exits the virtual machine. Their sum, 2,640 ticks, is larger than the
+  round trip measured, so the root task's figure is the one to compare.
+- Ferrix's `ipc-bench` still differs in its counter read (no `lfence`) and
+  its p50 (a histogram floored to an eighth of a power of two). Those are the
+  "made exact" part of step 0, still to do.
+
+To repeat: `~/.local/share/ferrix/sel4/` on nazuna (`fetch.sh`, `build.sh`,
+`run.sh`, `series.sh`, `summarize.py`, the patch to sel4bench's `apps/ipc`,
+and every run's log). The sources are sel4bench-manifest 80add415, with seL4
+at c6ce4d2a.
