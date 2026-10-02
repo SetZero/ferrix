@@ -721,6 +721,20 @@ fn the_commit_flushes_before_the_superblock() {
     );
     let nodes_after = log[primary..].iter().any(|op| matches!(op, Op::Write(at, _) if !ferrix_btrfs::superblock::SUPERBLOCK_OFFSETS.contains(at)));
     assert!(!nodes_after, "no node is written after the superblock");
+    let mirrors: Vec<usize> = log
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| matches!(op, Op::Write(at, _) if *at != ferrix_btrfs::superblock::PRIMARY_OFFSET && ferrix_btrfs::superblock::SUPERBLOCK_OFFSETS.contains(at)))
+        .map(|(index, _)| index)
+        .collect();
+    assert!(
+        !mirrors.is_empty(),
+        "the 128 MiB fixture holds the 64 MiB mirror"
+    );
+    assert!(
+        mirrors.iter().all(|&index| index > primary + 1),
+        "every mirror is written after the flush that makes the primary durable"
+    );
 }
 
 /// Write the images the other tests produce to `FERRIX_BTRFS_OUT` for host

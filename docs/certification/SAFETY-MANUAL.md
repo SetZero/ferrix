@@ -340,8 +340,11 @@ running system.
 The element parses a btrfs volume as hostile input in ring 0: whatever its
 bytes, the reader and writer answer an error rather than read or write
 outside a buffer, panic or loop without bound (`H.STORE.1`), and a block or
-sector whose checksum, address, level or generation is wrong is refused or
-read from its other copy (`H.STORE.2`). A damaged volume is not an internal
+sector whose checksum is wrong, or a node whose address or generation is
+not what its parent named, is refused or read from its other copy
+(`L.btrfs.31`, `L.btrfs.32`, `L.btrfs.70`, `L.btrfs.84`); the node's level
+and filesystem id are checked against its parent too, which no test
+verifies yet. A damaged volume is not an internal
 inconsistency: it is answered with an error, and a failed write turns the
 mount read-only at its last commit, never the safe state of §3. Two limits
 follow, and the integrator shall design for both. CRC-32C detects accident,
@@ -387,7 +390,7 @@ cause.
 | FM-8 | A partition is starved of processor time | ASR-8 violated | none at runtime; the `quota` boot line checks one job's share against another's | EEVDF eligibility, EDF admission; a job's share of a contended processor is its weight's, whatever its task count | no WCET, so no bound is provable (AoU-4) |
 | FM-9 | Kernel stack overflow | page fault at the instruction that overflowed | **guard page below every kernel stack**, and a boot check that the guard is unmapped | `vmap` reserves an unmapped page on each side of every allocation; no recursion in the element | the loader-provided boot stack is not guarded (early boot only) |
 | FM-10 | A processor stops answering a TLB shootdown or grace period (x86-64) | none while the wait lasts: nothing is freed and no narrowed permission relied on until every processor answers; then the safe state (FX-0001, FX-0002, FX-0003) | `smp::wait_for` and `take_turn`: a wall-clock floor (1 s, 5 s) **and** a count of the waiter's own polls, which stretches with the emulator's slowness | the count is in guest units, so a slow machine is not called stuck; a stuck processor answers no count and is still found (negative control: 1.8 s under KVM, 5.1 s under `tcg`, 32 s under the coverage plugin) | a host that stops running one virtual processor and keeps running the waiter can still end the wait early: availability lost, never integrity |
-| FM-11 | Stored data is altered or lost: a torn commit, a write the device reordered, damage on the medium, a hostile image | ASR-9 violated: wrong bytes returned as a file's, or a volume that no longer mounts | a CRC-32C on every node and data sector, and each node's address, level, generation and filesystem checked against its parent; the second copy read where the chunk keeps one | copy-on-write: nothing the last commit reaches is overwritten, and the superblock is written after a flush; a failed transaction is aborted and the volume reloaded read only at its last commit | deliberate alteration with matching checksums (AoU-15); a device that does not honour flush (AoU-16); log replay and orphan cleanup at mount are not measured against a full volume, and can still fail the mount there (`docs/BACKLOG.md`) |
+| FM-11 | Stored data is altered or lost: a torn commit, a write the device reordered, damage on the medium, a hostile image | ASR-9 violated: wrong bytes returned as a file's, or a volume that no longer mounts | a CRC-32C on every node and data sector, and each node's address and generation checked against its parent (`L.btrfs.31`, `L.btrfs.32`, `L.btrfs.70`, `L.btrfs.84`), its level and filesystem too, with no test of those two yet; the second copy read where the chunk keeps one | copy-on-write: nothing the last commit reaches is overwritten, and the superblock is written after a flush; a failed transaction is aborted and the volume reloaded read only at its last commit | deliberate alteration with matching checksums (AoU-15); a device that does not honour flush (AoU-16); log replay and orphan cleanup at mount are not measured against a full volume, and can still fail the mount there (`docs/BACKLOG.md`) |
 
 **FM-9 was recorded as the worst entry in this table and that was wrong.**
 Every kernel stack is guard-paged at both ends: `crate::vmap` reserves an

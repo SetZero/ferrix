@@ -727,6 +727,10 @@ fn a_dup_data_sector_that_fails_its_checksum_is_read_from_the_other_copy() {
         ),
         "with both copies bad the read fails and names the sector: {error:?}"
     );
+    assert!(
+        piece.iter().all(|&b| b == 0xAA || b == 0),
+        "and hands back none of its bytes"
+    );
 }
 
 /// Verifies: L.btrfs.85

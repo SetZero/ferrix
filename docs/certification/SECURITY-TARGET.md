@@ -228,7 +228,10 @@ data integrity error, the TSF shall **read the other copy where the chunk
 keeps one, and otherwise answer an error and return none of the damaged
 bytes**.
 
-*Refinement.* "Integrity error" is refined to accidental change. CRC-32C is
+*Refinement.* "Integrity error" is refined to accidental change. Of the
+node's attributes, the checksum, address and generation have tests
+(`L.btrfs.31`, `L.btrfs.32`, `L.btrfs.70`); the level and filesystem
+checks do not yet. CRC-32C is
 not a keyed check, and a volume written by an attacker can carry checksums
 that match (§9.8).
 

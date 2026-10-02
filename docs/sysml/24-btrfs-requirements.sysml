@@ -564,8 +564,7 @@ package FerrixBtrfsRequirements {
 
         requirement <'L.btrfs.10'> nodesReadFromAGoodCopy : ItemLowLevel {
             attribute :>> statement = "Volume::read_node shall try each copy of a node
-                in turn and return the first whose checksum, address, level, generation
-                and filesystem id match what its parent named.";
+                in turn and return the first that passes its checks.";
             attribute :>> criterion = "With the first copy of a DUP node damaged, the
                 read returns the node from the second.";
             attribute :>> parent = "H.STORE.2";

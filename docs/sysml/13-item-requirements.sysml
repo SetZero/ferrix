@@ -1327,7 +1327,12 @@ package FerrixItemRequirements {
              * (`ferrix-btrfs-vfs`, src/kernel/src/fs/btrfs*.rs) is load, so
              * these promise what the two crates do at `Volume` and
              * `WriteVolume`, not what a program sees through a mount. The
-             * low-level requirements are part 24. */
+             * low-level requirements are part 24. Some sit under a requirement
+             * here by decomposition rather than as a case of its criterion:
+             * L.btrfs.31 and .70 (a node's address and generation) refine
+             * H.STORE.2, whose criterion tests a data sector, and L.btrfs.16
+             * and .92 (superblock stripes) refine H.STORE.5, whose criterion
+             * tests the trees' consistency. */
 
         requirement <'H.STORE.1'> untrustedVolumesAnswered : ItemHighLevel {
             attribute :>> statement = "The btrfs reader and writer shall answer
@@ -1350,7 +1355,8 @@ package FerrixItemRequirements {
                 error.";
             attribute :>> criterion = "With the first copy of a DUP data sector damaged,
                 a file read returns the file's bytes from the second; with both
-                damaged, it answers DataChecksum and fills nothing.";
+                damaged, it answers DataChecksum and hands back none of the
+                sector's bytes.";
             attribute :>> parent = ("O.MEDIA", "ASR-9");
         }
         requirement <'H.STORE.3'> aCommitIsAllOrNothing : ItemHighLevel {

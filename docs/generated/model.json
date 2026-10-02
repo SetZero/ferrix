@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "158b724c0d014adf894833b10fde003862d450e589536372211e87b0bba0dfe2",
+  "digest": "129d99b9166c9269adab68a1d07ccd8db066bc1744068114edc69f52e4620faa",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -25325,7 +25325,7 @@
                       "name": "Storage",
                       "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::Storage",
                       "kind": "package",
-                      "doc": "The btrfs reader and write path, `ferrix-btrfs` and `ferrix-btrfs-write`, in the item since 2026-10-02: O.MEDIA and ASR-9 (FPT_TDC.1, FDP_SDI.2). Their interface below is the `Device` and `WriteDevice` traits the kernel's block layer answers, above it `Volume` and `WriteVolume`; the VFS glue on top (`ferrix-btrfs-vfs`, src/kernel/src/fs/btrfs*.rs) is load, so these promise what the two crates do at `Volume` and `WriteVolume`, not what a program sees through a mount. The low-level requirements are part 24.",
+                      "doc": "The btrfs reader and write path, `ferrix-btrfs` and `ferrix-btrfs-write`, in the item since 2026-10-02: O.MEDIA and ASR-9 (FPT_TDC.1, FDP_SDI.2). Their interface below is the `Device` and `WriteDevice` traits the kernel's block layer answers, above it `Volume` and `WriteVolume`; the VFS glue on top (`ferrix-btrfs-vfs`, src/kernel/src/fs/btrfs*.rs) is load, so these promise what the two crates do at `Volume` and `WriteVolume`, not what a program sees through a mount. The low-level requirements are part 24. Some sit under a requirement here by decomposition rather than as a case of its criterion: L.btrfs.31 and .70 (a node's address and generation) refine H.STORE.2, whose criterion tests a data sector, and L.btrfs.16 and .92 (superblock stripes) refine H.STORE.5, whose criterion tests the trees' consistency.",
                       "source": {
                         "file": "docs/sysml/13-item-requirements.sysml",
                         "line": 1321
@@ -25339,7 +25339,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1332
+                            "line": 1337
                           },
                           "children": [
                             {
@@ -25350,7 +25350,7 @@
                               "value": "\"The btrfs reader and writer shall answer every volume image, whatever its bytes, with a value or an error, without reading or writing outside a buffer, panicking or looping without bound.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1336
+                                "line": 1341
                               }
                             },
                             {
@@ -25361,7 +25361,7 @@
                               "value": "\"Each of 4,096 single-byte patches of a superblock, and of a leaf, parses or is refused, and every accessor of what parses answers, 0 panics. The decoders' own totality, and the `btrfs_read` fuzzer's resealed images, are their low-level requirements' and outside this criterion; the write path, which parses every node through the reader, has no hostile-image check of its own yet (TODO.md).\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1343
+                                "line": 1348
                               }
                             },
                             {
@@ -25372,7 +25372,7 @@
                               "value": "\"O.MEDIA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1344
+                                "line": 1349
                               }
                             }
                           ]
@@ -25385,7 +25385,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1346
+                            "line": 1351
                           },
                           "children": [
                             {
@@ -25396,7 +25396,7 @@
                               "value": "\"A block whose checksum disagrees with its contents shall never be returned as valid: the reader shall read another copy where the chunk keeps one, and otherwise answer an error.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1350
+                                "line": 1355
                               }
                             },
                             {
@@ -25404,10 +25404,10 @@
                               "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::Storage::damageNotReturnedAsData",
                               "kind": "attribute",
                               "redefines": "criterion",
-                              "value": "\"With the first copy of a DUP data sector damaged, a file read returns the file's bytes from the second; with both damaged, it answers DataChecksum and fills nothing.\"",
+                              "value": "\"With the first copy of a DUP data sector damaged, a file read returns the file's bytes from the second; with both damaged, it answers DataChecksum and hands back none of the sector's bytes.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1353
+                                "line": 1359
                               }
                             },
                             {
@@ -25418,7 +25418,7 @@
                               "value": "(\"O.MEDIA\", \"ASR-9\")",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1354
+                                "line": 1360
                               }
                             }
                           ]
@@ -25431,7 +25431,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1356
+                            "line": 1362
                           },
                           "children": [
                             {
@@ -25442,7 +25442,7 @@
                               "value": "\"Until a commit's superblock is written, the volume on the device shall be exactly the last commit, whatever of the commit's other writes have reached it.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1359
+                                "line": 1365
                               }
                             },
                             {
@@ -25453,7 +25453,7 @@
                               "value": "\"500 inserts committed, and the commit's writes replayed without its superblocks onto the volume as it was, leave a volume that checks clean and holds exactly the last commit's items.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1362
+                                "line": 1368
                               }
                             },
                             {
@@ -25464,7 +25464,7 @@
                               "value": "\"ASR-9\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1363
+                                "line": 1369
                               }
                             }
                           ]
@@ -25477,7 +25477,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1365
+                            "line": 1371
                           },
                           "children": [
                             {
@@ -25488,7 +25488,7 @@
                               "value": "\"What a commit or a log commit returned success for shall be found, no older, when the volume is opened after a power cut at any later point, the log replayed if the superblock names one.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1369
+                                "line": 1375
                               }
                             },
                             {
@@ -25499,7 +25499,7 @@
                               "value": "\"Of 100 cuts over 4 random scenarios of writes, logs and commits, each rebuilt as the device may have left the disk, every one opens, checks clean down to free space and checksums, and rolls back no completed promise.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1373
+                                "line": 1379
                               }
                             },
                             {
@@ -25510,7 +25510,7 @@
                               "value": "\"ASR-9\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1374
+                                "line": 1380
                               }
                             }
                           ]
@@ -25523,7 +25523,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1376
+                            "line": 1382
                           },
                           "children": [
                             {
@@ -25534,7 +25534,7 @@
                               "value": "\"Each commit shall leave the extent tree, the block groups' usage, the free-space tree and the superblock's totals agreeing with the trees, so that no block in use is free.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1379
+                                "line": 1385
                               }
                             },
                             {
@@ -25545,7 +25545,7 @@
                               "value": "\"After 3,000 random edits on the blank fixture, committed as they go, the writer's checker finds every tree block's and data extent's references, each block group's usage and free space and the superblock's total consistent.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1383
+                                "line": 1389
                               }
                             },
                             {
@@ -25556,7 +25556,7 @@
                               "value": "\"ASR-9\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1384
+                                "line": 1390
                               }
                             }
                           ]
@@ -25569,7 +25569,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1386
+                            "line": 1392
                           },
                           "children": [
                             {
@@ -25580,7 +25580,7 @@
                               "value": "\"An operation the volume has no room for shall be refused with no space before it changes anything, leaving the transaction able to commit.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1389
+                                "line": 1395
                               }
                             },
                             {
@@ -25591,7 +25591,7 @@
                               "value": "\"On a 128 MiB volume, creates until its trees are full end in NoSpace with the transaction not aborted, its commit succeeds, and a deletion still makes room for another create.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1392
+                                "line": 1398
                               }
                             },
                             {
@@ -25602,7 +25602,7 @@
                               "value": "\"ASR-9\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1393
+                                "line": 1399
                               }
                             }
                           ]
@@ -25615,7 +25615,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1395
+                            "line": 1401
                           },
                           "children": [
                             {
@@ -25626,7 +25626,7 @@
                               "value": "\"An allocation the btrfs writer cannot make shall be answered to its caller as an error, aborting the transaction if an edit had begun, and never as a panic or a stop of the element.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1398
+                                "line": 1404
                               }
                             },
                             {
@@ -25637,7 +25637,7 @@
                               "value": "\"With every allocation of the writer's operations failed in turn, each operation succeeds or answers an error, no panic is taken, and the volume reopened from the device is the last commit and checks clean.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1402
+                                "line": 1408
                               }
                             },
                             {
@@ -25648,7 +25648,7 @@
                               "value": "(\"O.QUOTA\", \"ASR-9\")",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1403
+                                "line": 1409
                               }
                             }
                           ]
@@ -25661,7 +25661,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1405
+                            "line": 1411
                           },
                           "children": [
                             {
@@ -25672,7 +25672,7 @@
                               "value": "\"An operation that fails after it changed something shall abort its transaction, so that none of it is committed, and the volume reloaded at its last commit shall take no further change.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1409
+                                "line": 1415
                               }
                             },
                             {
@@ -25683,7 +25683,7 @@
                               "value": "\"Through a mount, a commit whose device write fails answers EIO; the mount then reads the last commit, has no trace of the aborted transaction, answers EROFS to a write, a truncation and a create, and the disk holds the last commit.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1413
+                                "line": 1419
                               }
                             },
                             {
@@ -25694,7 +25694,7 @@
                               "value": "\"ASR-9\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1414
+                                "line": 1420
                               }
                             }
                           ]
@@ -65343,10 +65343,10 @@
                   "qualifiedName": "FerrixBtrfsRequirements::NodeReads::nodesReadFromAGoodCopy",
                   "kind": "attribute",
                   "redefines": "statement",
-                  "value": "\"Volume::read_node shall try each copy of a node in turn and return the first whose checksum, address, level, generation and filesystem id match what its parent named.\"",
+                  "value": "\"Volume::read_node shall try each copy of a node in turn and return the first that passes its checks.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 568
+                    "line": 567
                   }
                 },
                 {
@@ -65357,7 +65357,7 @@
                   "value": "\"With the first copy of a DUP node damaged, the read returns the node from the second.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 570
+                    "line": 569
                   }
                 },
                 {
@@ -65368,7 +65368,7 @@
                   "value": "\"H.STORE.2\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 571
+                    "line": 570
                   }
                 },
                 {
@@ -65379,7 +65379,7 @@
                   "value": "(\"ferrix_btrfs::volume::Volume::read_node\", \"ferrix_btrfs::volume::Volume::read_node_copy\", \"ferrix_btrfs::volume::Volume::read_copy\", \"ferrix_btrfs::chunk::ChunkMap::copies\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 575
+                    "line": 574
                   }
                 }
               ]
@@ -65392,7 +65392,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 577
+                "line": 576
               },
               "children": [
                 {
@@ -65403,7 +65403,7 @@
                   "value": "\"Volume::read_node shall refuse a node none of whose copies passes its checks, with the first copy's error.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 579
+                    "line": 578
                   }
                 },
                 {
@@ -65414,7 +65414,7 @@
                   "value": "\"A tree node with a damaged byte, in a SINGLE chunk, is refused and not read as a node.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 581
+                    "line": 580
                   }
                 },
                 {
@@ -65425,7 +65425,7 @@
                   "value": "\"H.STORE.2\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 582
+                    "line": 581
                   }
                 },
                 {
@@ -65436,7 +65436,7 @@
                   "value": "(\"ferrix_btrfs::volume::Volume::read_node\", \"ferrix_btrfs::volume::Volume::read_node_copy\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 584
+                    "line": 583
                   }
                 }
               ]
@@ -65449,7 +65449,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 586
+                "line": 585
               },
               "children": [
                 {
@@ -65460,7 +65460,7 @@
                   "value": "\"Volume::read_node shall refuse a node whose generation differs from what its parent named, with BadTree.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 588
+                    "line": 587
                   }
                 },
                 {
@@ -65471,7 +65471,7 @@
                   "value": "\"A root pointer with its generation raised by one is refused with BadTree.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 590
+                    "line": 589
                   }
                 },
                 {
@@ -65482,7 +65482,7 @@
                   "value": "\"H.STORE.2\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 591
+                    "line": 590
                   }
                 },
                 {
@@ -65493,7 +65493,7 @@
                   "value": "(\"ferrix_btrfs::volume::Volume::read_node_copy\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 592
+                    "line": 591
                   }
                 }
               ]
@@ -65506,7 +65506,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 594
+                "line": 593
               },
               "children": [
                 {
@@ -65517,7 +65517,7 @@
                   "value": "\"A failed device read shall be answered as DeviceRead at its physical address, not as damage.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 596
+                    "line": 595
                   }
                 },
                 {
@@ -65528,7 +65528,7 @@
                   "value": "\"A device failing the root's read answers DeviceRead at that address.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 598
+                    "line": 597
                   }
                 },
                 {
@@ -65539,7 +65539,7 @@
                   "value": "\"H.STORE.2\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 599
+                    "line": 598
                   }
                 },
                 {
@@ -65550,7 +65550,7 @@
                   "value": "(\"ferrix_btrfs::volume::Volume::read_copy\", \"ferrix_btrfs::volume::Volume::read_node\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 601
+                    "line": 600
                   }
                 }
               ]
@@ -65563,7 +65563,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 603
+                "line": 602
               },
               "children": [
                 {
@@ -65574,7 +65574,7 @@
                   "value": "\"A tree whose root names a level above MAX_LEVEL shall be refused with BadTree before anything is read.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 605
+                    "line": 604
                   }
                 },
                 {
@@ -65585,7 +65585,7 @@
                   "value": "\"A root of level 8 is refused with BadTree.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 606
+                    "line": 605
                   }
                 },
                 {
@@ -65596,7 +65596,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 607
+                    "line": 606
                   }
                 },
                 {
@@ -65607,7 +65607,7 @@
                   "value": "(\"ferrix_btrfs::volume::Volume::seek\", \"ferrix_btrfs::volume::Volume::read_node_copy\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 609
+                    "line": 608
                   }
                 }
               ]
@@ -65621,7 +65621,7 @@
           "doc": "Names and file contents, read through a subvolume.",
           "source": {
             "file": "docs/sysml/24-btrfs-requirements.sysml",
-            "line": 613
+            "line": 612
           },
           "children": [
             {
@@ -65632,7 +65632,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 616
+                "line": 615
               },
               "children": [
                 {
@@ -65643,7 +65643,7 @@
                   "value": "\"Subvolume::lookup shall refuse an entry filed under another name's hash.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 618
+                    "line": 617
                   }
                 },
                 {
@@ -65654,7 +65654,7 @@
                   "value": "\"A lookup reaching an entry whose name hashes to another key is refused.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 620
+                    "line": 619
                   }
                 },
                 {
@@ -65665,7 +65665,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 621
+                    "line": 620
                   }
                 },
                 {
@@ -65676,7 +65676,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::lookup\", \"ferrix_btrfs::items::name_hash\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 623
+                    "line": 622
                   }
                 }
               ]
@@ -65689,7 +65689,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 625
+                "line": 624
               },
               "children": [
                 {
@@ -65700,7 +65700,7 @@
                   "value": "\"Subvolume::lookup shall refuse a name that no longer matches its hash.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 627
+                    "line": 626
                   }
                 },
                 {
@@ -65711,7 +65711,7 @@
                   "value": "\"A lookup of a name changed on the disk after it was filed is refused.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 629
+                    "line": 628
                   }
                 },
                 {
@@ -65722,7 +65722,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 630
+                    "line": 629
                   }
                 },
                 {
@@ -65733,7 +65733,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::lookup\", \"ferrix_btrfs::items::name_hash\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 632
+                    "line": 631
                   }
                 }
               ]
@@ -65746,7 +65746,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 634
+                "line": 633
               },
               "children": [
                 {
@@ -65757,7 +65757,7 @@
                   "value": "\"check_name shall refuse an empty name, `.`, `..` and a name holding `/` or NUL, and accept other names of up to 255 bytes; a lookup shall refuse the same names.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 637
+                    "line": 636
                   }
                 },
                 {
@@ -65768,7 +65768,7 @@
                   "value": "\"Six names -- empty, `.`, `..`, `/`, `a/b` and one with a NUL -- are refused by check_name and by a lookup, and six others, `...` and one of 255 bytes among them, are accepted.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 640
+                    "line": 639
                   }
                 },
                 {
@@ -65779,7 +65779,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 641
+                    "line": 640
                   }
                 },
                 {
@@ -65790,7 +65790,7 @@
                   "value": "(\"ferrix_btrfs::fs::check_name\", \"ferrix_btrfs::fs::entry_named\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 643
+                    "line": 642
                   }
                 }
               ]
@@ -65803,7 +65803,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 645
+                "line": 644
               },
               "children": [
                 {
@@ -65814,7 +65814,7 @@
                   "value": "\"Subvolume::read_dir shall refuse a listing that holds a name with a slash.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 647
+                    "line": 646
                   }
                 },
                 {
@@ -65825,7 +65825,7 @@
                   "value": "\"A listing whose entry's name holds a slash is refused.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 649
+                    "line": 648
                   }
                 },
                 {
@@ -65836,7 +65836,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 650
+                    "line": 649
                   }
                 },
                 {
@@ -65847,7 +65847,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read_dir\", \"ferrix_btrfs::fs::check_name\", \"ferrix_btrfs::fs::target_of\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 652
+                    "line": 651
                   }
                 }
               ]
@@ -65860,7 +65860,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 654
+                "line": 653
               },
               "children": [
                 {
@@ -65871,7 +65871,7 @@
                   "value": "\"Subvolume::lookup shall answer a name the directory does not hold as a miss, not an error.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 656
+                    "line": 655
                   }
                 },
                 {
@@ -65882,7 +65882,7 @@
                   "value": "\"A lookup of an absent name answers None.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 657
+                    "line": 656
                   }
                 },
                 {
@@ -65893,7 +65893,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 658
+                    "line": 657
                   }
                 },
                 {
@@ -65904,7 +65904,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::lookup\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 659
+                    "line": 658
                   }
                 }
               ]
@@ -65917,7 +65917,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 661
+                "line": 660
               },
               "children": [
                 {
@@ -65928,7 +65928,7 @@
                   "value": "\"Subvolume::read shall return an uncompressed file's bytes as they were written.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 663
+                    "line": 662
                   }
                 },
                 {
@@ -65939,7 +65939,7 @@
                   "value": "\"Every file of the uncompressed image reads back byte for byte.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 665
+                    "line": 664
                   }
                 },
                 {
@@ -65950,7 +65950,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 666
+                    "line": 665
                   }
                 },
                 {
@@ -65961,7 +65961,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read\", \"ferrix_btrfs::fs::Subvolume::copy_extent\", \"ferrix_btrfs::fs::Placement::new\", \"ferrix_btrfs::fs::copy_from\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 669
+                    "line": 668
                   }
                 }
               ]
@@ -65974,7 +65974,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 671
+                "line": 670
               },
               "children": [
                 {
@@ -65985,7 +65985,7 @@
                   "value": "\"Subvolume::read shall return a zlib-compressed file's bytes as they were written.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 673
+                    "line": 672
                   }
                 },
                 {
@@ -65996,7 +65996,7 @@
                   "value": "\"Every file of the zlib image reads back byte for byte.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 675
+                    "line": 674
                   }
                 },
                 {
@@ -66007,7 +66007,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 676
+                    "line": 675
                   }
                 },
                 {
@@ -66018,7 +66018,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read\", \"ferrix_btrfs::fs::ReadBuffers::expand_extent\", \"ferrix_btrfs::fs::ReadBuffers::expand_inline\", \"ferrix_btrfs::fs::expanded_len\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 680
+                    "line": 679
                   }
                 }
               ]
@@ -66031,7 +66031,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 682
+                "line": 681
               },
               "children": [
                 {
@@ -66042,7 +66042,7 @@
                   "value": "\"Subvolume::read shall return an LZO-compressed file's bytes as they were written.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 684
+                    "line": 683
                   }
                 },
                 {
@@ -66053,7 +66053,7 @@
                   "value": "\"Every file of the LZO image reads back byte for byte.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 686
+                    "line": 685
                   }
                 },
                 {
@@ -66064,7 +66064,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 687
+                    "line": 686
                   }
                 },
                 {
@@ -66075,7 +66075,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read\", \"ferrix_btrfs::fs::ReadBuffers::expand_extent\", \"ferrix_btrfs::fs::ReadBuffers::expand_inline\", \"ferrix_btrfs::fs::expanded_len\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 691
+                    "line": 690
                   }
                 }
               ]
@@ -66088,7 +66088,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 693
+                "line": 692
               },
               "children": [
                 {
@@ -66099,7 +66099,7 @@
                   "value": "\"Subvolume::read shall return a zstd-compressed file's bytes as they were written.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 695
+                    "line": 694
                   }
                 },
                 {
@@ -66110,7 +66110,7 @@
                   "value": "\"Every file of the zstd image reads back byte for byte.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 697
+                    "line": 696
                   }
                 },
                 {
@@ -66121,7 +66121,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 698
+                    "line": 697
                   }
                 },
                 {
@@ -66132,7 +66132,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read\", \"ferrix_btrfs::fs::ReadBuffers::expand_extent\", \"ferrix_btrfs::fs::ReadBuffers::expand_inline\", \"ferrix_btrfs::fs::expanded_len\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 702
+                    "line": 701
                   }
                 }
               ]
@@ -66145,7 +66145,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 704
+                "line": 703
               },
               "children": [
                 {
@@ -66156,7 +66156,7 @@
                   "value": "\"Subvolume::read past a file's end shall return nothing, and Subvolume::read_dir shall resume a listing from the cursor it returned.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 707
+                    "line": 706
                   }
                 },
                 {
@@ -66167,7 +66167,7 @@
                   "value": "\"A read past the end returns nothing, and a listing resumed from its cursor yields the rest.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 709
+                    "line": 708
                   }
                 },
                 {
@@ -66178,7 +66178,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 710
+                    "line": 709
                   }
                 },
                 {
@@ -66189,7 +66189,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read\", \"ferrix_btrfs::fs::Subvolume::read_dir\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 712
+                    "line": 711
                   }
                 }
               ]
@@ -66202,7 +66202,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 714
+                "line": 713
               },
               "children": [
                 {
@@ -66213,7 +66213,7 @@
                   "value": "\"Subvolume::read shall return zeroes for a hole.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 715
+                    "line": 714
                   }
                 },
                 {
@@ -66224,7 +66224,7 @@
                   "value": "\"A file's hole reads as zeroes.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 716
+                    "line": 715
                   }
                 },
                 {
@@ -66235,7 +66235,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 717
+                    "line": 716
                   }
                 },
                 {
@@ -66246,7 +66246,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read\", \"ferrix_btrfs::fs::Placement::new\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 719
+                    "line": 718
                   }
                 }
               ]
@@ -66259,7 +66259,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 721
+                "line": 720
               },
               "children": [
                 {
@@ -66270,7 +66270,7 @@
                   "value": "\"Subvolume::read shall refuse an extent that starts inside the one before it.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 723
+                    "line": 722
                   }
                 },
                 {
@@ -66281,7 +66281,7 @@
                   "value": "\"An extent starting inside the one before it is refused.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 725
+                    "line": 724
                   }
                 },
                 {
@@ -66292,7 +66292,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 726
+                    "line": 725
                   }
                 },
                 {
@@ -66303,7 +66303,7 @@
                   "value": "(\"ferrix_btrfs::fs::Subvolume::read\", \"ferrix_btrfs::fs::Placement::new\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 728
+                    "line": 727
                   }
                 }
               ]
@@ -66316,7 +66316,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 730
+                "line": 729
               },
               "children": [
                 {
@@ -66327,7 +66327,7 @@
                   "value": "\"ReadBuffers::new shall refuse buffers smaller than the largest extent they must hold.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 732
+                    "line": 731
                   }
                 },
                 {
@@ -66338,7 +66338,7 @@
                   "value": "\"Buffers smaller than an extent are refused.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 733
+                    "line": 732
                   }
                 },
                 {
@@ -66349,7 +66349,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 734
+                    "line": 733
                   }
                 },
                 {
@@ -66360,7 +66360,7 @@
                   "value": "(\"ferrix_btrfs::fs::ReadBuffers::new\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 735
+                    "line": 734
                   }
                 }
               ]
@@ -66374,7 +66374,7 @@
           "doc": "The reader's checksums of file data.",
           "source": {
             "file": "docs/sysml/24-btrfs-requirements.sysml",
-            "line": 739
+            "line": 738
           },
           "children": [
             {
@@ -66385,7 +66385,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 742
+                "line": 741
               },
               "children": [
                 {
@@ -66396,7 +66396,7 @@
                   "value": "\"A file read shall answer DataChecksum, and no bytes, for a data sector whose CRC-32C differs from the checksum tree's.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 745
+                    "line": 744
                   }
                 },
                 {
@@ -66407,7 +66407,7 @@
                   "value": "\"A read of a file with one damaged data sector, in a SINGLE chunk, answers DataChecksum.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 747
+                    "line": 746
                   }
                 },
                 {
@@ -66418,7 +66418,7 @@
                   "value": "\"H.STORE.2\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 748
+                    "line": 747
                   }
                 },
                 {
@@ -66429,7 +66429,7 @@
                   "value": "(\"ferrix_btrfs::fs::ReadBuffers::read_verified\", \"ferrix_btrfs::fs::read_checked\", \"ferrix_btrfs::fs::verify_sectors\", \"ferrix_btrfs::items::CsumItem::checksum_for\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 751
+                    "line": 750
                   }
                 }
               ]
@@ -66442,7 +66442,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 753
+                "line": 752
               },
               "children": [
                 {
@@ -66453,7 +66453,7 @@
                   "value": "\"A file read shall read a DUP data sector that fails its checksum from its other copy, and answer an error when both fail.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 756
+                    "line": 755
                   }
                 },
                 {
@@ -66464,7 +66464,7 @@
                   "value": "\"With the first copy of a DUP sector damaged the read returns the file's bytes; with both damaged it answers DataChecksum.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 759
+                    "line": 758
                   }
                 },
                 {
@@ -66475,7 +66475,7 @@
                   "value": "\"H.STORE.2\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 760
+                    "line": 759
                   }
                 },
                 {
@@ -66486,7 +66486,7 @@
                   "value": "(\"ferrix_btrfs::fs::read_checked\", \"ferrix_btrfs::fs::verify_sectors\", \"ferrix_btrfs::fs::ReadBuffers::read_verified\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 763
+                    "line": 762
                   }
                 }
               ]
@@ -66499,7 +66499,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 765
+                "line": 764
               },
               "children": [
                 {
@@ -66510,7 +66510,7 @@
                   "value": "\"A compressed extent shall be checked against its checksums before it is expanded.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 767
+                    "line": 766
                   }
                 },
                 {
@@ -66521,7 +66521,7 @@
                   "value": "\"Damage inside a compressed extent is DataChecksum, not BadCompressedData.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 769
+                    "line": 768
                   }
                 },
                 {
@@ -66532,7 +66532,7 @@
                   "value": "\"H.STORE.2\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 770
+                    "line": 769
                   }
                 },
                 {
@@ -66543,7 +66543,7 @@
                   "value": "(\"ferrix_btrfs::fs::ReadBuffers::read_verified\", \"ferrix_btrfs::fs::ReadBuffers::expand_extent\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 772
+                    "line": 771
                   }
                 }
               ]
@@ -66556,7 +66556,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 774
+                "line": 773
               },
               "children": [
                 {
@@ -66567,7 +66567,7 @@
                   "value": "\"A file marked nodatasum shall be read without checksums, as Linux reads it.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 776
+                    "line": 775
                   }
                 },
                 {
@@ -66578,7 +66578,7 @@
                   "value": "\"A nodatasum file reads back byte for byte.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 777
+                    "line": 776
                   }
                 },
                 {
@@ -66589,7 +66589,7 @@
                   "value": "\"H.STORE.1\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 778
+                    "line": 777
                   }
                 },
                 {
@@ -66600,7 +66600,7 @@
                   "value": "(\"ferrix_btrfs::fs::ReadBuffers::read_verified\", \"ferrix_btrfs::fs::read_checked\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 780
+                    "line": 779
                   }
                 }
               ]
@@ -66614,7 +66614,7 @@
           "doc": "The write path's crash safety: copy-on-write and the order of a commit's writes.",
           "source": {
             "file": "docs/sysml/24-btrfs-requirements.sysml",
-            "line": 784
+            "line": 783
           },
           "children": [
             {
@@ -66625,7 +66625,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 788
+                "line": 787
               },
               "children": [
                 {
@@ -66636,7 +66636,7 @@
                   "value": "\"WriteVolume::commit shall flush directly before writing the primary superblock, make the primary durable before any mirror, and write no node after it.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 791
+                    "line": 790
                   }
                 },
                 {
@@ -66647,7 +66647,7 @@
                   "value": "\"In the device's record of a commit a flush directly precedes and directly follows the primary superblock, and no node write comes after it.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 794
+                    "line": 793
                   }
                 },
                 {
@@ -66658,7 +66658,7 @@
                   "value": "\"H.STORE.3\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 795
+                    "line": 794
                   }
                 },
                 {
@@ -66669,7 +66669,7 @@
                   "value": "(\"ferrix_btrfs_write::commit::WriteVolume::commit\", \"ferrix_btrfs_write::commit::WriteVolume::write_nodes\", \"ferrix_btrfs_write::commit::WriteVolume::write_superblocks\", \"ferrix_btrfs_write::commit::WriteVolume::finish_commit\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 799
+                    "line": 798
                   }
                 }
               ]
@@ -66682,7 +66682,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 801
+                "line": 800
               },
               "children": [
                 {
@@ -66693,7 +66693,7 @@
                   "value": "\"No write a transaction makes before its superblock shall land on a block the last commit's trees reach.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 803
+                    "line": 802
                   }
                 },
                 {
@@ -66704,7 +66704,7 @@
                   "value": "\"500 inserts committed, their writes replayed without the superblocks onto the volume as it was, leave a volume that checks clean and holds exactly the last commit's items.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 806
+                    "line": 805
                   }
                 },
                 {
@@ -66715,7 +66715,7 @@
                   "value": "\"H.STORE.3\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 807
+                    "line": 806
                   }
                 },
                 {
@@ -66726,7 +66726,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::cow\", \"ferrix_btrfs_write::volume::WriteVolume::cow_root\", \"ferrix_btrfs_write::volume::WriteVolume::cow_child\", \"ferrix_btrfs_write::volume::WriteVolume::free_node\", \"ferrix_btrfs_write::volume::WriteVolume::alloc_node\", \"ferrix_btrfs_write::space::Space::release\", \"ferrix_btrfs_write::space::Space::unpin\", \"ferrix_btrfs_write::space::BlockGroup::give_back\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 815
+                    "line": 814
                   }
                 }
               ]
@@ -66739,7 +66739,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 817
+                "line": 816
               },
               "children": [
                 {
@@ -66750,7 +66750,7 @@
                   "value": "\"WriteVolume::open shall refuse with Unsupported a volume of more than one device, of a profile other than SINGLE or DUP, without a valid free-space tree, with non-skinny metadata, without NO_HOLES, with mixed groups, an unknown read-only-compatible feature, a subvolume, quotas or a shared tree block.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 822
+                    "line": 821
                   }
                 },
                 {
@@ -66761,7 +66761,7 @@
                   "value": "\"WriteVolume::open of an image with each of these answers Unsupported naming it, and the device has no write.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 824
+                    "line": 823
                   }
                 },
                 {
@@ -66772,7 +66772,7 @@
                   "value": "(\"H.STORE.3\", \"H.STORE.5\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 825
+                    "line": 824
                   }
                 },
                 {
@@ -66783,7 +66783,7 @@
                   "value": "(\"ferrix_btrfs_write::open::check_writable\", \"ferrix_btrfs_write::open::WriteVolume::open_committed\", \"ferrix_btrfs_write::open::WriteVolume::load_roots\", \"ferrix_btrfs_write::open::WriteVolume::load_block_groups\", \"ferrix_btrfs_write::open::WriteVolume::load_free_space\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 830
+                    "line": 829
                   }
                 }
               ]
@@ -66797,7 +66797,7 @@
           "doc": "The log a fsync commits, and its replay at open.",
           "source": {
             "file": "docs/sysml/24-btrfs-requirements.sysml",
-            "line": 834
+            "line": 833
           },
           "children": [
             {
@@ -66808,7 +66808,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 837
+                "line": 836
               },
               "children": [
                 {
@@ -66819,7 +66819,7 @@
                   "value": "\"An inode's data logged with log_inode and commit_log shall be read back after a crash, the log replayed when the volume opens.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 840
+                    "line": 839
                   }
                 },
                 {
@@ -66830,7 +66830,7 @@
                   "value": "\"A file rewritten, logged and never committed, then opened from the crashed device, holds the rewrite.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 842
+                    "line": 841
                   }
                 },
                 {
@@ -66841,7 +66841,7 @@
                   "value": "\"H.STORE.4\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 843
+                    "line": 842
                   }
                 },
                 {
@@ -66852,7 +66852,7 @@
                   "value": "(\"ferrix_btrfs_write::log::WriteVolume::log_inode\", \"ferrix_btrfs_write::log::WriteVolume::commit_log\", \"ferrix_btrfs_write::log::WriteVolume::seal_log\", \"ferrix_btrfs_write::log::WriteVolume::replay_log\", \"ferrix_btrfs_write::log::WriteVolume::replay_extent\", \"ferrix_btrfs_write::log::WriteVolume::replay_sums\", \"ferrix_btrfs_write::open::WriteVolume::open_committed\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 850
+                    "line": 849
                   }
                 }
               ]
@@ -66865,7 +66865,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 852
+                "line": 851
               },
               "children": [
                 {
@@ -66876,7 +66876,7 @@
                   "value": "\"A commit shall carry what a log held into the trees and leave the superblock naming no log.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 854
+                    "line": 853
                   }
                 },
                 {
@@ -66887,7 +66887,7 @@
                   "value": "\"After a log commit and then a commit, the superblock names no log and the file holds the logged data.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 856
+                    "line": 855
                   }
                 },
                 {
@@ -66898,7 +66898,7 @@
                   "value": "\"H.STORE.4\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 857
+                    "line": 856
                   }
                 },
                 {
@@ -66909,7 +66909,7 @@
                   "value": "(\"ferrix_btrfs_write::commit::WriteVolume::commit\", \"ferrix_btrfs_write::log::WriteVolume::drop_log\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 859
+                    "line": 858
                   }
                 }
               ]
@@ -66922,7 +66922,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 861
+                "line": 860
               },
               "children": [
                 {
@@ -66933,7 +66933,7 @@
                   "value": "\"commit_log shall flush directly before writing the superblock that names the log.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 863
+                    "line": 862
                   }
                 },
                 {
@@ -66944,7 +66944,7 @@
                   "value": "\"In the device's record of a log commit a flush directly precedes the superblock.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 865
+                    "line": 864
                   }
                 },
                 {
@@ -66955,7 +66955,7 @@
                   "value": "\"H.STORE.3\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 866
+                    "line": 865
                   }
                 },
                 {
@@ -66966,7 +66966,7 @@
                   "value": "(\"ferrix_btrfs_write::log::WriteVolume::commit_log\", \"ferrix_btrfs_write::log::WriteVolume::seal_log\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 868
+                    "line": 867
                   }
                 }
               ]
@@ -66979,7 +66979,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 870
+                "line": 869
               },
               "children": [
                 {
@@ -66990,7 +66990,7 @@
                   "value": "\"A log commit's writes without its superblock shall leave the volume at its last commit.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 872
+                    "line": 871
                   }
                 },
                 {
@@ -67001,7 +67001,7 @@
                   "value": "\"The log commit's writes replayed without its superblock leave the file as last committed.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 874
+                    "line": 873
                   }
                 },
                 {
@@ -67012,7 +67012,7 @@
                   "value": "\"H.STORE.3\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 875
+                    "line": 874
                   }
                 },
                 {
@@ -67023,7 +67023,7 @@
                   "value": "(\"ferrix_btrfs_write::log::WriteVolume::commit_log\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 876
+                    "line": 875
                   }
                 }
               ]
@@ -67036,7 +67036,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 878
+                "line": 877
               },
               "children": [
                 {
@@ -67047,7 +67047,7 @@
                   "value": "\"Replaying a log of an inode logged twice shall leave the later of the two.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 880
+                    "line": 879
                   }
                 },
                 {
@@ -67058,7 +67058,7 @@
                   "value": "\"An inode logged with one content and again with another opens holding the second.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 882
+                    "line": 881
                   }
                 },
                 {
@@ -67069,7 +67069,7 @@
                   "value": "\"H.STORE.4\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 883
+                    "line": 882
                   }
                 },
                 {
@@ -67080,7 +67080,7 @@
                   "value": "(\"ferrix_btrfs_write::log::WriteVolume::log_inode\", \"ferrix_btrfs_write::log::WriteVolume::replay_log\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 885
+                    "line": 884
                   }
                 }
               ]
@@ -67093,7 +67093,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 887
+                "line": 886
               },
               "children": [
                 {
@@ -67104,7 +67104,7 @@
                   "value": "\"Replaying a logged extent cut in two shall make one extent referred to twice, not two.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 889
+                    "line": 888
                   }
                 },
                 {
@@ -67115,7 +67115,7 @@
                   "value": "\"A file whose extent an overwrite cut in two replays with one extent and two references to it, and checks clean.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 891
+                    "line": 890
                   }
                 },
                 {
@@ -67126,7 +67126,7 @@
                   "value": "\"H.STORE.4\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 892
+                    "line": 891
                   }
                 },
                 {
@@ -67137,7 +67137,7 @@
                   "value": "(\"ferrix_btrfs_write::log::WriteVolume::replay_extent\", \"ferrix_btrfs_write::log::logged_extent\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 894
+                    "line": 893
                   }
                 }
               ]
@@ -67151,7 +67151,7 @@
           "doc": "The write path's allocator and the bookkeeping trees that record what it handed out.",
           "source": {
             "file": "docs/sysml/24-btrfs-requirements.sysml",
-            "line": 898
+            "line": 897
           },
           "children": [
             {
@@ -67162,7 +67162,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 902
+                "line": 901
               },
               "children": [
                 {
@@ -67173,7 +67173,7 @@
                   "value": "\"A metadata block group whose chunk covers a superblock mirror shall allocate no tree block in the mirror's stripe, and its free-space tree shall still list the stripe free.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 905
+                    "line": 904
                   }
                 },
                 {
@@ -67184,7 +67184,7 @@
                   "value": "\"On the blank fixture, whose DUP metadata chunk covers the 64 MiB mirror, edits until past the mirror leave no tree block in its stripe, the volume checks clean, and the free-space tree lists the stripe free.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 909
+                    "line": 908
                   }
                 },
                 {
@@ -67195,7 +67195,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 910
+                    "line": 909
                   }
                 },
                 {
@@ -67206,7 +67206,7 @@
                   "value": "(\"ferrix_btrfs_write::chunks::Chunk::superblock_stripes\", \"ferrix_btrfs_write::space::BlockGroup::new\", \"ferrix_btrfs_write::commit::WriteVolume::sync_free_space_tree\", \"ferrix_btrfs_write::commit::WriteVolume::write_group_free_space\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 915
+                    "line": 914
                   }
                 }
               ]
@@ -67219,7 +67219,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 917
+                "line": 916
               },
               "children": [
                 {
@@ -67230,7 +67230,7 @@
                   "value": "\"A data chunk made over a superblock mirror shall keep the mirror's stripe out of data allocation.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 919
+                    "line": 918
                   }
                 },
                 {
@@ -67241,7 +67241,7 @@
                   "value": "\"On a volume grown until a data chunk covers the 64 MiB mirror, every data extent then allocated lies outside the stripe.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 922
+                    "line": 921
                   }
                 },
                 {
@@ -67252,7 +67252,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 923
+                    "line": 922
                   }
                 },
                 {
@@ -67263,7 +67263,7 @@
                   "value": "(\"ferrix_btrfs_write::chunks::Chunk::superblock_stripes\", \"ferrix_btrfs_write::space::BlockGroup::new\", \"ferrix_btrfs_write::space::Space::alloc_data\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 927
+                    "line": 926
                   }
                 }
               ]
@@ -67276,7 +67276,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 929
+                "line": 928
               },
               "children": [
                 {
@@ -67287,7 +67287,7 @@
                   "value": "\"Each commit shall leave every tree block's and data extent's references, each block group's usage and free space, and the superblock's total consistent with the trees.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 932
+                    "line": 931
                   }
                 },
                 {
@@ -67298,7 +67298,7 @@
                   "value": "\"After 3,000 random edits with commits between them, the writer's checker finds every count consistent and the reader reads back every item the model holds.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 935
+                    "line": 934
                   }
                 },
                 {
@@ -67309,7 +67309,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 936
+                    "line": 935
                   }
                 },
                 {
@@ -67320,7 +67320,7 @@
                   "value": "(\"ferrix_btrfs_write::commit::WriteVolume::settle\", \"ferrix_btrfs_write::commit::WriteVolume::run_head\", \"ferrix_btrfs_write::commit::WriteVolume::write_block_group_items\", \"ferrix_btrfs_write::commit::WriteVolume::write_root_items\", \"ferrix_btrfs_write::commit::check_main_key\", \"ferrix_btrfs_write::extent::ExtentRecord::to_items\", \"ferrix_btrfs_write::refs::DelayedRefs::add\", \"ferrix_btrfs_write::space::Space::account\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 944
+                    "line": 943
                   }
                 }
               ]
@@ -67333,7 +67333,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 946
+                "line": 945
               },
               "children": [
                 {
@@ -67344,7 +67344,7 @@
                   "value": "\"Deleting every item added to a tree shall shrink it back to a leaf holding what it held before.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 948
+                    "line": 947
                   }
                 },
                 {
@@ -67355,7 +67355,7 @@
                   "value": "\"2,000 items inserted, making a tree of three levels, then deleted, leave a tree of level 0 with the items it had, checking clean.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 951
+                    "line": 950
                   }
                 },
                 {
@@ -67366,7 +67366,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 952
+                    "line": 951
                   }
                 },
                 {
@@ -67377,7 +67377,7 @@
                   "value": "(\"ferrix_btrfs_write::tree::WriteVolume::delete\", \"ferrix_btrfs_write::tree::WriteVolume::shrink_root\", \"ferrix_btrfs_write::tree::WriteVolume::remove_ptr\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 955
+                    "line": 954
                   }
                 }
               ]
@@ -67390,7 +67390,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 957
+                "line": 956
               },
               "children": [
                 {
@@ -67401,7 +67401,7 @@
                   "value": "\"ExtentRecord::apply shall refuse a reference count taken below zero, or above one for a tree block's single owner.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 959
+                    "line": 958
                   }
                 },
                 {
@@ -67412,7 +67412,7 @@
                   "value": "\"Removing a reference never added, and adding one owner twice, are refused.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 961
+                    "line": 960
                   }
                 },
                 {
@@ -67423,7 +67423,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 962
+                    "line": 961
                   }
                 },
                 {
@@ -67434,7 +67434,7 @@
                   "value": "(\"ferrix_btrfs_write::extent::ExtentRecord::apply\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 963
+                    "line": 962
                   }
                 }
               ]
@@ -67447,7 +67447,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 965
+                "line": 964
               },
               "children": [
                 {
@@ -67458,7 +67458,7 @@
                   "value": "\"RangeSet::insert shall merge a run with the runs it touches.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 967
+                    "line": 966
                   }
                 },
                 {
@@ -67469,7 +67469,7 @@
                   "value": "\"Runs inserted touching on either side become one run.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 969
+                    "line": 968
                   }
                 },
                 {
@@ -67480,7 +67480,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 970
+                    "line": 969
                   }
                 },
                 {
@@ -67491,7 +67491,7 @@
                   "value": "(\"ferrix_btrfs_write::ranges::RangeSet::insert\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 971
+                    "line": 970
                   }
                 }
               ]
@@ -67504,7 +67504,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 973
+                "line": 972
               },
               "children": [
                 {
@@ -67515,7 +67515,7 @@
                   "value": "\"RangeSet::remove shall split the run a removal falls inside.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 975
+                    "line": 974
                   }
                 },
                 {
@@ -67526,7 +67526,7 @@
                   "value": "\"A range removed from inside a run leaves the two runs around it.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 977
+                    "line": 976
                   }
                 },
                 {
@@ -67537,7 +67537,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 978
+                    "line": 977
                   }
                 },
                 {
@@ -67548,7 +67548,7 @@
                   "value": "(\"ferrix_btrfs_write::ranges::RangeSet::remove\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 979
+                    "line": 978
                   }
                 }
               ]
@@ -67561,7 +67561,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 981
+                "line": 980
               },
               "children": [
                 {
@@ -67572,7 +67572,7 @@
                   "value": "\"RangeSet::first_fit shall return the first start that is aligned, holds the length and does not cross the boundary.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 983
+                    "line": 982
                   }
                 },
                 {
@@ -67583,7 +67583,7 @@
                   "value": "\"Each fit the test lists is aligned and does not cross the boundary.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 985
+                    "line": 984
                   }
                 },
                 {
@@ -67594,7 +67594,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 986
+                    "line": 985
                   }
                 },
                 {
@@ -67605,7 +67605,7 @@
                   "value": "(\"ferrix_btrfs_write::ranges::RangeSet::first_fit\", \"ferrix_btrfs_write::ranges::fit_in\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 988
+                    "line": 987
                   }
                 }
               ]
@@ -67618,7 +67618,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 990
+                "line": 989
               },
               "children": [
                 {
@@ -67629,7 +67629,7 @@
                   "value": "\"RangeSet::first_prefix shall return the longest aligned prefix of at most the length wanted and at least the minimum.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 992
+                    "line": 991
                   }
                 },
                 {
@@ -67640,7 +67640,7 @@
                   "value": "\"Each request the test lists takes the prefix the run has.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 994
+                    "line": 993
                   }
                 },
                 {
@@ -67651,7 +67651,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 995
+                    "line": 994
                   }
                 },
                 {
@@ -67662,7 +67662,7 @@
                   "value": "(\"ferrix_btrfs_write::ranges::RangeSet::first_prefix\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 996
+                    "line": 995
                   }
                 }
               ]
@@ -67675,7 +67675,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 998
+                "line": 997
               },
               "children": [
                 {
@@ -67686,7 +67686,7 @@
                   "value": "\"RangeSet::add shall union overlapping and touching runs.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1000
+                    "line": 999
                   }
                 },
                 {
@@ -67697,7 +67697,7 @@
                   "value": "\"Overlapping and touching runs added become their union.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1002
+                    "line": 1001
                   }
                 },
                 {
@@ -67708,7 +67708,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1003
+                    "line": 1002
                   }
                 },
                 {
@@ -67719,7 +67719,7 @@
                   "value": "(\"ferrix_btrfs_write::ranges::RangeSet::add\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1004
+                    "line": 1003
                   }
                 }
               ]
@@ -67732,7 +67732,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1006
+                "line": 1005
               },
               "children": [
                 {
@@ -67743,7 +67743,7 @@
                   "value": "\"RangeSet::extract shall take exactly the bytes two sets share.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1008
+                    "line": 1007
                   }
                 },
                 {
@@ -67754,7 +67754,7 @@
                   "value": "\"Extracting one set from another takes exactly their intersection and leaves the rest.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1010
+                    "line": 1009
                   }
                 },
                 {
@@ -67765,7 +67765,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1011
+                    "line": 1010
                   }
                 },
                 {
@@ -67776,7 +67776,7 @@
                   "value": "(\"ferrix_btrfs_write::ranges::RangeSet::extract\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1012
+                    "line": 1011
                   }
                 }
               ]
@@ -67789,7 +67789,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1014
+                "line": 1013
               },
               "children": [
                 {
@@ -67800,7 +67800,7 @@
                   "value": "\"place_stripes shall place every copy of a new chunk in the device's holes, or answer None.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1016
+                    "line": 1015
                   }
                 },
                 {
@@ -67811,7 +67811,7 @@
                   "value": "\"In one 8 MiB hole two copies of 8 MiB are refused and two of 4 MiB are placed side by side.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1018
+                    "line": 1017
                   }
                 },
                 {
@@ -67822,7 +67822,7 @@
                   "value": "\"H.STORE.5\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1019
+                    "line": 1018
                   }
                 },
                 {
@@ -67833,7 +67833,7 @@
                   "value": "(\"ferrix_btrfs_write::grow::place_stripes\", \"ferrix_btrfs_write::grow::WriteVolume::place_chunk\", \"ferrix_btrfs_write::grow::WriteVolume::device_holes\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1022
+                    "line": 1021
                   }
                 }
               ]
@@ -67846,7 +67846,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1024
+                "line": 1023
               },
               "children": [
                 {
@@ -67857,7 +67857,7 @@
                   "value": "\"WriteVolume::alloc_data shall answer NoSpace, aborting nothing, when neither a block group nor the device has room for a data extent.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1027
+                    "line": 1026
                   }
                 },
                 {
@@ -67868,7 +67868,7 @@
                   "value": "\"Data extents taken until the device has no room end in NoSpace with the transaction not aborted.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1029
+                    "line": 1028
                   }
                 },
                 {
@@ -67879,7 +67879,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1030
+                    "line": 1029
                   }
                 },
                 {
@@ -67890,7 +67890,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::alloc_data\", \"ferrix_btrfs_write::volume::WriteVolume::grow\", \"ferrix_btrfs_write::grow::WriteVolume::place_chunk\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1033
+                    "line": 1032
                   }
                 }
               ]
@@ -67904,7 +67904,7 @@
           "doc": "A volume that runs out, and a transaction that fails.",
           "source": {
             "file": "docs/sysml/24-btrfs-requirements.sysml",
-            "line": 1037
+            "line": 1036
           },
           "children": [
             {
@@ -67915,7 +67915,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1040
+                "line": 1039
               },
               "children": [
                 {
@@ -67926,7 +67926,7 @@
                   "value": "\"A file write larger than the data room shall be refused with NoSpace before it changes anything, aborting nothing.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1042
+                    "line": 1041
                   }
                 },
                 {
@@ -67937,7 +67937,7 @@
                   "value": "\"A write one sector past data_room is NoSpace, the transaction is not aborted, and its commit leaves a volume that checks clean.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1045
+                    "line": 1044
                   }
                 },
                 {
@@ -67948,7 +67948,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1046
+                    "line": 1045
                   }
                 },
                 {
@@ -67959,7 +67959,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::admit\", \"ferrix_btrfs_write::volume::WriteVolume::alloc_data\", \"ferrix_btrfs_write::grow::WriteVolume::data_room\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1049
+                    "line": 1048
                   }
                 }
               ]
@@ -67972,7 +67972,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1051
+                "line": 1050
               },
               "children": [
                 {
@@ -67983,7 +67983,7 @@
                   "value": "\"A file write of exactly the data room shall succeed and leave no data room.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1053
+                    "line": 1052
                   }
                 },
                 {
@@ -67994,7 +67994,7 @@
                   "value": "\"A write of exactly data_room succeeds, data_room is then 0, and the commit checks clean.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1055
+                    "line": 1054
                   }
                 },
                 {
@@ -68005,7 +68005,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1056
+                    "line": 1055
                   }
                 },
                 {
@@ -68016,7 +68016,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::alloc_data\", \"ferrix_btrfs_write::grow::WriteVolume::data_room\", \"ferrix_btrfs_write::grow::WriteVolume::unallocated\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1059
+                    "line": 1058
                   }
                 }
               ]
@@ -68029,7 +68029,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1061
+                "line": 1060
               },
               "children": [
                 {
@@ -68040,7 +68040,7 @@
                   "value": "\"An operation the metadata room cannot hold, with the commit's reserve and the global reserve, shall be refused with NoSpace before its first edit, and an operation that frees space may still use the global reserve.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1065
+                    "line": 1064
                   }
                 },
                 {
@@ -68051,7 +68051,7 @@
                   "value": "\"Creates until the trees are full end in NoSpace with the transaction not aborted, the commit succeeds, 64 unlinks succeed, and a create after their commit succeeds.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1068
+                    "line": 1067
                   }
                 },
                 {
@@ -68062,7 +68062,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1069
+                    "line": 1068
                   }
                 },
                 {
@@ -68073,7 +68073,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::admit\", \"ferrix_btrfs_write::volume::WriteVolume::commit_reserve\", \"ferrix_btrfs_write::volume::WriteVolume::guarded_with\", \"ferrix_btrfs_write::volume::WriteVolume::operation_with\", \"ferrix_btrfs_write::grow::WriteVolume::meta_room\", \"ferrix_btrfs_write::grow::WriteVolume::tree_headroom\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1075
+                    "line": 1074
                   }
                 }
               ]
@@ -68086,7 +68086,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1077
+                "line": 1076
               },
               "children": [
                 {
@@ -68097,7 +68097,7 @@
                   "value": "\"A data write on full trees shall be refused with NoSpace, aborting nothing.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1079
+                    "line": 1078
                   }
                 },
                 {
@@ -68108,7 +68108,7 @@
                   "value": "\"After the trees are filled, 64 KiB writes end in NoSpace with the transaction not aborted, and the commit checks clean.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1081
+                    "line": 1080
                   }
                 },
                 {
@@ -68119,7 +68119,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1082
+                    "line": 1081
                   }
                 },
                 {
@@ -68130,7 +68130,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::admit\", \"ferrix_btrfs_write::volume::WriteVolume::operation_with\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1084
+                    "line": 1083
                   }
                 }
               ]
@@ -68143,7 +68143,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1086
+                "line": 1085
               },
               "children": [
                 {
@@ -68154,7 +68154,7 @@
                   "value": "\"A data write that needs a new metadata chunk shall succeed or be refused with NoSpace, aborting nothing.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1088
+                    "line": 1087
                   }
                 },
                 {
@@ -68165,7 +68165,7 @@
                   "value": "\"With metadata used until the next edit must make a chunk, a write of the data room succeeds or is NoSpace, the transaction is not aborted, and the commit checks clean.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1091
+                    "line": 1090
                   }
                 },
                 {
@@ -68176,7 +68176,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1092
+                    "line": 1091
                   }
                 },
                 {
@@ -68187,7 +68187,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::ensure_space\", \"ferrix_btrfs_write::volume::WriteVolume::guarded_with\", \"ferrix_btrfs_write::volume::WriteVolume::grow\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1096
+                    "line": 1095
                   }
                 }
               ]
@@ -68200,7 +68200,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1098
+                "line": 1097
               },
               "children": [
                 {
@@ -68211,7 +68211,7 @@
                   "value": "\"Through a mount, a write to a full volume shall be refused with ENOSPC at exactly the room statfs offered, keeping what was written.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1101
+                    "line": 1100
                   }
                 },
                 {
@@ -68222,7 +68222,7 @@
                   "value": "\"Through ferrix-btrfs-vfs, writes stop with ENOSPC at the byte statfs offered, the file holds every byte written, and after an unlink a 1 MiB file is written and read back after remounting.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1104
+                    "line": 1103
                   }
                 },
                 {
@@ -68233,7 +68233,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1105
+                    "line": 1104
                   }
                 },
                 {
@@ -68244,7 +68244,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::admit\", \"ferrix_btrfs_write::grow::WriteVolume::data_room\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1107
+                    "line": 1106
                   }
                 }
               ]
@@ -68257,7 +68257,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1109
+                "line": 1108
               },
               "children": [
                 {
@@ -68268,7 +68268,7 @@
                   "value": "\"Through a mount, creates on full trees shall be refused with ENOSPC, and the mount shall stay writable.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1111
+                    "line": 1110
                   }
                 },
                 {
@@ -68279,7 +68279,7 @@
                   "value": "\"Through ferrix-btrfs-vfs, creates end in ENOSPC, another create is ENOSPC too, the sync succeeds and 64 unlinks succeed.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1114
+                    "line": 1113
                   }
                 },
                 {
@@ -68290,7 +68290,7 @@
                   "value": "\"H.STORE.6\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1115
+                    "line": 1114
                   }
                 },
                 {
@@ -68301,7 +68301,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::admit\", \"ferrix_btrfs_write::volume::WriteVolume::operation_with\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1117
+                    "line": 1116
                   }
                 }
               ]
@@ -68314,7 +68314,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1119
+                "line": 1118
               },
               "children": [
                 {
@@ -68325,7 +68325,7 @@
                   "value": "\"A failure after an edit changed something shall mark the transaction aborted, and reload_read_only shall replace it with the last commit read from the device and answer ReadOnly to every edit after it.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1123
+                    "line": 1122
                   }
                 },
                 {
@@ -68336,7 +68336,7 @@
                   "value": "\"Through a mount, a commit whose device write fails answers EIO; the mount then reads the last commit, has no trace of the aborted transaction, answers EROFS to a write, a truncation and a create, and the disk holds the last commit.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1127
+                    "line": 1126
                   }
                 },
                 {
@@ -68347,7 +68347,7 @@
                   "value": "\"H.STORE.8\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1128
+                    "line": 1127
                   }
                 },
                 {
@@ -68358,7 +68358,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::abort_with\", \"ferrix_btrfs_write::volume::WriteVolume::check_writable\", \"ferrix_btrfs_write::volume::WriteVolume::guarded_with\", \"ferrix_btrfs_write::volume::WriteVolume::operation_with\", \"ferrix_btrfs_write::open::WriteVolume::reload_read_only\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1133
+                    "line": 1132
                   }
                 }
               ]
@@ -68371,7 +68371,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1135
+                "line": 1134
               },
               "children": [
                 {
@@ -68382,7 +68382,7 @@
                   "value": "\"reload_read_only shall leave the volume aborted, and every read answering an error, when the last commit cannot be read.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1138
+                    "line": 1137
                   }
                 },
                 {
@@ -68393,7 +68393,7 @@
                   "value": "\"Through a mount, with writes and reads failing, the sync answers EIO and every later lookup answers EIO.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1140
+                    "line": 1139
                   }
                 },
                 {
@@ -68404,7 +68404,7 @@
                   "value": "\"H.STORE.8\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1141
+                    "line": 1140
                   }
                 },
                 {
@@ -68415,7 +68415,7 @@
                   "value": "(\"ferrix_btrfs_write::open::WriteVolume::reload_read_only\", \"ferrix_btrfs_write::open::WriteVolume::abort\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1144
+                    "line": 1143
                   }
                 }
               ]
@@ -68428,7 +68428,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/24-btrfs-requirements.sysml",
-                "line": 1146
+                "line": 1145
               },
               "children": [
                 {
@@ -68439,7 +68439,7 @@
                   "value": "\"Every heap allocation of the write path shall be made fallibly, and a refused one shall be answered as an error that aborts the transaction if an edit had begun, never as a panic.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1149
+                    "line": 1148
                   }
                 },
                 {
@@ -68450,7 +68450,7 @@
                   "value": "\"With every allocation of a create, a data write, a commit and an open failed in turn, each answers an error or succeeds, no panic is taken, and the volume reopened is the last commit and checks clean.\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1153
+                    "line": 1152
                   }
                 },
                 {
@@ -68461,7 +68461,7 @@
                   "value": "\"H.STORE.7\"",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1154
+                    "line": 1153
                   }
                 },
                 {
@@ -68472,7 +68472,7 @@
                   "value": "(\"ferrix_btrfs_write::volume::WriteVolume::load\", \"ferrix_btrfs_write::volume::WriteVolume::read_node\", \"ferrix_btrfs_write::volume::WriteVolume::new_node\", \"ferrix_btrfs_write::node::TreeNode::from_node\", \"ferrix_btrfs_write::commit::WriteVolume::write_nodes\")",
                   "source": {
                     "file": "docs/sysml/24-btrfs-requirements.sysml",
-                    "line": 1159
+                    "line": 1158
                   }
                 }
               ]
