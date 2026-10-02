@@ -56,7 +56,10 @@ Two documents come out:
   COVERAGE-RESIDUAL.md  the four categories on each architecture.
   COVERAGE-WORKLIST.md  the fourth category alone, grouped by module, with
                         each file's count on every architecture: the list
-                        test-writing starts from, one module at a time.
+                        test-writing starts from, one module at a time,
+                        and then what the next run owes: the rows of
+                        coverage-owed.json, code a landing changed after
+                        the last measurement.
 
     python3 tools/common/gen/gen-coverage-justification.py
     python3 tools/common/gen/gen-coverage-justification.py --check
@@ -74,6 +77,7 @@ CERT = ROOT / "docs" / "certification"
 KERNEL = ROOT / "src" / "kernel" / "src"
 OUTPUT = CERT / "COVERAGE-RESIDUAL.md"
 WORKLIST = CERT / "COVERAGE-WORKLIST.md"
+OWED = CERT / "coverage-owed.json"
 
 ARCHES = ("x86_64", "aarch64", "armv7a")
 
@@ -418,7 +422,53 @@ def ranges(numbers: list[int]) -> str:
     return ", ".join(out)
 
 
-def render_worklist(residuals: dict[str, dict], coverage: dict[str, dict]) -> str:
+def load_owed() -> tuple[list[dict], list[str]]:
+    """What the next coverage run owes (coverage-owed.json), and every reason
+    an entry is malformed."""
+    if not OWED.is_file():
+        return [], []
+    owed = json.loads(OWED.read_text(encoding="utf-8")).get("owed", [])
+    problems: list[str] = []
+    for index, entry in enumerate(owed):
+        where = f"{OWED.relative_to(ROOT)} #{index}"
+        for field in ("landing", "dropped", "what"):
+            if not str(entry.get(field, "")).strip():
+                problems.append(f"{where}: no {field!r} given")
+        arches = entry.get("architectures", [])
+        if not arches or any(arch not in ARCHES for arch in arches):
+            problems.append(f"{where}: 'architectures' must name some of {ARCHES}")
+    return owed, problems
+
+
+def render_owed(owed: list[dict]) -> list[str]:
+    """The worklist's first section: what the next run owes, one row per
+    landing, or nothing when nothing is owed."""
+    if not owed:
+        return []
+    lines = [
+        "## Owed at the next coverage run",
+        "",
+        "Code changed after the last measurement, listed in "
+        "`coverage-owed.json`. Its lines are unmeasured, so F-10's percentages "
+        "are not re-claimed for it until the run that deletes its row.",
+        "",
+        "| Landing | Architectures | Dropped by the carry | Owed |",
+        "|---|---|---|---|",
+    ]
+    for entry in owed:
+        cells = [
+            entry["landing"],
+            ", ".join(entry["architectures"]),
+            entry["dropped"],
+            entry["what"],
+        ]
+        lines.append("| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |")
+    return lines + [""]
+
+
+def render_worklist(
+    residuals: dict[str, dict], coverage: dict[str, dict], owed: list[dict]
+) -> str:
     # {file: {arch: [lines]}} for the needs-a-test category only, with an
     # empty list where the architecture compiles the file, counts it as a gap
     # and reached all of it: that architecture has nothing left to close, and
@@ -494,6 +544,8 @@ def render_worklist(residuals: dict[str, dict], coverage: dict[str, dict]) -> st
         lines.append(f"| [`{module}`](#{anchor(module)}) | {counts} | {len(modules[module])} |")
     total_row = " | ".join(f"**{totals[a]}**" for a in residuals)
     lines += [f"| **Total** | {total_row} | {len(gap)} |", ""]
+    if owed:
+        lines += ["---", "", *render_owed(owed)]
 
     for module in order:
         lines += [
@@ -553,6 +605,8 @@ def main() -> int:
         LINE_ARGUMENTS[arch] = argued
         ARGUMENTS[arch] = arguments
         problems += found
+    owed, found = load_owed()
+    problems += found
     for problem in problems:
         print(f"gen-coverage-justification: {problem}", file=sys.stderr)
     if problems:
@@ -565,7 +619,7 @@ def main() -> int:
 
     outputs = {
         OUTPUT: render(residuals),
-        WORKLIST: render_worklist(residuals, coverage),
+        WORKLIST: render_worklist(residuals, coverage, owed),
     }
 
     if args.check:

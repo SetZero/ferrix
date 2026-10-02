@@ -828,6 +828,19 @@ and took the recommended answer for D2, D3 and D5.
   * a full gate on the final head.
   It proposed F-57, pre-existing: x86-64 has no interrupt remapping. N0g
   closes it before N1.
+* **2026-10-02 — N0's owed conditions, fixed forward** (branch
+  `nvidia-n0-conds`, for the consultant). N0 landed ahead of its
+  re-review's conditions; these meet A2, A3 and B1-B3:
+  * A2: `ferrix_pci::topology::claims` decides every placement and is
+    never `Own` where `behind` says aliased; host-tested (L.iommu.45).
+  * B1: one memory type per device page across every user mapping, both
+    directions, render-node windows included (L.user.109,
+    `user::memory_type`), with a stage-9 refusal check.
+  * B2: `io_mapping_map_combining` is refused until every processor
+    programmed its PAT; B3: L.user.108 names where it runs (all three
+    ISAs: ARMv7-A's virtio-pci has a prefetchable BAR too).
+  * A3: what N0 left unmeasured is a row of `coverage-owed.json`, shown
+    in COVERAGE-WORKLIST, until the next F-10 run.
 * **2026-10-02 — CUDA feasibility and design (§11).** On that day the
   customer asked for CUDA now, alongside graphics.
   * `nvidia-uvm` was built twice against the host kernel's headers in a

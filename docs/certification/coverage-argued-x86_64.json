@@ -75,7 +75,7 @@
     },
     {
       "file": "arch/x86_64/cpu.rs",
-      "lines": "638, 644",
+      "lines": "645, 651",
       "category": "defensive",
       "match": "let empty = [0_u8; 10];",
       "why": "The triple fault is `reset`'s last way, taken only after the FADT's reset register and ten pulses of the keyboard controller's reset line have each failed to reset the machine. On q35 the FADT names port 0xCF9, which resets it at once: the suite's `boot-reset` gate shows the loader starting again. Reaching this would take a machine that ignores both documented resets."
@@ -460,287 +460,287 @@
     },
     {
       "file": "iommu.rs",
-      "lines": "299-301",
+      "lines": "294-296",
       "category": "other-architecture",
       "match": "let root = table.nodes().find(|node| {",
       "why": "Places a function through the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "303",
+      "lines": "298",
       "category": "other-architecture",
       "match": "let Some(root) = root else {",
       "why": "Places a function through the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "306",
+      "lines": "301",
       "category": "other-architecture",
       "match": "let Some((stream, reference)) = root.translate(u32::from(fun",
       "why": "Places a function through the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "309",
+      "lines": "304",
       "category": "other-architecture",
       "match": "match table.node_at(reference) {",
       "why": "Places a function through the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "311",
+      "lines": "306",
       "category": "other-architecture",
       "match": "Some(next) => match next.smmu_v3() {",
       "why": "Places a function through the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "313",
+      "lines": "308",
       "category": "other-architecture",
       "match": "None if next.kind == iort::NODE_SMMU_V1_V2 => Behind::Unreso",
       "why": "Places a function through the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "327",
+      "lines": "322",
       "category": "other-architecture",
       "match": "let hosts: Vec<EcamHost> = tree.ecam_hosts().collect();",
       "why": "Places a function through a device tree, which the x86-64 loader never hands over's iommu-map."
     },
     {
       "file": "iommu.rs",
-      "lines": "330-331",
+      "lines": "325-326",
       "category": "other-architecture",
       "match": ".find(|host| host.segment == Some(function.segment()));",
       "why": "Places a function through a device tree, which the x86-64 loader never hands over's iommu-map."
     },
     {
       "file": "iommu.rs",
-      "lines": "333",
+      "lines": "328",
       "category": "other-architecture",
       "match": "(None, [only]) if only.segment.is_none() => only,",
       "why": "Places a function through a device tree, which the x86-64 loader never hands over's iommu-map."
     },
     {
       "file": "iommu.rs",
-      "lines": "336",
+      "lines": "331",
       "category": "other-architecture",
       "match": "let Some(map) = tree.ecam_iommu_map(host) else {",
       "why": "Places a function through a device tree, which the x86-64 loader never hands over's iommu-map."
     },
     {
       "file": "iommu.rs",
-      "lines": "339",
+      "lines": "334",
       "category": "other-architecture",
       "match": "let Some((phandle, stream)) = map.translate(u32::from(functi",
       "why": "Places a function through a device tree, which the x86-64 loader never hands over's iommu-map."
     },
     {
       "file": "iommu.rs",
-      "lines": "342",
+      "lines": "337",
       "category": "other-architecture",
       "match": "match tree.smmu_v3s().find(|smmu| smmu.phandle == Some(phand",
       "why": "Places a function through a device tree, which the x86-64 loader never hands over's iommu-map."
     },
     {
       "file": "iommu.rs",
-      "lines": "394-395",
+      "lines": "389-390",
       "category": "absent-hardware",
       "match": "Behind::Nothing => report.bypassing += 1,",
       "why": "A function the firmware puts behind no unit, or describes in a way this cannot follow: q35's DMAR puts every function behind its one VT-d unit."
     },
     {
       "file": "iommu.rs",
-      "lines": "413",
+      "lines": "408",
       "category": "other-architecture",
       "match": "for &function in &functions {",
       "why": "The branch for a device tree, which the x86-64 loader never hands over."
     },
     {
       "file": "iommu.rs",
-      "lines": "417",
+      "lines": "412",
       "category": "defensive",
       "match": "for &function in &functions {",
       "why": "A machine described by neither ACPI nor a device tree: the loader hands over one or the other on every architecture, and stage 1's hand-off check refuses a boot without either."
     },
     {
       "file": "iommu.rs",
-      "lines": "600",
+      "lines": "595",
       "category": "other-architecture",
       "match": "changing: Gate,",
       "why": "The SMMUv3 variant's fields, printed only for a domain an SMMUv3 translates, which no x86-64 machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "640",
+      "lines": "635",
       "category": "other-architecture",
       "match": "Translation::SmmuV3 { unit, attached, .. } => unit.flush(att",
       "why": "The SMMUv3 arm, for a domain an SMMUv3 translates, which no x86-64 machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "676",
+      "lines": "671",
       "category": "other-architecture",
       "match": "Translation::SmmuV3 { unit, attached, .. } => unit.detach(*a",
       "why": "The SMMUv3 arm, for a domain an SMMUv3 translates, which no x86-64 machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "804",
+      "lines": "799",
       "category": "absent-hardware",
       "match": "return Err(DomainError::OutOfRange);",
       "why": "A frame above what a translated domain's tables address (TRANSLATED_BITS): RAM that high, which no suite machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "842",
+      "lines": "837",
       "category": "defensive",
       "match": "Err(why) => return Err((DomainError::Unit(why), pinned)),",
       "why": "A unit that never finished an operation, tables that would not unmap a page they mapped, or an invalidation the unit never completed: the domain keeps the pin for good rather than free what a device may reach. A working unit -- every unit QEMU emulates answers at once -- never takes it."
     },
     {
       "file": "iommu.rs",
-      "lines": "855",
+      "lines": "850",
       "category": "defensive",
       "match": "return Err((DomainError::Tables, pinned));",
       "why": "A unit that never finished an operation, tables that would not unmap a page they mapped, or an invalidation the unit never completed: the domain keeps the pin for good rather than free what a device may reach. A working unit -- every unit QEMU emulates answers at once -- never takes it."
     },
     {
       "file": "iommu.rs",
-      "lines": "860",
+      "lines": "855",
       "category": "defensive",
       "match": "return Err((DomainError::Unit(why), pinned));",
       "why": "A unit that never finished an operation, tables that would not unmap a page they mapped, or an invalidation the unit never completed: the domain keeps the pin for good rather than free what a device may reach. A working unit -- every unit QEMU emulates answers at once -- never takes it."
     },
     {
       "file": "iommu.rs",
-      "lines": "863",
+      "lines": "858",
       "category": "defensive",
       "match": "}",
       "why": "A unit that never finished an operation, tables that would not unmap a page they mapped, or an invalidation the unit never completed: the domain keeps the pin for good rather than free what a device may reach. A working unit -- every unit QEMU emulates answers at once -- never takes it."
     },
     {
       "file": "iommu.rs",
-      "lines": "1054",
+      "lines": "1049",
       "category": "defensive",
       "match": "report.refused += 1;",
       "why": "A VT-d unit that would not enable: its functions get untranslated domains. QEMU's unit always enables."
     },
     {
       "file": "iommu.rs",
-      "lines": "1071-1072",
+      "lines": "1066-1067",
       "category": "other-architecture",
       "match": "for node in table.nodes() {",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1075-1077",
+      "lines": "1070-1072",
       "category": "other-architecture",
       "match": "let opened = smmuv3::Unit::open(smmu.base_address, doorbell)",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1080",
+      "lines": "1075",
       "category": "other-architecture",
       "match": "offsets.push((node.offset, programmed.smmu.len()));",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1083",
+      "lines": "1078",
       "category": "other-architecture",
       "match": "report.smmu_v3 += 1;",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1086",
+      "lines": "1081",
       "category": "other-architecture",
       "match": "report.refused += 1;",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1091-1092",
+      "lines": "1086-1087",
       "category": "other-architecture",
       "match": "for node in table.nodes() {",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1095",
+      "lines": "1090",
       "category": "other-architecture",
       "match": "let Ok(segment) = u16::try_from(complex.segment) else {",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1100-1101",
+      "lines": "1095-1096",
       "category": "other-architecture",
       "match": "node.id_mappings()",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1103",
+      "lines": "1098",
       "category": "other-architecture",
       "match": "let &(_, unit) = offsets",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1105",
+      "lines": "1100",
       "category": "other-architecture",
       "match": ".find(|(offset, _)| *offset == mapping.output_reference)?;",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1107",
+      "lines": "1102",
       "category": "other-architecture",
       "match": "segment,",
       "why": "Programs the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1140-1141",
+      "lines": "1135-1136",
       "category": "other-architecture",
       "match": "} else if let Some((unit, stream)) = smmu_stream_for(program",
       "why": "The SMMUv3 branch, for the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1190-1193",
+      "lines": "1185-1188",
       "category": "other-architecture",
       "match": "let requester = u32::from(function.requester_id());",
       "why": "The stream an SMMUv3 sees, from the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1197",
+      "lines": "1192",
       "category": "other-architecture",
       "match": "programmed.smmu.get(map.unit)?,",
       "why": "The stream an SMMUv3 sees, from the IORT's SMMUv3 description, which only an Arm machine's ACPI has; x86-64 firmware describes its IOMMU in the DMAR and has no IORT."
     },
     {
       "file": "iommu.rs",
-      "lines": "1269",
+      "lines": "1264",
       "category": "defensive",
       "match": "if fault.cause != Cause::Access {",
       "why": "A stray fault that is not a refused access: an SMMUv3 event of another kind. The audit requires none; a device whose DMA stops for another reason, or tables the unit refused, would be one."
     },
     {
       "file": "iommu.rs",
-      "lines": "1353",
+      "lines": "1348",
       "category": "defensive",
       "match": "audit.first = audit.first.or(Some(fault));",
       "why": "The first stray fault the audit read: a DMA fault no check provoked, which the boot then fails on (STAGE10_DMA_FAULT)."
     },
     {
       "file": "iommu.rs",
-      "lines": "1355",
+      "lines": "1350",
       "category": "absent-hardware",
       "match": "audit.provoked += 1;",
       "why": "The out-of-domain probe's own fault, still recorded when the audit reads the unit: a unit that records it after the probe stopped looking. QEMU's VT-d and SMMUv3 record every fault of the probe's before its completion is seen, and the probe drains them then; every suite boot reports 0 late faults."
@@ -1433,56 +1433,56 @@
     },
     {
       "file": "user/space.rs",
-      "lines": "273",
+      "lines": "280",
       "category": "defensive",
       "match": "})?;",
       "why": "`ferrix_vma::AddressSpace::new` refuses a window whose ends are not page aligned or out of order, and the window here is `MMAP_MIN_ADDR..USER_VIRT_END`, two constants of the layout that are both. Reported rather than panicked on, as the comment says."
     },
     {
       "file": "user/space.rs",
-      "lines": "555",
+      "lines": "562",
       "category": "defensive",
       "match": "Ok((vmo.page(index).unwrap_or(shared), None))",
       "why": "A page found held by a device between the fault reading its reference count and taking it. A pin makes a shared page the object's own first (`Vmo::hold` copies it), so a copy-on-write fault finds a held page only if a pin lands in those few instructions on another processor, which no check can place deterministically."
     },
     {
       "file": "user/space.rs",
-      "lines": "767",
+      "lines": "774",
       "category": "credited-elsewhere",
       "match": "let _ = inner.native.remove(&id);",
       "why": "Run whenever a mapping is abandoned part-way: the allocation sweep's `fork` scenario fails the file mapping's table insert after a native object is mapped, and `abandon_region` runs (its lines 637 and 641 are reached). The line's only statement row is on the removal of an entry the set holds, and `abandon_region` is only called for an id that never went into the native set -- a native mapping whose insert failed, or a file mapping -- so the search always ends empty-handed, under the inlined `BTreeSet::remove`'s rows."
     },
     {
       "file": "user/space.rs",
-      "lines": "1190",
+      "lines": "1197",
       "category": "defensive",
       "match": "};",
       "why": "A private file mapping's region whose file object or shadow is missing from the tables. `map_file` records both under the region's id before the region can fault, and they leave together as the region's id leaves; a fault finding one missing would be the tables and the map disagreeing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2362",
+      "lines": "2369",
       "category": "defensive",
       "match": "debug_assert!(",
       "why": "The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2366-2367",
+      "lines": "2373-2374",
       "category": "defensive",
       "match": "site.map_or(\"?\", |site| site.file()),",
       "why": "The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2665",
+      "lines": "2723",
       "category": "defensive",
       "match": "return Err(SpaceError::NotUserRange(at));",
       "why": "`map_anywhere`'s refusal of a place outside the user half. `find_free` answers only places inside the map's window, `MMAP_MIN_ADDR..USER_VIRT_END`, so the place it found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract."
     },
     {
       "file": "user/space.rs",
-      "lines": "2869",
+      "lines": "2927",
       "category": "defensive",
       "match": "return Err(SpaceError::NotUserRange(at));",
       "why": "`map_shared_code`'s refusal of a place outside the user half, as `map_anywhere`'s is. `find_free` answers only places inside the map's window (its contract, `src/lib/kernel/vma/src/lib.rs`), and a space's window is `MMAP_MIN_ADDR..USER_VIRT_END` when built (`AddressSpace::new`) and never raised past `USER_VIRT_END` after (`set_ceiling` refuses it), so the place found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract."

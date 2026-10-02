@@ -554,196 +554,196 @@
     },
     {
       "file": "iommu.rs",
-      "lines": "313",
+      "lines": "308",
       "category": "absent-hardware",
       "match": "None if next.kind == iort::NODE_SMMU_V1_V2 => Behind::Unreso",
       "why": "An IORT that sends a function to an SMMUv1 or v2, which this driver does not program: virt's IORT names only its SMMUv3."
     },
     {
       "file": "iommu.rs",
-      "lines": "333",
+      "lines": "328",
       "category": "absent-hardware",
       "match": "(None, [only]) if only.segment.is_none() => only,",
       "why": "A single PCI host whose device tree node names no linux,pci-domain: virt's names one."
     },
     {
       "file": "iommu.rs",
-      "lines": "394-395",
+      "lines": "389-390",
       "category": "absent-hardware",
       "match": "Behind::Nothing => report.bypassing += 1,",
       "why": "A function the firmware puts behind no unit, or describes in a way this cannot follow: virt's IORT, and its device tree's iommu-map on the device-tree boots, put every PCI function behind its SMMUv3 (on ARMv7-A the unit is described and the functions placed behind it; the kernel leaves it alone there)."
     },
     {
       "file": "iommu.rs",
-      "lines": "417",
+      "lines": "412",
       "category": "defensive",
       "match": "for &function in &functions {",
       "why": "A machine described by neither ACPI nor a device tree: the loader hands over one or the other on every architecture, and stage 1's hand-off check refuses a boot without either."
     },
     {
       "file": "iommu.rs",
-      "lines": "585",
+      "lines": "580",
       "category": "other-architecture",
       "match": "unit: &'static vtd::Unit,",
       "why": "The VT-d variant's fields, printed only for a domain a VT-d unit translates, which no Arm machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "587",
+      "lines": "582",
       "category": "other-architecture",
       "match": "attached: vtd::Attached,",
       "why": "The VT-d variant's fields, printed only for a domain a VT-d unit translates, which no Arm machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "590",
+      "lines": "585",
       "category": "other-architecture",
       "match": "changing: Gate,",
       "why": "The VT-d variant's fields, printed only for a domain a VT-d unit translates, which no Arm machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "639",
+      "lines": "634",
       "category": "other-architecture",
       "match": "Translation::VtD { unit, attached, .. } => unit.flush(attach",
       "why": "The VT-d arm, for a domain a VT-d unit translates, which no Arm machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "657",
+      "lines": "652",
       "category": "other-architecture",
       "match": "Translation::VtD { attached, .. } => Some(attached.stream())",
       "why": "The VT-d arm, for a domain a VT-d unit translates, which no Arm machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "675",
+      "lines": "670",
       "category": "other-architecture",
       "match": "Translation::VtD { unit, attached, .. } => unit.detach(*atta",
       "why": "The VT-d arm, for a domain a VT-d unit translates, which no Arm machine has."
     },
     {
       "file": "iommu.rs",
-      "lines": "842",
+      "lines": "837",
       "category": "defensive",
       "match": "Err(why) => return Err((DomainError::Unit(why), pinned)),",
       "why": "A unit that never finished an operation, tables that would not unmap a page they mapped, or an invalidation the unit never completed: the domain keeps the pin for good rather than free what a device may reach. A working unit -- every unit QEMU emulates answers at once -- never takes it."
     },
     {
       "file": "iommu.rs",
-      "lines": "855",
+      "lines": "850",
       "category": "defensive",
       "match": "return Err((DomainError::Tables, pinned));",
       "why": "A unit that never finished an operation, tables that would not unmap a page they mapped, or an invalidation the unit never completed: the domain keeps the pin for good rather than free what a device may reach. A working unit -- every unit QEMU emulates answers at once -- never takes it."
     },
     {
       "file": "iommu.rs",
-      "lines": "860",
+      "lines": "855",
       "category": "defensive",
       "match": "return Err((DomainError::Unit(why), pinned));",
       "why": "A unit that never finished an operation, tables that would not unmap a page they mapped, or an invalidation the unit never completed: the domain keeps the pin for good rather than free what a device may reach. A working unit -- every unit QEMU emulates answers at once -- never takes it."
     },
     {
       "file": "iommu.rs",
-      "lines": "1017-1018",
+      "lines": "1012-1013",
       "category": "other-architecture",
       "match": "for structure in table.structures() {",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1022-1023",
+      "lines": "1017-1018",
       "category": "other-architecture",
       "match": "vtd::Unit::open(unit.register_base).and_then(|opened| opened",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1025",
+      "lines": "1020",
       "category": "other-architecture",
       "match": "let index = programmed.vtd.len();",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1029",
+      "lines": "1024",
       "category": "other-architecture",
       "match": ".extend(endpoints(&unit).map(|address| (address, index)));",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1051",
+      "lines": "1046",
       "category": "other-architecture",
       "match": "report.vtd += 1;",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1054",
+      "lines": "1049",
       "category": "other-architecture",
       "match": "report.refused += 1;",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1056",
+      "lines": "1051",
       "category": "other-architecture",
       "match": "}",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1086",
+      "lines": "1081",
       "category": "defensive",
       "match": "report.refused += 1;",
       "why": "An SMMUv3 the IORT describes that would not open or enable: left alone, its functions untranslated. QEMU's unit always enables."
     },
     {
       "file": "iommu.rs",
-      "lines": "1088",
+      "lines": "1083",
       "category": "defensive",
       "match": "}",
       "why": "An SMMUv3 the IORT describes that would not open or enable: left alone, its functions untranslated. QEMU's unit always enables."
     },
     {
       "file": "iommu.rs",
-      "lines": "1120-1121",
+      "lines": "1115-1116",
       "category": "other-architecture",
       "match": "let segment = unit.segment;",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1123-1124",
+      "lines": "1118-1119",
       "category": "other-architecture",
       "match": ".filter_map(|scope| scope.endpoint())",
       "why": "Reads the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1135",
+      "lines": "1130",
       "category": "other-architecture",
       "match": "unit.attach(function).map(|attached| Translation::VtD {",
       "why": "The VT-d branch, for the DMAR, x86-64's ACPI description of its VT-d units, and a VT-d unit: neither exists on an Arm machine."
     },
     {
       "file": "iommu.rs",
-      "lines": "1269",
+      "lines": "1264",
       "category": "defensive",
       "match": "if fault.cause != Cause::Access {",
       "why": "A stray fault that is not a refused access: an SMMUv3 event of another kind. The audit requires none; a device whose DMA stops for another reason, or tables the unit refused, would be one."
     },
     {
       "file": "iommu.rs",
-      "lines": "1353",
+      "lines": "1348",
       "category": "defensive",
       "match": "audit.first = audit.first.or(Some(fault));",
       "why": "The first stray fault the audit read: a DMA fault no check provoked, which the boot then fails on (STAGE10_DMA_FAULT)."
     },
     {
       "file": "iommu.rs",
-      "lines": "1355",
+      "lines": "1350",
       "category": "absent-hardware",
       "match": "audit.provoked += 1;",
       "why": "The out-of-domain probe's own fault, still recorded when the audit reads the unit: a unit that records it after the probe stopped looking. QEMU's VT-d and SMMUv3 record every fault of the probe's before its completion is seen, and the probe drains them then; every suite boot reports 0 late faults."
@@ -1380,35 +1380,35 @@
     },
     {
       "file": "user/space.rs",
-      "lines": "273",
+      "lines": "280",
       "category": "defensive",
       "match": "})?;",
       "why": "`ferrix_vma::AddressSpace::new` refuses a window whose ends are not page aligned or out of order, and the window here is `MMAP_MIN_ADDR..USER_VIRT_END`, two constants of the layout that are both. Reported rather than panicked on, as the comment says."
     },
     {
       "file": "user/space.rs",
-      "lines": "555",
+      "lines": "562",
       "category": "defensive",
       "match": "Ok((vmo.page(index).unwrap_or(shared), None))",
       "why": "A page found held by a device between the fault reading its reference count and taking it. A pin makes a shared page the object's own first (`Vmo::hold` copies it), so a copy-on-write fault finds a held page only if a pin lands in those few instructions on another processor, which no check can place deterministically."
     },
     {
       "file": "user/space.rs",
-      "lines": "1190",
+      "lines": "1197",
       "category": "defensive",
       "match": "};",
       "why": "A private file mapping's region whose file object or shadow is missing from the tables. `map_file` records both under the region's id before the region can fault, and they leave together as the region's id leaves; a fault finding one missing would be the tables and the map disagreeing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2362",
+      "lines": "2369",
       "category": "defensive",
       "match": "debug_assert!(",
       "why": "The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing."
     },
     {
       "file": "user/space.rs",
-      "lines": "2366-2367",
+      "lines": "2373-2374",
       "category": "defensive",
       "match": "site.map_or(\"?\", |site| site.file()),",
       "why": "The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing."
