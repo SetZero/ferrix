@@ -759,6 +759,39 @@ impl Client {
         self.defer(result);
     }
 
+    /// Hand a press on a window's own title bar or edge to the compositor,
+    /// to move the window by the pointer (`xdg_toplevel.move`, `edges` 0)
+    /// or resize it by the edges named (`xdg_toplevel.resize`, a
+    /// `resize_edge`). It goes with the last press's serial, which is the
+    /// press it should start from; the compositor may decline. Anything but
+    /// a window, or a client with no seat, is left alone.
+    pub fn drag_window(&mut self, window: SurfaceId, edges: u32) {
+        let Some(Kind::Toplevel { toplevel, .. }) =
+            self.surfaces.get(&window).map(|state| &state.kind)
+        else {
+            return;
+        };
+        let toplevel = *toplevel;
+        let Some(seat) = self.seat.seat else {
+            return;
+        };
+        let serial = self.seat.input_serial;
+        let result = if edges == 0 {
+            self.send(
+                toplevel,
+                xdg_toplevel::request::MOVE,
+                &[Arg::Object(seat), Arg::Uint(serial)],
+            )
+        } else {
+            self.send(
+                toplevel,
+                xdg_toplevel::request::RESIZE,
+                &[Arg::Object(seat), Arg::Uint(serial), Arg::Uint(edges)],
+            )
+        };
+        self.defer(result);
+    }
+
     /// Change the least and greatest size a window may be given
     /// (`xdg_toplevel.set_min_size` and `set_max_size`; 0 is no limit),
     /// in effect from its next commit. Anything but a window is left alone.
