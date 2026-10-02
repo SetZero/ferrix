@@ -68,7 +68,7 @@ evidence is host tests, not boots: 8,278 lines of tests over images
 `mkfs.btrfs` made and over a device in memory that records every write and
 flush, so that a power cut at any point can be rebuilt and the volume opened
 again, and the writer's own checker, which recomputes every reference,
-usage and free-space count from the trees. `L.btrfs.1` to `L.btrfs.23` name
+usage and free-space count from the trees. `L.btrfs.1` to `L.btrfs.107` name
 them (TRACEABILITY.md). Stage 11's and 12's boot checks
 (`fs/btrfs_check.rs`, `fs/btrfs_write_check.rs`,
 `fs/btrfs_powerfail.rs`) run the crates under

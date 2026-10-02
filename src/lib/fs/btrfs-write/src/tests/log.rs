@@ -79,7 +79,7 @@ fn what_a_log_promised_survives_a_crash() {
     check(&after.device);
 }
 
-/// Verifies: L.btrfs.15
+/// Verifies: L.btrfs.87
 #[test]
 fn a_commit_after_a_log_leaves_no_log_behind() {
     let (mut volume, ino) = with_a_file(&pattern(9000, 3));
@@ -119,7 +119,7 @@ fn a_log_costs_less_than_a_commit() {
     );
 }
 
-/// Verifies: L.btrfs.15
+/// Verifies: L.btrfs.88
 #[test]
 fn a_log_commit_flushes_before_its_superblock() {
     let (mut volume, ino) = with_a_file(&pattern(5000, 7));
@@ -141,7 +141,7 @@ fn a_log_commit_flushes_before_its_superblock() {
     );
 }
 
-/// Verifies: L.btrfs.15
+/// Verifies: L.btrfs.89
 #[test]
 fn a_crash_between_the_log_and_its_superblock_leaves_the_last_commit() {
     let first = pattern(20_000, 9);
@@ -168,7 +168,7 @@ fn a_crash_between_the_log_and_its_superblock_leaves_the_last_commit() {
     check(&after.device);
 }
 
-/// Verifies: L.btrfs.15
+/// Verifies: L.btrfs.90
 #[test]
 fn logging_the_same_inode_twice_keeps_the_later_of_the_two() {
     let (mut volume, ino) = with_a_file(&pattern(4000, 11));
@@ -187,7 +187,7 @@ fn logging_the_same_inode_twice_keeps_the_later_of_the_two() {
     check(&after.device);
 }
 
-/// Verifies: L.btrfs.15
+/// Verifies: L.btrfs.91
 #[test]
 fn an_extent_cut_in_two_replays_as_one_extent_twice_referred_to() {
     let whole = pattern(60_000, 15);

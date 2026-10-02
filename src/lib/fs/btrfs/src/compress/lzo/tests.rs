@@ -258,7 +258,7 @@ fn a_segment_expands_to_at_most_one_sector() {
     assert_eq!(decode(&spills, 4096, 512), Err(CORRUPT));
 }
 
-/// Verifies: L.btrfs.5
+/// Verifies: L.btrfs.61
 #[test]
 fn the_output_bounds_the_decode() {
     let plain = text_plain();
@@ -596,7 +596,7 @@ fn answers(input: &[u8], len: usize) {
 
 const VECTORS: [(&[u8], usize); 3] = [(INLINE, 1800), (TEXT, 106_784), (MIXED, MIXED_LEN)];
 
-/// Verifies: L.btrfs.5, H.STORE.1
+/// Verifies: L.btrfs.60
 #[test]
 fn every_truncation_answers() {
     for (extent, len) in VECTORS {
@@ -619,7 +619,7 @@ fn every_truncation_answers() {
     }
 }
 
-/// Verifies: L.btrfs.5, H.STORE.1
+/// Verifies: L.btrfs.59
 #[test]
 fn single_bit_flips_answer() {
     for (extent, len) in VECTORS {
@@ -646,7 +646,6 @@ fn single_bit_flips_answer() {
     }
 }
 
-/// Verifies: L.btrfs.5
 #[test]
 fn random_garbage_answers() {
     let mut rng = Rng(0x5EED_0000_0000_0003);

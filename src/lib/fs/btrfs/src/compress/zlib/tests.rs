@@ -489,7 +489,7 @@ fn fixed_blocks_decode_literals_and_matches() {
     );
 }
 
-/// Verifies: L.btrfs.5
+/// Verifies: L.btrfs.58
 #[test]
 fn refuses_a_distance_before_the_start_of_the_output() {
     // Distance code 1 is 2 back, with one byte written.
@@ -567,7 +567,7 @@ fn a_stored_block_after_a_partial_byte_starts_on_the_boundary() {
     );
 }
 
-/// Verifies: L.btrfs.5
+/// Verifies: L.btrfs.57
 #[test]
 fn refuses_output_that_does_not_fit() {
     assert_eq!(decode(&stored(b"hello", !5), 4), Err(BAD), "stored");
@@ -859,7 +859,7 @@ fn victims() -> Vec<(Vec<u8>, Vec<u8>)> {
     out
 }
 
-/// Verifies: L.btrfs.5, H.STORE.1
+/// Verifies: L.btrfs.56
 #[test]
 fn every_truncation_before_the_trailer_is_refused() {
     for (stream, plain) in victims() {
@@ -878,7 +878,7 @@ fn every_truncation_before_the_trailer_is_refused() {
     }
 }
 
-/// Verifies: L.btrfs.5, H.STORE.1
+/// Verifies: L.btrfs.5
 #[test]
 fn bit_flips_give_an_error_or_what_miniz_oxide_decodes() {
     #[cfg(not(miri))]
@@ -915,7 +915,6 @@ fn agrees_with_oracle(stream: &[u8], capacity: usize, context: usize) {
     );
 }
 
-/// Verifies: L.btrfs.5
 #[test]
 fn random_bytes_behind_a_valid_header_are_total() {
     #[cfg(not(miri))]

@@ -360,7 +360,7 @@ ASR-9's half about power loss rests on one property of the device below the
 element's `WriteDevice` interface: every write that returned before a flush
 is durable when the flush returns, and a write with FUA is durable when it
 returns. The commit writes its nodes, flushes, and only then writes the
-superblock (`H.STORE.3`). A device, controller, emulator or host cache mode
+superblock (`L.btrfs.13`, `H.STORE.3`). A device, controller, emulator or host cache mode
 that acknowledges a flush it has not done can make the superblock durable
 before a node it names, and the volume may then not mount after a power cut.
 The integrator shall use storage, and a virtual disk configuration, that

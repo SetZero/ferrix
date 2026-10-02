@@ -12,7 +12,7 @@ fn inserts_merge_with_touching_runs() {
     assert_eq!(set.total(), 30);
 }
 
-/// Verifies: L.btrfs.18
+/// Verifies: L.btrfs.95
 #[test]
 fn removes_split_the_run_they_are_in() {
     let mut set = RangeSet::new();
@@ -28,7 +28,7 @@ fn removes_split_the_run_they_are_in() {
     assert!(!set.overlaps(0, 60));
 }
 
-/// Verifies: L.btrfs.18
+/// Verifies: L.btrfs.96
 #[test]
 fn first_fit_aligns_and_avoids_the_boundary() {
     let mut set = RangeSet::new();
@@ -41,7 +41,7 @@ fn first_fit_aligns_and_avoids_the_boundary() {
     assert_eq!(set.first_fit(2 << 20, 4096, 0, 0), None);
 }
 
-/// Verifies: L.btrfs.18
+/// Verifies: L.btrfs.97
 #[test]
 fn first_prefix_takes_what_the_run_has() {
     let mut set = RangeSet::new();
@@ -54,7 +54,7 @@ fn first_prefix_takes_what_the_run_has() {
     );
 }
 
-/// Verifies: L.btrfs.18
+/// Verifies: L.btrfs.98
 #[test]
 fn add_unions_overlapping_and_touching_runs() {
     let mut set = RangeSet::new();
@@ -71,7 +71,7 @@ fn add_unions_overlapping_and_touching_runs() {
     assert_eq!(set.total(), 40, "a range already held changes nothing");
 }
 
-/// Verifies: L.btrfs.18
+/// Verifies: L.btrfs.99
 #[test]
 fn extract_takes_exactly_the_shared_bytes() {
     let mut set = RangeSet::new();

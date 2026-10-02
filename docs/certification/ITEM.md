@@ -236,9 +236,10 @@ written. A kernel file naming one of the crates is an edge to the `item` ring
 like a `crate::` path, so the core cannot name btrfs. The item-scoped gates --
 complexity and recursion, fallible allocation, the unsafe trace, and the
 panic-exemption count -- read the crates' product code from 2026-10-02. What
-they found then is recorded as debt, not waived: 185 allocations that cannot
-report failure (19 in the reader, 166 in the write path), which branch
-`btrfs-fallible` is converting, and 40 functions over the complexity floors
+they found then is recorded as debt, not waived: 166 allocations in the write
+path that cannot report failure, which branch `btrfs-fallible` is
+converting, and 19 calls in the reader the gate counts by name that allocate
+nothing, awaiting their `NOALLOC:` arguments; and 40 functions over the complexity floors
 (18 and 22), none recursive. Neither crate has an `unsafe` site or a panic
 exemption.
 

@@ -407,7 +407,7 @@ fn one_block(size: u8, literals: &[u8], sequences: &[u8]) -> Vec<u8> {
     frame
 }
 
-/// Verifies: L.btrfs.5
+/// Verifies: L.btrfs.65
 #[test]
 fn a_match_before_the_output_start_is_corrupt() {
     // Two literals, then a match of 3 at a distance of 2 (value 5): fine.
@@ -713,7 +713,7 @@ fn whole_frames() -> Vec<(&'static str, Vec<u8>, usize)> {
     frames
 }
 
-/// Verifies: L.btrfs.5, H.STORE.1
+/// Verifies: L.btrfs.63
 #[test]
 fn every_truncation_is_corrupt_and_total() {
     for (name, frame, len) in whole_frames() {
@@ -730,7 +730,7 @@ fn every_truncation_is_corrupt_and_total() {
     }
 }
 
-/// Verifies: L.btrfs.5, H.STORE.1
+/// Verifies: L.btrfs.62
 #[test]
 fn single_bit_flips_are_total() {
     for (name, frame, len) in whole_frames() {
@@ -750,7 +750,6 @@ fn single_bit_flips_are_total() {
     }
 }
 
-/// Verifies: L.btrfs.5
 #[test]
 #[cfg_attr(miri, ignore)]
 fn bit_flips_in_a_full_extent_are_total() {
@@ -766,7 +765,6 @@ fn bit_flips_in_a_full_extent_are_total() {
     }
 }
 
-/// Verifies: L.btrfs.5
 #[test]
 fn random_bodies_behind_valid_headers_are_total() {
     let rounds = if cfg!(miri) { 40 } else { 20_000 };
@@ -790,7 +788,6 @@ fn random_bodies_behind_valid_headers_are_total() {
     }
 }
 
-/// Verifies: L.btrfs.5
 #[test]
 fn random_rewrites_of_real_frames_are_total() {
     let rounds = if cfg!(miri) { 20 } else { 3000 };
@@ -807,7 +804,7 @@ fn random_rewrites_of_real_frames_are_total() {
     }
 }
 
-/// Verifies: L.btrfs.5
+/// Verifies: L.btrfs.64
 #[test]
 fn an_output_buffer_smaller_than_the_content_is_corrupt() {
     for (name, frame, len) in whole_frames() {

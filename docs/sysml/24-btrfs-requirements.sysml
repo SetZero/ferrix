@@ -14,16 +14,24 @@
  *
  * The pilot's rules hold: a requirement names every function that carries
  * its behaviour as its `unit`; one check proves a whole requirement, so a
- * requirement is no broader than its checks can prove; a statement says no
+ * requirement is no broader than one check can prove; a statement says no
  * more than its criterion tests; an accessor needs no requirement of its own.
+ * The first version of this part, L.btrfs.1 to 23, broke the second rule:
+ * many of them were conjunctions whose clauses different tests proved. The
+ * certification consultant found it (2026-10-02). Each was narrowed to what
+ * one test proves, and every clause it gave up that a test proves became a
+ * requirement of its own, L.btrfs.24 to 107; ids a check named were not
+ * renumbered. Clauses no test proved were dropped rather than kept
+ * unverified: the commit's settling bound (64 passes), and a reload whose
+ * own log replay aborts (docs/BACKLOG.md).
  *
  * What proves what. Every check here is a host test of the crates
  * themselves, against images `mkfs.btrfs` made (src/lib/fs/btrfs/testdata)
  * and against a device in memory that records every write and flush, so
- * that a crash can be rebuilt from the record; except the two of L.btrfs.21,
- * which drive the write path through the load's `ferrix-btrfs-vfs` because
- * that is where a mount turns read-only, and the second half of L.btrfs.20,
- * which does too. The `btrfs_read` fuzzer (src/tests/fuzz) exercises the
+ * that a crash can be rebuilt from the record; except L.btrfs.21, 105, 106
+ * and 107, whose tests drive the write path through the load's
+ * `ferrix-btrfs-vfs`, because a mount is where ENOSPC and a read-only
+ * reload show. The `btrfs_read` fuzzer (src/tests/fuzz) exercises the
  * reader beyond these and is not a verifier the gate reads. Nothing fuzzes
  * the write path.
  *
@@ -40,163 +48,87 @@
 package FerrixBtrfsRequirements {
     private import FerrixItemRequirements::*;
 
-    package Parsing {
-        doc /* The reader's parsers: every structure read from a volume is
-             * hostile input in ring 0, and every function is total over it
-             * (the crate is `forbid(unsafe_code)`, reads every field through
-             * `slice::get`, and checks every length sum). */
+    package Superblocks {
+        doc /* The superblock: the one structure read before anything is known
+             * about the volume. */
 
-        requirement <'L.btrfs.1'> superblocksParsedOrRefused : ItemLowLevel {
-            attribute :>> statement = "Superblock::parse shall refuse, with an error
-                naming what is wrong, a superblock that is truncated, has the wrong
-                magic or a failing checksum, an unsupported checksum type, a sector or
-                node size outside btrfs's range or a root no tree of that size can
-                have, and every accessor of one it accepts shall answer.";
-            attribute :>> criterion = "A well-formed superblock parses; a wrong magic,
-                a flipped checksummed byte, a truncation, disagreeing sizes, an
-                impossible root and checksum type 2 are each refused with their own
-                error; each of 4,096 single-byte patches parses or is refused, and
-                every accessor of what parses answers.";
-            attribute :>> parent = ("H.STORE.1", "H.STORE.2");
+        requirement <'L.btrfs.1'> superblockParsingIsTotal : ItemLowLevel {
+            attribute :>> statement = "Superblock::parse shall answer any bytes with a
+                superblock or an error, and every accessor of a superblock it returns
+                shall answer without a panic.";
+            attribute :>> criterion = "Each of 4,096 single-byte patches of a
+                well-formed superblock (the first 1,024 bytes, each set to 0x00, 0x01,
+                0x7F and 0xFF) parses or is refused, and every accessor of each that
+                parses answers.";
+            attribute :>> parent = "H.STORE.1";
             attribute :>> unit = ("ferrix_btrfs::superblock::Superblock::parse",
                 "ferrix_btrfs::superblock::Superblock::parse_at",
                 "ferrix_btrfs::superblock::Superblock::check_roots",
-                "ferrix_btrfs::verify_crc32c", "ferrix_btrfs::is_valid_block_size",
+                "ferrix_btrfs::is_valid_block_size");
+        }
+        requirement <'L.btrfs.24'> superblockChecksumChecked : ItemLowLevel {
+            attribute :>> statement = "Superblock::parse shall refuse a superblock whose
+                CRC-32C does not match its bytes, with BadChecksum.";
+            attribute :>> criterion = "A superblock with one checksummed byte changed is
+                refused with BadChecksum.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::superblock::Superblock::parse",
+                "ferrix_btrfs::verify_crc32c");
+        }
+        requirement <'L.btrfs.25'> superblockMagicChecked : ItemLowLevel {
+            attribute :>> statement = "Superblock::parse shall refuse bytes without the
+                btrfs magic, with BadMagic.";
+            attribute :>> criterion = "A superblock with its magic changed is refused
+                with BadMagic.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::superblock::Superblock::parse");
+        }
+        requirement <'L.btrfs.26'> truncatedSuperblockRefused : ItemLowLevel {
+            attribute :>> statement = "Superblock::parse shall refuse a buffer shorter
+                than a superblock, with Truncated.";
+            attribute :>> criterion = "A superblock cut short is refused with Truncated
+                naming the bytes needed and found.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::superblock::Superblock::parse",
+                "ferrix_btrfs::truncated");
+        }
+        requirement <'L.btrfs.27'> superblockSizesChecked : ItemLowLevel {
+            attribute :>> statement = "Superblock::parse shall refuse a sector, node or
+                leaf size btrfs would not write, with BadSectorSize or BadNodeSize
+                naming it.";
+            attribute :>> criterion = "Each combination of sector, node and leaf size
+                the test lists -- nodes smaller than a sector among them -- is refused
+                with the error naming the size.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::superblock::Superblock::parse",
+                "ferrix_btrfs::is_valid_block_size");
+        }
+        requirement <'L.btrfs.28'> superblockRootsChecked : ItemLowLevel {
+            attribute :>> statement = "Superblock::parse shall refuse a superblock
+                naming a root, a chunk root or a log root no tree can have.";
+            attribute :>> criterion = "A root and a chunk root of level 8, a log root of
+                level 255 and each other root the test lists are refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::superblock::Superblock::parse",
+                "ferrix_btrfs::superblock::Superblock::check_roots");
+        }
+        requirement <'L.btrfs.29'> unsupportedChecksumReported : ItemLowLevel {
+            attribute :>> statement = "Superblock::parse shall refuse a superblock whose
+                checksum type is not CRC-32C, with UnsupportedChecksum carrying the
+                type.";
+            attribute :>> criterion = "A superblock of checksum type 2 is refused with
+                UnsupportedChecksum(2).";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::superblock::Superblock::parse");
+        }
+        requirement <'L.btrfs.30'> crc32cIsCastagnoli : ItemLowLevel {
+            attribute :>> statement = "crc32c shall compute the CRC-32C (Castagnoli) of
+                its input.";
+            attribute :>> criterion = "crc32c of each published test vector equals its
+                published value.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::crc32c::crc32c",
                 "ferrix_btrfs::crc32c::crc32c_update");
-        }
-        requirement <'L.btrfs.2'> nodesParsedOrRefused : ItemLowLevel {
-            attribute :>> statement = "Node::parse shall refuse a node that is
-                truncated, fails its checksum, records another address than the one
-                it was read from, is deeper than MAX_LEVEL, claims more items than its
-                size holds, has an item outside the node or over the item array, has
-                leaf payloads not packed back to back, or has keys out of order.";
-            attribute :>> criterion = "A node from the wrong address, with a bad
-                checksum, too many items, an item past its end, unpacked payloads,
-                keys out of order, a level of 8 or a truncation is each refused with
-                its own error; a leaf packed to its boundaries parses; each of 4,096
-                single-byte patches of a leaf parses or is refused, and every accessor
-                of what parses answers.";
-            attribute :>> parent = "H.STORE.1";
-            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
-                "ferrix_btrfs::tree::Node::parse_unchecked_address",
-                "ferrix_btrfs::tree::Node::check_capacity",
-                "ferrix_btrfs::tree::Node::check_leaf",
-                "ferrix_btrfs::tree::Node::check_internal",
-                "ferrix_btrfs::tree::NodeHeader::parse",
-                "ferrix_btrfs::tree::Node::search");
-        }
-        requirement <'L.btrfs.3'> chunksMappedOrRefused : ItemLowLevel {
-            attribute :>> statement = "ChunkItem::parse and ChunkMap::insert shall
-                refuse a chunk item btrfs would not write, one disagreeing with the
-                volume's sector size, a non-system chunk in the system chunk array,
-                and a chunk overlapping one already mapped; ChunkMap::insert shall
-                answer ChunkMapFull rather than write past its storage; and map_copy
-                shall map only the SINGLE, DUP and mirrored profiles, answering
-                UnsupportedProfile for the others.";
-            attribute :>> criterion = "A chunk with no stripes, a truncated one, one
-                of a type, stripe count or size btrfs would not write, one of another
-                sector size, a data chunk in the system array and an overlapping one
-                are each refused; a map one entry short of a volume's chunks answers
-                ChunkMapFull; a SINGLE chunk maps logical to physical, a mirrored one
-                to each copy, and a striped one is refused; every layout btrfs writes
-                still parses.";
-            attribute :>> parent = "H.STORE.1";
-            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkItem::parse",
-                "ferrix_btrfs::chunk::ChunkItem::check_type",
-                "ferrix_btrfs::chunk::ChunkItem::check_geometry",
-                "ferrix_btrfs::chunk::ChunkItem::check_sectorsize",
-                "ferrix_btrfs::chunk::ChunkMap::insert",
-                "ferrix_btrfs::chunk::ChunkMap::check_neighbours",
-                "ferrix_btrfs::chunk::ChunkMap::insert_at",
-                "ferrix_btrfs::chunk::ChunkMap::map_copy",
-                "ferrix_btrfs::chunk::ChunkMap::load_sys_chunk_array",
-                "ferrix_btrfs::chunk::SysChunkArray::entry");
-        }
-        requirement <'L.btrfs.4'> itemsParsedOrRefused : ItemLowLevel {
-            attribute :>> statement = "The item parsers shall refuse an inode item,
-                directory entry, inode reference or extent item that is truncated or
-                that btrfs would not write, and the directory entry iterators shall
-                stop, not overrun, at a name past the item's end.";
-            attribute :>> criterion = "An inode item and extent data in all three
-                forms decode; a truncated inode or extent item, an extent and a
-                directory entry btrfs would not write, and an inode reference or
-                extended reference Linux refuses are each refused; a directory item
-                whose name runs past its end stops cleanly.";
-            attribute :>> parent = "H.STORE.1";
-            attribute :>> unit = ("ferrix_btrfs::items::InodeItem::parse",
-                "ferrix_btrfs::items::InodeRefIter::record",
-                "ferrix_btrfs::items::InodeExtrefIter::record",
-                "ferrix_btrfs::items::DirItemIter::plausible",
-                "ferrix_btrfs::items::DirItemIter::record",
-                "ferrix_btrfs::items::ExtentData::parse",
-                "ferrix_btrfs::items::ExtentData::extent",
-                "ferrix_btrfs::items::ExtentData::parse_item",
-                "ferrix_btrfs::items::ExtentData::check",
-                "ferrix_btrfs::items::ExtentData::check_reference");
-        }
-        requirement <'L.btrfs.5'> decompressionStaysInItsBuffer : ItemLowLevel {
-            attribute :>> statement = "compress::decompress shall answer
-                BadCompressedData for a malformed zlib, LZO or zstd stream, a
-                back-reference before the start of the output, or more output than
-                the buffer holds, and shall write nothing outside its output
-                buffer.";
-            attribute :>> criterion = "Every truncation and every single-bit flip of
-                real extents, random bodies behind valid headers, and outputs smaller
-                than the content give an error or the oracle's decoding, for each of
-                zlib, LZO and zstd; 0 panics.";
-            attribute :>> parent = "H.STORE.1";
-            attribute :>> unit = ("ferrix_btrfs::compress::decompress",
-                "ferrix_btrfs::compress::zlib::decompress",
-                "ferrix_btrfs::compress::lzo::decompress",
-                "ferrix_btrfs::compress::zstd::decompress");
-        }
-        requirement <'L.btrfs.6'> walksAscendAndEnd : ItemLowLevel {
-            attribute :>> statement = "Volume::walk shall visit each key of a tree
-                once, strictly ascending, and stop when its visitor breaks, and
-                last_at_or_before shall find the last key at or before a key across
-                leaf boundaries.";
-            attribute :>> criterion = "A walk of every image visits each key once in
-                order; a walk whose visitor breaks stops there; the last key at or
-                before each probe is found across a leaf boundary; the predecessor
-                steps through every field of a key.";
-            attribute :>> parent = "H.STORE.1";
-            attribute :>> unit = ("ferrix_btrfs::volume::Volume::walk",
-                "ferrix_btrfs::volume::Volume::seek",
-                "ferrix_btrfs::volume::Volume::last_at_or_before",
-                "ferrix_btrfs::volume::at_or_before",
-                "ferrix_btrfs::volume::predecessor");
-        }
-        requirement <'L.btrfs.7'> namesChecked : ItemLowLevel {
-            attribute :>> statement = "Subvolume::lookup and Subvolume::read_dir shall
-                refuse a name no directory can hold, a name with a slash, and an
-                entry filed under another name's hash, and shall answer a missing name
-                as a miss, not an error.";
-            attribute :>> criterion = "A lookup of an entry filed under another
-                name's hash, or one no longer matching its hash, is refused; names no
-                directory can hold, and a listing holding a name with a slash, are
-                refused; a missing name is a miss.";
-            attribute :>> parent = "H.STORE.1";
-            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::lookup",
-                "ferrix_btrfs::fs::Subvolume::read_dir", "ferrix_btrfs::fs::check_name",
-                "ferrix_btrfs::fs::target_of", "ferrix_btrfs::items::name_hash");
-        }
-        requirement <'L.btrfs.8'> fileReadsBounded : ItemLowLevel {
-            attribute :>> statement = "Subvolume::read shall return a file's bytes as
-                they were written, never more than were asked for nor past the
-                inode's size, zeroes for a hole, and shall refuse an extent starting
-                inside the one before it and a buffer smaller than an extent.";
-            attribute :>> criterion = "The uncompressed, zlib, LZO and zstd images read
-                back byte for byte; a read past the end returns nothing; a hole reads
-                as zeroes; an overlapping extent and a too-small buffer are
-                refused.";
-            attribute :>> parent = "H.STORE.1";
-            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
-                "ferrix_btrfs::fs::Subvolume::copy_extent",
-                "ferrix_btrfs::fs::ReadBuffers::new",
-                "ferrix_btrfs::fs::ReadBuffers::expand_inline",
-                "ferrix_btrfs::fs::ReadBuffers::expand_extent",
-                "ferrix_btrfs::fs::Placement::new", "ferrix_btrfs::fs::expanded_len",
-                "ferrix_btrfs::fs::copy_from");
         }
         requirement <'L.btrfs.9'> volumesTheReaderWouldMisreadRefused : ItemLowLevel {
             attribute :>> statement = "Volume::open shall refuse a volume setting an
@@ -228,48 +160,660 @@ package FerrixBtrfsRequirements {
         }
     }
 
-    package Integrity {
-        doc /* The reader's half of ASR-9: damage is found and not returned,
-             * and a second copy is read where there is one. */
+    package Nodes {
+        doc /* Tree nodes, parsed before any field of them is used. */
+
+        requirement <'L.btrfs.2'> nodeParsingIsTotal : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall answer any bytes with a node or
+                an error, and every accessor of a node it returns shall answer without a
+                panic.";
+            attribute :>> criterion = "Each of 4,096 single-byte patches of a
+                well-formed leaf parses or is refused, and every accessor of each that
+                parses answers.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
+                "ferrix_btrfs::tree::Node::parse_unchecked_address",
+                "ferrix_btrfs::tree::Node::check_capacity",
+                "ferrix_btrfs::tree::Node::check_leaf",
+                "ferrix_btrfs::tree::Node::check_internal",
+                "ferrix_btrfs::tree::NodeHeader::parse");
+        }
+        requirement <'L.btrfs.31'> nodeAddressChecked : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a node that records
+                another address than the one it was read from, with WrongAddress.";
+            attribute :>> criterion = "A node parsed at another address than its own is
+                refused with WrongAddress naming both.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse");
+        }
+        requirement <'L.btrfs.32'> nodeChecksumChecked : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a node whose CRC-32C
+                does not match its bytes, with BadChecksum.";
+            attribute :>> criterion = "A node with one checksummed byte changed is
+                refused with BadChecksum.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
+                "ferrix_btrfs::verify_crc32c");
+        }
+        requirement <'L.btrfs.33'> nodeItemCountChecked : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a node claiming more
+                items than a node of its size holds, with TooManyItems.";
+            attribute :>> criterion = "A node whose item count exceeds its capacity is
+                refused with TooManyItems.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
+                "ferrix_btrfs::tree::Node::check_capacity");
+        }
+        requirement <'L.btrfs.34'> itemsStayInTheirNode : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a leaf with an item
+                whose data lies outside the node or over the item array, with
+                ItemOutOfBounds.";
+            attribute :>> criterion = "A leaf with an item running past the node is
+                refused with ItemOutOfBounds naming its slot.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
+                "ferrix_btrfs::tree::Node::check_leaf");
+        }
+        requirement <'L.btrfs.35'> keysInOrder : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a node whose keys are
+                not strictly ascending, with ItemsOutOfOrder.";
+            attribute :>> criterion = "A node with two keys out of order is refused with
+                ItemsOutOfOrder naming the slot.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
+                "ferrix_btrfs::tree::Node::check_leaf",
+                "ferrix_btrfs::tree::Node::check_internal");
+        }
+        requirement <'L.btrfs.36'> payloadsPacked : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a leaf whose item
+                payloads are not packed back to back from the node's end.";
+            attribute :>> criterion = "A leaf with a gap or an overlap between payloads
+                is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
+                "ferrix_btrfs::tree::Node::check_leaf");
+        }
+        requirement <'L.btrfs.37'> nodeLevelBounded : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a node whose level
+                exceeds MAX_LEVEL.";
+            attribute :>> criterion = "A node of level 8 is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse_unchecked_address",
+                "ferrix_btrfs::tree::NodeHeader::parse");
+        }
+        requirement <'L.btrfs.38'> truncatedNodeRefused : ItemLowLevel {
+            attribute :>> statement = "Node::parse shall refuse a buffer shorter than
+                the node it describes, with Truncated.";
+            attribute :>> criterion = "A node cut short is refused with Truncated.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::parse",
+                "ferrix_btrfs::tree::NodeHeader::parse");
+        }
+        requirement <'L.btrfs.39'> searchFindsOrPlaces : ItemLowLevel {
+            attribute :>> statement = "Node::search shall return a present key's slot,
+                and for an absent key the slot it would be inserted at.";
+            attribute :>> criterion = "Present keys are found at their slots and absent
+                ones answer the slot they would go in, as the test lists.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::tree::Node::search");
+        }
+    }
+
+    package Chunks {
+        doc /* Chunk items and the logical-to-physical map built from them. */
+
+        requirement <'L.btrfs.3'> chunkMapNeverOverruns : ItemLowLevel {
+            attribute :>> statement = "ChunkMap::insert shall answer ChunkMapFull, not
+                write past its storage, when the map is full.";
+            attribute :>> criterion = "A map one entry short of the chunks inserted
+                answers ChunkMapFull for the last and keeps the others.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkMap::insert",
+                "ferrix_btrfs::chunk::ChunkMap::insert_at");
+        }
+        requirement <'L.btrfs.40'> overlappingChunksRefused : ItemLowLevel {
+            attribute :>> statement = "ChunkMap::insert shall refuse a chunk whose range
+                overlaps a different chunk already mapped, with BadChunk.";
+            attribute :>> criterion = "A chunk overlapping one already mapped is refused
+                with BadChunk.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkMap::insert",
+                "ferrix_btrfs::chunk::ChunkMap::check_neighbours");
+        }
+        requirement <'L.btrfs.41'> unsupportedProfilesRefused : ItemLowLevel {
+            attribute :>> statement = "ChunkMap::map shall answer UnsupportedProfile for
+                an address in a chunk of a striped or parity profile, never a guessed
+                physical address.";
+            attribute :>> criterion = "An address in a RAID0, RAID10, RAID5 or RAID6
+                chunk is refused with UnsupportedProfile carrying its type bits.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkMap::map_copy");
+        }
+        requirement <'L.btrfs.42'> singleChunksMap : ItemLowLevel {
+            attribute :>> statement = "ChunkMap::map shall map an address in a SINGLE
+                chunk to its stripe's offset plus the address's offset into the chunk.";
+            attribute :>> criterion = "Addresses in a SINGLE chunk map to the physical
+                addresses the test computes.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkMap::map_copy");
+        }
+        requirement <'L.btrfs.43'> mirroredChunksMap : ItemLowLevel {
+            attribute :>> statement = "ChunkMap::map shall map an address in a DUP or
+                RAID1 chunk to the first stripe, and refuse one in a RAID0 chunk.";
+            attribute :>> criterion = "A DUP and a RAID1 chunk map to their first
+                stripe; a RAID0 chunk is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkMap::map_copy");
+        }
+        requirement <'L.btrfs.44'> chunksBtrfsWouldNotWriteRefused : ItemLowLevel {
+            attribute :>> statement = "ChunkItem::parse shall refuse a chunk item of a
+                stripe length, length, type or stripe count btrfs would not write, with
+                BadChunk.";
+            attribute :>> criterion = "Each malformed chunk item the test lists is
+                refused with BadChunk.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkItem::parse",
+                "ferrix_btrfs::chunk::ChunkItem::check_type",
+                "ferrix_btrfs::chunk::ChunkItem::check_geometry");
+        }
+        requirement <'L.btrfs.45'> chunksWithoutStripesRefused : ItemLowLevel {
+            attribute :>> statement = "ChunkItem::parse shall refuse a chunk item with
+                no stripes.";
+            attribute :>> criterion = "A chunk item with num_stripes zero is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkItem::parse",
+                "ferrix_btrfs::chunk::ChunkItem::check_geometry");
+        }
+        requirement <'L.btrfs.46'> truncatedChunksRefused : ItemLowLevel {
+            attribute :>> statement = "ChunkItem::parse shall refuse a chunk item
+                shorter than its stripe records.";
+            attribute :>> criterion = "A chunk item cut inside its stripe records is
+                refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkItem::parse");
+        }
+        requirement <'L.btrfs.47'> chunkSectorSizeChecked : ItemLowLevel {
+            attribute :>> statement = "A chunk shall be refused when its sector size
+                differs from the volume's or its start is off the sector grid.";
+            attribute :>> criterion = "A chunk of another sector size, and one starting
+                off the grid, are refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkItem::check_sectorsize");
+        }
+        requirement <'L.btrfs.48'> systemArrayHoldsSystemChunks : ItemLowLevel {
+            attribute :>> statement = "The system chunk array shall be refused when it
+                holds a chunk that is not a system chunk.";
+            attribute :>> criterion = "A system chunk array holding a data chunk is
+                refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkMap::load_sys_chunk_array",
+                "ferrix_btrfs::chunk::SysChunkArray::entry");
+        }
+        requirement <'L.btrfs.49'> systemArrayBootstrapsTheMap : ItemLowLevel {
+            attribute :>> statement = "ChunkMap::load_sys_chunk_array shall map every
+                chunk the superblock's system chunk array holds.";
+            attribute :>> criterion = "Every chunk of the system chunk array the test
+                builds is mapped after the load.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::chunk::ChunkMap::load_sys_chunk_array",
+                "ferrix_btrfs::chunk::SysChunkArray::entry");
+        }
+    }
+
+    package Items {
+        doc /* Item payloads, parsed for their key type. */
+
+        requirement <'L.btrfs.4'> directoryEntriesStopAtTheEnd : ItemLowLevel {
+            attribute :>> statement = "Iterating a directory item shall stop, not read
+                past the item, at an entry whose name runs past the item's end.";
+            attribute :>> criterion = "A directory item whose last name runs past its
+                end yields the entries before it and then stops.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::items::DirItemIter::record",
+                "ferrix_btrfs::items::DirItemIter::plausible");
+        }
+        requirement <'L.btrfs.50'> truncatedInodeItemsRefused : ItemLowLevel {
+            attribute :>> statement = "InodeItem::parse shall refuse a payload shorter
+                than an inode item.";
+            attribute :>> criterion = "An inode item cut short is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::items::InodeItem::parse");
+        }
+        requirement <'L.btrfs.51'> directoryEntriesBtrfsWouldNotWriteRefused : ItemLowLevel {
+            attribute :>> statement = "Iterating a directory item shall refuse an entry
+                btrfs would not write: an empty or over-long name, an unknown type, or
+                data where none belongs.";
+            attribute :>> criterion = "Each malformed entry the test lists is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::items::DirItemIter::record",
+                "ferrix_btrfs::items::DirItemIter::plausible");
+        }
+        requirement <'L.btrfs.52'> inodeRefNamesBounded : ItemLowLevel {
+            attribute :>> statement = "Iterating an inode reference shall accept names
+                of 1 to 255 bytes and refuse others.";
+            attribute :>> criterion = "Names of 1 and 255 bytes are read, and names
+                outside that length are refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::items::InodeRefIter::record");
+        }
+        requirement <'L.btrfs.53'> truncatedExtentItemsRefused : ItemLowLevel {
+            attribute :>> statement = "ExtentData::parse shall refuse a payload shorter
+                than its form of extent item.";
+            attribute :>> criterion = "The truncated extent items the test lists are
+                refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::items::ExtentData::parse",
+                "ferrix_btrfs::items::ExtentData::extent");
+        }
+        requirement <'L.btrfs.54'> extentsBtrfsWouldNotWriteRefused : ItemLowLevel {
+            attribute :>> statement = "ExtentData::parse_item shall refuse an extent
+                item btrfs would not write: an unknown type, a range outside its extent,
+                or a misaligned offset.";
+            attribute :>> criterion = "Each malformed extent the test lists is refused
+                with BadItem.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::items::ExtentData::parse_item",
+                "ferrix_btrfs::items::ExtentData::check",
+                "ferrix_btrfs::items::ExtentData::check_reference");
+        }
+        requirement <'L.btrfs.55'> extrefsLinuxRefusesRefused : ItemLowLevel {
+            attribute :>> statement = "Iterating an inode extended reference shall
+                refuse the records Linux refuses.";
+            attribute :>> criterion = "Well-formed extended references parse, and each
+                the test lists that Linux refuses is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::items::InodeExtrefIter::record");
+        }
+    }
+
+    package Compression {
+        doc /* The three decoders of compressed extents. */
+
+        requirement <'L.btrfs.5'> zlibIsTotalUnderBitFlips : ItemLowLevel {
+            attribute :>> statement = "zlib::decompress shall answer every stream with
+                an error or the bytes it encodes, within its output buffer.";
+            attribute :>> criterion = "Every single-bit flip of real zlib extents
+                decodes to what miniz_oxide decodes or is an error; 0 panics.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zlib::decompress",
+                "ferrix_btrfs::compress::decompress");
+        }
+        requirement <'L.btrfs.56'> zlibTruncationsRefused : ItemLowLevel {
+            attribute :>> statement = "zlib::decompress shall refuse a stream cut before
+                its end.";
+            attribute :>> criterion = "Every truncation of a real extent before its
+                trailer is an error.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zlib::decompress");
+        }
+        requirement <'L.btrfs.57'> zlibOutputBounded : ItemLowLevel {
+            attribute :>> statement = "zlib::decompress shall refuse a stream that
+                decodes to more than its output buffer holds.";
+            attribute :>> criterion = "A stream decoding past a smaller output buffer is
+                an error, and nothing is written past the buffer.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zlib::decompress");
+        }
+        requirement <'L.btrfs.58'> zlibDistancesBounded : ItemLowLevel {
+            attribute :>> statement = "zlib::decompress shall refuse a back-reference
+                before the start of its output.";
+            attribute :>> criterion = "A stream whose first match reaches before the
+                output's start is an error.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zlib::decompress");
+        }
+        requirement <'L.btrfs.59'> lzoIsTotalUnderBitFlips : ItemLowLevel {
+            attribute :>> statement = "lzo::decompress shall answer every stream with an
+                error or decoded bytes, within its output buffer.";
+            attribute :>> criterion = "Every single-bit flip of real LZO extents
+                answers; 0 panics.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::lzo::decompress",
+                "ferrix_btrfs::compress::decompress");
+        }
+        requirement <'L.btrfs.60'> lzoTruncationsAnswered : ItemLowLevel {
+            attribute :>> statement = "lzo::decompress shall answer every truncated
+                stream without a panic.";
+            attribute :>> criterion = "Every truncation of a real LZO extent answers.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::lzo::decompress");
+        }
+        requirement <'L.btrfs.61'> lzoOutputBounded : ItemLowLevel {
+            attribute :>> statement = "lzo::decompress shall decode no more than its
+                output buffer holds.";
+            attribute :>> criterion = "A stream decoded into a smaller output buffer
+                stops at the buffer and writes nothing past it.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::lzo::decompress");
+        }
+        requirement <'L.btrfs.62'> zstdIsTotalUnderBitFlips : ItemLowLevel {
+            attribute :>> statement = "zstd::decompress shall answer every stream with
+                an error or decoded bytes, within its output buffer.";
+            attribute :>> criterion = "Every single-bit flip of real zstd frames
+                answers; 0 panics.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zstd::decompress",
+                "ferrix_btrfs::compress::decompress");
+        }
+        requirement <'L.btrfs.63'> zstdTruncationsRefused : ItemLowLevel {
+            attribute :>> statement = "zstd::decompress shall refuse a frame cut short
+                as corrupt.";
+            attribute :>> criterion = "Every truncation of a real zstd frame is
+                BadCompressedData.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zstd::decompress");
+        }
+        requirement <'L.btrfs.64'> zstdOutputBounded : ItemLowLevel {
+            attribute :>> statement = "zstd::decompress shall refuse a frame whose
+                content is larger than its output buffer.";
+            attribute :>> criterion = "A frame decoded into a buffer smaller than its
+                content is BadCompressedData.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zstd::decompress");
+        }
+        requirement <'L.btrfs.65'> zstdMatchesBounded : ItemLowLevel {
+            attribute :>> statement = "zstd::decompress shall refuse a match before the
+                start of its output.";
+            attribute :>> criterion = "A frame whose first match reaches before the
+                output's start is BadCompressedData.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::compress::zstd::decompress");
+        }
+    }
+
+    package Walks {
+        doc /* Searching and walking a tree. */
+
+        requirement <'L.btrfs.6'> walksAscendOnce : ItemLowLevel {
+            attribute :>> statement = "Volume::walk shall visit every key of a tree
+                once, in strictly ascending order.";
+            attribute :>> criterion = "A walk of each of the four images' fs trees
+                visits every key once, each greater than the one before.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::walk",
+                "ferrix_btrfs::volume::Volume::seek");
+        }
+        requirement <'L.btrfs.66'> walksStopWhenAsked : ItemLowLevel {
+            attribute :>> statement = "Volume::walk shall stop at the key its visitor
+                breaks on.";
+            attribute :>> criterion = "A walk whose visitor breaks stops at that key.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::walk");
+        }
+        requirement <'L.btrfs.67'> lastAtOrBeforeAcrossLeaves : ItemLowLevel {
+            attribute :>> statement = "Volume::last_at_or_before shall return the last
+                key at or before the one asked, across leaf boundaries.";
+            attribute :>> criterion = "For every pair of neighbouring keys of the four
+                images, the later finds itself and a key in the gap finds the earlier.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::last_at_or_before",
+                "ferrix_btrfs::volume::at_or_before");
+        }
+        requirement <'L.btrfs.68'> predecessorIsExact : ItemLowLevel {
+            attribute :>> statement = "predecessor shall return the greatest key below
+                its argument, through every field.";
+            attribute :>> criterion = "predecessor steps back through each field of a
+                key as the test lists.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::volume::predecessor");
+        }
+    }
+
+    package NodeReads {
+        doc /* Reading a node from the copy that passes its checks. */
 
         requirement <'L.btrfs.10'> nodesReadFromAGoodCopy : ItemLowLevel {
             attribute :>> statement = "Volume::read_node shall try each copy of a node
-                in turn and return the first whose checksum, address, level,
-                generation and filesystem id match what its parent named, and
-                otherwise the first copy's error.";
-            attribute :>> criterion = "A corrupt tree node and a pointer to the wrong
-                generation are refused, not misread, as is a tree deeper than btrfs
-                allows; a device error propagates; a DUP node whose first copy fails
-                is read from the second, and a volume whose root tree has one bad
-                copy opens.";
+                in turn and return the first whose checksum, address, level, generation
+                and filesystem id match what its parent named.";
+            attribute :>> criterion = "With the first copy of a DUP node damaged, the
+                read returns the node from the second.";
             attribute :>> parent = "H.STORE.2";
             attribute :>> unit = ("ferrix_btrfs::volume::Volume::read_node",
                 "ferrix_btrfs::volume::Volume::read_node_copy",
                 "ferrix_btrfs::volume::Volume::read_copy",
                 "ferrix_btrfs::chunk::ChunkMap::copies");
         }
-        requirement <'L.btrfs.11'> dataSectorsVerified : ItemLowLevel {
-            attribute :>> statement = "A file read shall verify every data sector
-                against the checksum tree before returning or decompressing it, read
-                the other copy of a DUP sector that fails, and otherwise answer
-                DataChecksum; a sector of a nodatasum file is read unchecked, as Linux
-                reads it.";
-            attribute :>> criterion = "A data sector that fails its checksum is an
-                error, not bytes; a DUP sector whose first copy fails is read from the
-                second; damage in a compressed extent fails its checksum before it is
-                expanded; a nodatasum file reads back.";
+        requirement <'L.btrfs.69'> corruptNodesRefused : ItemLowLevel {
+            attribute :>> statement = "Volume::read_node shall refuse a node none of
+                whose copies passes its checks, with the first copy's error.";
+            attribute :>> criterion = "A tree node with a damaged byte, in a SINGLE
+                chunk, is refused and not read as a node.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::read_node",
+                "ferrix_btrfs::volume::Volume::read_node_copy");
+        }
+        requirement <'L.btrfs.70'> staleNodesRefused : ItemLowLevel {
+            attribute :>> statement = "Volume::read_node shall refuse a node whose
+                generation differs from what its parent named, with BadTree.";
+            attribute :>> criterion = "A root pointer with its generation raised by one
+                is refused with BadTree.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::read_node_copy");
+        }
+        requirement <'L.btrfs.71'> deviceErrorsPropagate : ItemLowLevel {
+            attribute :>> statement = "A failed device read shall be answered as
+                DeviceRead at its physical address, not as damage.";
+            attribute :>> criterion = "A device failing the root's read answers
+                DeviceRead at that address.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::read_copy",
+                "ferrix_btrfs::volume::Volume::read_node");
+        }
+        requirement <'L.btrfs.72'> overDeepTreesRefused : ItemLowLevel {
+            attribute :>> statement = "A tree whose root names a level above MAX_LEVEL
+                shall be refused with BadTree before anything is read.";
+            attribute :>> criterion = "A root of level 8 is refused with BadTree.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::seek",
+                "ferrix_btrfs::volume::Volume::read_node_copy");
+        }
+    }
+
+    package Files {
+        doc /* Names and file contents, read through a subvolume. */
+
+        requirement <'L.btrfs.7'> lookupChecksTheHash : ItemLowLevel {
+            attribute :>> statement = "Subvolume::lookup shall refuse an entry filed
+                under another name's hash.";
+            attribute :>> criterion = "A lookup reaching an entry whose name hashes to
+                another key is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::lookup",
+                "ferrix_btrfs::items::name_hash");
+        }
+        requirement <'L.btrfs.73'> lookupChecksTheName : ItemLowLevel {
+            attribute :>> statement = "Subvolume::lookup shall refuse a name that no
+                longer matches its hash.";
+            attribute :>> criterion = "A lookup of a name changed on the disk after it
+                was filed is refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::lookup",
+                "ferrix_btrfs::items::name_hash");
+        }
+        requirement <'L.btrfs.74'> impossibleNamesRefused : ItemLowLevel {
+            attribute :>> statement = "check_name shall refuse an empty name, `.`, `..`
+                and a name holding `/` or NUL, and accept other names of up to 255
+                bytes; a lookup shall refuse the same names.";
+            attribute :>> criterion = "Six names -- empty, `.`, `..`, `/`, `a/b` and one
+                with a NUL -- are refused by check_name and by a lookup, and six others,
+                `...` and one of 255 bytes among them, are accepted.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::check_name",
+                "ferrix_btrfs::fs::entry_named");
+        }
+        requirement <'L.btrfs.75'> listingsCheckNames : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read_dir shall refuse a listing that
+                holds a name with a slash.";
+            attribute :>> criterion = "A listing whose entry's name holds a slash is
+                refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read_dir",
+                "ferrix_btrfs::fs::check_name", "ferrix_btrfs::fs::target_of");
+        }
+        requirement <'L.btrfs.76'> missingNamesMiss : ItemLowLevel {
+            attribute :>> statement = "Subvolume::lookup shall answer a name the
+                directory does not hold as a miss, not an error.";
+            attribute :>> criterion = "A lookup of an absent name answers None.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::lookup");
+        }
+        requirement <'L.btrfs.8'> plainFilesReadBack : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read shall return an uncompressed
+                file's bytes as they were written.";
+            attribute :>> criterion = "Every file of the uncompressed image reads back
+                byte for byte.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
+                "ferrix_btrfs::fs::Subvolume::copy_extent",
+                "ferrix_btrfs::fs::Placement::new", "ferrix_btrfs::fs::copy_from");
+        }
+        requirement <'L.btrfs.77'> zlibFilesReadBack : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read shall return a zlib-compressed
+                file's bytes as they were written.";
+            attribute :>> criterion = "Every file of the zlib image reads back byte for
+                byte.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
+                "ferrix_btrfs::fs::ReadBuffers::expand_extent",
+                "ferrix_btrfs::fs::ReadBuffers::expand_inline",
+                "ferrix_btrfs::fs::expanded_len");
+        }
+        requirement <'L.btrfs.78'> lzoFilesReadBack : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read shall return an LZO-compressed
+                file's bytes as they were written.";
+            attribute :>> criterion = "Every file of the LZO image reads back byte for
+                byte.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
+                "ferrix_btrfs::fs::ReadBuffers::expand_extent",
+                "ferrix_btrfs::fs::ReadBuffers::expand_inline",
+                "ferrix_btrfs::fs::expanded_len");
+        }
+        requirement <'L.btrfs.79'> zstdFilesReadBack : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read shall return a zstd-compressed
+                file's bytes as they were written.";
+            attribute :>> criterion = "Every file of the zstd image reads back byte for
+                byte.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
+                "ferrix_btrfs::fs::ReadBuffers::expand_extent",
+                "ferrix_btrfs::fs::ReadBuffers::expand_inline",
+                "ferrix_btrfs::fs::expanded_len");
+        }
+        requirement <'L.btrfs.80'> readsEndAtTheEnd : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read past a file's end shall return
+                nothing, and Subvolume::read_dir shall resume a listing from the cursor
+                it returned.";
+            attribute :>> criterion = "A read past the end returns nothing, and a
+                listing resumed from its cursor yields the rest.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
+                "ferrix_btrfs::fs::Subvolume::read_dir");
+        }
+        requirement <'L.btrfs.81'> holesReadAsZeroes : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read shall return zeroes for a hole.";
+            attribute :>> criterion = "A file's hole reads as zeroes.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
+                "ferrix_btrfs::fs::Placement::new");
+        }
+        requirement <'L.btrfs.82'> overlappingExtentsRefused : ItemLowLevel {
+            attribute :>> statement = "Subvolume::read shall refuse an extent that
+                starts inside the one before it.";
+            attribute :>> criterion = "An extent starting inside the one before it is
+                refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::Subvolume::read",
+                "ferrix_btrfs::fs::Placement::new");
+        }
+        requirement <'L.btrfs.83'> smallBuffersRefused : ItemLowLevel {
+            attribute :>> statement = "ReadBuffers::new shall refuse buffers smaller
+                than the largest extent they must hold.";
+            attribute :>> criterion = "Buffers smaller than an extent are refused.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::ReadBuffers::new");
+        }
+    }
+
+    package DataSectors {
+        doc /* The reader's checksums of file data. */
+
+        requirement <'L.btrfs.11'> damagedSectorsRefused : ItemLowLevel {
+            attribute :>> statement = "A file read shall answer DataChecksum, and no
+                bytes, for a data sector whose CRC-32C differs from the checksum
+                tree's.";
+            attribute :>> criterion = "A read of a file with one damaged data sector, in
+                a SINGLE chunk, answers DataChecksum.";
             attribute :>> parent = "H.STORE.2";
             attribute :>> unit = ("ferrix_btrfs::fs::ReadBuffers::read_verified",
                 "ferrix_btrfs::fs::read_checked", "ferrix_btrfs::fs::verify_sectors",
-                "ferrix_btrfs::items::CsumItem::new",
                 "ferrix_btrfs::items::CsumItem::checksum_for");
+        }
+        requirement <'L.btrfs.84'> damagedSectorsReadFromTheOtherCopy : ItemLowLevel {
+            attribute :>> statement = "A file read shall read a DUP data sector that
+                fails its checksum from its other copy, and answer an error when both
+                fail.";
+            attribute :>> criterion = "With the first copy of a DUP sector damaged the
+                read returns the file's bytes; with both damaged it answers
+                DataChecksum.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::fs::read_checked",
+                "ferrix_btrfs::fs::verify_sectors",
+                "ferrix_btrfs::fs::ReadBuffers::read_verified");
+        }
+        requirement <'L.btrfs.85'> compressedExtentsCheckedFirst : ItemLowLevel {
+            attribute :>> statement = "A compressed extent shall be checked against its
+                checksums before it is expanded.";
+            attribute :>> criterion = "Damage inside a compressed extent is
+                DataChecksum, not BadCompressedData.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::fs::ReadBuffers::read_verified",
+                "ferrix_btrfs::fs::ReadBuffers::expand_extent");
+        }
+        requirement <'L.btrfs.86'> nodatasumFilesReadUnchecked : ItemLowLevel {
+            attribute :>> statement = "A file marked nodatasum shall be read without
+                checksums, as Linux reads it.";
+            attribute :>> criterion = "A nodatasum file reads back byte for byte.";
+            attribute :>> parent = "H.STORE.1";
+            attribute :>> unit = ("ferrix_btrfs::fs::ReadBuffers::read_verified",
+                "ferrix_btrfs::fs::read_checked");
         }
     }
 
     package Commit {
-        doc /* The write path's crash safety: copy-on-write, the order of a
-             * commit's writes, and the log a fsync commits. */
+        doc /* The write path's crash safety: copy-on-write and the order of a
+             * commit's writes. */
 
+        requirement <'L.btrfs.13'> superblockLast : ItemLowLevel {
+            attribute :>> statement = "WriteVolume::commit shall flush directly before
+                writing the primary superblock, make the primary durable before any
+                mirror, and write no node after it.";
+            attribute :>> criterion = "In the device's record of a commit a flush
+                directly precedes and directly follows the primary superblock, and no
+                node write comes after it.";
+            attribute :>> parent = "H.STORE.3";
+            attribute :>> unit = ("ferrix_btrfs_write::commit::WriteVolume::commit",
+                "ferrix_btrfs_write::commit::WriteVolume::write_nodes",
+                "ferrix_btrfs_write::commit::WriteVolume::write_superblocks",
+                "ferrix_btrfs_write::commit::WriteVolume::finish_commit");
+        }
+        requirement <'L.btrfs.14'> committedBlocksNeverOverwritten : ItemLowLevel {
+            attribute :>> statement = "No write a transaction makes before its
+                superblock shall land on a block the last commit's trees reach.";
+            attribute :>> criterion = "500 inserts committed, their writes replayed
+                without the superblocks onto the volume as it was, leave a volume that
+                checks clean and holds exactly the last commit's items.";
+            attribute :>> parent = "H.STORE.3";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::cow",
+                "ferrix_btrfs_write::volume::WriteVolume::cow_root",
+                "ferrix_btrfs_write::volume::WriteVolume::cow_child",
+                "ferrix_btrfs_write::volume::WriteVolume::free_node",
+                "ferrix_btrfs_write::volume::WriteVolume::alloc_node",
+                "ferrix_btrfs_write::space::Space::release",
+                "ferrix_btrfs_write::space::Space::unpin",
+                "ferrix_btrfs_write::space::BlockGroup::give_back");
+        }
         requirement <'L.btrfs.12'> volumesTheWriterCannotKeepRefused : ItemLowLevel {
             attribute :>> statement = "WriteVolume::open shall refuse with Unsupported
                 a volume of more than one device, of a profile other than SINGLE or
@@ -285,185 +829,318 @@ package FerrixBtrfsRequirements {
                 "ferrix_btrfs_write::open::WriteVolume::load_block_groups",
                 "ferrix_btrfs_write::open::WriteVolume::load_free_space");
         }
-        requirement <'L.btrfs.13'> superblockLast : ItemLowLevel {
-            attribute :>> statement = "WriteVolume::commit shall write every node the
-                transaction owns to each of its copies, flush, write the primary
-                superblock with write_durable, then the mirrors, and write no node
-                after the primary superblock.";
-            attribute :>> criterion = "In the device's record of a commit, a flush
-                directly precedes the primary superblock, a flush directly follows it,
-                and no node write comes after it; the commit's writes replayed without
-                its superblocks leave a volume that checks clean and holds the last
-                commit's items.";
-            attribute :>> parent = "H.STORE.3";
-            attribute :>> unit = ("ferrix_btrfs_write::commit::WriteVolume::commit",
-                "ferrix_btrfs_write::commit::WriteVolume::write_nodes",
-                "ferrix_btrfs_write::commit::WriteVolume::write_superblocks",
-                "ferrix_btrfs_write::commit::WriteVolume::build_superblock",
-                "ferrix_btrfs_write::commit::WriteVolume::write_backup_root",
-                "ferrix_btrfs_write::commit::WriteVolume::finish_commit",
-                "ferrix_btrfs_write::commit::sealed");
-        }
-        requirement <'L.btrfs.14'> committedBlocksNeverOverwritten : ItemLowLevel {
-            attribute :>> statement = "An edit shall copy a node the last commit
-                reaches to a newly allocated block before changing it, and a block
-                freed in a transaction that the last commit uses shall stay pinned,
-                unallocatable, until the commit is on the disk.";
-            attribute :>> criterion = "Of 100 cuts over 4 random scenarios, each disk
-                rebuilt as the device may have left it opens and checks clean; the
-                commit's writes without its superblocks leave the last commit
-                whole.";
-            attribute :>> parent = ("H.STORE.3", "H.STORE.4");
-            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::cow",
-                "ferrix_btrfs_write::volume::WriteVolume::cow_root",
-                "ferrix_btrfs_write::volume::WriteVolume::cow_child",
-                "ferrix_btrfs_write::volume::WriteVolume::free_node",
-                "ferrix_btrfs_write::volume::WriteVolume::alloc_node",
-                "ferrix_btrfs_write::space::Space::release",
-                "ferrix_btrfs_write::space::Space::unpin",
-                "ferrix_btrfs_write::space::BlockGroup::give_back");
-        }
+    }
+
+    package Log {
+        doc /* The log a fsync commits, and its replay at open. */
+
         requirement <'L.btrfs.15'> aLogKeepsItsPromise : ItemLowLevel {
-            attribute :>> statement = "commit_log shall make an inode's logged items
-                durable in a log tree, flushing before the superblock that names it,
-                and opening a volume whose superblock names a log shall replay it
-                before anything is allocated, keeping the later of two logs of one
-                inode.";
-            attribute :>> criterion = "A write logged and never committed is read back
-                after the crash; the log commit's record has a flush before its
-                superblock; its writes without the superblock leave the last commit;
-                the later of two logs wins; an extent cut in two replays as one
-                extent referred to twice; a commit after a log leaves no log.";
+            attribute :>> statement = "An inode's data logged with log_inode and
+                commit_log shall be read back after a crash, the log replayed when the
+                volume opens.";
+            attribute :>> criterion = "A file rewritten, logged and never committed,
+                then opened from the crashed device, holds the rewrite.";
             attribute :>> parent = "H.STORE.4";
             attribute :>> unit = ("ferrix_btrfs_write::log::WriteVolume::log_inode",
                 "ferrix_btrfs_write::log::WriteVolume::commit_log",
                 "ferrix_btrfs_write::log::WriteVolume::seal_log",
-                "ferrix_btrfs_write::log::WriteVolume::drop_log",
                 "ferrix_btrfs_write::log::WriteVolume::replay_log",
                 "ferrix_btrfs_write::log::WriteVolume::replay_extent",
                 "ferrix_btrfs_write::log::WriteVolume::replay_sums",
+                "ferrix_btrfs_write::open::WriteVolume::open_committed");
+        }
+        requirement <'L.btrfs.87'> commitsDropTheLog : ItemLowLevel {
+            attribute :>> statement = "A commit shall carry what a log held into the
+                trees and leave the superblock naming no log.";
+            attribute :>> criterion = "After a log commit and then a commit, the
+                superblock names no log and the file holds the logged data.";
+            attribute :>> parent = "H.STORE.4";
+            attribute :>> unit = ("ferrix_btrfs_write::commit::WriteVolume::commit",
+                "ferrix_btrfs_write::log::WriteVolume::drop_log");
+        }
+        requirement <'L.btrfs.88'> logSuperblockLast : ItemLowLevel {
+            attribute :>> statement = "commit_log shall flush directly before writing
+                the superblock that names the log.";
+            attribute :>> criterion = "In the device's record of a log commit a flush
+                directly precedes the superblock.";
+            attribute :>> parent = "H.STORE.3";
+            attribute :>> unit = ("ferrix_btrfs_write::log::WriteVolume::commit_log",
+                "ferrix_btrfs_write::log::WriteVolume::seal_log");
+        }
+        requirement <'L.btrfs.89'> unnamedLogsChangeNothing : ItemLowLevel {
+            attribute :>> statement = "A log commit's writes without its superblock
+                shall leave the volume at its last commit.";
+            attribute :>> criterion = "The log commit's writes replayed without its
+                superblock leave the file as last committed.";
+            attribute :>> parent = "H.STORE.3";
+            attribute :>> unit = ("ferrix_btrfs_write::log::WriteVolume::commit_log");
+        }
+        requirement <'L.btrfs.90'> theLaterLogWins : ItemLowLevel {
+            attribute :>> statement = "Replaying a log of an inode logged twice shall
+                leave the later of the two.";
+            attribute :>> criterion = "An inode logged with one content and again with
+                another opens holding the second.";
+            attribute :>> parent = "H.STORE.4";
+            attribute :>> unit = ("ferrix_btrfs_write::log::WriteVolume::log_inode",
+                "ferrix_btrfs_write::log::WriteVolume::replay_log");
+        }
+        requirement <'L.btrfs.91'> cutExtentsReplayWhole : ItemLowLevel {
+            attribute :>> statement = "Replaying a logged extent cut in two shall make
+                one extent referred to twice, not two.";
+            attribute :>> criterion = "A file whose extent an overwrite cut in two
+                replays with one extent and two references to it, and checks clean.";
+            attribute :>> parent = "H.STORE.4";
+            attribute :>> unit = ("ferrix_btrfs_write::log::WriteVolume::replay_extent",
                 "ferrix_btrfs_write::log::logged_extent");
         }
     }
 
     package Space {
-        doc /* The write path's allocator and the bookkeeping trees that
-             * record what it handed out. */
+        doc /* The write path's allocator and the bookkeeping trees that record
+             * what it handed out. */
 
-        requirement <'L.btrfs.16'> superblockStripesExcluded : ItemLowLevel {
-            attribute :>> statement = "Each block group shall keep every stripe a
-                superblock copy lies in out of allocation, as Linux's
-                exclude_super_stripes does, and the commit shall still write those
-                stripes to the free-space tree as free.";
-            attribute :>> criterion = "On a volume whose metadata chunk covers the
-                64 MiB mirror, and one grown until a data chunk does, no tree block or
-                data extent is allocated over the mirror's stripe, the volume checks
-                clean, and the free-space tree lists the stripe free.";
+        requirement <'L.btrfs.16'> superblockStripesExcludedFromMetadata : ItemLowLevel {
+            attribute :>> statement = "A metadata block group whose chunk covers a
+                superblock mirror shall allocate no tree block in the mirror's stripe,
+                and its free-space tree shall still list the stripe free.";
+            attribute :>> criterion = "On the blank fixture, whose DUP metadata chunk
+                covers the 64 MiB mirror, edits until past the mirror leave no tree
+                block in its stripe, the volume checks clean, and the free-space tree
+                lists the stripe free.";
             attribute :>> parent = "H.STORE.5";
-            attribute :>> unit = ("ferrix_btrfs_write::chunks::Chunk::superblock_stripes",
+            attribute :>> unit =
+                ("ferrix_btrfs_write::chunks::Chunk::superblock_stripes",
                 "ferrix_btrfs_write::space::BlockGroup::new",
                 "ferrix_btrfs_write::commit::WriteVolume::sync_free_space_tree",
                 "ferrix_btrfs_write::commit::WriteVolume::write_group_free_space");
         }
-        requirement <'L.btrfs.17'> bookkeepingSettles : ItemLowLevel {
-            attribute :>> statement = "Before writing, the commit shall turn delayed
-                references into extent items and rewrite block-group items, the
-                free-space tree and root items until a pass changes nothing, and
-                answer Inconsistent if 64 passes do not settle; a reference count shall
-                never go below zero.";
-            attribute :>> criterion = "After 3,000 random edits on a blank and on a
-                populated volume, and after building, editing, churning and deleting
-                everything added, the writer's checker finds the extent tree, usage,
-                free space and totals consistent and the reader reads back every item;
-                a reference count taken below zero is refused.";
+        requirement <'L.btrfs.92'> superblockStripesExcludedFromData : ItemLowLevel {
+            attribute :>> statement = "A data chunk made over a superblock mirror shall
+                keep the mirror's stripe out of data allocation.";
+            attribute :>> criterion = "On a volume grown until a data chunk covers the
+                64 MiB mirror, every data extent then allocated lies outside the
+                stripe.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit =
+                ("ferrix_btrfs_write::chunks::Chunk::superblock_stripes",
+                "ferrix_btrfs_write::space::BlockGroup::new",
+                "ferrix_btrfs_write::space::Space::alloc_data");
+        }
+        requirement <'L.btrfs.17'> bookkeepingConsistent : ItemLowLevel {
+            attribute :>> statement = "Each commit shall leave every tree block's and
+                data extent's references, each block group's usage and free space, and
+                the superblock's total consistent with the trees.";
+            attribute :>> criterion = "After 3,000 random edits with commits between
+                them, the writer's checker finds every count consistent and the reader
+                reads back every item the model holds.";
             attribute :>> parent = "H.STORE.5";
             attribute :>> unit = ("ferrix_btrfs_write::commit::WriteVolume::settle",
                 "ferrix_btrfs_write::commit::WriteVolume::run_head",
                 "ferrix_btrfs_write::commit::WriteVolume::write_block_group_items",
                 "ferrix_btrfs_write::commit::WriteVolume::write_root_items",
                 "ferrix_btrfs_write::commit::check_main_key",
-                "ferrix_btrfs_write::extent::ExtentRecord::apply",
                 "ferrix_btrfs_write::extent::ExtentRecord::to_items",
                 "ferrix_btrfs_write::refs::DelayedRefs::add",
                 "ferrix_btrfs_write::space::Space::account");
         }
-        requirement <'L.btrfs.18'> rangeSetsExact : ItemLowLevel {
-            attribute :>> statement = "A RangeSet shall merge touching runs on insert,
-                split the run a removal falls in, take exactly the shared bytes on
-                extract, and first_fit and first_prefix shall return only space the
-                set holds, aligned and not crossing the boundary asked for.";
-            attribute :>> criterion = "Inserts merge touching runs, removes split, add
-                unions overlapping runs, extract takes exactly the shared bytes,
-                first_fit aligns and avoids the boundary, and first_prefix takes what
-                the run has.";
+        requirement <'L.btrfs.93'> treesShrinkBack : ItemLowLevel {
+            attribute :>> statement = "Deleting every item added to a tree shall shrink
+                it back to a leaf holding what it held before.";
+            attribute :>> criterion = "2,000 items inserted, making a tree of three
+                levels, then deleted, leave a tree of level 0 with the items it had,
+                checking clean.";
             attribute :>> parent = "H.STORE.5";
-            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::insert",
-                "ferrix_btrfs_write::ranges::RangeSet::remove",
-                "ferrix_btrfs_write::ranges::RangeSet::add",
-                "ferrix_btrfs_write::ranges::RangeSet::extract",
-                "ferrix_btrfs_write::ranges::RangeSet::first_fit",
-                "ferrix_btrfs_write::ranges::RangeSet::first_prefix",
+            attribute :>> unit = ("ferrix_btrfs_write::tree::WriteVolume::delete",
+                "ferrix_btrfs_write::tree::WriteVolume::shrink_root",
+                "ferrix_btrfs_write::tree::WriteVolume::remove_ptr");
+        }
+        requirement <'L.btrfs.94'> countsNeverBelowZero : ItemLowLevel {
+            attribute :>> statement = "ExtentRecord::apply shall refuse a reference
+                count taken below zero, or above one for a tree block's single owner.";
+            attribute :>> criterion = "Removing a reference never added, and adding one
+                owner twice, are refused.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit = ("ferrix_btrfs_write::extent::ExtentRecord::apply");
+        }
+        requirement <'L.btrfs.18'> insertsMerge : ItemLowLevel {
+            attribute :>> statement = "RangeSet::insert shall merge a run with the runs
+                it touches.";
+            attribute :>> criterion = "Runs inserted touching on either side become one
+                run.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::insert");
+        }
+        requirement <'L.btrfs.95'> removesSplit : ItemLowLevel {
+            attribute :>> statement = "RangeSet::remove shall split the run a removal
+                falls inside.";
+            attribute :>> criterion = "A range removed from inside a run leaves the two
+                runs around it.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::remove");
+        }
+        requirement <'L.btrfs.96'> firstFitAligned : ItemLowLevel {
+            attribute :>> statement = "RangeSet::first_fit shall return the first start
+                that is aligned, holds the length and does not cross the boundary.";
+            attribute :>> criterion = "Each fit the test lists is aligned and does not
+                cross the boundary.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::first_fit",
                 "ferrix_btrfs_write::ranges::fit_in");
         }
+        requirement <'L.btrfs.97'> firstPrefixTakesWhatIsThere : ItemLowLevel {
+            attribute :>> statement = "RangeSet::first_prefix shall return the longest
+                aligned prefix of at most the length wanted and at least the minimum.";
+            attribute :>> criterion = "Each request the test lists takes the prefix the
+                run has.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::first_prefix");
+        }
+        requirement <'L.btrfs.98'> addsUnion : ItemLowLevel {
+            attribute :>> statement = "RangeSet::add shall union overlapping and
+                touching runs.";
+            attribute :>> criterion = "Overlapping and touching runs added become their
+                union.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::add");
+        }
+        requirement <'L.btrfs.99'> extractsExact : ItemLowLevel {
+            attribute :>> statement = "RangeSet::extract shall take exactly the bytes
+                two sets share.";
+            attribute :>> criterion = "Extracting one set from another takes exactly
+                their intersection and leaves the rest.";
+            attribute :>> parent = "H.STORE.5";
+            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::extract");
+        }
         requirement <'L.btrfs.19'> everyCopyGetsAStripe : ItemLowLevel {
-            attribute :>> statement = "A new chunk shall be placed only in the
-                device's unallocated holes, with a stripe for every copy its profile
-                needs, or refused with NoSpace before anything is recorded.";
-            attribute :>> criterion = "In one 8 MiB hole a DUP chunk of 8 MiB is
-                refused and two copies of 4 MiB are placed; data extents taken until
-                the device has no room end in NoSpace, with the transaction not
-                aborted.";
-            attribute :>> parent = ("H.STORE.5", "H.STORE.6");
+            attribute :>> statement = "place_stripes shall place every copy of a new
+                chunk in the device's holes, or answer None.";
+            attribute :>> criterion = "In one 8 MiB hole two copies of 8 MiB are refused
+                and two of 4 MiB are placed side by side.";
+            attribute :>> parent = "H.STORE.5";
             attribute :>> unit = ("ferrix_btrfs_write::grow::place_stripes",
                 "ferrix_btrfs_write::grow::WriteVolume::place_chunk",
-                "ferrix_btrfs_write::grow::WriteVolume::device_holes",
-                "ferrix_btrfs_write::volume::WriteVolume::grow");
+                "ferrix_btrfs_write::grow::WriteVolume::device_holes");
+        }
+        requirement <'L.btrfs.100'> aFullDeviceRefusesData : ItemLowLevel {
+            attribute :>> statement = "WriteVolume::alloc_data shall answer NoSpace,
+                aborting nothing, when neither a block group nor the device has room for
+                a data extent.";
+            attribute :>> criterion = "Data extents taken until the device has no room
+                end in NoSpace with the transaction not aborted.";
+            attribute :>> parent = "H.STORE.6";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::alloc_data",
+                "ferrix_btrfs_write::volume::WriteVolume::grow",
+                "ferrix_btrfs_write::grow::WriteVolume::place_chunk");
         }
     }
 
     package Full {
-        doc /* A volume that runs out, a transaction that fails, and an
-             * allocation that is refused. */
+        doc /* A volume that runs out, and a transaction that fails. */
 
-        requirement <'L.btrfs.20'> refusedBeforeTheFirstEdit : ItemLowLevel {
-            attribute :>> statement = "An operation shall be admitted only if the
-                metadata room holds its own worst case, the commit's reserve and,
-                unless it frees space, the global reserve, and a data write only if
-                the data room holds it; otherwise it shall be refused with NoSpace
-                before its first edit, aborting nothing.";
-            attribute :>> criterion = "A write one sector past the data room is
-                refused and one of exactly the room fits; creates until the trees are
-                full end in NoSpace, the commit succeeds, and deleting 64 files makes
-                room for another; a data write on full trees and one that needs a new
-                metadata chunk abort nothing; through a mount, a full volume answers
-                ENOSPC to the byte statfs offered and stays writable.";
+        requirement <'L.btrfs.20'> aWritePastTheRoomChangesNothing : ItemLowLevel {
+            attribute :>> statement = "A file write larger than the data room shall be
+                refused with NoSpace before it changes anything, aborting nothing.";
+            attribute :>> criterion = "A write one sector past data_room is NoSpace, the
+                transaction is not aborted, and its commit leaves a volume that checks
+                clean.";
+            attribute :>> parent = "H.STORE.6";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::admit",
+                "ferrix_btrfs_write::volume::WriteVolume::alloc_data",
+                "ferrix_btrfs_write::grow::WriteVolume::data_room");
+        }
+        requirement <'L.btrfs.101'> theWholeRoomFits : ItemLowLevel {
+            attribute :>> statement = "A file write of exactly the data room shall
+                succeed and leave no data room.";
+            attribute :>> criterion = "A write of exactly data_room succeeds, data_room
+                is then 0, and the commit checks clean.";
+            attribute :>> parent = "H.STORE.6";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::alloc_data",
+                "ferrix_btrfs_write::grow::WriteVolume::data_room",
+                "ferrix_btrfs_write::grow::WriteVolume::unallocated");
+        }
+        requirement <'L.btrfs.102'> fullTreesRefuseCreates : ItemLowLevel {
+            attribute :>> statement = "An operation the metadata room cannot hold, with
+                the commit's reserve and the global reserve, shall be refused with
+                NoSpace before its first edit, and an operation that frees space may
+                still use the global reserve.";
+            attribute :>> criterion = "Creates until the trees are full end in NoSpace
+                with the transaction not aborted, the commit succeeds, 64 unlinks
+                succeed, and a create after their commit succeeds.";
             attribute :>> parent = "H.STORE.6";
             attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::admit",
                 "ferrix_btrfs_write::volume::WriteVolume::commit_reserve",
-                "ferrix_btrfs_write::volume::WriteVolume::ensure_space",
-                "ferrix_btrfs_write::volume::WriteVolume::alloc_data",
-                "ferrix_btrfs_write::grow::WriteVolume::data_room",
+                "ferrix_btrfs_write::volume::WriteVolume::guarded_with",
+                "ferrix_btrfs_write::volume::WriteVolume::operation_with",
                 "ferrix_btrfs_write::grow::WriteVolume::meta_room",
-                "ferrix_btrfs_write::grow::WriteVolume::tree_headroom",
-                "ferrix_btrfs_write::grow::WriteVolume::unallocated");
+                "ferrix_btrfs_write::grow::WriteVolume::tree_headroom");
+        }
+        requirement <'L.btrfs.103'> fullTreesRefuseData : ItemLowLevel {
+            attribute :>> statement = "A data write on full trees shall be refused with
+                NoSpace, aborting nothing.";
+            attribute :>> criterion = "After the trees are filled, 64 KiB writes end in
+                NoSpace with the transaction not aborted, and the commit checks clean.";
+            attribute :>> parent = "H.STORE.6";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::admit",
+                "ferrix_btrfs_write::volume::WriteVolume::operation_with");
+        }
+        requirement <'L.btrfs.104'> aChunkMadeMidWriteAbortsNothing : ItemLowLevel {
+            attribute :>> statement = "A data write that needs a new metadata chunk
+                shall succeed or be refused with NoSpace, aborting nothing.";
+            attribute :>> criterion = "With metadata used until the next edit must make
+                a chunk, a write of the data room succeeds or is NoSpace, the
+                transaction is not aborted, and the commit checks clean.";
+            attribute :>> parent = "H.STORE.6";
+            attribute :>> unit =
+                ("ferrix_btrfs_write::volume::WriteVolume::ensure_space",
+                "ferrix_btrfs_write::volume::WriteVolume::guarded_with",
+                "ferrix_btrfs_write::volume::WriteVolume::grow");
+        }
+        requirement <'L.btrfs.105'> aFullMountAnswersEnospc : ItemLowLevel {
+            attribute :>> statement = "Through a mount, a write to a full volume shall
+                be refused with ENOSPC at exactly the room statfs offered, keeping what
+                was written.";
+            attribute :>> criterion = "Through ferrix-btrfs-vfs, writes stop with ENOSPC
+                at the byte statfs offered, the file holds every byte written, and after
+                an unlink a 1 MiB file is written and read back after remounting.";
+            attribute :>> parent = "H.STORE.6";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::admit",
+                "ferrix_btrfs_write::grow::WriteVolume::data_room");
+        }
+        requirement <'L.btrfs.106'> aMountOnFullTreesStaysWritable : ItemLowLevel {
+            attribute :>> statement = "Through a mount, creates on full trees shall be
+                refused with ENOSPC, and the mount shall stay writable.";
+            attribute :>> criterion = "Through ferrix-btrfs-vfs, creates end in ENOSPC,
+                another create is ENOSPC too, the sync succeeds and 64 unlinks
+                succeed.";
+            attribute :>> parent = "H.STORE.6";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::admit",
+                "ferrix_btrfs_write::volume::WriteVolume::operation_with");
         }
         requirement <'L.btrfs.21'> anAbortedTransactionIsDropped : ItemLowLevel {
             attribute :>> statement = "A failure after an edit changed something shall
-                mark the transaction aborted, and reload_read_only shall replace it
-                with the last commit read from the device and answer ReadOnly to every
-                edit after it, or, when the last commit cannot be read, leave the
-                volume aborted.";
+                mark the transaction aborted, and reload_read_only shall replace it with
+                the last commit read from the device and answer ReadOnly to every edit
+                after it.";
             attribute :>> criterion = "Through a mount, a commit whose device write
-                fails answers EIO; the mount then reads the last commit, has no trace
-                of the aborted transaction, answers EROFS to a write, a truncation
-                and a create, and the disk holds the last commit; with reads failing
-                as well, every lookup answers EIO and the mount says so once.";
-            attribute :>> parent = "H.STORE.6";
+                fails answers EIO; the mount then reads the last commit, has no trace of
+                the aborted transaction, answers EROFS to a write, a truncation and a
+                create, and the disk holds the last commit.";
+            attribute :>> parent = "H.STORE.8";
             attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::abort_with",
                 "ferrix_btrfs_write::volume::WriteVolume::check_writable",
                 "ferrix_btrfs_write::volume::WriteVolume::guarded_with",
                 "ferrix_btrfs_write::volume::WriteVolume::operation_with",
-                "ferrix_btrfs_write::open::WriteVolume::reload_read_only",
+                "ferrix_btrfs_write::open::WriteVolume::reload_read_only");
+        }
+        requirement <'L.btrfs.107'> anUnreadableLastCommitStaysAborted : ItemLowLevel {
+            attribute :>> statement = "reload_read_only shall leave the volume aborted,
+                and every read answering an error, when the last commit cannot be
+                read.";
+            attribute :>> criterion = "Through a mount, with writes and reads failing,
+                the sync answers EIO and every later lookup answers EIO.";
+            attribute :>> parent = "H.STORE.8";
+            attribute :>> unit =
+                ("ferrix_btrfs_write::open::WriteVolume::reload_read_only",
                 "ferrix_btrfs_write::open::WriteVolume::abort");
         }
         requirement <'L.btrfs.22'> allocationsAreFallible : ItemLowLevel {

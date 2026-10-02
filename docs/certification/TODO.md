@@ -476,7 +476,7 @@ their heap still charged to their job"*, on pipes).
 **Decided 2026-10-02** (the customer): the btrfs reader and write path,
 `ferrix-btrfs` and `ferrix-btrfs-write`, are in the item; `ferrix-btrfs-vfs`
 and `src/kernel/src/fs/btrfs*.rs` stay load. Written so far: `H.STORE.1` to
-`H.STORE.7` (part 13), `L.btrfs.1` to `L.btrfs.23` (part 24), ASR-9, FM-11,
+`H.STORE.8` (part 13), `L.btrfs.1` to `L.btrfs.107` (part 24), ASR-9, FM-11,
 AoU-15 and AoU-16 (SAFETY-MANUAL.md), O.MEDIA, T.MEDIA, A.STORAGE,
 FDP_SDI.2 and §9.8 (SECURITY-TARGET.md), V-08 and V-09
 (VULNERABILITY-ANALYSIS.md), and MEMORY-AND-TIMING.md §1.8 and §2.2d. What

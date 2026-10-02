@@ -46,7 +46,7 @@ fn fill_trees(volume: &mut WriteVolume<MemDevice>, stop: u32) -> (u32, Option<Er
     (n, None)
 }
 
-/// Verifies: L.btrfs.20, H.STORE.6
+/// Verifies: L.btrfs.20
 #[test]
 fn a_write_past_the_room_changes_nothing() {
     let mut volume = WriteVolume::open(MemDevice::new(BLANK)).unwrap();
@@ -68,7 +68,7 @@ fn a_write_past_the_room_changes_nothing() {
     check(&volume.device);
 }
 
-/// Verifies: L.btrfs.20, H.STORE.6
+/// Verifies: L.btrfs.101
 #[test]
 fn a_write_of_exactly_the_room_fits() {
     let mut volume = WriteVolume::open(MemDevice::new(BLANK)).unwrap();
@@ -83,7 +83,7 @@ fn a_write_of_exactly_the_room_fits() {
     check(&volume.device);
 }
 
-/// Verifies: L.btrfs.20, H.STORE.6
+/// Verifies: L.btrfs.102, H.STORE.6
 #[test]
 fn creates_on_full_trees_are_refused_and_a_deletion_still_makes_room() {
     // 22,738 creates on this fixture used to abort the transaction: the
@@ -114,7 +114,7 @@ fn creates_on_full_trees_are_refused_and_a_deletion_still_makes_room() {
     check(&volume.device);
 }
 
-/// Verifies: L.btrfs.20, H.STORE.6
+/// Verifies: L.btrfs.103
 #[test]
 fn a_data_write_on_full_trees_aborts_nothing() {
     let mut volume = WriteVolume::open(MemDevice::new(BLANK)).unwrap();
@@ -136,7 +136,7 @@ fn a_data_write_on_full_trees_aborts_nothing() {
     check(&volume.device);
 }
 
-/// Verifies: L.btrfs.20, H.STORE.6
+/// Verifies: L.btrfs.104
 #[test]
 fn a_metadata_chunk_made_during_a_write_of_the_room_aborts_nothing() {
     let mut volume = WriteVolume::open(MemDevice::new(BLANK)).unwrap();
@@ -169,7 +169,7 @@ fn a_metadata_chunk_made_during_a_write_of_the_room_aborts_nothing() {
     check(&volume.device);
 }
 
-/// Verifies: L.btrfs.19, L.btrfs.20, H.STORE.6
+/// Verifies: L.btrfs.100
 #[test]
 fn a_data_extent_the_device_has_no_room_for_aborts_nothing() {
     let mut volume = WriteVolume::open(MemDevice::new(BLANK)).unwrap();

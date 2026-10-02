@@ -348,11 +348,12 @@ delayed reference changes, each block group's free, pinned and reserved
 ranges -- and a cache of nodes read and unchanged (`clean`). Its
 allocations are the standard library's infallible ones: a refusal is the
 allocation error handler, FX-0008, as it is for the load (§1.3). The
-fallible-allocation gate reads both crates since 2026-10-02 and records 185
-unmarked sites as debt, 166 in the write path and 19 in the reader; the
-reader's are calls named like an allocating method (`insert`, `extend`) on
-its own fixed-size types, since the crate does not link `alloc`, and want a
-`NOALLOC:` mark, not a conversion. Converting the write path is in progress
+fallible-allocation gate reads both crates since 2026-10-02 and records as
+debt 166 allocations in the write path that stop the machine when memory
+runs out, and beside them 19 calls in the reader it counts by name -- methods
+named like an allocating one (`insert`, `push`) on the reader's own
+fixed-size types -- that allocate nothing, since the crate does not link
+`alloc`, and await their `NOALLOC:` arguments rather than a conversion. Converting the write path is in progress
 on the branch `btrfs-fallible` (`H.STORE.7`, `L.btrfs.22`, TODO.md §4.7,
 F-56); until it lands, AoU-5 covers the write path as it covers the
 load.
@@ -383,7 +384,7 @@ commit's share and the data write's are **estimates**, shown sufficient on
 the 128 MiB fixture only: deriving them, and testing a full-size
 transaction on full trees, is open (`docs/BACKLOG.md`, TODO.md §4.7 item 5).
 The first 1 MiB of the device is never allocated (`DEVICE_RESERVED`), nor is
-any superblock copy's stripe (`L.btrfs.16`).
+any superblock copy's stripe (`L.btrfs.16`, `L.btrfs.92`).
 
 ---
 

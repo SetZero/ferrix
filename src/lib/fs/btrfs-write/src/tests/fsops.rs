@@ -272,7 +272,6 @@ fn edit(volume: &mut WriteVolume<MemDevice>, expected: &mut BTreeMap<&'static st
     volume.commit().unwrap();
 }
 
-/// Verifies: L.btrfs.17
 #[test]
 fn a_built_tree_reads_back_and_checks_clean() {
     let mut expected = BTreeMap::new();
@@ -281,7 +280,6 @@ fn a_built_tree_reads_back_and_checks_clean() {
     read_back(&volume.device, &expected);
 }
 
-/// Verifies: L.btrfs.17
 #[test]
 fn edits_read_back_and_check_clean() {
     let mut expected = BTreeMap::new();
@@ -391,7 +389,6 @@ fn churn_populated() -> MemDevice {
     volume.into_device()
 }
 
-/// Verifies: L.btrfs.17
 #[test]
 fn churn_on_a_populated_volume_checks_clean() {
     check(&churn_populated());
