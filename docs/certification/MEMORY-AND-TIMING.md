@@ -690,6 +690,39 @@ per dword (128 bytes), which `device_config_write` reads and sets only under
 the lock and prints from after it is dropped. A refused write allocates
 nothing.
 
+### 2.2i A VT-d unit's invalidation queue (`iommu::vtd::Unit::submit`)
+
+Since NVIDIA's N0g every VT-d invalidation goes through the unit's
+invalidation queue (`L.iommu.47`): one descriptor and a fenced wait
+descriptor, written into the unit's queue frame, cleaned to memory on a unit
+whose walk does not snoop, then a write of the tail register, and a wait for
+the wait descriptor's status word to read this submission's sequence
+number. Memory: three 4 KiB kernel frames per unit -- the root table, the
+queue (256 descriptors of 16 bytes) and the status word's frame -- taken
+once at stage 10's bring-up through `vtd::table` and never given back. No
+domain maps them. A submission allocates nothing.
+
+Time: a submission is held inside the unit's `commands` gate (`gate.rs`), a
+gate and not a lock, entered with interrupts on wherever the caller may
+block, so the wait gives up the processor between looks as the register
+wait it replaces did. The hold is two descriptor writes, their clean, one
+register write, and the wait, bounded by the unit's patience, 100 ms. The
+order with a domain's `changing` gate is unchanged: `changing`, then
+`commands`, never the reverse. An MSI mint (step 3 of N0g, to come) will
+enter `commands` under a device's `minted` lock; there the gate spins with
+its deadline, as it does under any spin lock.
+
+A failed invalidation -- the status not written within the patience, or
+`IQE`, `ICE` or `ITE` seen -- answers an error and its caller releases
+nothing (`L.iommu.48`), so memory the unit may still reach stays held for
+good and counted in the device's `kept`. After `IQE` or `ITE` the unit is
+marked failed: every later invalidation on it fails at once, without
+entering the gate or touching the queue, so a broken unit costs nothing
+more than holding what its domains held, and the boot's fault audit fails
+on it (FX-1007). Check R7 makes one invalidation fail on purpose with a
+patience of its own, 2 ms, rather than spend the unit's 100 ms of every
+boot on an answer known in advance.
+
 ### 2.3 What is missing, per standard
 
 * **DO-178C DAL C** does not require WCET as such, but does require that

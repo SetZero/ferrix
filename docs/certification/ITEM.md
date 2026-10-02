@@ -256,7 +256,10 @@ space a driver may write (`L.device.26`) is `ferrix_pci::window`. Also since
 cleaned to memory before a unit that does not snoop is told of them is
 `ferrix_paging::coherence`: `Unpublished`, the record of writes not yet
 cleaned, and `Walked`, the `unsafe impl PhysMem` that puts the mapper's own
-writes and fresh tables through it (`L.iommu.56`, `L.iommu.57`). Their host
+writes and fresh tables through it (`L.iommu.56`, `L.iommu.57`). And since
+NVIDIA's N0g, the descriptors of the VT-d invalidation queue every
+invalidation goes through, and the queue registers' encodings, are
+`ferrix_paging::vtd::queue` (`L.iommu.47`, `L.iommu.48`). Their host
 tests trace to those requirements, but the item-scoped gates do not read
 them; `docs/BACKLOG.md` has the row that classifies them.
 
