@@ -1756,7 +1756,8 @@ package FerrixMemoryRequirements {
                 "user::space::AddressSpace::map_window",
                 "user::space::AddressSpace::give_back",
                 "user::memory_type::Hold::drop", "user::memory_type::release",
-                "user::memory_type::claims", "user::space::WindowPages::all");
+                "user::memory_type::claims", "user::space::WindowPages::all",
+                "user::space::WindowPages::check");
         }
         requirement <'L.user.107'> aCopyThroughADevicePageIsRefused : ItemLowLevel {
             attribute :>> statement = "with_page and with_present_page shall refuse

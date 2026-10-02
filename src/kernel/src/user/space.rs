@@ -2478,6 +2478,21 @@ impl WindowPages {
             whole_len: len,
         }
     }
+
+    /// `len` bytes from `physical`, and the whole window, each as
+    /// [`check_device_range`] asks, and the first inside the second.
+    fn check(self, len: u64, flags: VmaFlags) -> Result<(), SpaceError> {
+        check_device_range(self.physical, len, flags, 0)?;
+        check_device_range(self.whole, self.whole_len, flags, 0)?;
+        let end = self.physical.checked_add(len);
+        let whole_end = self.whole.checked_add(self.whole_len);
+        match (end, whole_end) {
+            (Some(end), Some(whole_end)) if self.physical >= self.whole && end <= whole_end => {
+                Ok(())
+            }
+            _ => Err(SpaceError::BadRange),
+        }
+    }
 }
 
 /// What a window's region keeps under its id: its keeper, and its memory
@@ -2616,19 +2631,8 @@ impl AddressSpace {
         cached: bool,
         keeper: Arc<dyn Any + Send + Sync>,
     ) -> Result<u64, SpaceError> {
+        pages.check(len, flags)?;
         let physical = pages.physical;
-        check_device_range(physical, len, flags, 0)?;
-        check_device_range(pages.whole, pages.whole_len, flags, 0)?;
-        let inside = physical >= pages.whole
-            && physical.checked_add(len).is_some_and(|end| {
-                pages
-                    .whole
-                    .checked_add(pages.whole_len)
-                    .is_some_and(|whole_end| end <= whole_end)
-            });
-        if !inside {
-            return Err(SpaceError::BadRange);
-        }
         let held = hold_type(pages.whole, pages.whole_len, MemoryType::of(cached, false))?;
         let keeper: Arc<dyn Any + Send + Sync> =
             fallible::try_arc(WindowKept { keeper, held }).map_err(|_| SpaceError::OutOfMemory)?;
