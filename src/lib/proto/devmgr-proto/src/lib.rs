@@ -47,6 +47,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
+pub mod isolation;
 
 /// DEVICES' message type.
 pub const DEVICES: u32 = 1;
@@ -458,3 +459,6 @@ mod tests;
 
 #[cfg(test)]
 mod budget_tests;
+
+#[cfg(test)]
+mod isolation_tests;
