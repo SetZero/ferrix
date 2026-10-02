@@ -150,6 +150,12 @@ pub(crate) fn test_boot_lines(
                     watched.log.display()
                 )));
             }
+            if let Some(problem) = queue_problem(arch, &watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             if let Some(problem) = config_problem(arch, &watched.lines) {
                 return Err(Error::new(format!(
                     "{arch}: {problem}.\n  Serial output is in {}",
@@ -329,6 +335,38 @@ fn cleaning_problem(arch: Arch, lines: &[String]) -> Option<String> {
         return None;
     }
     Some("the kernel never said it cleaned its VT-d table writes to memory".to_owned())
+}
+
+/// What stage 10's IOMMU check prints when every VT-d invalidation of the
+/// boot went through a unit's queue (`docs/NVIDIA.md` §12.3, check R6).
+const QUEUED: &str = "invalidations queued and each waited for, none by register";
+
+/// What it prints after the number of invalidations check R7 made fail.
+const R7_FAILED: &str = " failed as check R7 made it";
+
+/// Why an x86-64 boot did not show its VT-d invalidations queued, if it did
+/// not.
+///
+/// Every x86-64 machine this tool boots has a VT-d unit, and the kernel
+/// refuses one without an invalidation queue, so stage 10's check must have
+/// said every invalidation went through the queue and none by register, and
+/// that the one invalidation check R7 makes fail did fail.
+///
+/// Verifies: L.iommu.47, L.iommu.48
+fn queue_problem(arch: Arch, lines: &[String]) -> Option<String> {
+    if arch != Arch::X86_64 {
+        return None;
+    }
+    let Some(line) = lines.iter().find(|line| line.contains(QUEUED)) else {
+        return Some("the kernel never said its VT-d invalidations were queued".to_owned());
+    };
+    if count_before(line, R7_FAILED) != Some(1) {
+        return Some(format!(
+            "check R7 did not make exactly one invalidation fail: `{}`",
+            line.trim()
+        ));
+    }
+    None
 }
 
 /// What stage 10's `config` line says when `device_aperture` reported
@@ -2981,7 +3019,7 @@ mod tests {
     use super::{
         Arch, SUCCESS_MARKER, UNCHECKED_MARKER, blocks_compatibility_format, cleaning_problem,
         config_problem, devmgr_problem, entropy_problem, fault_problem, iommu_problem, msi_problem,
-        namespace_problem, parse_qemu_version, xstate_problem,
+        namespace_problem, parse_qemu_version, queue_problem, xstate_problem,
     };
 
     /// Only the build `fetch-qemu-linux.sh` makes is taken for x86-64.
@@ -3139,6 +3177,21 @@ mod tests {
             None,
             "an SMMU snoops"
         );
+    }
+
+    #[test]
+    fn an_x86_64_boot_without_its_invalidations_queued_fails() {
+        let queued = lines(&[
+            "  iommu    4 context-cache and 16 IOTLB invalidations queued and each waited for, none by register on 1 VT-d units; 1 failed as check R7 made it, its 2 pages kept; a queue left on as firmware leaves it turned off on 1",
+        ]);
+        assert_eq!(queue_problem(Arch::X86_64, &queued), None);
+        let none_failed = lines(&[
+            "  iommu    4 context-cache and 16 IOTLB invalidations queued and each waited for, none by register on 1 VT-d units; 0 failed as check R7 made it, its 0 pages kept; a queue left on as firmware leaves it turned off on 1",
+        ]);
+        assert!(queue_problem(Arch::X86_64, &none_failed).is_some());
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-12"]);
+        assert!(queue_problem(Arch::X86_64, &silent).is_some());
+        assert_eq!(queue_problem(Arch::AArch64, &silent), None, "no VT-d");
     }
 
     #[test]

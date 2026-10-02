@@ -606,6 +606,76 @@ package FerrixIommuRequirements {
             attribute :>> unit = ("iommu::place_dmar", "iommu::Scope::places",
                 "iommu::vtd_unit_for", "iommu::learn_bridge", "iommu::bring_up_vtd");
         }
+        requirement <'L.iommu.47'> onlyQueuedInvalidation : ItemLowLevel {
+            attribute :>> statement = "A VT-d unit without ECAP.QI shall be left
+                alone, with the reason printed. On a unit brought up, every
+                context-cache and IOTLB invalidation -- at enable, attach, detach,
+                after an unmap or a caching-mode map, and the quarantine's release
+                -- shall be made through the unit's invalidation queue: the
+                descriptor and a fenced wait descriptor behind it are written and
+                cleaned to memory, the tail is moved past both, and the
+                invalidation completes only when the wait's status word reads that
+                submission's own sequence number. No register-based invalidation
+                shall be issued.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG the iommu line
+                counts the context-cache and IOTLB invalidations queued, both more
+                than 0, and no unit reads back a register-based invalidation
+                pending; test-boot requires the line. With one flush put back on
+                the register path, QEMU never performs it while the queue is on and
+                the boot fails at stage 10. Host tests: each descriptor is laid out
+                as the specification says and passes QEMU's reserved-bit masks; the
+                queue registers name sixteen-byte slots; a full queue is never
+                taken for an empty one.";
+            attribute :>> parent = ("H.DMA.2", "H.DMA.8");
+            attribute :>> unit = ("iommu::vtd::Unit::open", "iommu::vtd::Unit::enable",
+                "iommu::vtd::Unit::start_queue", "iommu::vtd::Unit::submit",
+                "iommu::vtd::Unit::submit_and_wait", "iommu::vtd::Unit::write_descriptors",
+                "iommu::vtd::Unit::await_completion", "iommu::vtd::Unit::status_word",
+                "iommu::vtd::Unit::invalidate_context",
+                "iommu::vtd::Unit::invalidate_iotlb",
+                "iommu::vtd::Unit::register_invalidation_pending",
+                "iommu::register_invalidations_pending", "iommu::vtd::invalidations");
+        }
+        requirement <'L.iommu.48'> aFailedInvalidationReleasesNothing : ItemLowLevel {
+            attribute :>> statement = "A VT-d invalidation whose wait status is not
+                written within the unit's patience, or during which FSTS reads IQE,
+                ICE or ITE, shall answer an error, and its caller shall release
+                nothing the unit may still reach: an unpin hands the pin back and
+                its frames are kept and counted in kept. After IQE or ITE the unit
+                shall be marked failed: every later invalidation on it answers an
+                error without touching the queue, and the failure is reported once
+                to the end-of-boot fault audit as a stray fault.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG check R7 unpins a
+                two-page pin whose wait descriptor, through the check-only
+                Wait::Unwritten, writes no status: the invalidation fails, the two
+                pages move from live to kept and the frames stay held, and the iommu
+                line says exactly one invalidation failed, as R7 made it; with
+                Pin::drop taking the error for success the boot panics with 'frames
+                released after a failed invalidation'. Host test: a wait writes its
+                sequence number, or with Unwritten nothing, as a valid descriptor.";
+            attribute :>> parent = ("H.DMA.8", "H.DMA.3");
+            attribute :>> unit = ("iommu::vtd::Unit::submit",
+                "iommu::vtd::Unit::await_completion", "iommu::vtd::Unit::fail",
+                "iommu::vtd::Unit::take_fault", "iommu::vtd::Unit::flush",
+                "iommu::Domain::unpin_waiting", "iommu::Translation::flush");
+        }
+        requirement <'L.iommu.51'> firmwaresQueueTurnedOff : ItemLowLevel {
+            attribute :>> statement = "A VT-d unit firmware left remapping
+                interrupts shall have IRE cleared and read back clear, and one whose
+                invalidation queue firmware left on shall have the queue drained,
+                QIE cleared and read back clear, each within the unit's patience,
+                before the kernel's own setup; a unit that does not shall be left
+                alone with the reason printed. GCMD writes shall not repeat CFI.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG, before each
+                unit's enable, the check turns its queue on as firmware would and
+                ends it with a completed wait, and open's path turns it off and
+                reads it off; the iommu line counts it on every unit. With the QIE
+                clear dropped from that path, the boot panics with 'firmware left
+                its invalidation queue on and it would not stop'.";
+            attribute :>> parent = "H.DMA.2";
+            attribute :>> unit = ("iommu::vtd::stop_firmware", "iommu::vtd::wait_for",
+                "iommu::vtd::Unit::command");
+        }
         requirement <'L.iommu.56'> aWriteIsInMemoryBeforeItIsPublished : ItemLowLevel {
             attribute :>> statement = "On a VT-d unit whose ECAP.C is clear, every
                 root, context and second-level entry the kernel writes shall be

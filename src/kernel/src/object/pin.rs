@@ -93,7 +93,7 @@ use ferrix_paging::{MapFlags, PAGE_SIZE};
 
 use crate::device::DeviceNode;
 use crate::fallible::{self, AllocError};
-use crate::iommu::{Domain, DomainError, Pinned};
+use crate::iommu::{Domain, DomainError, Pinned, Wait};
 use crate::mm;
 use crate::object::process::Exit;
 use crate::println;
@@ -427,6 +427,10 @@ pub(crate) struct Pin {
     spare: Option<Box<Quarantined>>,
     /// Whether it is a boot check's, which says nothing on the console.
     quiet: bool,
+    /// How its unpin's invalidation is waited for: [`Wait::Status`], but
+    /// [`Wait::Unwritten`] for check R7's, set by `check.rs` alone, whose
+    /// invalidation then fails (`docs/NVIDIA.md` §12.3).
+    wait: Wait,
     /// The pages it counts in its device's `live`, until it is closed.
     pages: usize,
 }
@@ -493,6 +497,7 @@ impl Pin {
                 owner,
                 spare,
                 quiet,
+                wait: Wait::Status,
                 pages,
             }),
             Err(why) => {
@@ -562,7 +567,7 @@ impl Drop for Pin {
         }
         // Given back on every domain the unpin succeeds on: an untranslated
         // one's device reaches all of memory anyway (F-59, V-03).
-        let freeable = match self.domain.unpin(pinned) {
+        let freeable = match self.domain.unpin_waiting(pinned, self.wait) {
             Ok(()) => true,
             Err((_, back)) => {
                 back.leak();

@@ -9,8 +9,8 @@
 //!   table**, one entry per device and function, which names a domain and the
 //!   root of its second-level tables — `src/lib/kernel/paging`'s [`VtdSecondLevel`],
 //!   three levels over 39 bits;
-//! * **register-based invalidation** of the context cache and the IOTLB, after
-//!   anything the unit may have cached changes;
+//! * **queued invalidation** of the context cache and the IOTLB, after
+//!   anything the unit may have cached changes (below);
 //! * **translation on**, after which a function with no context entry reaches
 //!   nothing at all.
 //!
@@ -41,23 +41,46 @@
 //! on `open`'s clean of the root table, `flush` on `map`'s and `unmap`'s
 //! own checks.
 //!
-//! Queued invalidation, interrupt remapping and fault events are not used.
-//! QEMU honours the register interface while queued invalidation is off, and
-//! the kernel's MSI-X messages are compatibility format, which QEMU passes
-//! through untouched until interrupt remapping is enabled.
+//! # Queued invalidation, and only that
+//!
+//! Every invalidation goes through the unit's invalidation queue
+//! (`docs/NVIDIA.md` §12.3, N0g): one descriptor and a fenced wait
+//! descriptor behind it, whose status write -- a sequence number of the
+//! unit's own, so a late completion of an earlier wait is never taken for
+//! this one -- is what the kernel waits for, up to [`PATIENCE_NANOS`]. A
+//! unit without `ECAP.QI` is refused, so there is no register-based
+//! invalidation left to issue while `QIE` is set, which the specification
+//! forbids. [`Unit::invalidate_context`] and [`Unit::invalidate_iotlb`] are
+//! the only two entry points, so every caller -- an attach, a detach, a
+//! flush after an unmap or a caching-mode map, the quarantine's release --
+//! goes through the queue without a change at its call site.
+//!
+//! **A failed invalidation** is a wait whose status is not written within
+//! the unit's patience, or `FSTS.IQE`, `ICE` or `ITE` seen while waiting.
+//! It answers `Err`, and every caller already treats that as "the unit may
+//! still reach it": an unpin hands the pin back and its frames are kept, a
+//! detach keeps the root table. After `IQE` or `ITE` the unit has stopped
+//! fetching descriptors, so it is marked **failed**: every later
+//! invalidation on it fails at once without touching the queue, nothing is
+//! released from its domains again until reboot, and the end-of-boot audit
+//! counts the failure as a stray fault (FX-1007). There is no recovery: a
+//! wedged queue is a broken unit, and holding memory is the safe side.
+//!
+//! Interrupt remapping and fault events are not used.
 
 use alloc::collections::{BTreeMap, BTreeSet};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_paging::coherence::Unpublished;
 use ferrix_paging::vtd::VtdSecondLevel;
+use ferrix_paging::vtd::queue::{self, Completion, ContextScope, Descriptor, IotlbScope};
 use ferrix_paging::{MapError, MapFlags, PhysAddr};
 use ferrix_pci::Address;
 use ferrix_sync::IrqSpinLock;
 
 use super::gate::{self, Gate};
-use super::{Cause, Fault};
+use super::{Cause, Fault, Wait};
 use crate::mmio::Mmio;
 use crate::{arch, mm, timer, vmap};
 
@@ -77,23 +100,53 @@ const GCMD: u64 = 0x18;
 const GSTS: u64 = 0x1C;
 /// Root table address register.
 const RTADDR: u64 = 0x20;
-/// Context command register.
+/// Context command register: read only, to see that no register-based
+/// invalidation was ever issued ([`Unit::register_invalidation_pending`]).
 const CCMD: u64 = 0x28;
 /// Fault status register.
 const FSTS: u64 = 0x34;
+/// Invalidation queue head: the next descriptor the unit fetches.
+const IQH: u64 = 0x80;
+/// Invalidation queue tail: the slot after the last descriptor written.
+const IQT: u64 = 0x88;
+/// Invalidation queue address, size and descriptor width.
+const IQA: u64 = 0x90;
+/// Invalidation event control: bit 31 masks the completion event.
+const IECTL: u64 = 0xA0;
 
 /// GCMD: turn translation on; GSTS: it is on.
 const TE: u32 = 1 << 31;
 /// GCMD: take the root table pointer; GSTS: it is taken.
 const SRTP: u32 = 1 << 30;
+/// GCMD: turn the invalidation queue on; GSTS (`QIES`): it is on.
+const QIE: u32 = 1 << 26;
+/// GCMD: turn interrupt remapping on; GSTS (`IRES`): it is on.
+const IRE: u32 = 1 << 25;
 /// GSTS bits reporting a standing enable, which every GCMD write repeats so as
-/// not to turn it off: translation, queued invalidation, interrupt remapping
-/// and compatibility-format interrupts.
-const STANDING: u32 = 1 << 31 | 1 << 26 | 1 << 25 | 1 << 23;
+/// not to turn it off: translation, queued invalidation and interrupt
+/// remapping. Not `CFI` (bit 23): a compatibility-format permission
+/// firmware left set is cleared by the kernel's first GCMD write rather than
+/// carried into every later one.
+const STANDING: u32 = TE | QIE | IRE;
+
+/// IECTL: the invalidation completion event is masked. Set before the queue
+/// goes on: the event's message registers are never programmed, and the only
+/// wait that raises it is check R7's.
+const IECTL_MASKED: u32 = 1 << 31;
+
+/// FSTS: invalidation queue error, the unit stopped at a bad descriptor.
+const FSTS_IQE: u32 = 1 << 4;
+/// FSTS: invalidation completion error.
+const FSTS_ICE: u32 = 1 << 5;
+/// FSTS: invalidation time-out error; the unit stops its queue as for IQE.
+const FSTS_ITE: u32 = 1 << 6;
 
 /// ECAP: page-walk coherency, the unit's walk snoops the processors' caches.
 /// Clear, every table write is cleaned to memory before it is published.
 const ECAP_C: u64 = 1 << 0;
+/// ECAP: queued invalidation. Required: the queue is the kernel's only way to
+/// invalidate.
+const ECAP_QI: u64 = 1 << 1;
 
 /// CAP: the unit needs its write buffer flushed after every change, which this
 /// driver does not do.
@@ -104,19 +157,10 @@ const CAP_CM: u64 = 1 << 7;
 /// CAP: the `SAGAW` bit for three-level, 39-bit tables.
 const CAP_SAGAW_39: u64 = 1 << 9;
 
-/// CCMD: invalidate the context cache; reads back set until done.
+/// CCMD: a register-based context-cache invalidation is in progress.
 const ICC: u64 = 1 << 63;
-/// CCMD: one source ID, named in bits 31:16.
-const CCMD_DEVICE: u64 = 3 << 61;
-/// CCMD: every entry.
-const CCMD_GLOBAL: u64 = 1 << 61;
-
-/// IOTLB register: invalidate; reads back set until done.
+/// IOTLB register: a register-based IOTLB invalidation is in progress.
 const IVT: u64 = 1 << 63;
-/// IOTLB register: every entry.
-const IOTLB_GLOBAL: u64 = 1 << 60;
-/// IOTLB register: one domain, named in bits 47:32.
-const IOTLB_DOMAIN: u64 = 2 << 60;
 
 /// FSTS: primary fault overflow, a fault was lost for want of a free record.
 /// Write one to clear. While it is set the unit records nothing: QEMU's
@@ -139,6 +183,12 @@ const AW_39: u64 = 1;
 /// How long a command may take before the unit is given up on.
 const PATIENCE_NANOS: u64 = 100_000_000;
 
+/// How long check R7's wait, which writes no status and so can never be seen
+/// to complete, is waited for before it fails: the same timeout path as
+/// [`PATIENCE_NANOS`]'s, without spending a tenth of a second of every boot
+/// on an answer known in advance (the test-time priority).
+const UNWRITTEN_PATIENCE_NANOS: u64 = 2_000_000;
+
 /// Why a publish was refused: a table write not cleaned to memory.
 const UNCLEANED_WHY: &str = "a table write was not cleaned to memory before it was published";
 
@@ -153,6 +203,42 @@ static TABLES_CLEANED: AtomicU64 = AtomicU64::new(0);
 static CHANGES_CHECKED: AtomicU64 = AtomicU64::new(0);
 /// Changes whose check found a write not cleaned, and were refused.
 static UNCLEANED: AtomicU64 = AtomicU64::new(0);
+
+/// Context-cache invalidations queued and waited for.
+static QUEUED_CONTEXT: AtomicU64 = AtomicU64::new(0);
+/// IOTLB invalidations queued and waited for.
+static QUEUED_IOTLB: AtomicU64 = AtomicU64::new(0);
+/// Invalidations that failed: a wait not completed, or a queue error.
+static INVALIDATIONS_FAILED: AtomicU64 = AtomicU64::new(0);
+/// Units marked failed after their queue stopped.
+static UNITS_FAILED: AtomicU64 = AtomicU64::new(0);
+
+/// Why an invalidation on a failed unit is refused at once.
+const FAILED_WHY: &str = "its invalidation queue stopped at a bad descriptor, so it takes no \
+                          invalidation again";
+
+/// What the units' invalidation queues did, for stage 10's check R6.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Invalidations {
+    /// Context-cache invalidations queued, each waited for.
+    pub(crate) context: u64,
+    /// IOTLB invalidations queued, each waited for.
+    pub(crate) iotlb: u64,
+    /// Invalidations that failed.
+    pub(crate) failed: u64,
+    /// Units marked failed.
+    pub(crate) units_failed: u64,
+}
+
+/// What every unit's invalidation queue has done since boot.
+pub(crate) fn invalidations() -> Invalidations {
+    Invalidations {
+        context: QUEUED_CONTEXT.load(Ordering::Relaxed),
+        iotlb: QUEUED_IOTLB.load(Ordering::Relaxed),
+        failed: INVALIDATIONS_FAILED.load(Ordering::Relaxed),
+        units_failed: UNITS_FAILED.load(Ordering::Relaxed),
+    }
+}
 
 /// What the units' cleaning did, for stage 10's check.
 #[derive(Clone, Copy, Debug)]
@@ -183,10 +269,29 @@ pub(crate) fn cleaning() -> Cleaning {
 /// One remapping unit.
 #[derive(Debug)]
 pub(crate) struct Unit {
+    /// Physical address of its registers, which names it on the console.
+    phys: u64,
     /// Its registers.
     registers: Mmio,
     /// Physical address of the root table.
     root: u64,
+    /// Physical address of its invalidation queue: one frame of
+    /// [`queue::QUEUE_LENGTH`] descriptors, which only this unit's code
+    /// writes, under `commands`.
+    queue: u64,
+    /// Physical address of the frame whose first word each wait descriptor's
+    /// status write lands in.
+    status: u64,
+    /// The queue slot the next descriptor goes in. Changed only under
+    /// `commands`.
+    tail: AtomicU32,
+    /// The last wait's status data. Changed only under `commands`.
+    sequence: AtomicU32,
+    /// Whether the queue stopped (`IQE` or `ITE`): no invalidation is made on
+    /// the unit again.
+    failed: AtomicBool,
+    /// Whether the end-of-boot audit has been told of the failure.
+    failure_reported: AtomicBool,
     /// Offset of the first fault recording register.
     faults: u64,
     /// Offset of the IOTLB invalidation register.
@@ -239,7 +344,10 @@ impl Attached {
 
 impl Unit {
     /// Map the unit whose registers are at `phys`, and require it to be able to
-    /// do what this driver asks.
+    /// do what this driver asks: a version 1 unit walking three-level tables,
+    /// with no write buffer to flush, with an invalidation queue, and not left
+    /// translating. A unit firmware left remapping interrupts, or with its
+    /// queue on, is turned off first and must read back off.
     ///
     /// # Errors
     ///
@@ -263,21 +371,43 @@ impl Unit {
         if cap & CAP_RWBF != 0 {
             return refuse("it needs its write buffer flushed");
         }
+        if ecap & ECAP_QI == 0 {
+            return refuse("it has no invalidation queue");
+        }
         if registers.read32(GSTS) & TE != 0 {
             return refuse("firmware left it translating");
+        }
+        if let Err(why) = stop_firmware(registers) {
+            return refuse(why);
         }
         let coherent = ecap & ECAP_C != 0;
         let mut writes = Unpublished::new(coherent);
         let Some(root) = table(&mut writes) else {
             return refuse("no frame for its root table");
         };
+        let Some(queue) = table(&mut writes) else {
+            mm::deallocate_frames(root / PAGE_SIZE, 0);
+            return refuse("no frame for its invalidation queue");
+        };
+        let Some(status) = table(&mut writes) else {
+            mm::deallocate_frames(root / PAGE_SIZE, 0);
+            mm::deallocate_frames(queue / PAGE_SIZE, 0);
+            return refuse("no frame for its invalidation queue's status");
+        };
         settle(&writes);
         if !coherent {
             let _ = UNITS_CLEANING.fetch_add(1, Ordering::Relaxed);
         }
         Ok(Unit {
+            phys,
             registers,
             root,
+            queue,
+            status,
+            tail: AtomicU32::new(0),
+            sequence: AtomicU32::new(0),
+            failed: AtomicBool::new(false),
+            failure_reported: AtomicBool::new(false),
             faults: ((cap >> 24) & 0x3FF) * 16,
             iotlb: ((ecap >> 8) & 0x3FF) * 16 + 8,
             caching: cap & CAP_CM != 0,
@@ -289,9 +419,9 @@ impl Unit {
         })
     }
 
-    /// Point the unit at its root table, make it forget what it cached, and
-    /// turn translation on. From here a function with no context entry reaches
-    /// nothing.
+    /// Point the unit at its root table, turn its invalidation queue on, make
+    /// it forget what it cached, and turn translation on. From here a
+    /// function with no context entry reaches nothing.
     ///
     /// # Errors
     ///
@@ -299,10 +429,11 @@ impl Unit {
     pub(crate) fn enable(&self) -> Result<(), &'static str> {
         write64(self.registers, RTADDR, self.root);
         self.command(SRTP, "it never took its root table")?;
+        self.start_queue()?;
         // The root table was cleaned when `open` made it, and nothing has
         // been written since: no record to check.
-        self.invalidate_context(CCMD_GLOBAL, None)?;
-        self.invalidate_iotlb(IOTLB_GLOBAL, None)?;
+        self.invalidate_context(ContextScope::Global, None)?;
+        self.invalidate_iotlb(IotlbScope::Global, None, Wait::Status)?;
         // A fault firmware left recorded would otherwise be read as ours.
         if self.registers.read32(self.faults + 12) & FRCD_F != 0 {
             self.registers.write32(self.faults + 12, FRCD_F);
@@ -310,6 +441,29 @@ impl Unit {
         self.registers.write32(FSTS, PFO);
         *self.taken.lock() = None;
         self.command(TE, "it never started translating")
+    }
+
+    /// Turn the invalidation queue on: its frame, 256 descriptors of 128
+    /// bits, at a tail of 0, with the completion event masked. No
+    /// invalidation has been issued yet, so none is in flight.
+    fn start_queue(&self) -> Result<(), &'static str> {
+        self.registers.write32(IECTL, IECTL_MASKED);
+        write64(self.registers, IQA, queue::queue_address(self.queue));
+        write64(self.registers, IQT, queue::slot_register(0));
+        self.tail.store(0, Ordering::Relaxed);
+        self.command(QIE, "it never turned its invalidation queue on")?;
+        if queue::slot_of(read64(self.registers, IQH)) != 0 {
+            return Err("its invalidation queue did not start at its head");
+        }
+        Ok(())
+    }
+
+    /// Whether a register-based invalidation is pending on the unit: `ICC`
+    /// or `IVT` read back set. With the queue on the unit never performs
+    /// one -- QEMU's leaves the bit set -- and the kernel issues none, so
+    /// stage 10's check R6 requires this false on every unit.
+    pub(crate) fn register_invalidation_pending(&self) -> bool {
+        read64(self.registers, CCMD) & ICC != 0 || read64(self.registers, self.iotlb) & IVT != 0
     }
 
     /// The fault the unit's first recording register holds, cleared so the unit
@@ -347,8 +501,22 @@ impl Unit {
     /// where a vmexit between two halves of a read is likeliest -- and never
     /// under TCG. Reading F by itself first, and the rest only once it is set,
     /// is correct by construction against that write order.
+    ///
+    /// **A unit marked failed** is reported once, first, as
+    /// [`Cause::Queue`]: its queue stopped, and the end-of-boot audit must
+    /// count it.
     pub(crate) fn take_fault(&self) -> Option<Fault> {
         let mut taken = self.taken.lock();
+        if self.failed.load(Ordering::Acquire)
+            && !self.failure_reported.swap(true, Ordering::AcqRel)
+        {
+            return Some(Fault {
+                stream: u32::MAX,
+                page: 0,
+                write: false,
+                cause: Cause::Queue,
+            });
+        }
         let status = self.registers.read32(FSTS);
         let flags = self.registers.read32(self.faults + 12);
         if flags & FRCD_F != 0 {
@@ -401,8 +569,13 @@ impl Unit {
             }
         };
         // If this fails the entry stays, and so do the tables it points at.
+        // Domain 0: an entry not present is cached, in caching mode, under
+        // no domain of its own.
         self.invalidate_context(
-            CCMD_DEVICE | u64::from(function.requester_id()) << 16,
+            ContextScope::Device {
+                source: function.requester_id(),
+                domain: 0,
+            },
             Some(&writes),
         )?;
         Ok(attached)
@@ -473,12 +646,16 @@ impl Unit {
         // could still read the entry as present and reach the frames below.
         self.publish(&mut writes);
         settle(&writes);
+        // Under the domain the entry was present with, as the unit cached it.
         self.invalidate_context(
-            CCMD_DEVICE | u64::from(attached.function.requester_id()) << 16,
+            ContextScope::Device {
+                source: attached.function.requester_id(),
+                domain: attached.identifier,
+            },
             Some(&writes),
         )?;
         // The same record, checked by the invalidation just made.
-        self.invalidate_iotlb(IOTLB_DOMAIN | u64::from(attached.identifier) << 32, None)?;
+        self.invalidate_iotlb(IotlbScope::Domain(attached.identifier), None, Wait::Status)?;
         let _ = self.tables.lock().identifiers.remove(&attached.identifier);
         mm::deallocate_frames(attached.root / PAGE_SIZE, 0);
         Ok(())
@@ -540,15 +717,23 @@ impl Unit {
     /// unmap always, and after a map only in caching mode, where not-present
     /// entries are cached too.
     ///
+    /// `wait` is [`Wait::Status`] everywhere but in check R7, which passes
+    /// [`Wait::Unwritten`] to make the invalidation fail.
+    ///
     /// # Errors
     ///
     /// A unit that never finished.
-    pub(crate) fn flush(&self, attached: &Attached, after_map: bool) -> Result<(), &'static str> {
+    pub(crate) fn flush(
+        &self,
+        attached: &Attached,
+        after_map: bool,
+        wait: Wait,
+    ) -> Result<(), &'static str> {
         if after_map && !self.caching {
             return Ok(());
         }
         // `map` and `unmap` checked their own records before they returned.
-        self.invalidate_iotlb(IOTLB_DOMAIN | u64::from(attached.identifier) << 32, None)
+        self.invalidate_iotlb(IotlbScope::Domain(attached.identifier), None, wait)
     }
 
     /// A record for this unit's table writes: one that notes and cleans
@@ -576,53 +761,282 @@ impl Unit {
         self.wait(|| self.registers.read32(GSTS) & bit != 0, why)
     }
 
-    /// Invalidate the context cache for `scope`, and wait until it has.
-    /// Refused if `writes`, the record of the change this publishes, holds a
-    /// write not cleaned to memory; `None` for an invalidation that publishes
-    /// no change's writes.
+    /// Invalidate the context cache for `scope` through the queue, and wait
+    /// until it has. Refused if `writes`, the record of the change this
+    /// publishes, holds a write not cleaned to memory; `None` for an
+    /// invalidation that publishes no change's writes.
     fn invalidate_context(
         &self,
-        scope: u64,
+        scope: ContextScope,
         writes: Option<&Unpublished>,
     ) -> Result<(), &'static str> {
         if let Some(writes) = writes {
             require_published(writes)?;
         }
-        let _held = self.commands.enter()?;
-        write64(self.registers, CCMD, ICC | scope);
-        self.wait(
-            || read64(self.registers, CCMD) & ICC == 0,
-            "it never finished invalidating its context cache",
-        )
+        self.submit(queue::context(scope), Wait::Status)?;
+        let _ = QUEUED_CONTEXT.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// Invalidate the IOTLB for `scope`, and wait until it has. Refused as
-    /// [`Unit::invalidate_context`] is.
+    /// Invalidate the IOTLB for `scope` through the queue, and wait until it
+    /// has, as `wait` says. Refused as [`Unit::invalidate_context`] is.
     fn invalidate_iotlb(
         &self,
-        scope: u64,
+        scope: IotlbScope,
         writes: Option<&Unpublished>,
+        wait: Wait,
     ) -> Result<(), &'static str> {
         if let Some(writes) = writes {
             require_published(writes)?;
         }
+        self.submit(queue::iotlb(scope), wait)?;
+        let _ = QUEUED_IOTLB.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Put `descriptor` and a fenced wait behind it in the queue, move the
+    /// tail past both, and wait for the wait to complete: its status word to
+    /// read this submission's sequence number, within [`PATIENCE_NANOS`].
+    ///
+    /// Both descriptors are cleaned to memory, on a unit that does not
+    /// snoop, before the tail write that publishes them. Held inside
+    /// `commands` throughout, so two submissions never interleave; the wait
+    /// is made with interrupts on wherever the caller may block (`gate`).
+    ///
+    /// With [`Wait::Unwritten`] the wait writes no status, so this fails
+    /// after [`UNWRITTEN_PATIENCE_NANOS`]: check R7's way of making an
+    /// invalidation fail.
+    ///
+    /// # Errors
+    ///
+    /// A failed invalidation: the unit already failed, no room in the queue,
+    /// a status not written in time, or a queue error seen while waiting --
+    /// which also marks the unit failed.
+    fn submit(&self, descriptor: Descriptor, wait: Wait) -> Result<(), &'static str> {
+        let result = self.submit_and_wait(descriptor, wait);
+        if result.is_err() {
+            let _ = INVALIDATIONS_FAILED.fetch_add(1, Ordering::Relaxed);
+        }
+        result
+    }
+
+    /// [`Unit::submit`]'s work.
+    fn submit_and_wait(&self, descriptor: Descriptor, wait: Wait) -> Result<(), &'static str> {
+        if self.failed.load(Ordering::Acquire) {
+            return Err(FAILED_WHY);
+        }
         let _held = self.commands.enter()?;
-        write64(self.registers, self.iotlb, IVT | scope);
-        self.wait(
-            || read64(self.registers, self.iotlb) & IVT == 0,
-            "it never finished invalidating its IOTLB",
-        )
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = queue::slot_of(read64(self.registers, IQH));
+        if queue::free_slots(head, tail) < 2 {
+            return Err("its invalidation queue had no room");
+        }
+        let sequence = match self.sequence.load(Ordering::Relaxed).wrapping_add(1) {
+            0 => 1,
+            next => next,
+        };
+        self.sequence.store(sequence, Ordering::Relaxed);
+        let completion = match wait {
+            Wait::Status => Completion::Status {
+                address: self.status,
+                data: sequence,
+            },
+            Wait::Unwritten => Completion::Unwritten,
+        };
+        let slot = self.write_descriptors(tail, [descriptor, queue::wait(completion)])?;
+        self.tail.store(slot, Ordering::Relaxed);
+        write64(self.registers, IQT, queue::slot_register(slot));
+        self.await_completion(sequence, wait)
+    }
+
+    /// Write `descriptors` into the queue from slot `tail` on, and clean them
+    /// to memory, so that the unit fetches them whole once the tail moves:
+    /// the slot after the last.
+    ///
+    /// # Errors
+    ///
+    /// [`UNCLEANED_WHY`], for a descriptor not cleaned.
+    fn write_descriptors(
+        &self,
+        tail: u32,
+        descriptors: [Descriptor; 2],
+    ) -> Result<u32, &'static str> {
+        let mut writes = self.writes();
+        let mut slot = tail;
+        for written in descriptors {
+            let at = self.queue + u64::from(slot) * queue::DESCRIPTOR_BYTES;
+            write_entry(at, written[0], &mut writes);
+            write_entry(at + 8, written[1], &mut writes);
+            slot = (slot + 1) % queue::QUEUE_LENGTH;
+        }
+        // In memory before the tail write the unit fetches them after.
+        self.publish(&mut writes);
+        settle(&writes);
+        if writes.is_published() {
+            Ok(slot)
+        } else {
+            Err(UNCLEANED_WHY)
+        }
+    }
+
+    /// Wait for the wait descriptor whose status is `sequence` to complete,
+    /// within the patience `wait` has, and see whether the unit stopped or
+    /// failed it.
+    ///
+    /// # Errors
+    ///
+    /// A queue error -- which for `IQE` or `ITE` also marks the unit failed --
+    /// or a status not written in time.
+    fn await_completion(&self, sequence: u32, wait: Wait) -> Result<(), &'static str> {
+        let errors = FSTS_IQE | FSTS_ICE | FSTS_ITE;
+        let patience = match wait {
+            Wait::Status => PATIENCE_NANOS,
+            Wait::Unwritten => UNWRITTEN_PATIENCE_NANOS,
+        };
+        let deadline = timer::now_nanos().saturating_add(patience);
+        let done = gate::poll(
+            || self.status_word() == sequence || self.registers.read32(FSTS) & errors != 0,
+            deadline,
+        );
+        let status = self.registers.read32(FSTS);
+        if status & (FSTS_IQE | FSTS_ITE) != 0 {
+            self.fail(status);
+            return Err(FAILED_WHY);
+        }
+        if status & FSTS_ICE != 0 {
+            return Err("it reported an invalidation completion error");
+        }
+        if done && self.status_word() == sequence {
+            Ok(())
+        } else {
+            Err("it never finished an invalidation")
+        }
+    }
+
+    /// The word the queue's wait descriptors write their status to.
+    fn status_word(&self) -> u32 {
+        // SAFETY: (DMA) `status` is a frame this unit took from the frame
+        // allocator for itself in `open` and never gives back; the direct map
+        // covers every frame of RAM, and its first word is four-byte
+        // aligned. The unit writes it, which is why the read is volatile.
+        unsafe { core::ptr::read_volatile(mm::direct_map(self.status) as *const u32) }
+    }
+
+    /// Mark the unit failed after its queue stopped, with `status` the fault
+    /// status register that said so, and say so once.
+    fn fail(&self, status: u32) {
+        if self.failed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let _ = UNITS_FAILED.fetch_add(1, Ordering::Relaxed);
+        crate::println!(
+            "  iommu    VT-d unit {:#x}: its invalidation queue stopped ({}): it takes no \
+             invalidation again, and nothing it may reach is released until reboot",
+            self.phys,
+            if status & FSTS_IQE != 0 {
+                "IQE, a descriptor it would not take"
+            } else {
+                "ITE, an invalidation that timed out"
+            },
+        );
     }
 
     /// Wait for `ready`, up to [`PATIENCE_NANOS`], with interrupts on
     /// wherever the caller may block: see `gate`.
     fn wait(&self, ready: impl Fn() -> bool, why: &'static str) -> Result<(), &'static str> {
-        let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
-        if gate::poll(ready, deadline) {
-            Ok(())
-        } else {
-            Err(why)
-        }
+        wait_for(ready, why)
+    }
+}
+
+/// Bring `unit`'s registers into the state firmware that used the
+/// invalidation queue would leave them in -- the queue on, at the unit's own
+/// frame, its last descriptor a wait the unit has completed -- and require
+/// [`stop_firmware`] to turn it off and read it back off: the path `open`
+/// takes on such a unit, which no firmware QEMU boots takes. For
+/// `iommu/check.rs`, before `enable` turns the queue on for good.
+///
+/// The wait matters: QEMU will not turn a queue off whose last descriptor
+/// was anything else (`vtd_queued_inv_disable_check`), and firmware that
+/// waits for its invalidations, as any must, leaves one last.
+///
+/// # Errors
+///
+/// The queue would not go on as firmware's would, or `stop_firmware` did
+/// not turn it off.
+pub(super) fn leave_queue_on_and_stop(unit: &Unit) -> Result<(), &'static str> {
+    let registers = unit.registers;
+    registers.write32(IECTL, IECTL_MASKED);
+    write64(registers, IQA, queue::queue_address(unit.queue));
+    write64(registers, IQT, queue::slot_register(0));
+    registers.write32(GCMD, (registers.read32(GSTS) & STANDING) | QIE);
+    wait_for(
+        || registers.read32(GSTS) & QIE != 0,
+        "a queue turned on as firmware would never came on",
+    )?;
+    /// What firmware's last wait writes, which no sequence number reaches
+    /// before the boot's checks are over.
+    const FIRMWARE_WAIT: u32 = 0xF1A7_0000;
+    let mut writes = unit.writes();
+    let last = queue::wait(Completion::Status {
+        address: unit.status,
+        data: FIRMWARE_WAIT,
+    });
+    write_entry(unit.queue, last[0], &mut writes);
+    write_entry(unit.queue + 8, last[1], &mut writes);
+    unit.publish(&mut writes);
+    settle(&writes);
+    write64(registers, IQT, queue::slot_register(1));
+    wait_for(
+        || unit.status_word() == FIRMWARE_WAIT,
+        "a wait in a queue turned on as firmware would never completed",
+    )?;
+    stop_firmware(registers)?;
+    if registers.read32(GSTS) & QIE != 0 {
+        return Err("a queue firmware left on was still on after it was stopped");
+    }
+    Ok(())
+}
+
+/// Turn off what firmware left on that the kernel sets up itself: interrupt
+/// remapping, then the invalidation queue once it is idle. Each must read
+/// back off within [`PATIENCE_NANOS`]. A table pointer firmware left
+/// (`IRTPS`) needs nothing here: the kernel's own replaces it before
+/// anything uses it.
+///
+/// # Errors
+///
+/// What firmware left on and would not stop.
+fn stop_firmware(registers: Mmio) -> Result<(), &'static str> {
+    let status = registers.read32(GSTS);
+    if status & IRE != 0 {
+        registers.write32(GCMD, status & STANDING & !IRE);
+        wait_for(
+            || registers.read32(GSTS) & IRE == 0,
+            "firmware left it remapping interrupts and it would not stop",
+        )?;
+    }
+    if registers.read32(GSTS) & QIE != 0 {
+        wait_for(
+            || queue::slot_of(read64(registers, IQH)) == queue::slot_of(read64(registers, IQT)),
+            "firmware left its invalidation queue busy and it would not drain",
+        )?;
+        registers.write32(GCMD, registers.read32(GSTS) & STANDING & !QIE);
+        wait_for(
+            || registers.read32(GSTS) & QIE == 0,
+            "firmware left its invalidation queue on and it would not stop",
+        )?;
+    }
+    Ok(())
+}
+
+/// Wait for `ready`, up to [`PATIENCE_NANOS`], with interrupts on wherever
+/// the caller may block: see `gate`.
+fn wait_for(ready: impl Fn() -> bool, why: &'static str) -> Result<(), &'static str> {
+    let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    if gate::poll(ready, deadline) {
+        Ok(())
+    } else {
+        Err(why)
     }
 }
 

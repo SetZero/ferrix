@@ -119,17 +119,28 @@ pub(crate) fn check_iommu() {
             "stage 10 self-check failed: {problem}"
         ),
     }
-    match object::pin::check::check_budget(device::devices()) {
-        Ok(Some(report)) => println!(
-            "  iommu    pin budget: {} pins refused at a budget of 2 pages and at twice it, a dead \
-             driver's pins quarantined and released, {} page kept and still counted, and \
-             device_set_limit refused {} times -- without SET_LIMIT, under a live pin and past \
-             the ceiling of {} pages -- each audited",
-            report.refusals,
-            report.kept,
-            report.set_refused,
-            object::pin::ceiling(),
+    let failed_kept = match object::pin::check::check_budget(device::devices()) {
+        Ok(Some(report)) => {
+            println!(
+                "  iommu    pin budget: {} pins refused at a budget of 2 pages and at twice it, a \
+                 dead driver's pins quarantined and released, {} page kept and still counted, \
+                 and device_set_limit refused {} times -- without SET_LIMIT, under a live pin \
+                 and past the ceiling of {} pages -- each audited",
+                report.refusals,
+                report.kept,
+                report.set_refused,
+                object::pin::ceiling(),
+            );
+            report.failed_kept
+        }
+        Ok(None) => 0,
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
         ),
+    };
+    match check_queue(super::invalidations(), failed_kept) {
+        Ok(Some(line)) => println!("  iommu    {line}"),
         Ok(None) => {}
         Err(problem) => fatal!(
             catalog::STAGE10_IOMMU,
@@ -196,6 +207,100 @@ fn check_cleaning(
         cleaning.tables,
         cleaning.units,
         cleaning.checked
+    )))
+}
+
+/// VT-d units on which [`check_firmware_left_on`] left the queue on as
+/// firmware would and saw `open`'s path turn it off.
+static FIRMWARE_QUEUES_STOPPED: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Stage 10, at bring-up, between a VT-d unit's `open` and its `enable`,
+/// unless the boot was told to skip its checks:
+/// the unit's invalidation queue turned on as firmware that used it would
+/// leave it, and then turned off by the path `open` takes when it finds a
+/// queue firmware left on, and read back off. No firmware QEMU boots leaves
+/// one on, so without this the path would never run.
+///
+/// Halts rather than returning, as every other stage's check does.
+///
+/// Verifies: L.iommu.51
+pub(crate) fn check_firmware_left_on(unit: &super::vtd::Unit) {
+    if !crate::checks::run() {
+        return;
+    }
+    if let Err(problem) = super::vtd::leave_queue_on_and_stop(unit) {
+        fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        );
+    }
+    let _ = FIRMWARE_QUEUES_STOPPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// R6 and R7 (`docs/NVIDIA.md` §12.3): every VT-d invalidation of the boot
+/// went through a unit's queue and was waited for, and none by register --
+/// no unit reads back a register-based invalidation pending, which QEMU's
+/// leaves set for good once the queue is on -- and the one invalidation check
+/// R7 made fail, and nothing else, failed: its pin's `failed_kept` pages were
+/// kept. No unit was marked failed.
+///
+/// `None` on a machine with no VT-d unit translating.
+///
+/// # Errors
+///
+/// A register-based invalidation pending, no invalidation of a kind the
+/// boot makes, a failure R7 did not make, or a unit marked failed.
+///
+/// Verifies: L.iommu.47
+/// Verifies: L.iommu.48
+fn check_queue(
+    queued: super::Invalidations,
+    failed_kept: usize,
+) -> Result<Option<alloc::string::String>, alloc::string::String> {
+    let (units, pending) = super::register_invalidations_pending();
+    if units == 0 {
+        return Ok(None);
+    }
+    if pending != 0 {
+        return Err(alloc::format!(
+            "{pending} of {units} VT-d units read back a register-based invalidation pending"
+        ));
+    }
+    if queued.context == 0 || queued.iotlb == 0 {
+        return Err(alloc::format!(
+            "the boot queued {} context-cache and {} IOTLB invalidations, where it makes both",
+            queued.context,
+            queued.iotlb
+        ));
+    }
+    if queued.units_failed != 0 {
+        return Err(alloc::format!(
+            "{} VT-d units' invalidation queues stopped",
+            queued.units_failed
+        ));
+    }
+    let provoked = u64::from(failed_kept != 0);
+    if queued.failed != provoked {
+        return Err(alloc::format!(
+            "{} VT-d invalidations failed where check R7 made {provoked} fail",
+            queued.failed
+        ));
+    }
+    let stopped = FIRMWARE_QUEUES_STOPPED.load(core::sync::atomic::Ordering::Relaxed);
+    if stopped != units as u64 {
+        return Err(alloc::format!(
+            "a queue left on as firmware leaves it was turned off on {stopped} of {units} VT-d \
+             units"
+        ));
+    }
+    Ok(Some(alloc::format!(
+        "{} context-cache and {} IOTLB invalidations queued and each waited for, none by \
+         register on {units} VT-d units; {} failed as check R7 made it, its {failed_kept} pages \
+         kept; a queue left on as firmware leaves it turned off on {stopped}",
+        queued.context,
+        queued.iotlb,
+        queued.failed
     )))
 }
 

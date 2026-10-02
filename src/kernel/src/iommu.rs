@@ -78,6 +78,7 @@ mod smmuv3;
 mod vtd;
 
 pub(crate) use check::{check_dma_faults, check_iommu, run as check_gate};
+pub(crate) use vtd::{Invalidations, invalidations};
 
 use gate::Gate;
 
@@ -495,6 +496,23 @@ pub(crate) enum Cause {
     /// record's, the one taken last before the overflow was seen, and the
     /// lost fault is unknown. [`provoked`] says when it counts as stray.
     Overflow,
+    /// A VT-d unit whose invalidation queue stopped (`IQE` or `ITE`), and
+    /// which was marked failed: it names no stream, nothing provokes it, and
+    /// it counts as stray, so the boot fails on it (FX-1007).
+    Queue,
+}
+
+/// How a VT-d invalidation's wait descriptor completes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Wait {
+    /// It writes its status word, which the kernel waits for: every
+    /// invalidation but check R7's.
+    Status,
+    /// It writes nothing, so the invalidation fails after a short patience
+    /// of its own: only for check R7 (`docs/NVIDIA.md` §12.3), which passes it
+    /// through [`Domain::unpin_waiting`] to show that a failed invalidation
+    /// releases nothing. Never chosen at run time.
+    Unwritten,
 }
 
 impl Fault {
@@ -531,6 +549,10 @@ impl core::fmt::Display for Fault {
                 f,
                 "a VT-d fault was lost to a full record, which held stream {:#x}, page {:#x}",
                 self.stream, self.page
+            ),
+            Cause::Queue => write!(
+                f,
+                "a VT-d unit's invalidation queue stopped, and the unit was marked failed"
             ),
         }
     }
@@ -631,11 +653,13 @@ impl Translation {
         }
     }
 
-    /// Make the unit forget what it cached, after an unmap or a map.
-    fn flush(&self, after_map: bool) -> Result<(), &'static str> {
+    /// Make the unit forget what it cached, after an unmap or a map. `wait`
+    /// reaches a VT-d unit's queue; an `SMMUv3`'s commands have no such
+    /// choice, and check R7 runs only on a VT-d domain.
+    fn flush(&self, after_map: bool, wait: Wait) -> Result<(), &'static str> {
         match self {
             Translation::None => Ok(()),
-            Translation::VtD { unit, attached, .. } => unit.flush(attached, after_map),
+            Translation::VtD { unit, attached, .. } => unit.flush(attached, after_map, wait),
             Translation::SmmuV3 { unit, attached, .. } => unit.flush(attached, after_map),
         }
     }
@@ -841,6 +865,27 @@ impl Domain {
     /// [`DomainError::Foreign`], handing the pin back, when another domain took
     /// it.
     pub(crate) fn unpin(&self, pinned: Pinned) -> Result<(), (DomainError, Pinned)> {
+        self.unpin_waiting(pinned, Wait::Status)
+    }
+
+    /// Whether a VT-d unit translates this domain: where its invalidations
+    /// go through a queue, and [`Wait::Unwritten`] means something.
+    pub(crate) fn queued(&self) -> bool {
+        matches!(self.translation, Translation::VtD { .. })
+    }
+
+    /// [`Domain::unpin`], its invalidation waited for as `wait` says:
+    /// [`Wait::Status`] but in check R7, whose [`Wait::Unwritten`] makes the
+    /// invalidation fail so that the pin comes back (`object::pin`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Domain::unpin`].
+    pub(crate) fn unpin_waiting(
+        &self,
+        pinned: Pinned,
+        wait: Wait,
+    ) -> Result<(), (DomainError, Pinned)> {
         if pinned.domain != self.id {
             return Err((DomainError::Foreign, pinned));
         }
@@ -864,7 +909,7 @@ impl Domain {
             }
             // Only once the unit has forgotten the pages may their frames go,
             // or the tables that led to them (finding F-36).
-            if let Err(why) = self.translation.flush(false) {
+            if let Err(why) = self.translation.flush(false, wait) {
                 return Err((DomainError::Unit(why), pinned));
             }
             tables.release();
@@ -894,7 +939,7 @@ fn map_all(
         for &mapped in addresses.iter().take(written) {
             let _ = translation.unmap(mapped, &mut tables);
         }
-        if translation.flush(false).is_ok() {
+        if translation.flush(false, Wait::Status).is_ok() {
             tables.release();
         }
         return Err(match error {
@@ -902,7 +947,9 @@ fn map_all(
             _ => DomainError::Tables,
         });
     }
-    translation.flush(true).map_err(DomainError::Unit)
+    translation
+        .flush(true, Wait::Status)
+        .map_err(DomainError::Unit)
 }
 
 impl Drop for Domain {
@@ -1029,8 +1076,10 @@ fn bring_up_vtd(table: &dmar::Dmar<'_>, programmed: &mut Programmed, report: &mu
         let Structure::Drhd(unit) = structure else {
             continue;
         };
-        let opened =
-            vtd::Unit::open(unit.register_base).and_then(|opened| opened.enable().map(|()| opened));
+        let opened = vtd::Unit::open(unit.register_base).and_then(|opened| {
+            check::check_firmware_left_on(&opened);
+            opened.enable().map(|()| opened)
+        });
         match opened {
             Ok(opened) => {
                 let index = programmed.vtd.len();
@@ -1164,6 +1213,22 @@ pub(crate) fn domain_for(function: Address) -> Domain {
             Domain::untranslated()
         }
     }
+}
+
+/// How many VT-d units are translating, and how many of them read back a
+/// register-based invalidation pending: none ever should, since every
+/// invalidation goes through the queue (check R6).
+pub(crate) fn register_invalidations_pending() -> (usize, usize) {
+    PROGRAMMED.get().map_or((0, 0), |programmed| {
+        (
+            programmed.vtd.len(),
+            programmed
+                .vtd
+                .iter()
+                .filter(|unit| unit.register_invalidation_pending())
+                .count(),
+        )
+    })
 }
 
 /// The VT-d unit the DMAR puts `function` behind, if it is translating.

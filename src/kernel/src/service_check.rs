@@ -393,7 +393,7 @@ fn failures_read_as_they_are_documented(report: &mut Report) -> Result<(), &'sta
     Ok(())
 }
 
-/// A DMA fault reads as its unit recorded it, whichever of the four causes it
+/// A DMA fault reads as its unit recorded it, whichever of the five causes it
 /// was, and a domain prints as what translates it: the words the boot's fault
 /// audit and a failed domain check put in the log.
 ///
@@ -405,7 +405,7 @@ fn faults_and_domains_read_as_recorded(report: &mut Report) -> Result<(), &'stat
         write,
         cause,
     };
-    let expected: [(String, &str); 5] = [
+    let expected: [(String, &str); 6] = [
         (
             format!("{}", fault(false, Cause::Access)),
             "stream 0x10, page 0x1000, a read",
@@ -421,6 +421,10 @@ fn faults_and_domains_read_as_recorded(report: &mut Report) -> Result<(), &'stat
         (
             format!("{}", fault(false, Cause::Overflow)),
             "a VT-d fault was lost to a full record, which held stream 0x10, page 0x1000",
+        ),
+        (
+            format!("{}", fault(false, Cause::Queue)),
+            "a VT-d unit's invalidation queue stopped, and the unit was marked failed",
         ),
         (format!("{:?}", Cause::Event(0x10)), "Event(16)"),
     ];

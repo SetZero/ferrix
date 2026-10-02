@@ -22,7 +22,7 @@ use ferrix_paging::MapFlags;
 use super::{Counts, DEFAULT_PIN_BUDGET_PAGES, Pin, PinError, ceiling, counts, release};
 use crate::audit::{self, DEVICE_LIMIT, DEVICE_LIMIT_SET};
 use crate::device::DeviceNode;
-use crate::iommu::{Domain, DomainError};
+use crate::iommu::{Domain, DomainError, Wait};
 use crate::object::Object;
 use crate::object::check::{Side, reg};
 use crate::object::process::Exit;
@@ -39,6 +39,9 @@ pub(crate) struct Report {
     pub(crate) set_refused: u32,
     /// Pages a release could not unpin, moved to `kept` (one per boot).
     pub(crate) kept: usize,
+    /// Pages of a pin whose unpin's invalidation was made to fail, kept and
+    /// held (check R7; two per boot on a VT-d domain, else none).
+    pub(crate) failed_kept: usize,
 }
 
 /// The two ends a check pins for: a process that has ended, whose pins go
@@ -74,7 +77,48 @@ pub(crate) fn check_budget(nodes: &[Arc<DeviceNode>]) -> Result<Option<Report>, 
     check_give_back(&domain, &owners)?;
     check_release(&domain, &owners, &mut report)?;
     check_set_limit(&node, &domain, &owners, &mut report)?;
+    check_failed_invalidation(&domain, &owners, &mut report)?;
     Ok(Some(report))
+}
+
+/// R7 (`docs/NVIDIA.md` §12.3): a pin whose unpin's invalidation fails is
+/// kept. Its unpin's wait descriptor is made to write no status, through
+/// the check-only [`Wait::Unwritten`], so the unit's queue never says it
+/// finished: the unpin answers an error after a short patience of its own
+/// (2 ms), the pin's two pages move from `live` to `kept`, and its frames
+/// stay held -- the check's own reference on each is not the last. Only on
+/// a domain a VT-d unit translates; elsewhere nothing is checked.
+///
+/// Verifies: L.iommu.48
+fn check_failed_invalidation(
+    domain: &Arc<Domain>,
+    owners: &Owners,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    if !domain.queued() {
+        return Ok(());
+    }
+    let before = counts(domain);
+    let (mut pin, frames) = watched_pin(domain, &owners.live)?;
+    pin.wait = Wait::Unwritten;
+    let failed = crate::iommu::invalidations().failed;
+    drop(pin);
+    let now = counts(domain);
+    let mut released = false;
+    for &frame in &frames {
+        released |= crate::mm::release_frame(frame);
+    }
+    if released {
+        return Err("frames released after a failed invalidation");
+    }
+    if crate::iommu::invalidations().failed == failed {
+        return Err("an unpin whose wait wrote no status did not fail its invalidation");
+    }
+    if now.kept != before.kept + frames.len() || now.live != before.live {
+        return Err("a pin whose invalidation failed was not moved from live to kept");
+    }
+    report.failed_kept = frames.len();
+    Ok(())
 }
 
 /// P1: with a budget of two pages, a two-page pin is taken and a one-page

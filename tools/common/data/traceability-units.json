@@ -57,6 +57,7 @@
     "mm::FrameWindow::kept": "A check's frame window: frames kept since it opened. Every caller is a check file; it reads Held, which reads the heap and route counters private to mm.rs.",
     "mm::FrameWindow::report_at": "Prints a window's heap and per-route movement for a failing check, through FrameWindow::report; check files only.",
     "mm::Held::now": "The frame window's settled read of free frames, slab pages and route counters, for FrameWindow and held_frames, whose callers are all check files. It reads HEAP and ROUTE_COUNTS, private to mm.rs.",
+    "iommu::vtd::leave_queue_on_and_stop": "Serves only the stage 10 check of a queue firmware left on (iommu/check.rs check_firmware_left_on, L.iommu.51): it puts a unit's queue in the state such firmware leaves it in, then calls the product path stop_firmware. It needs the unit's registers and frames, private to vtd.rs, so it stays beside them.",
     "mm::claim_frame": "Takes back a frame a check has just given up (smp/check.rs, user/rmap_check.rs), to prove it was free; no product caller.",
     "mm::count": "Counts frames per allocation route into ROUTE_COUNTS. Called on the product allocation paths, so it cannot move, but only checks read what it writes (Held::now, and user_tables_given_back for smp/check.rs's table check).",
     "mm::frame_state": "What the frame allocator records for a frame, for mm/check.rs's frame-0 check and user/edge_check.rs; no product caller.",
