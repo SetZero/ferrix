@@ -136,6 +136,19 @@ pub(crate) fn check_iommu() {
             "stage 10 self-check failed: {problem}"
         ),
     }
+    match object::pin::check::check_untranslated(device::devices()) {
+        Ok(Some(done)) => println!(
+            "  iommu    untranslated pins: {} a live driver closed given back at once, past twice \
+             a budget of 2 pages; {} pages a dead driver left quarantined and freed at the next \
+             HELLO",
+            done.given_back, done.released,
+        ),
+        Ok(None) => {}
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    }
 }
 
 /// Every VT-d change on a unit whose walk does not snoop found its table

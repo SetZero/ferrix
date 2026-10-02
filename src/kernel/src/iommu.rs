@@ -830,9 +830,11 @@ impl Domain {
     ///
     /// On a translated domain the device can no longer reach them once this
     /// returns, and their frames may be freed. On an untranslated one it still
-    /// can: nothing stands between the device and physical memory, so the
-    /// frames may be freed only once the device is known to be quiet — reset,
-    /// or never given the addresses — and are otherwise held for good.
+    /// can, as it can every frame: nothing stands between the device and
+    /// physical memory, and its driver is trusted with all of it (degraded
+    /// trusted mode, VULNERABILITY-ANALYSIS V-03), so `object::pin` gives a
+    /// live driver's frames back here too (F-59) and quarantines a dead one's
+    /// until its device is reset.
     ///
     /// # Errors
     ///

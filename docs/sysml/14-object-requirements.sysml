@@ -600,8 +600,8 @@ package FerrixObjectRequirements {
         requirement <'L.object.46'> unpinnedBeforeFreed : ItemLowLevel {
             attribute :>> statement = "Dropping a pin of a live owner shall take its
                 pages out of the domain, the invalidation complete, before the hold
-                on its frames is released; on an untranslated domain, or when the
-                domain refuses, the frames shall be kept.";
+                on its frames is released; when the domain refuses, the frames
+                shall be kept.";
             attribute :>> criterion = "On a translated domain a closed pin's pages
                 are no longer reachable through the domain.";
             attribute :>> parent = "H.DMA.3";
@@ -610,7 +610,8 @@ package FerrixObjectRequirements {
         requirement <'L.object.47'> aDeadDriversPinIsQuarantined : ItemLowLevel {
             attribute :>> statement = "Dropping a pin on a translated domain after
                 its owner terminated shall keep its pages mapped and its frames
-                held, charged to nobody, in the quarantine, moving them from its
+                held, charged to nobody, in the quarantine (on an untranslated
+                domain too, with nothing to unmap: L.object.127), moving them from its
                 device's live count to its quarantined count; a pin closed by a
                 live owner shall not be quarantined, and its pages shall leave the
                 live count.";
@@ -697,6 +698,33 @@ package FerrixObjectRequirements {
             attribute :>> unit = ("object::pin::Pin::with_budget", "object::pin::Pin::map",
                 "object::pin::reserve", "object::pin::unreserve",
                 "object::pin::PinBudget::write");
+        }
+        requirement <'L.object.126'> anUntranslatedLiveCloseGivesBack : ItemLowLevel {
+            attribute :>> statement = "On an untranslated domain, dropping a pin of
+                a live owner shall give its frames back at once and take its pages
+                off the device's live count, keeping nothing: the device of such a
+                domain reaches all of memory anyway (VULNERABILITY-ANALYSIS V-03,
+                finding F-59).";
+            attribute :>> criterion = "On an untranslated domain, six 2-page pins
+                opened and closed in turn by a live process at a budget of 2 pages
+                are each taken, leave the counts at 0 live, 0 quarantined and 0
+                kept, and leave each frame with no reference but the check's.";
+            attribute :>> parent = ("H.DMA.3", "H.DMA.4");
+            attribute :>> unit = ("object::pin::Pin::drop", "object::pin::Pin::map",
+                "object::pin::unreserve");
+        }
+        requirement <'L.object.127'> anUntranslatedDeadPinIsQuarantined : ItemLowLevel {
+            attribute :>> statement = "On an untranslated domain, a pin dropped after
+                its owner terminated shall go to the quarantine with its frames held
+                and its pages counted quarantined, not kept, and the next HELLO its
+                device's core accepts shall give it back.";
+            attribute :>> criterion = "On an untranslated domain a 2-page pin closed
+                by a dead process leaves 0 live, 2 quarantined and 0 kept with its
+                frames still referenced; DeviceNode::hello_accepted then leaves the
+                counts at 0 and each frame with no reference but the check's.";
+            attribute :>> parent = "H.DMA.4";
+            attribute :>> unit = ("object::pin::quarantine", "object::pin::quarantine_release",
+                "object::pin::release", "device::DeviceNode::hello_accepted");
         }
     }
 

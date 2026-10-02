@@ -10,10 +10,15 @@
 //! Out of the domain, and forgotten by the unit, first; only then are the
 //! holds released and the frames free to go. On a translated domain that is
 //! the whole story. On an untranslated one the device can still reach the
-//! frames once they are unpinned, since nothing stands between it and memory,
-//! so the frames stay held until the device is reset. Nothing resets a device
-//! yet, so today they stay held for good, and the console says so the first
-//! time. A pin its domain refuses to give back keeps its frames the same way.
+//! frames once they are unpinned, since nothing stands between it and
+//! memory -- but it can reach every other frame too: such a domain is the
+//! degraded trusted mode of VULNERABILITY-ANALYSIS V-03, where the driver is
+//! trusted with all of memory. Keeping a live driver's closed pin there
+//! protects nothing its device could not reach anyway, so it is given back
+//! at once, as on a translated domain (finding F-59; before it, such pins
+//! were kept for good, a leak, and since the pin budget a device that stopped
+//! after enough attaches). A pin its domain refuses to give back keeps its
+//! frames for good, and the console says so the first time.
 //!
 //! # The quarantine
 //!
@@ -27,19 +32,21 @@
 //! driver's death, and its reset leaves them queued (`docs/AUDIO.md` §3.3).
 //! So the frames of a pin closed because its process died could be written
 //! after they were freed, into whatever took them next: a driver started
-//! again at once is given them.
+//! again at once is given them. On an untranslated domain nothing forgets
+//! anything, and the same late write lands wherever the frame went next.
 //!
-//! So such a pin goes to a quarantine instead of being given back: its pages
+//! So such a pin, on either kind of domain, goes to a quarantine instead of being given back: its pages
 //! stay mapped in the domain and its frames held, charged to nobody, since
 //! the job they were charged to is gone. What the device writes late lands in
 //! the dead driver's own pages, reached as the domain still allows, and
-//! neither faults nor reaches memory anything else holds. The pin is given
+//! neither faults nor reaches memory anything else holds. An untranslated
+//! domain has nothing to unmap: its quarantined pin is only its frames, held
+//! (F-59). The pin is given
 //! back, out of the domain first and then to the allocator, once the device's
 //! core accepts a new driver's HELLO for it ([`quarantine_release`]). A driver resets its device in its bring-up,
 //! before HELLO, and virtio-snd's also releases what the device held. That is
 //! an event the device's own protocol orders, not a time. A device no driver
-//! takes up again keeps its quarantine for good, as an untranslated domain
-//! keeps its pins. That is bounded by what devmgr starts: it starts no
+//! takes up again keeps its quarantine for good. That is bounded by what devmgr starts: it starts no
 //! driver again after one that died before publishing, which is after its
 //! HELLO was accepted, or after its restart budget is spent (`docs/DEVMGR.md`
 //! §4). So a device's quarantine holds at most the pins of the last driver
@@ -58,7 +65,7 @@
 //! still open, reserved before the domain is asked to map them ([`reserve`])
 //! and given back if it refuses; `quarantined`, the pages its quarantine
 //! holds; and `kept`, the pages kept for good because the domain would not
-//! give them back or the device can reach them untranslated. A pin of `n`
+//! give them back, or a dead driver's pin could not be quarantined. A pin of `n`
 //! pages is refused, with nothing mapped, when `live + n > B`
 //! ([`PinError::LimitReached`]), and when `quarantined + kept + live + n >
 //! 2B` ([`PinError::QuarantineFull`]). A death moves pages from `live` to
@@ -175,8 +182,8 @@ pub(crate) struct PinBudget {
     live: AtomicUsize,
     /// Pages in the quarantine.
     quarantined: AtomicUsize,
-    /// Pages kept for good: a pin the domain would not give back, one that
-    /// could not be quarantined, one closed on an untranslated domain.
+    /// Pages kept for good: a pin the domain would not give back, or one that
+    /// could not be quarantined.
     kept: AtomicUsize,
     /// Whether a pin past the budget has been announced for this device.
     said_limit: AtomicBool,
@@ -414,8 +421,9 @@ pub(crate) struct Pin {
     /// the quarantine.
     owner: Arc<Exit>,
     /// The quarantine's record of it, made with the pin, since a drop cannot
-    /// allocate (finding F-23): `None` on an untranslated domain, which keeps
-    /// its frames for good instead. Taken on drop.
+    /// allocate (finding F-23), on every domain: an untranslated domain's
+    /// dead pins are quarantined too, with nothing to unmap (F-59). Taken on
+    /// drop.
     spare: Option<Box<Quarantined>>,
     /// Whether it is a boot check's, which says nothing on the console.
     quiet: bool,
@@ -494,27 +502,23 @@ impl Pin {
         }
     }
 
-    /// The quarantine's record of a pin of `held` -- on a translated domain
-    /// only -- and the domain's mapping of it, for pages already reserved.
+    /// The quarantine's record of a pin of `held`, and the domain's mapping
+    /// of it, for pages already reserved.
     fn map(
         domain: &Arc<Domain>,
         held: &Held,
         flags: MapFlags,
     ) -> Result<(Option<Box<Quarantined>>, Pinned), PinError> {
-        let spare = if domain.translated() {
-            let frames = fallible::try_boxed_slice(held.frames())?;
-            let sums = fallible::try_boxed_filled(0, frames.len())?;
-            Some(fallible::try_box(Quarantined {
-                domain: Arc::clone(domain),
-                pinned: None,
-                frames,
-                sums,
-                next: None,
-            })?)
-        } else {
-            None
-        };
-        Ok((spare, domain.pin(held.frames(), flags)?))
+        let frames = fallible::try_boxed_slice(held.frames())?;
+        let sums = fallible::try_boxed_filled(0, frames.len())?;
+        let spare = fallible::try_box(Quarantined {
+            domain: Arc::clone(domain),
+            pinned: None,
+            frames,
+            sums,
+            next: None,
+        })?;
+        Ok((Some(spare), domain.pin(held.frames(), flags)?))
     }
 
     /// Each page's device address, in page order.
@@ -556,8 +560,10 @@ impl Drop for Pin {
             quarantine(spare, pinned, held, self.quiet, self.pages);
             return;
         }
+        // Given back on every domain the unpin succeeds on: an untranslated
+        // one's device reaches all of memory anyway (F-59, V-03).
         let freeable = match self.domain.unpin(pinned) {
-            Ok(()) => self.domain.translated(),
+            Ok(()) => true,
             Err((_, back)) => {
                 back.leak();
                 false
@@ -572,8 +578,8 @@ impl Drop for Pin {
         keep(&self.domain, self.pages);
         if !KEPT.swap(true, Ordering::Relaxed) {
             println!(
-                "  iommu    a pin was closed while its device may still reach its pages: \
-                 the frames are kept until the device is reset"
+                "  iommu    a pin its domain would not give back was closed: its frames are \
+                 kept for good"
             );
         }
     }
@@ -610,8 +616,7 @@ impl From<AllocError> for PinError {
 /// A reference to each frame is taken first, so the VMO may go with `held`
 /// and the frames stay. If any cannot be taken -- a frame the allocator does
 /// not count, which the VMOs drivers pin never have -- the pin is kept for
-/// good instead, mapped and held, as an untranslated domain keeps its pins:
-/// giving it back would free what the device may still write (finding F-38).
+/// good instead, mapped and held: giving it back would free what the device may still write (finding F-38).
 ///
 /// `pages` move from the device's `live` to its `quarantined`, or to `kept`.
 fn quarantine(mut spare: Box<Quarantined>, pinned: Pinned, held: Held, quiet: bool, pages: usize) {

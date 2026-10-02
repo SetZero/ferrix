@@ -8,6 +8,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec;
+use alloc::vec::Vec;
 
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
@@ -446,4 +447,171 @@ fn check_pin_under(
         budget,
         true,
     )
+}
+
+/// What F-59's checks did, for the boot log.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Untranslated {
+    /// Pins a live driver closed, each given back at once, past twice the
+    /// checks' budget.
+    pub(crate) given_back: usize,
+    /// Pages a dead driver's pins quarantined and released at a HELLO.
+    pub(crate) released: usize,
+}
+
+/// F-59's two checks on the first untranslated domain: a device tree or
+/// virtio-mmio node's, or a PCI node's already made untranslated. `None` on a
+/// machine where every domain made is translated (x86-64 and AArch64 under
+/// QEMU); ARMv7-A has only untranslated ones.
+///
+/// # Errors
+///
+/// The first thing that is not so.
+pub(crate) fn check_untranslated(
+    nodes: &[Arc<DeviceNode>],
+) -> Result<Option<Untranslated>, &'static str> {
+    let Some((node, domain)) = untranslated_domain(nodes)? else {
+        return Ok(None);
+    };
+    let before = counts(&domain);
+    if before != idle(before.budget) {
+        return Err("the checked untranslated device had pins counted before its checks");
+    }
+    let owners = Owners {
+        dead: Exit::for_check(true).map_err(|_| "no memory for a check's end")?,
+        live: Exit::for_check(false).map_err(|_| "no memory for a check's end")?,
+    };
+    let given_back = check_live_close(&domain, &owners)?;
+    let released = check_dead_close(&node, &domain, &owners)?;
+    Ok(Some(Untranslated {
+        given_back,
+        released,
+    }))
+}
+
+/// How many times [`check_live_close`] pins and closes: three times twice
+/// the checks' budget, in pages.
+const CLOSES: usize = 3 * BUDGET;
+
+/// P7: on an untranslated domain, two-page pins a live driver opens and
+/// closes, past twice a budget of two pages, are each taken, given back at
+/// once and their frames freed, and leave nothing counted.
+///
+/// Verifies: L.object.126
+fn check_live_close(domain: &Arc<Domain>, owners: &Owners) -> Result<usize, &'static str> {
+    for _ in 0..CLOSES {
+        let (pin, frames) = watched_pin(domain, &owners.live)?;
+        drop(pin);
+        if counts(domain) != idle(BUDGET_UNCHANGED) {
+            return Err("a pin closed by a live driver on an untranslated domain was kept");
+        }
+        freed(
+            &frames,
+            "a pin closed by a live driver on an untranslated domain kept its frames",
+        )?;
+    }
+    Ok(CLOSES)
+}
+
+/// P8: on an untranslated domain a dead driver's pin is quarantined, its
+/// frames held and nothing kept, and the next accepted HELLO
+/// (`DeviceNode::hello_accepted`, after the configuration's read-back)
+/// gives it back and frees its frames.
+///
+/// Verifies: L.object.127
+fn check_dead_close(
+    node: &Arc<DeviceNode>,
+    domain: &Arc<Domain>,
+    owners: &Owners,
+) -> Result<usize, &'static str> {
+    let (pin, frames) = watched_pin(domain, &owners.dead)?;
+    drop(pin);
+    let now = counts(domain);
+    if (now.live, now.quarantined, now.kept) != (0, 2, 0) {
+        return Err("a dead driver's pin on an untranslated domain was not quarantined");
+    }
+    if frames
+        .iter()
+        .any(|&frame| crate::mm::frame_references(frame) < 2)
+    {
+        // Ours and the quarantine's: put ours back before saying so.
+        for &frame in &frames {
+            let _ = crate::mm::release_frame(frame);
+        }
+        return Err("a dead driver's quarantined pin did not hold its frames");
+    }
+    node.hello_accepted();
+    if counts(domain) != idle(BUDGET_UNCHANGED) {
+        return Err("a HELLO did not release a dead driver's pin on an untranslated domain");
+    }
+    freed(
+        &frames,
+        "a released quarantined pin on an untranslated domain kept its frames",
+    )?;
+    Ok(frames.len())
+}
+
+/// A pin of two fresh pages into `domain` for `owner` under the checks'
+/// budget, with a reference of the check's own on each frame, and its VMO
+/// already gone: so that only the pin, and whatever it leaves, holds them.
+fn watched_pin(domain: &Arc<Domain>, owner: &Arc<Exit>) -> Result<(Pin, Vec<u64>), &'static str> {
+    let vmo = crate::user::vmo::Vmo::new_anonymous(2).map_err(|_| "no memory for a check's VMO")?;
+    let held = vmo
+        .hold(0, 2)
+        .map_err(|_| "a check's pages could not be held")?;
+    let frames = held.frames().to_vec();
+    for &frame in &frames {
+        if crate::mm::share_frame(frame).is_none() {
+            return Err("a check could not take a reference to its own frame");
+        }
+    }
+    let pin = Pin::with_budget(
+        Arc::clone(domain),
+        held,
+        MapFlags::DMA,
+        Arc::clone(owner),
+        Some(BUDGET),
+        true,
+    );
+    drop(vmo);
+    match pin {
+        Ok(pin) => Ok((pin, frames)),
+        Err(_) => {
+            for &frame in &frames {
+                let _ = crate::mm::release_frame(frame);
+            }
+            Err("a pin on an untranslated domain within twice the budget was refused")
+        }
+    }
+}
+
+/// Give back the check's own reference to each of `frames`, and require
+/// that it was the last: nothing else held them.
+fn freed(frames: &[u64], kept: &'static str) -> Result<(), &'static str> {
+    let mut all = true;
+    for &frame in frames {
+        all &= crate::mm::release_frame(frame);
+    }
+    if all { Ok(()) } else { Err(kept) }
+}
+
+/// The first node whose domain is untranslated: a device tree or
+/// virtio-mmio node, whose domain is always untranslated, or a PCI node
+/// whose domain was already made so. No translated domain is made here.
+fn untranslated_domain(nodes: &[Arc<DeviceNode>]) -> Result<Option<Checked>, &'static str> {
+    for node in nodes {
+        let domain = match node.location() {
+            crate::device::Location::Pci(_) => match node.domain_made() {
+                Some(domain) => domain,
+                None => continue,
+            },
+            _ => node
+                .domain()
+                .map_err(|_| "no memory for a device's domain")?,
+        };
+        if !domain.translated() {
+            return Ok(Some((Arc::clone(node), domain)));
+        }
+    }
+    Ok(None)
 }
