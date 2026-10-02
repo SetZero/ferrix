@@ -471,6 +471,17 @@ struct Shared {
     /// for a disk. The kernel lends the wait through the namespace's
     /// [`Parker`]; on the host it spins.
     rename_lock: SleepLock<()>,
+    /// The unused dentries kept, oldest first: never more than
+    /// `cache_limit`, in a buffer of that capacity made with the namespace.
+    ///
+    /// Whole at the start, not grown as the cache fills. A queue grown on
+    /// demand doubled its buffer each time the count crossed a power of two
+    /// -- a heap block of a page and more, taken by whichever lookup happened
+    /// to cross, under this lock, and never given back. That is a cost no
+    /// lookup should pay, and it is what a frame window around a boot check
+    /// read as a leak: the stage 7 handler checks failed whenever their own
+    /// lookups took the cache past 512 entries, which a boot with a larger
+    /// initramfs did inside the measured run.
     cache: SpinLock<VecDeque<Arc<Dentry>>>,
     cache_limit: usize,
     /// The next namespace's number, which `/proc/<pid>/ns/mnt` shows. From
@@ -595,7 +606,7 @@ impl Namespace {
         let shared = Arc::new(Shared {
             next_mount: AtomicU64::new(3),
             rename_lock: SleepLock::new((), parker.as_ref()),
-            cache: SpinLock::new(VecDeque::new()),
+            cache: SpinLock::new(VecDeque::with_capacity(cache_limit)),
             cache_limit,
             next_namespace: AtomicU64::new(FIRST_NAMESPACE + 1),
         });
@@ -685,15 +696,28 @@ impl Namespace {
         self.shared.cache.lock().len()
     }
 
+    /// How many dentries the cache's queue has room for without growing.
+    #[cfg(test)]
+    pub(crate) fn cache_capacity(&self) -> usize {
+        self.shared.cache.lock().capacity()
+    }
+
     pub(crate) fn remember(&self, dentry: &Arc<Dentry>) {
+        if self.shared.cache_limit == 0 {
+            return;
+        }
+        // The oldest out before the newest in, so the queue never holds more
+        // than its limit even for a moment and the buffer made for it is
+        // never grown (`Shared::cache`).
         let evicted = {
             let mut cache = self.shared.cache.lock();
-            cache.push_back(Arc::clone(dentry));
-            if cache.len() > self.shared.cache_limit {
+            let evicted = if cache.len() >= self.shared.cache_limit {
                 cache.pop_front()
             } else {
                 None
-            }
+            };
+            cache.push_back(Arc::clone(dentry));
+            evicted
         };
         // Dropped with the lock released: the last reference to a dentry
         // releases its parent, and that chain is unbounded.

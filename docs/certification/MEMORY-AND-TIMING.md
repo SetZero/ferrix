@@ -277,8 +277,9 @@ even for an instant, and a refused charge takes nothing.
   charged, are in FINDINGS.md F-37: a kernel stack, a futex waiter and a
   process's recorded arguments are one per task, which the task limit
   bounds; 256 pseudoterminals, the neighbour and IP reassembly caches, the
-  routing tables and a btrfs transaction's changed nodes are the machine's,
-  each with a fixed bound; a VMO's page list is a few dozen bytes per
+  routing tables, a btrfs transaction's changed nodes and the dentry cache's
+  queue (made whole at boot and never grown) are the machine's, each with a
+  fixed bound; a VMO's page list is a few dozen bytes per
   charged frame. `memory.stat`'s `kernel` line reads the heap alone.
   System V shared memory's `shmget` scans every slot of its IPC namespace's
   table under the table's spin lock -- for a key, and to count the job's

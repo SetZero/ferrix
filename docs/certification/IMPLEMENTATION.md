@@ -1840,7 +1840,10 @@ the global tables netlink writes, which get the privilege check Linux has.
 * **Pseudoterminals**: 256 pairs on the machine, and a few kilobytes each.
 * **The dentry cache** keeps up to 4,096 dentries nobody holds, charged to
   whoever looked them up. A job whose limit they take meets `ENOMEM` where
-  Linux would reclaim them; reclaim is M1's rest (`docs/CGROUPS.md`).
+  Linux would reclaim them; reclaim is M1's rest (`docs/CGROUPS.md`). Its
+  queue is made whole with the first namespace at boot (4,096 entries: 32 KiB
+  on 64-bit, 16 KiB on armv7a), is shared by every copy, and never grows, so
+  no lookup allocates for it.
 * **The load's own infallible allocations** stay infallible (AoU-5). What
   changes is that a limited job cannot drive the heap to exhaustion through
   them.

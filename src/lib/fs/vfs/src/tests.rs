@@ -716,6 +716,35 @@ fn the_cache_is_bounded() {
     assert!(ns.cached() <= 8);
 }
 
+/// The cache's queue is made whole with the namespace and never grows: a
+/// lookup that fills it allocates nothing for it, so a frame window around
+/// lookups does not see the queue's buffer double (`Shared::cache`). The
+/// default limit as the kernel uses it, filled twice over.
+#[test]
+fn the_cache_never_grows_its_queue() {
+    let ns = Namespace::new(tmpfs(1), Arc::new(SpinParker));
+    let made = ns.cache_capacity();
+    assert!(made >= crate::DEFAULT_CACHE);
+    let ctx = ns.context();
+    for i in 0..2 * crate::DEFAULT_CACHE {
+        let _ = ns.resolve(&ctx, None, alloc::format!("/miss-{i}").as_bytes(), true);
+    }
+    assert_eq!(ns.cached(), crate::DEFAULT_CACHE);
+    assert_eq!(ns.cache_capacity(), made, "the queue's buffer grew");
+}
+
+/// A namespace with no cache keeps nothing and makes no queue.
+#[test]
+fn a_namespace_without_a_cache_keeps_nothing() {
+    let ns = Namespace::with_cache(tmpfs(1), 0, Arc::new(SpinParker));
+    let ctx = ns.context();
+    for i in 0..16 {
+        let _ = ns.resolve(&ctx, None, alloc::format!("/miss-{i}").as_bytes(), true);
+    }
+    assert_eq!(ns.cached(), 0);
+    assert_eq!(ns.cache_capacity(), 0);
+}
+
 // -- Mounts ------------------------------------------------------------------
 
 /// Write access, not creating: what `open(O_WRONLY)` asks.
