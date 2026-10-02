@@ -474,7 +474,10 @@ must fire exactly once; then a periodic timer must deliver its ticks, every
 interrupt must reach a registered handler, and the rate measured against the
 counter must be within 25 percent of the 1000 Hz asked for. A scheduler slice, a
 sleep and every later timeout is this rate multiplied by something, so a timer
-that is silent, repeats, or runs at the wrong rate makes all of them wrong.
+that is silent, repeats, or runs at the wrong rate makes all of them wrong. Once
+the boot processor has its record, `check_a_skipped_arm` holds `timer::after`'s
+skip to its bound: a 2 ms one-shot asked for while a 1 s one is armed, or before
+it, fires within 200 ms of its deadline.
 
 1. The timer's interrupt is not reaching the processor: firmware named the wrong
    interrupt for the virtual timer (the GTDT on AArch64, the device tree on

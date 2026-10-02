@@ -46,6 +46,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 | NVIDIA N0d (64-bit apertures, a driver's configuration window, one lock per node, the breach detector; branch nvidia-n0d) | x86_64, aarch64, armv7a | N0d's carry from c0bbc5751, 3 anchors dropped as unmeasured, one per architecture, all device.rs 584 at the old numbering (MsixTable's Debug field for config_phys, which N0d removed). | Measure and test or argue the new lines in device.rs and syscall/native.rs: DeviceNode::config_read, config_write and its refusal line, verify_config, breach, config_breach's MSI and MSI-X arms and msix_control_breach (reached only by a provoked rewrite of those registers, which W7 does not make: it rewrites COMMAND), MsixTable::rewritten's mismatch arm, MappedConfig::read's out-of-space answer (reached only on a CAM window, crosvm), config_access's refusals, ConfigWrites's outside-the-space refusal, DeviceNode::hello_accepted on each core's HELLO, quiesce_while's refusal arm, device_in's BAD_STATE for a refused node, device_aperture, aperture_bytes and config_status; and the consultant's conditions 1 and 2: DeviceNode::refuse (its unmapped arm reached by no boot), set_bus_master's refusal of a refused node (W7 reaches it), and hello_accepted's new order. The allowlist itself, ferrix_pci::window, its full-array refusals included, is host-tested and outside the kernel's measurement. |
 | NVIDIA N0f (a per-device pin budget in place of the quarantine's cap; branch nvidia-n0f) | x86_64, aarch64, armv7a | carried from 3038b5a9e, 2 anchors dropped as unmeasured: armv7a residual object/pin.rs 183, 189, 229, 284, 312-313, 324, 328-330, 335, 397 and 403 at the old numbering (the cap's test and its line, with_cap's spare and pin, Drop's quarantine call, quarantine's list push, quarantined_pages, release's list and its unpin match), whose other-architecture argument is kept for the lines the change left alone. | Measure and test or argue the new lines in object/pin.rs, object/pin/check.rs, iommu/check.rs and syscall/native.rs: PinBudget and its counts, count_ceiling, ceiling_room, room, raise_of, set_budget, reserve, unreserve, keep, account_release, Pin::new's announce, Pin::with_budget and Pin::map, release's refusing parameter and its kept arm, quarantine_release's longer line, device_set_limit and device_get_limit, and (the fix-forward) set_limit_on, device_and_rights, budget_of and audit::device_limit. The boot checks P1-P5 reach every rule on x86_64 and aarch64; no boot reaches announce (a driver refused at its budget or at twice it), device_set_limit's INVALID_ARGS for another limit and its NO_MEMORY for a budget no usize holds, device_get_limit's INVALID_ARGS and its answers for a node whose domain was never made, or quarantine_release's line for an entry kept by a refused unpin: test or argue them as defensive. On armv7a, where every domain is untranslated and the checks return at their first line, argue the quarantine's and the checks' lines as other-architecture, and measure reserve, unreserve and keep, which every driver's pin reaches there. |
 | F-59 (an untranslated domain's live close given back, its dead pins quarantined; branch f59-untranslated-pins) | x86_64, aarch64, armv7a | carried from 342b8a48e, 2 anchors dropped as unmeasured: armv7a residual object/pin.rs 505-507 at the old numbering (Pin::map's spare, now made on every domain). The armv7a other-architecture argument over the quarantine (Pin::drop's dead arm, quarantine, quarantine_release, release and fold) is withdrawn: those lines are reached on ARMv7-A now, by P8 and by every dead driver's pins. | On armv7a, measure object/pin.rs's quarantine, release, fold and Pin::drop's dead arm, which P8 reaches, and object/pin/check.rs's check_untranslated, check_live_close, check_dead_close, watched_pin, freed and untranslated_domain; argue their refusal arms as defensive (each only a negative control reaches). On x86_64 and aarch64, where every domain made is translated, argue check_untranslated's lines past untranslated_domain as other-architecture. |
+| OPAQUE-KERNEL.md §9.5 step 1, channel_write_read and the round trip (branch ipc-step1, with the consultant's conditions 1-4 of 2026-10-02) | x86_64, aarch64, armv7a | Carried from 5e1341d35: 0 anchors dropped on every architecture. Nothing measured was edited; what is owed is new code no run has measured. | Measure, and test or argue, the new and edited lines on each architecture: object::channel's slot (Small, Inbox::put_small, take_spare, pop_fitting's slot arm, pop_small, unpop's younger-slot arm and its refusal, drain, Endpoint::write_small and its refusals, read_small, readable_or_closed); syscall::native's channel_write_read, send_words, receive_words, read_refusal and dispatch_write_read, and syscall::native_call's 0x1013 arm; the entries' ReturnWords arms (x86-64's ferrix_syscall_entry and int $0x80 system_call, aarch64's system_call, armv7a's store_words); sched's IN_CALL (call_entered, call_left, carry_in_call, resched_here's call arm), the Sync wake (wake_with, may_place, asleep_at_home, wake_onto and its Declined and NotBlocked arms, wake_at_home's deferral, kick_after_wake), Task::holds_slots and swap_in_call; sched::wait's wait_trusting, wait_sliced's no-recheck and unlisted arms and its fence, WaitQueue::wake_all_with's batch and long-list arms; timer's ARMED (after's skip, stop's one-shot arm, on_tick's clear, every), ticks_to_nanos; x86-64's apic LVT_UNMASKED and timer_disarm_fired; and trap::system_call's call_entered and call_left. The new check files are object/write_read_check.rs, the drive_native_words functions in each entry's check file, and stages_check's check_a_skipped_arm. |
 
 ---
 
@@ -64,7 +65,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 |---|---|---:|---:|---:|---:|---|
 | `object/pin.rs` | `core` | 0 | 1 | 23 | 0 | - |
 | `object/oom.rs` | `core` | 0 | 6 | 5 | 0 | - |
-| `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 315-317, 322 |
+| `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 538-540, 545 |
 | `object/process.rs` | `core` | 3 | 3 | 3 | 2 | 133, 172 |
 | `object/mod.rs` | `core` | 2 | 2 | 2 | 0 | - |
 | `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
@@ -77,9 +78,9 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `arch/x86_64/trap.rs` | `core` | 22 | - | - | 22 | 51, 54-67, 70, 72, 77-81 |
-| `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 412, 615, 618-619, 621, 628 |
+| `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 412, 623, 626-627, 629, 636 |
 | `arch/x86_64/switch.rs` | `core` | 3 | - | - | 3 | 202, 482, 491 |
-| `arch/x86_64/mod.rs` | `core` | 2 | - | - | 2 | 1313-1314 |
+| `arch/x86_64/mod.rs` | `core` | 2 | - | - | 2 | 1316-1317 |
 | `arch/x86_64/signal/compat.rs` | `core` | 1 | - | - | 1 | 336 |
 
 ---
@@ -88,7 +89,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `syscall/native.rs` | `item` | 12 | 6 | 8 | 1 | 2048 |
+| `syscall/native.rs` | `item` | 12 | 6 | 8 | 1 | 2165 |
 | `syscall/program.rs` | `item` | 3 | 4 | 2 | 1 | 89 |
 
 ---
@@ -116,7 +117,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 6 | 4 | 3 | 296, 657, 1198 |
+| `main.rs` | `item` | 3 | 6 | 4 | 3 | 296, 657, 1221 |
 
 ---
 
@@ -156,7 +157,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1243, 1933 |
+| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1298, 2169 |
 | `sched/task.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---

@@ -14,17 +14,17 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
-| High (`H.*`) | 122 | 70 | 52 |
-| Low (`L.*`) | 761 | 491 | 270 |
+| High (`H.*`) | 122 | 71 | 51 |
+| Low (`L.*`) | 770 | 499 | 271 |
 
-1480 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1517 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1480 |
-| Accessors, covered by the requirement they serve | 809 |
+| Named by a low-level requirement | 1517 |
+| Accessors, covered by the requirement they serve | 824 |
 | Check code in a product file | 55 |
-| Named by none | 889 |
+| Named by none | 883 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
@@ -194,7 +194,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.SCHED.1` | Every runnable task shall run: no task shall stay runnable without being scheduled while processors are online. | 1000 threads spawned across the online processors all run to completion within the check's deadline (the `tasks` line). | G.1, ASR-8 | *baselined* | — | — | — |
 | `H.SCHED.2` | Among processor-bound tasks of equal weight on one processor, no task's service shall lag its fair share by more than one scheduling slice plus the timer overruns served in the window. | With 12 spinners on every processor, each processor's worst lag is at or below that bound (the `fair` line). | ASR-8, O.QUOTA | *baselined* | — | — | — |
 | `H.SCHED.3` | Under contention a job shall receive processor time in proportion to its weight, whatever the number of tasks in it. | One task alone in a job keeps half of a processor, within the check's stated tolerance, against eight tasks in a sibling job of equal weight (the `quota` line). | O.QUOTA, ASR-8 | *baselined* | — | — | — |
-| `H.SCHED.4` | A task shall run only on the processors its affinity mask allows. | Spinners confined to processors 0 and 1, twice as many as there are online processors, are seen running on no other processor: 0 violations. | G.1 | *baselined* | — | — | — |
+| `H.SCHED.4` | A task shall run only on the processors its affinity mask allows. | Spinners confined to processors 0 and 1, twice as many as there are online processors, are seen running on no other processor: 0 violations. | G.1 | `src/kernel/src/object/write_read_check.rs::check_a_sync_wake_keeps_a_pinned_reader` | not built | not built | not built |
 | `H.SCHED.5` | A task that sleeps for a duration shall not be woken before the duration has passed, and shall be woken within twenty times it. | A 20 ms sleep returns after at least 20 ms and at most 400 ms (the `sleep` line). | G.1, ASR-8 | *baselined* | — | — | — |
 | `H.SCHED.6` | Code running on a processor shall find, through that processor's per-processor register, the record that names that processor and no other. | In 100 rounds of work run on every online processor at once, each processor runs each round once and the record its register gives it names its own hardware identifier every time: 0 misplaced runs (the `smp` line). | O.ISOLATE, ASR-1 | `src/kernel/src/smp/check.rs::everywhere` | reached | reached | reached |
 | `H.SCHED.7` | A thread's thread-local segment descriptors and data selectors shall be its own whenever it runs in ring 3, never another thread's. x86-64 only. | Two i386 programs pinned to one processor, with one descriptor slot and selector but bases 4 bytes apart, each read their own word through %gs 200 times across sched_yield: both exit 42. | O.ISOLATE, G.1 | `src/kernel/src/arch/x86_64/trap/check.rs::check_thread_areas` | reached | not built | not built |
@@ -526,12 +526,31 @@ Each system-level requirement, and the high-level requirements that name it as t
 |---|---|---|---|---|---|---|---|---|
 | `L.object.117` | Every write to a published node's PCI configuration space, by the kernel or by a driver, shall be made holding the node's one configuration lock, through the one type that holds it; enumeration's writers run at stage 10, before any node is published. | A ConfigWrites is made only by taking the lock, MappedConfig has no write, and bus mastering, an MSI mint and mask, MSI-X's enable and a driver's write go through ConfigWrites. Bus mastering switched on and off on one processor while another makes a driver's configuration writes to the same function, 1,000 rounds, reads back as dma_on says every time (the second config line). | H.DMA.5, H.IRQ.2 | `device::DeviceNode::config_writes`, `device::DeviceNode::config_writes_mapped`, `device::DeviceNode::set_bus_master`, `device::DeviceNode::config_mapping`, `device::ConfigWrites::write`, `device::ConfigWrites::inside`, `device::MsiFunction::mint`, `device::MsiFunction::set_masked`, `device::MsixTable::open` | `src/kernel/src/device/config_check.rs::race` | not built | not built | not built |
 
+### ChannelWriteRead
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.object.128` | Endpoint::write_small shall refuse a message as Endpoint::write does -- the peer closed, more bytes than three words, the queue full -- and shall otherwise hold a message of at most three words without handles in the peer's slot only while nothing waits there and the inbox's spare has room for it or can be given it, queueing it behind what does, so that the slot always holds the oldest message and a buffer for it. | A small message written behind a queued one is read after it, and a send to a closed peer, one past three words and one on a handle without WRITE send nothing (the `wrread` line). | H.OBJ.10 | `object::channel::Endpoint::write_small`, `object::channel::Inbox::put_small`, `object::channel::Inbox::is_empty`, `object::channel::Small::of`, `object::channel::Inbox::drain` | `src/kernel/src/object/write_read_check.rs::run` | not built | not built | not built |
+| `L.object.129` | Endpoint::read shall take the message held in the slot before any queued, as a message without handles in the inbox's spare, never failing for memory, leave it with its size reported when the caller has too little room, and Endpoint::unread shall put a message back ahead of one the slot has taken since, so that every reader sees the messages in the order written. | A message held in the slot is read before one queued after it; a read with room for 2 bytes of a 5-byte slot message is refused with its size and the next read returns it whole; a message taken from the slot and put back after the slot took another is read first, then the other (the `wrread` line). | H.OBJ.7 | `object::channel::Inbox::pop_fitting`, `object::channel::Inbox::unpop`, `object::channel::Inbox::head_needs_topology`, `object::channel::Inbox::take_spare` | `src/kernel/src/object/write_read_check.rs::run` | not built | not built | not built |
+| `L.object.130` | Endpoint::read_small shall take the oldest message only if it carries no handles and at most three words, and give its bytes followed by zeros to the width of three words; it shall leave any other message queued and report its size. | A 5-byte message held in the slot and a 7-byte message queued each come back from channel_write_read as their bytes then zeros, and a 40-byte message is refused by a small read and then read whole (the `wrread` line). | H.OBJ.7 | `object::channel::Endpoint::read_small`, `object::channel::Inbox::pop_small`, `object::channel::Small::of` | `src/kernel/src/object/write_read_check.rs::run` | not built | not built | not built |
+| `L.object.131` | channel_write_read shall send its count bytes from its third to fifth argument registers, then answer the next message on the same end with its size in the return register and its words in the second to fourth argument registers, zero past its bytes; a call that fails shall answer its status in the return register alone and leave the second to fourth argument registers as the program set them, on each architecture's entry. | Through the entry, a call that sends 3 bytes and finds a 4-byte answer waiting answers 4 and its words, and the peer reads the 3 bytes then zeros; a closed handle, a count past three words, a send without WRITE, a message too big for registers, and a send and a receive on a closed peer each answer their status with registers 2 to 4 as sent, 6 of 6 (the `wrread` line). | H.TRAP.10, H.OBJ.2 | `syscall::native::channel_write_read`, `syscall::native::dispatch_write_read`, `syscall::native::send_words`, `syscall::native::receive_words`, `syscall::native::read_refusal`, `syscall::native_call`, `arch::x86_64::syscall::ferrix_syscall_entry`, `arch::aarch64::trap::system_call`, `arch::armv7a::trap::system_call`, `arch::armv7a::trap::store_words` | `src/kernel/src/object/write_read_check.rs::run` | not built | not built | not built |
+| `L.object.132` | channel_write_read's wait shall file no recheck while it is listed on its end's queue, and shall end on each of what it waits for: a message arriving on the end, the peer's close, and its process's end or another thread's execve, each of which wakes it; it shall then answer the message, PEER_CLOSED, or EINTR. The message and the close shall be looked at under the end's inbox lock, which their wakers take, and the task's blocked state and its process's end shall be ordered by a SeqCst fence on each side (WaitQueue::wait_trusting, Process::wake_other_tasks). | A thread blocked in channel_write_read and listed on its end's queue is woken within 10 s by a message, which it answers, by its peer's close, which it answers PEER_CLOSED, and by its process's kill, after which its thread ends (the `wrread` line). | H.OBJ.11 | `object::channel::Endpoint::readable_or_closed`, `sched::wait::WaitQueue::wait_trusting`, `sched::wait::WaitQueue::wait_sliced`, `object::channel::Endpoint::drop` | `src/kernel/src/object/write_read_check.rs::run` | not built | not built | not built |
+
 ### Decisions
 
 | Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
 |---|---|---|---|---|---|---|---|---|
 | `L.sched.1` | While any task waits on a processor's queue, CpuQueue::arm_timer shall arm the next decision no more than one configured slice away, however long a request the running task holds. | With an entity queued that is not eligible and the running one having yielded 600 times, so that its remaining request exceeds 100 slices, the queue's next decision is at most one slice away; with nothing queued there is none. | H.SCHED.2 | `sched::queue::CpuQueue::arm_timer` | `src/lib/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host test | host test | host test |
 | `L.sched.2` | A yield by the only task on a processor's queue shall leave its request unchanged. | After 600 yields with nothing else queued, the running entity's remaining slice is what it was before the first. | H.SCHED.2 | `sched::yield_now` | `src/lib/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host test | host test | host test |
+
+### Wakes
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.sched.5` | timer::after shall keep, for each processor, the clock read after the hardware was armed plus the delay asked for, and shall leave a one-shot armed only when that is no later than the new deadline; otherwise it shall arm for the new one, so that no interrupt asked for is served later than the hardware's own one-tick rounding of a delay shorter than a tick. | On the boot processor, a 2 ms one-shot asked for while a 1 s one is armed, and one asked for before a 1 s one, each fire within 200 ms of the 2 ms deadline (the `arm` line). | H.SCHED.5 | `timer::after`, `timer::stop`, `timer::on_tick`, `timer::armed_slot` | `src/kernel/src/stages_check.rs::check_a_skipped_arm` | not built | not built | not built |
+| `L.sched.6` | now_nanos shall convert the counter to nanoseconds as ticks times 10^9 over the counter's rate, rounded down, exactly, and u64::MAX past what 64 bits hold. | At 12 counter rates from 1 Hz to u64::MAX and 10 tick values at each, from 0 to u64::MAX across a second's boundaries and the saturation point, the two-division conversion equals the 128-bit formula (ferrix-vdso's host test). | H.SCHED.9 | `timer::now_nanos`, `timer::ticks_to_nanos` | `src/lib/kernel/vdso/src/tests.rs::counter_nanos_is_the_wide_formula_exactly` | host test | host test | host test |
+| `L.sched.7` | A wake made inside a system call shall leave its decision to the call's end (sched::call_left), the next preempt_enable that brings the count to zero, or the next interrupt exit, whichever comes first; and a Sync wake shall arm the waker's processor's timer for its next decision, so that a waker that does not block leaves the woken task waiting at most one slice. | Argued in MEMORY-AND-TIMING §2.2c: no check times the deferral, which sits inside H.SCHED.2's bound of one slice plus the timer overruns served. | H.SCHED.2 | `sched::resched_here`, `sched::call_entered`, `sched::call_left`, `sched::carry_in_call`, `sched::kick_after_wake`, `sched::wake_at_home` | *baselined* | — | — | — |
+| `L.sched.8` | A Sync wake shall move the task it wakes onto the waker's processor only when the task is asleep at its home and in nothing else, its affinity allows the waker's processor, and nothing else is queued there, deciding under both processors' queue locks, and shall otherwise wake it where it is. | At two processors or more, a reader blocked in channel_write_read and free to move, woken by a Sync write from another processor, answers every time and is moved in at least one of 8 rounds; a reader pinned to processor 1 woken from processor 0 answers on processor 1 in each of 8 rounds (the `sync` line). | H.SCHED.4, H.SCHED.1 | `sched::wake_with`, `sched::wake_onto`, `sched::may_place`, `sched::asleep_at_home`, `sched::task::Task::holds_slots` | `src/kernel/src/object/write_read_check.rs::check_a_sync_wake_moves_the_reader`, `src/kernel/src/object/write_read_check.rs::check_a_sync_wake_keeps_a_pinned_reader` | not built | not built | not built |
 
 ### Discovery
 
@@ -1601,6 +1620,10 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/object/quota_check.rs::check_the_processor` | kernel | L.object.60 |
 | `src/kernel/src/object/quota_check.rs::check_the_weight` | kernel | L.object.62 |
 | `src/kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
+| `src/kernel/src/object/write_read_check.rs::check_a_sync_wake_keeps_a_pinned_reader` | kernel | L.sched.8, H.SCHED.4 |
+| `src/kernel/src/object/write_read_check.rs::check_a_sync_wake_moves_the_reader` | kernel | L.sched.8 |
+| `src/kernel/src/object/write_read_check.rs::run` | kernel | L.object.128, L.object.129, L.object.130, L.object.131 |
+| `src/kernel/src/object/write_read_check.rs::run` | kernel | L.object.132 |
 | `src/kernel/src/sched/check.rs::many_tasks` | kernel | L.x86_64.17 |
 | `src/kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
 | `src/kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | kernel | L.claim.1, L.claim.5 |
@@ -1621,6 +1644,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/smp/check.rs::shootdown` | kernel | H.MEM.12, L.mm.28, L.smp.14, L.x86_64.108 |
 | `src/kernel/src/smp/check.rs::tables_wait_for_their_shootdown` | kernel | H.MEM.7 |
 | `src/kernel/src/smp/check.rs::unlink_and_shoot` | kernel | L.mm.23, L.mm.39, L.smp.24 |
+| `src/kernel/src/stages_check.rs::check_a_skipped_arm` | kernel | L.sched.5 |
 | `src/kernel/src/stages_check.rs::check_breakpoint` | kernel | L.aarch64.6 |
 | `src/kernel/src/stages_check.rs::timer_check` | kernel | L.aarch64.24 |
 | `src/kernel/src/syscall/check.rs::a_shared_futex_crosses_a_fork` | kernel | L.user.78 |
@@ -1833,6 +1857,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/lib/kernel/paging/src/tests.rs::write_combining_selects_pat_entry_one_and_reads_back` | host | L.x86_64.127 |
 | `src/lib/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host | L.sched.1 |
 | `src/lib/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host | L.sched.2 |
+| `src/lib/kernel/vdso/src/tests.rs::counter_nanos_is_the_wide_formula_exactly` | host | L.sched.6 |
 | `src/lib/platform/description/src/tests.rs::a_tree_only_is_read_by_the_tree` | host | L.discovery.1 |
 | `src/lib/platform/description/src/tests.rs::acpi_beside_a_tree_is_read_by_its_tables` | host | L.discovery.1 |
 | `src/lib/platform/description/src/tests.rs::acpi_only_is_read_by_its_tables` | host | L.discovery.1 |
