@@ -1799,6 +1799,46 @@ fn qemu_version(binary: &Path) -> Option<(u32, u32)> {
     parse_qemu_version(&text)
 }
 
+/// What `tools/common/fetch/fetch-qemu-linux.sh` builds QEMU with
+/// (`--with-pkgversion`), and so what its `--version` says in brackets.
+const PATCHED_QEMU: &str = "(ferrix-cfi";
+
+/// Refuse an x86-64 boot on a QEMU that does not block compatibility-format
+/// interrupts (F-57, `docs/NVIDIA.md` §12.3).
+///
+/// Released QEMU ignores the VT-d `GCMD.CFI` bit and passes every
+/// compatibility-format message through even with interrupt remapping on,
+/// so on it the kernel's own check of that block cannot pass, and a
+/// `CFIS`=0 read back proves nothing. The patched build says so in its
+/// `--version`; anything else is refused before the boot, by name.
+///
+/// # Errors
+///
+/// `binary` does not run, or is not the patched build.
+fn require_compatibility_block(binary: &Path) -> Result<()> {
+    let output = Command::new(binary).arg("--version").output();
+    let text = output
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+    if blocks_compatibility_format(&text) {
+        return Ok(());
+    }
+    let banner = text.lines().next().unwrap_or("no --version");
+    Err(Error::new(format!(
+        "x86-64 boots need a QEMU that blocks compatibility-format interrupts (F-57); \
+         run tools/common/fetch/fetch-qemu-linux.sh\n  {} says: {banner}",
+        binary.display()
+    )))
+}
+
+/// Whether a QEMU `--version` banner is the patched build's.
+fn blocks_compatibility_format(version: &str) -> bool {
+    version
+        .lines()
+        .next()
+        .is_some_and(|banner| banner.contains(PATCHED_QEMU))
+}
+
 /// [`qemu_version`]'s parse, apart for its tests.
 fn parse_qemu_version(text: &str) -> Option<(u32, u32)> {
     let rest = text.split("version ").nth(1)?;
@@ -1856,6 +1896,12 @@ fn qemu_command(
             arch.qemu_binary()
         ))
     })?;
+
+    // Linux hosts only for now: the Windows build (fetch-qemu-windows.sh)
+    // does not carry the patch yet (docs/BACKLOG.md).
+    if arch == Arch::X86_64 && cfg!(target_os = "linux") {
+        require_compatibility_block(&binary)?;
+    }
 
     let firmware = paths::find_firmware(arch)?;
     let accelerator = accelerator(arch, &binary, args.accel.as_deref())?;
@@ -2933,10 +2979,25 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::{
-        Arch, SUCCESS_MARKER, UNCHECKED_MARKER, cleaning_problem, config_problem, devmgr_problem,
-        entropy_problem, fault_problem, iommu_problem, msi_problem, namespace_problem,
-        parse_qemu_version, xstate_problem,
+        Arch, SUCCESS_MARKER, UNCHECKED_MARKER, blocks_compatibility_format, cleaning_problem,
+        config_problem, devmgr_problem, entropy_problem, fault_problem, iommu_problem, msi_problem,
+        namespace_problem, parse_qemu_version, xstate_problem,
     };
+
+    /// Only the build `fetch-qemu-linux.sh` makes is taken for x86-64.
+    #[test]
+    fn only_the_patched_qemu_blocks_compatibility_format() {
+        assert!(blocks_compatibility_format(
+            "QEMU emulator version 10.2.1 (ferrix-cfi)\nCopyright (c) 2003-2025\n"
+        ));
+        assert!(!blocks_compatibility_format(
+            "QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)\n"
+        ));
+        assert!(!blocks_compatibility_format(
+            "QEMU emulator version 9.2.4 (v9.2.4-dirty)\n"
+        ));
+        assert!(!blocks_compatibility_format(""));
+    }
 
     /// A secret goes in any case and every time, and nothing else does.
     #[test]

@@ -410,22 +410,32 @@ pub(crate) fn which_all(program: &str) -> Vec<PathBuf> {
     found
 }
 
-/// `~/.local/share/ferrix/qemu`, where `tools/common/fetch/fetch-qemu-windows.sh`
-/// installs a QEMU with the fixes in `tools/common/data/qemu/`, looked in before
-/// `PATH`: the released Windows build jumps to NULL the first time a guest
-/// resets `virtio-gpu-gl-pci`, so every `--gl` boot there needs this one
-/// (`docs/GPU.md` §3.12). Taken whenever it is there, on any host, rather
-/// than on Windows alone: a machine that has it asked for it.
+/// `~/.local/share/ferrix/qemu`, where the fetch scripts install a QEMU with
+/// the fixes in `tools/common/data/qemu/`, looked in before `PATH`. Taken
+/// whenever it is there, on any host: a machine that has it asked for it.
+///
+/// * `tools/common/fetch/fetch-qemu-linux.sh` installs an x86-64-only build
+///   under `bin/`, whose intel-iommu blocks compatibility-format interrupts
+///   (`docs/NVIDIA.md` §12.3); x86-64 boots refuse any other
+///   (`qemu::require_compatibility_block`). AArch64 and ARMv7-A find no
+///   binary of theirs there and keep the one on `PATH`.
+/// * `tools/common/fetch/fetch-qemu-windows.sh` installs one at the top: the
+///   released Windows build jumps to NULL the first time a guest resets
+///   `virtio-gpu-gl-pci`, so every `--gl` boot there needs this one
+///   (`docs/GPU.md` §3.12).
 fn own_qemu() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(
-        PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("ferrix")
-            .join("qemu"),
-    )
-    .filter(|dir| dir.is_dir())
+    let dir = PathBuf::from(home)
+        .join(".local")
+        .join("share")
+        .join("ferrix")
+        .join("qemu");
+    let bin = dir.join("bin");
+    if bin.is_dir() {
+        Some(bin)
+    } else {
+        Some(dir).filter(|dir| dir.is_dir())
+    }
 }
 
 /// Whether two paths are one file: `PATH` often names a directory twice,
