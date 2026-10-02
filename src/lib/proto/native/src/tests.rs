@@ -1012,6 +1012,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = interrupt.ack();
     let _ = device.io_mapping(IoMappingSpec::default());
     let _ = mapping.map(None);
+    let _ = mapping.map_combining(None);
     let _ = device.pin(&vmo, 0, 1, PinAccess::ReadOnly);
     let _ = Pin::from_owned(handle()).addresses(&mut []);
 
