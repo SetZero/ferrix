@@ -1011,6 +1011,22 @@ and took the recommended answer for D2, D3 and D5.
       budget's line.
     * `device_set_limit` writes no audit record. job_set_limit does, and the
       design did not ask for one.
+  * **The consultant's code review: OK IF**, on 253bff4b5 (its ledger,
+    2026-10-02), which landed as is. Its three conditions are fixed forward
+    on `nvidia-n0f-fix`:
+    * `device_set_limit` is audited: `DEVICE_LIMIT_SET` for a set and
+      `DEVICE_LIMIT` (refusal ring) for a refusal, `ACCESS_DENIED` included,
+      each with the device, the limit and the old and new values. P5 reads
+      the four records back; its control drops the record.
+    * AoU-12 and T.EXHAUST path 7 state the untranslated-domain bound.
+      Every closed pin there is kept for good and counts against `2B`. The
+      review's premise that drivers pin only at start does not hold:
+      `virtio-gpu` and `ltdc` pin each attached buffer and `virtio-snd` each
+      stream buffer, so the budget is spent per attach as well as per
+      restart. The documents say so.
+    * N0d's duplicate MEMORY-AND-TIMING §2.2f is §2.2h, after N0f's §2.2g.
+    * The stage-10 line now says "4 pins refused, and device_set_limit
+      refused 3 times".
 
 ## 11. CUDA (N5)
 

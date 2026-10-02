@@ -305,7 +305,22 @@ worst case) unless devmgr sets another, and a new pin is refused with
 `LIMIT_REACHED` when the device's live pins would pass `B`, and with
 `QUARANTINE_FULL` when its quarantined, kept and live pages would pass `2B`.
 The device then stops working until a driver of it is accepted or the element
-restarts. Only devmgr holds `SET_LIMIT` on a device, and a budget raised above
+restarts. Where a device's DMA is untranslated -- every device on ARMv7-A, and
+any device behind a unit the element refused -- a closed pin is never given
+back, since the device may still reach its frames: it moves to the device's
+`kept` count for good and counts against `2B`. So each driver death or
+restart there uses up budget for the life of the element, and the device
+stops pinning once its kept and live pages pass `2B`. That is the bound on
+what was, before the budget, an unbounded leak, and it is an availability
+bound. What it counts is not only restarts: a driver's rings and areas are
+pinned once, at start, but the display drivers pin each buffer attached to a
+scanout (`virtio-gpu`'s attach, `ltdc`'s), and `virtio-snd` each stream
+buffer the sound core publishes. On an untranslated domain each of those,
+once closed, is kept for good too. So a display or sound device there stops
+pinning after about `2B` pages of attached buffers and restarts over the
+element's life -- at the default, some 170 attaches of a 1024x768
+framebuffer -- and then fails as `QUARANTINE_FULL` says. The integrator of
+an untranslated machine shall budget for that, or restart the element. Only devmgr holds `SET_LIMIT` on a device, and a budget raised above
 the default counts against the element's ceiling of a quarter of RAM. The
 integrator shall not rebind such a device in a loop, and shall treat
 `QUARANTINE_FULL` as a device that has failed. (Finding F-38; NVIDIA N0f.)
