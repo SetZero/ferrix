@@ -134,6 +134,8 @@ pub const DEVICE_CONFIG_WRITE: usize = 0x1056;
 pub const DEVICE_SET_LIMIT: usize = 0x1057;
 /// [`NativeCall::DeviceGetLimit`].
 pub const DEVICE_GET_LIMIT: usize = 0x1058;
+/// [`NativeCall::DeviceIsolation`].
+pub const DEVICE_ISOLATION: usize = 0x1059;
 /// The most records one [`NativeCall::AuditRead`] copies.
 pub const AUDIT_READ_MAX: u64 = 64;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
@@ -442,8 +444,13 @@ pub enum NativeCall {
     /// vendor-specific capabilities, virtio's `pci_cfg_data` excepted -- is
     /// made; any other is `ACCESS_DENIED` and writes nothing. Needs `MANAGE`.
     DeviceConfigWrite,
-    /// `(device, which, value)` → 0. Set one of the device's limits; today
-    /// only [`crate::types::DEVICE_LIMIT_PIN_PAGES`], its pin budget in
+    /// `(device, which, value)` → 0. Set one of the device's limits:
+    /// [`crate::types::DEVICE_LIMIT_ISOLATED_INTERRUPTS`], set-once -- with a
+    /// value other than 0 it marks the device so that `interrupt_create`
+    /// and `vmo_pin` are `ACCESS_DENIED` for it while the machine's
+    /// interrupts are not isolated, and a value of 0 on a marked device is
+    /// `ACCESS_DENIED` (`docs/NVIDIA.md` §12.3); or
+    /// [`crate::types::DEVICE_LIMIT_PIN_PAGES`], its pin budget in
     /// pages (`docs/NVIDIA.md` §12.2): a pin that would take the pages its
     /// device's live pins hold past it is refused `LIMIT_REACHED`, and one
     /// that would take what its quarantine, its kept pins and its live pins
@@ -458,13 +465,23 @@ pub enum NativeCall {
     /// [`crate::types::DEVICE_LIMIT_PIN_PAGES`], its pin budget;
     /// [`crate::types::DEVICE_LIMIT_PIN_CEILING`], the machine's ceiling on
     /// raised budgets; [`crate::types::DEVICE_LIMIT_PIN_ROOM`], what of the
-    /// ceiling other devices' raised budgets leave. Any device handle will
-    /// do; `INVALID_ARGS` for another `which`.
+    /// ceiling other devices' raised budgets leave;
+    /// [`crate::types::DEVICE_LIMIT_ISOLATED_INTERRUPTS`], 1 when the device
+    /// is marked. Any device handle will do; `INVALID_ARGS` for another
+    /// `which`.
     DeviceGetLimit,
+    /// `(device)` → bits. How the device is isolated:
+    /// [`crate::types::DEVICE_ISOLATION_DMA_TRANSLATED`] when an IOMMU
+    /// translates its DMA, and
+    /// [`crate::types::DEVICE_ISOLATION_INTERRUPTS`] when the machine's
+    /// interrupts are isolated and its own messages remapped, so it raises
+    /// only the vectors minted for it (`H.DMA.9`). Any device handle will
+    /// do.
+    DeviceIsolation,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 53] = [
+pub const ALL: [NativeCall; 54] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -518,6 +535,7 @@ pub const ALL: [NativeCall; 53] = [
     NativeCall::DeviceConfigWrite,
     NativeCall::DeviceSetLimit,
     NativeCall::DeviceGetLimit,
+    NativeCall::DeviceIsolation,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -586,6 +604,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         DEVICE_CONFIG_WRITE => NativeCall::DeviceConfigWrite,
         DEVICE_SET_LIMIT => NativeCall::DeviceSetLimit,
         DEVICE_GET_LIMIT => NativeCall::DeviceGetLimit,
+        DEVICE_ISOLATION => NativeCall::DeviceIsolation,
         _ => return None,
     };
     Some(call)
@@ -648,5 +667,6 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::DeviceConfigWrite => DEVICE_CONFIG_WRITE,
         NativeCall::DeviceSetLimit => DEVICE_SET_LIMIT,
         NativeCall::DeviceGetLimit => DEVICE_GET_LIMIT,
+        NativeCall::DeviceIsolation => DEVICE_ISOLATION,
     }
 }

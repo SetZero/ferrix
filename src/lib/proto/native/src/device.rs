@@ -2,8 +2,9 @@
 
 use ferrix_native_abi::nr;
 use ferrix_native_abi::types::{
-    APERTURE_INFO_BYTES, ApertureInfo, DEVICE_INFO_BYTES, DEVICE_LIMIT_PIN_CEILING,
-    DEVICE_LIMIT_PIN_PAGES, DEVICE_LIMIT_PIN_ROOM, DeviceBlock, DeviceInfo, IoMappingSpec,
+    APERTURE_INFO_BYTES, ApertureInfo, DEVICE_INFO_BYTES, DEVICE_LIMIT_ISOLATED_INTERRUPTS,
+    DEVICE_LIMIT_PIN_CEILING, DEVICE_LIMIT_PIN_PAGES, DEVICE_LIMIT_PIN_ROOM, DeviceBlock,
+    DeviceInfo, IoMappingSpec,
 };
 
 use crate::call::{Call, Syscall};
@@ -18,7 +19,7 @@ object_handle!(
 );
 
 /// A limit of a device's: `device_set_limit` and `device_get_limit`'s
-/// (`docs/NVIDIA.md` §12.2). Each is in pages.
+/// (`docs/NVIDIA.md` §12.2 and §12.3). The pin limits are in pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Limit {
     /// The device's pin budget, which only `devmgr` sets.
@@ -29,6 +30,9 @@ pub enum Limit {
     /// What of the ceiling other devices' raised budgets leave: the most
     /// twice this device's budget may be raised to. Read only.
     PinRoom,
+    /// The isolated-interrupts mark, set-once by `devmgr` on a device that
+    /// runs firmware of its own: 1 marked, 0 not.
+    IsolatedInterrupts,
 }
 
 impl Limit {
@@ -38,6 +42,7 @@ impl Limit {
             Limit::PinPages => DEVICE_LIMIT_PIN_PAGES,
             Limit::PinCeiling => DEVICE_LIMIT_PIN_CEILING,
             Limit::PinRoom => DEVICE_LIMIT_PIN_ROOM,
+            Limit::IsolatedInterrupts => DEVICE_LIMIT_ISOLATED_INTERRUPTS,
         }
     }
 }
@@ -256,6 +261,21 @@ impl<S: Syscall> Device<S> {
                 .value(which.number() as usize)
                 .make(self.syscall()),
         )
+    }
+
+    /// `device_isolation`: how the device is isolated, as
+    /// `DEVICE_ISOLATION_*` bits. Any device handle will do.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongType`] for a handle that is not a device.
+    pub fn isolation(&self) -> Result<u64, Error> {
+        decode(
+            Call::new(nr::DEVICE_ISOLATION)
+                .value(register(self.handle()))
+                .make(self.syscall()),
+        )
+        .map(|bits: usize| bits as u64)
     }
 
     /// Ask the kernel for a block ring on this device: the driver's end of

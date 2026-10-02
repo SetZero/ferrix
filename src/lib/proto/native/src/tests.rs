@@ -861,6 +861,27 @@ fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
     );
 }
 
+/// The isolated-interrupts mark and `device_isolation` travel by their
+/// numbers.
+#[test]
+fn the_isolated_interrupts_mark_travels_by_its_number() {
+    let sys = Recorder::default();
+    let device = Device::from_owned(owned(&sys, 0xA7));
+    sys.returns(0);
+    assert_eq!(device.set_limit(Limit::IsolatedInterrupts, 1), Ok(()));
+    sys.returns(3);
+    assert_eq!(device.isolation(), Ok(3));
+    let calls = sys.take();
+    assert_eq!(
+        calls[0],
+        made(
+            nr::DEVICE_SET_LIMIT,
+            &[0xA7, types::DEVICE_LIMIT_ISOLATED_INTERRUPTS as usize, 1]
+        )
+    );
+    assert_eq!(calls[1], made(nr::DEVICE_ISOLATION, &[0xA7]));
+}
+
 /// The pin budget: set, refused, and read back, each limit by its number.
 #[test]
 fn device_limits_travel_by_their_numbers() {
@@ -1111,6 +1132,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.config_write(0x48, 4, 0);
     let _ = device.set_limit(Limit::PinPages, 1);
     let _ = device.limit(Limit::PinRoom);
+    let _ = device.isolation();
     let _ = pending::create_process(&job, &vmo, "x");
     let _ = Process::from_owned(handle()).start(handle());
     let _ = Process::from_owned(handle()).status();

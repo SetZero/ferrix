@@ -89,6 +89,20 @@ pub const DEVICE_LIMIT_PIN_CEILING: u64 = 1;
 /// budget may be raised to.
 pub const DEVICE_LIMIT_PIN_ROOM: u64 = 2;
 
+/// `device_set_limit` and `device_get_limit`'s limit: the isolated-interrupts
+/// mark, set-once (`docs/NVIDIA.md` §12.3). Set, the kernel refuses the
+/// device's vectors and pins while the machine's interrupts are not
+/// isolated; `devmgr` sets it for every device that runs firmware of its
+/// own, and starts no driver for one it could not mark.
+pub const DEVICE_LIMIT_ISOLATED_INTERRUPTS: u64 = 3;
+
+/// `device_isolation`'s bit: an IOMMU translates the device's DMA.
+pub const DEVICE_ISOLATION_DMA_TRANSLATED: u64 = 1 << 0;
+/// `device_isolation`'s bit: the machine's interrupts are isolated -- every
+/// interrupt remapping unit remaps with compatibility format blocked, and
+/// no function bypasses them -- and the device's messages are remapped.
+pub const DEVICE_ISOLATION_INTERRUPTS: u64 = 1 << 1;
+
 /// `job_set_limit` and `job_get_quota`'s resource: physical memory, in bytes.
 pub const JOB_MEMORY: u64 = 0;
 /// `job_set_limit` and `job_get_quota`'s resource: kernel objects a program

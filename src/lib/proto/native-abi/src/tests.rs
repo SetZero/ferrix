@@ -70,6 +70,7 @@ fn pinning_sits_in_the_vmo_block() {
     assert_eq!(nr::decode(0x104F), Some(NativeCall::DeviceClock));
     assert_eq!(nr::decode(0x1057), Some(NativeCall::DeviceSetLimit));
     assert_eq!(nr::decode(0x1058), Some(NativeCall::DeviceGetLimit));
+    assert_eq!(nr::decode(0x1059), Some(NativeCall::DeviceIsolation));
     assert_eq!(nr::decode(0x1027), None, "0x1027 stays free");
     assert!(
         !Rights::PIN.contains(Rights::TRANSFER),
