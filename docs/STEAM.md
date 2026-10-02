@@ -128,6 +128,14 @@ are the host spike's: Chromium's sandbox needs user namespaces, and its GPU
 process would look for DRI3, which yserver on a guest without a render node
 does not offer; it renders in software instead.
 
+It presents those software frames to yserver with MIT-SHM: Chromium's
+`XShmImagePool` makes a System V segment (`shmget(IPC_PRIVATE, size,
+IPC_CREAT | 0600)`), attaches it, hands yserver its id, and removes it
+while both still have it attached. The kernel answers those calls since
+2026-10-02 (the customer's decision; `src/kernel/src/syscall/shm.rs`,
+`cargo xtask test-shm`, branch `steam-sysv-shm`); before, they were
+`ENOSYS`, and every frame went through the socket as a core `PutImage`.
+
 ## 3. The workarounds
 
 | Workaround | Why | Real fix | Owner |
