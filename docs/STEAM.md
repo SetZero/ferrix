@@ -356,3 +356,68 @@ wrongly (`btrfs check`: "link count wrong", "unresolved ref dir"), and C:
 was full besides. a1b522ec checks every `--everything` volume with
 `btrfs check` and makes it again from copies when the links come out
 broken.
+
+## 8. Smooth: the store at 60 frames a second (2026-10-02)
+
+The customer found Steam on the `--everything` desktop all but unusable on
+2026-10-01: clicks that took up to a minute, scrolling that crawled, on
+Windows and on nazuna alike. Measured on nazuna under KVM with the store
+maximized (1896x1016), a scroll drew 11 to 16 frames a second and a click on
+a tab showed in 300 to 350 ms. On 2026-10-02 the same scroll draws 60: the
+page's own `requestAnimationFrame` loop gets 59.8 frames a second over 22 s
+(p99 16.8 ms), CEF's compositor draws as many, yserver hands hyprix 60 to 62
+new images a second, and a click shows in 60 to 70 ms, with the guest less
+than half busy. What was in the way, in the order it was found:
+
+1. **yserver rendered on Venus.** Once the `--everything` desktop had Venus,
+   Mesa's virtio ICD came before lavapipe. The Wayland backend reads every
+   changed window back to the CPU, and Venus's host-visible memory is
+   write-combining, which Ferrix maps uncached; on an AMD host that is
+   uncached indeed. A maximized frame took 22 ms to read back, and copying
+   clients' images in was half the server's time. yserver is pinned to
+   lavapipe (`VK_ICD_FILENAMES`, 9363fa75d).
+2. **yserver's loop woke 9,000 times a second.** It kept every client's
+   socket in its poller for READABLE although a reader thread owns the
+   reads, and Ferrix's `EPOLLET` counts traffic in both directions of a
+   socket, so every byte either way woke it: 50,000 system calls a second,
+   two thirds of the server's time in the kernel. The fork's branch
+   `steam-perf` registers a client's socket only while output waits.
+3. **Every frame went through four copies too many** on its way to hyprix,
+   and hyprix took all of the window up again each time. yserver now reads a
+   window straight into the `wl_shm` buffer (the toolkit's `draw_pixels`,
+   17f8591ef) and tells hyprix only the rows that changed, found by hashing
+   each row; X's own damage was tried first and missed drawing paths.
+4. **`munmap` was quadratic** in a process's mappings (fc44ecda8): 2 ms at
+   4,000 mappings, 0.12 ms now. CEF unmaps its frame buffers every frame.
+5. **No System V shared memory**, so Chromium's MIT-SHM fell back to core
+   `PutImage` and every 7.7 MB frame went through the X socket: 10.9 of the
+   15.9 ms of CEF's compositor frame. Built at the customer's word
+   (d2b33b961..b84bc9e06, `test-shm`); the compositor's frame is 4.8 ms.
+6. **ferrousli read the clock by system call**, 36,000 a second from CEF:
+   it reads the vDSO now (a618944b1), 18 ns a call instead of 600.
+7. **Every virtio driver read the device status on every interrupt** — a
+   register read that waits for QEMU's lock, which QEMU holds while it shows
+   a frame. The display driver spent a quarter of a processor there. It
+   reads it only when an interrupt may be a configuration change
+   (b95437303..445b38333); 1.7% now. And only virtio-gpu had ever routed
+   configuration changes to an MSI-X vector, so the other four would never
+   have heard of a reset but for that read.
+
+How it was measured, and how to measure it again: a copy of the
+`--everything` volume kept between boots (`FERRIX_EVERYTHING_VOLUME`, and
+the data disk attached without `snapshot=on`), so Steam installs and signs
+in once; Steam started with `-cef-enable-debugging`, whose DevTools port
+(8080 in the guest) gives traces and a `requestAnimationFrame` probe; and a
+timer-only instruction sampler in the kernel. VNC's own refresh is 30 ms, so
+frame rates read off a VNC screen stop at about 33. A benchmark that scrolls
+by wheel notches every 50 ms measures the notches, not the machine: the 20 to
+24 frames it showed were CEF drawing one frame a notch.
+
+**Not yet on the desktop as the customer runs it.** The yserver changes (2
+and 3 above, and a word-wide alpha store) are on the fork's local branch
+`steam-perf`; `fetch-yserver.sh` pins the fork by commit, so they reach
+`run-compositor --everything` only once that branch is pushed to the fork
+and the pin moves, which needs the customer's word. Until then the desktop's
+yserver has the 9,000 wake-ups a second. And Windows under WHPX gives the
+guest one processor (QEMU 11.1's MMIO emulator, BACKLOG), on which a browser,
+an X server and a compositor share one core.
