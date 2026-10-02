@@ -52,7 +52,7 @@ use ferrix_virtio::pci::{CommonConfig, NO_VECTOR};
 use ferrix_virtio::snd::DeviceConfig;
 use ferrix_virtio_snd::{
     Control, DevicePages, Driver, ISR_QUEUE, MAX_BUFFER_PAGES, Options, Parts, SCRATCH_BYTES,
-    Scratch, Teardown, Transport,
+    Scratch, Teardown, Transport, WATCH_NANOS,
 };
 
 ferrix_rt::entry!(main);
@@ -645,7 +645,14 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
 /// `Ok(true)` when the core asked for a stop, which is answered with STOPPED.
 fn serve(driver: &mut Snd, port: &Port<Kernel>, control: &Channel<Kernel>) -> Result<bool, Step> {
     loop {
-        let packet = port.wait(Deadline::Never).map_err(|_| Step::Events)?;
+        let packet = match port.wait(watch(driver)) {
+            Ok(packet) => packet,
+            Err(Error::TimedOut) => {
+                driver.check_needs_reset().map_err(|_| Step::Faulted)?;
+                continue;
+            }
+            Err(_) => return Err(Step::Events),
+        };
         match (packet.kind, packet.key) {
             (PACKET_INTERRUPT, KEY_INTERRUPT) => {
                 let _ = driver.on_interrupt().map_err(|_| Step::Faulted)?;
@@ -689,5 +696,20 @@ fn take_control(driver: &mut Snd, control: &Channel<Kernel>) -> Result<Option<bo
             Ok(Control::Followed) => flush(driver, control)?,
             Err(_) => return Err(Step::Faulted),
         }
+    }
+}
+
+/// How long to wait for the device: for good with nothing in flight, and
+/// otherwise [`WATCH_NANOS`], after which the driver looks at the device
+/// status itself -- an interrupt that brought completions does not
+/// (`Driver::on_interrupt`), so a reset announced in one could otherwise
+/// leave the core waiting for ELAPSED that never comes.
+fn watch(driver: &Snd) -> Deadline {
+    if driver.in_flight() == 0 {
+        return Deadline::Never;
+    }
+    match ferrix_rt::linux::monotonic_nanos() {
+        Ok(now) => Deadline::At(now.saturating_add(WATCH_NANOS)),
+        Err(_) => Deadline::Never,
     }
 }

@@ -14,8 +14,8 @@ use ferrix_virtio::pci::{STATUS_DRIVER_OK, STATUS_FAILED};
 
 use super::fake::{Bus, Device, Handle, PAGE, Region};
 use crate::{
-    Control, ControlError, DeviceError, Driver, InitError, Options, Parts, Phase, Refusing,
-    Teardown,
+    CONFIG_LOOK_EVERY, Control, ControlError, DeviceError, Driver, ISR_CONFIG, InitError, Options,
+    Parts, Phase, Refusing, Teardown,
 };
 
 type Snd = Driver<Handle, Region, Region>;
@@ -484,4 +484,73 @@ fn refused_and_stop_end_the_driver_and_it_shuts_down_clean() {
         Ok(Control::Refused(Refusal::Nothing))
     );
     assert_eq!(driver.phase(), Phase::Refused);
+}
+
+/// A device that needs a reset says so with a configuration change, which
+/// under MSI-X shares the queues' vector: an interrupt that brings no
+/// completion. The driver reads the status then, and not on an interrupt
+/// that brought one -- but on every [`CONFIG_LOOK_EVERY`]th all the same,
+/// and whenever asked after a wait ([`Driver::check_needs_reset`]).
+#[test]
+fn a_device_that_needs_a_reset_is_failed_at_its_next_quiet_interrupt() {
+    let mut rig = rig(false);
+    assert_eq!(
+        rig.device.borrow().config_vector,
+        1,
+        "configuration changes share the control queue's vector"
+    );
+    rig.device.borrow_mut().misbehave.needs_reset = true;
+    follow(&mut rig.driver, &submit(0, 0, 3840));
+    assert_eq!(rig.device.borrow_mut().consume(1), 1);
+    let reads = rig.device.borrow().status_reads.get();
+    assert_eq!(rig.driver.on_interrupt().expect("a completion").taken, 1);
+    assert_eq!(
+        rig.device.borrow().status_reads.get(),
+        reads,
+        "status not read"
+    );
+    assert_eq!(messages(&mut rig.driver).len(), 1, "its ELAPSED");
+    assert_eq!(rig.driver.on_interrupt(), Err(DeviceError::NeedsReset));
+    assert_eq!(rig.driver.fault(), Some(DeviceError::NeedsReset));
+    assert_ne!(rig.device.borrow().status & STATUS_FAILED, 0);
+    assert!(rig.driver.pop_message().is_none());
+
+    let mut asked = self::rig(false);
+    assert_eq!(asked.driver.check_needs_reset(), Ok(()));
+    asked.device.borrow_mut().misbehave.needs_reset = true;
+    assert_eq!(
+        asked.driver.check_needs_reset(),
+        Err(DeviceError::NeedsReset)
+    );
+    assert_eq!(asked.driver.fault(), Some(DeviceError::NeedsReset));
+    assert_ne!(asked.device.borrow().status & STATUS_FAILED, 0);
+    let _ = asked.bus;
+}
+
+/// Interrupts that bring completions read no register but the queues' own
+/// memory, except every [`CONFIG_LOOK_EVERY`]th; one that brings none, or
+/// whose ISR says the configuration changed, reads the status.
+#[test]
+fn only_a_quiet_or_a_periodic_interrupt_reads_the_device_status() {
+    let mut rig = rig(false);
+    let before = rig.device.borrow().status_reads.get();
+    for sequence in 0..CONFIG_LOOK_EVERY * 2 {
+        follow(&mut rig.driver, &submit(sequence, 0, 3840));
+        assert_eq!(rig.device.borrow_mut().consume(1), 1);
+        assert_eq!(rig.driver.on_interrupt().expect("a completion").taken, 1);
+        assert_eq!(messages(&mut rig.driver).len(), 1);
+    }
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 2);
+    assert_eq!(
+        rig.driver.on_interrupt().expect("a quiet interrupt").taken,
+        0
+    );
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 3);
+    follow(&mut rig.driver, &submit(CONFIG_LOOK_EVERY * 2, 0, 3840));
+    assert_eq!(rig.device.borrow_mut().consume(1), 1);
+    rig.device.borrow_mut().isr = ISR_CONFIG;
+    assert_eq!(rig.driver.on_interrupt().expect("a completion").taken, 1);
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 4);
+    assert!(rig.device.borrow().protocol_errors.is_empty());
+    let _ = rig.bus;
 }
