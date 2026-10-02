@@ -212,9 +212,12 @@ a `Device` returns, and what a `WriteVolume` writes back. **The target, not yet
 the fact, is that a corrupt or hostile volume gives an error and never stops
 the machine.** What holds today is that every field is read through a checked
 slice access, in crates that are `#![forbid(unsafe_code)]` and deny indexing
-and explicit panics (`ferrix-btrfs`'s *Totality*). What does not: the 185
-baselined allocations that cannot report failure (below) can take their sizes
-from the disk and exhaust the heap, which stops the machine (FX-0008); and the
+and explicit panics (`ferrix-btrfs`'s *Totality*). What does not: the write
+path's 166 baselined allocations that cannot report failure (below) can take
+their sizes from the disk and exhaust the heap, which stops the machine
+(FX-0008) -- the reader's 19 baselined sites are calls on its own fixed-size
+types (`ChunkMap::insert`, `Window::push`), since it does not link `alloc`,
+and want a `NOALLOC:` argument rather than a conversion; and the
 release profile has no overflow checks and the workspace no arithmetic lint,
 so "every length is checked arithmetic" rests on care rather than on a gate.
 Both are F-56, the crates' missing evidence (`FINDINGS.md`). What it does not vouch for is that the
@@ -242,9 +245,11 @@ exemption.
 Two open points are for the assessor rather than settled here. The two
 allowlisted crates are linked by the core today without being classified at
 all, which this change makes visible rather than causes; classifying them
-`core` is the natural next step (F-56; `docs/BACKLOG.md`). And the traceability and coverage evidence,
-which is measured on the kernel image, does not yet reach the crates, whose
-tests run on the host.
+`core` is the natural next step (F-56; `docs/BACKLOG.md`). And the coverage evidence, which is measured on
+the kernel image, does not yet reach the crates, whose tests run on the host;
+the traceability matrix reaches them since the same landing (`L.btrfs.*` and
+`H.STORE.*`, traced to the crates' host tests), with the requirements no test
+verifies yet in its baseline.
 
 ### `load` — everything it runs and does not vouch for
 
