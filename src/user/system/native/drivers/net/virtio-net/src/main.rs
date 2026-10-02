@@ -39,7 +39,7 @@ use core::sync::atomic::{Ordering, fence};
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
-use ferrix_native_abi::types::{DeviceBlock, DeviceInfo, IoMappingSpec, PACKET_INTERRUPT};
+use ferrix_native_abi::types::{DeviceBlock, DeviceInfo, IoMappingSpec};
 use ferrix_netring::control::{HELLO_RIGHTS, Hello, Interface, InterfaceFlags, MAX_MESSAGE};
 use ferrix_netring::driver::DriverSide;
 use ferrix_netring::layout::VERSION;
@@ -47,7 +47,6 @@ use ferrix_netring::{Message, RingMemory, Wait};
 use ferrix_netserve::{Nic, Serve};
 use ferrix_rt::native::channel::{Channel, ReadError};
 use ferrix_rt::native::device::{Device, Interrupt, IoMapping};
-use ferrix_rt::native::error::Error;
 use ferrix_rt::native::handle::{Deadline, Object, OwnedHandle};
 use ferrix_rt::native::pending::Protection;
 use ferrix_rt::native::pin::{Pin, PinAccess, device_address};
@@ -59,7 +58,7 @@ use ferrix_virtio::QueueMemory;
 use ferrix_virtio::pci::CommonConfig;
 use ferrix_virtio_net::{
     DeviceError, DevicePages, Driver, Event, Frame, Options, Parts, RequestArea, Slot, SubmitError,
-    Teardown, Transport, WATCH_NANOS,
+    Teardown, Transport,
 };
 
 ferrix_rt::entry!(main);
@@ -561,12 +560,6 @@ struct Adapter {
     transmit: Window,
     /// Where frames that arrived are read.
     receive: Window,
-    /// Whether the device's interrupt has come since the last drain: the
-    /// loop drains on every turn, the kernel's bell and its own busy turns
-    /// included, and only a drain after an interrupt acknowledges it and may
-    /// read the device status (`Driver::on_interrupt`), which leaves the
-    /// guest and under KVM waits for QEMU's lock.
-    interrupted: bool,
 }
 
 impl Nic for Adapter {
@@ -581,12 +574,7 @@ impl Nic for Adapter {
     }
 
     fn drain(&mut self, out: &mut [Event]) -> Result<usize, DeviceError> {
-        let drained = if core::mem::take(&mut self.interrupted) {
-            self.card.on_interrupt(out)
-        } else {
-            self.card.poll(out)
-        };
-        drained.map(|drained| drained.events)
+        self.card.on_interrupt(out).map(|drained| drained.events)
     }
 
     fn write_transmit(&mut self, offset: u64, frame: &[u8]) {
@@ -696,8 +684,6 @@ fn bring_up(
         card,
         transmit,
         receive,
-        // Answered on the first turn, in case one came before the loop.
-        interrupted: true,
     })
 }
 
@@ -864,19 +850,8 @@ fn serve(
         if wait != Wait::Sleep {
             continue;
         }
-        let packet = match ring.port.wait(watch(&adapter.card)) {
-            Ok(packet) => packet,
-            Err(Error::TimedOut) => {
-                serve.woke(&mut ring.ring, &mut ring.side);
-                adapter.card.check_needs_reset().map_err(|_| Step::Serve)?;
-                continue;
-            }
-            Err(_) => return Err(Step::Serve),
-        };
+        let packet = ring.port.wait(Deadline::Never).map_err(|_| Step::Serve)?;
         serve.woke(&mut ring.ring, &mut ring.side);
-        if (packet.kind, packet.key) == (PACKET_INTERRUPT, KEY_INTERRUPT) {
-            adapter.interrupted = true;
-        }
         match packet.key {
             KEY_CONTROL => {
                 let _ = control.wait_async(
@@ -937,20 +912,5 @@ fn finish(adapter: Adapter, control: &Channel<Kernel>) -> Result<(), Step> {
         // kernel is told nothing: it resets through its own means, and the
         // pins keep the frames until it has. The exit status is what says so.
         Teardown::Wedged(_) => Err(Step::Reset),
-    }
-}
-
-/// How long to sleep: for good with no frame in the device, and otherwise
-/// [`WATCH_NANOS`], after which the driver looks at the device status itself
-/// -- an interrupt that brought completions does not
-/// (`Driver::on_interrupt`), so a reset announced in one could otherwise
-/// leave a frame's completion waited for that never comes.
-fn watch(card: &Card) -> Deadline {
-    if card.frames_in_flight() == 0 {
-        return Deadline::Never;
-    }
-    match ferrix_rt::linux::monotonic_nanos() {
-        Ok(now) => Deadline::At(now.saturating_add(WATCH_NANOS)),
-        Err(_) => Deadline::Never,
     }
 }

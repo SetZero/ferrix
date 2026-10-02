@@ -100,17 +100,8 @@ pub const TRANSMIT_QUEUE: u16 = 1;
 pub const ISR_QUEUE: u8 = 1;
 
 /// ISR status bit: the device configuration changed — a link that came up or
-/// went down, or a device that needs a reset (virtio 1.2 §2.1.2).
+/// went down.
 pub const ISR_CONFIG: u8 = 2;
-
-/// How many interrupts may bring completions before
-/// [`Driver::on_interrupt`] reads the device status anyway: a reset
-/// announced together with completions is seen within this many.
-pub const CONFIG_LOOK_EVERY: u32 = 64;
-
-/// How long a driver with frames in flight waits for an interrupt before it
-/// asks [`Driver::check_needs_reset`].
-pub const WATCH_NANOS: u64 = 100_000_000;
 
 /// The smallest queue worth running: two chains of a header and a frame, with
 /// room for another beside them.
@@ -212,9 +203,7 @@ pub enum Event {
 pub struct Drained {
     /// Events written to the start of the caller's slice.
     pub events: usize,
-    /// The device's configuration may have changed: the ISR said so, or the
-    /// interrupt brought no completion, as a configuration change's under
-    /// MSI-X does not, or it was the [`CONFIG_LOOK_EVERY`]th; see
+    /// The device says its configuration changed; see
     /// [`Driver::refresh_config`].
     pub config_changed: bool,
     /// The device has completed more than the slice had room for.
@@ -863,8 +852,6 @@ pub struct Driver<T, R, A, D, S> {
     sending: u16,
     /// Receive buffers the caller holds.
     held: u16,
-    /// Interrupts taken, for [`CONFIG_LOOK_EVERY`].
-    interrupts: u32,
 }
 
 impl<T, R, A, D, S> fmt::Debug for Driver<T, R, A, D, S> {
@@ -995,15 +982,6 @@ where
             .and_then(|receive| {
                 let transmit =
                     Self::activate(&mut transport, TRANSMIT_QUEUE, size, plan.sizing.transmit)?;
-                // Configuration changes on the receive queue's vector, so
-                // that under MSI-X a link change, or a device that needs a
-                // reset, raises an interrupt that brings no completion,
-                // which is when [`Driver::on_interrupt`] reads the status. A
-                // device with no room for it keeps none, and a reset is then
-                // seen at the [`CONFIG_LOOK_EVERY`]th interrupt or the watch.
-                if receive.vector != pci::NO_VECTOR {
-                    let _kept = pci::set_config_vector(&mut transport, receive.vector);
-                }
                 pci::driver_ok(&mut transport).map_err(InitError::Transport)?;
                 Ok((receive, transmit))
             });
@@ -1049,7 +1027,6 @@ where
             fault: None,
             sending: 0,
             held: 0,
-            interrupts: 0,
         })
     }
 
@@ -1286,59 +1263,8 @@ where
     /// A [`DeviceError`] once the device breaks the protocol. Events taken
     /// before the fault in the same call are returned first, and the fault on
     /// the next call, so none is lost.
-    ///
-    /// [`Drained::config_changed`] says the configuration may have changed,
-    /// and only then is the device status read for `DEVICE_NEEDS_RESET`,
-    /// which a device announces with a configuration change (virtio 1.2
-    /// §2.1.2): the ISR's [`ISR_CONFIG`] says so, or -- under MSI-X, which
-    /// has no ISR byte and raises configuration changes on the receive
-    /// queue's vector -- the interrupt brought no completion on either
-    /// queue, or it is the [`CONFIG_LOOK_EVERY`]th. The read leaves the
-    /// guest, and under KVM waits for QEMU's lock, which QEMU's main thread
-    /// holds while it shows a frame.
     pub fn on_interrupt(&mut self, out: &mut [Event]) -> Result<Drained, DeviceError> {
         let isr = self.transport.acknowledge_interrupt();
-        if let Some(fault) = self.fault {
-            return Err(fault);
-        }
-        self.interrupts = self.interrupts.wrapping_add(1);
-        let look = isr & ISR_CONFIG != 0
-            || !(self.receive.has_used() || self.transmit.has_used())
-            || self.interrupts.is_multiple_of(CONFIG_LOOK_EVERY);
-        if look && self.transport.read8(DEVICE_STATUS) & STATUS_DEVICE_NEEDS_RESET != 0 {
-            self.break_down(DeviceError::NeedsReset);
-            return Err(DeviceError::NeedsReset);
-        }
-        let mut drained = self.take(out)?;
-        drained.config_changed = look;
-        Ok(drained)
-    }
-
-    /// Take what the device has done without an interrupt to answer: as
-    /// [`Driver::on_interrupt`], but nothing is acknowledged and no register
-    /// read, for a loop that looks at the queues on every turn and not only
-    /// after its device's interrupt.
-    ///
-    /// # Errors
-    ///
-    /// As [`Driver::on_interrupt`].
-    pub fn poll(&mut self, out: &mut [Event]) -> Result<Drained, DeviceError> {
-        if let Some(fault) = self.fault {
-            return Err(fault);
-        }
-        self.take(out)
-    }
-
-    /// Read the device status for `DEVICE_NEEDS_RESET` now, whatever the
-    /// last interrupt looked like: for a driver that has waited
-    /// [`WATCH_NANOS`] with frames in flight and heard nothing, in case the
-    /// configuration change that announced a reset came together with a
-    /// completion and [`Driver::on_interrupt`] did not look.
-    ///
-    /// # Errors
-    ///
-    /// [`DeviceError::NeedsReset`], or the fault the driver already has.
-    pub fn check_needs_reset(&mut self) -> Result<(), DeviceError> {
         if let Some(fault) = self.fault {
             return Err(fault);
         }
@@ -1346,11 +1272,7 @@ where
             self.break_down(DeviceError::NeedsReset);
             return Err(DeviceError::NeedsReset);
         }
-        Ok(())
-    }
 
-    /// Drain both queues into `out` and refill the receive queue.
-    fn take(&mut self, out: &mut [Event]) -> Result<Drained, DeviceError> {
         let (received, receive_fault) = self.drain(RECEIVE_QUEUE, out, 0);
         let (sent, transmit_fault) = match receive_fault {
             Some(_) => (0, None),
@@ -1368,7 +1290,7 @@ where
         let refilled = self.refill().unwrap_or(0);
         Ok(Drained {
             events,
-            config_changed: false,
+            config_changed: isr & ISR_CONFIG != 0,
             more: self.fault.is_none() && (self.receive.has_used() || self.transmit.has_used()),
             refilled,
         })
