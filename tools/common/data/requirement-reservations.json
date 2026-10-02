@@ -38,6 +38,13 @@
       "branch": "btrfs-fallible",
       "date": "2026-10-02",
       "purpose": "Fallible allocation in the btrfs crates (the consultant's conditions on c51fed2fc): out-of-memory outcomes of a transaction, an open, a log replay and a read; OutOfMemory from a device not retried by the reader or the writer; RangeSet edits unchanged on failure; nothing allocating past the commit point; map nodes within a size class; and the kernel's section for library map inserts"
+    },
+    {
+      "ids": ["L.user.111-124", "L.object.121-125", "H.MEM.20-21"],
+      "owner": "nvidia",
+      "branch": "nvidia-c3k",
+      "date": "2026-10-02",
+      "purpose": "NVIDIA C3-K, the kernel's fault windows (docs/NVIDIA.md §11.4, the consultant's OK IF of 2026-10-02): window regions, forwarded faults and their wait, kernel copies that never wait, refused partial operations, the mapping count and UNMAPPED, break-before-make entries, revoke, server death, insert checks and holds, answers only from the server handle; a server-inserted frame unreachable before its hold goes, and a client waiting on a server only by its own mapping"
     }
   ]
 }

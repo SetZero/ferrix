@@ -675,7 +675,7 @@ unit tests.
 | N3b | nvidia-drm subset as `renderD129`; hyprix `zwp_linux_dmabuf_v1` and syncobj; NVIDIA's own WSI and EGL | 16 |
 | N3c | hyprix composites on the 3060 | 8 |
 | N4 | Chrome `--enable-gpu` on the 3060; GLX for yserver (D4); a Steam game on the 3060 | 20 |
-| N5 | CUDA: NVIDIA's `nvidia-uvm` rebuilt in `nvrm` against a Linux-compatible header set, fault windows in the kernel for managed memory, the CUDA samples (§11.5: C0–C4) | 49 |
+| N5 | CUDA: NVIDIA's `nvidia-uvm` rebuilt in `nvrm` against a Linux-compatible header set, fault windows in the kernel for managed memory, the CUDA samples (§11.5: C0–C4) | 52 |
 | N6 | Scan-out on the 3060's own outputs through NVKMS | 15 |
 
 Each milestone's total, and what it shows:
@@ -783,7 +783,7 @@ and took the recommended answer for D2, D3 and D5.
    the forwarding core and `nvrm`'s request bridge able to serve
    `/dev/nvidia-uvm` (raw ioctl numbers, its dynamic major, its own
    mmap and fault paths) without a second mechanism. §11 is that design,
-   49 points. Its own five decisions, D-C1 to D-C5, were answered the same
+   52 points. Its own five decisions, D-C1 to D-C5, were answered the same
    day (§11.8): managed memory as small as possible, NVIDIA's own UVM,
    beside graphics after N1, no profilers, NVIDIA's samples.
 9. **D8 — the platform changes inside the item** (N0a–d, f) go one by one
@@ -816,6 +816,16 @@ and took the recommended answer for D2, D3 and D5.
   * The UVM ioctls that libcuda 580.173.02 issues were read from its
     code.
   * The GPU was not booted for this pass.
+* **2026-10-02 — K1 design reviewed: OK IF.** The certification
+  consultant reviewed §11.4's fault windows before any code, and accepted
+  them with conditions:
+  * the hazards H1–H8 and the conditions are folded into §11.4;
+  * the boot checks A–L, each with a negative control, are in §11.4;
+  * the obligations (AoU-17, AoU-18, FM-12, V-10, V-11) are in §11.7;
+  * `L.user.111`–`124`, `L.object.121`–`125` and `H.MEM.20`–`21` are
+    reserved on `main`, for C3-K's landing to release;
+  * C3-K's code, QEMU only, follows C0a and goes to the consultant before
+    it lands.
 
 ## 11. CUDA (N5)
 
@@ -1009,7 +1019,7 @@ The scratch build was deleted after counting. The import lists are kept in
 | The semaphore pool | `vm_insert_page` of its pages at `mmap` | A window of pool pages, inserted when the client calls `mmap` (K1 below). §4.4's VMO-range reply would also do |
 | **Managed memory: a CPU fault** | the vma's `->fault` services the page: allocate, copy back from the GPU, then `vm_insert_page` with read or read-write access | **K1**: the kernel forwards the fault to `nvrm`, which runs UVM's own handler and inserts the pages; the faulting thread then retries |
 | **Managed memory: migration to the GPU** | `unmap_mapping_range` on the va_space's `address_space`, keyed by `offset == address`, in every process that maps the file | **K1**: `window_revoke`, a shootdown of every mapping of that window |
-| `munmap`, a split, `mremap` | `->close` on the vma destroys UVM's range; this is how `cudaFree` frees managed memory, because `UVM_FREE` refuses managed ranges (`uvm_free`). `->open` splits it | K1: a whole-window `munmap` drops the window object, and its drop sends `UNMAPPED(window)` to `nvrm`. A partial `munmap`, `mprotect` or `mremap` of a window is refused with `EINVAL` |
+| `munmap`, a split, `mremap` | `->close` on the vma destroys UVM's range; this is how `cudaFree` frees managed memory, because `UVM_FREE` refuses managed ranges (`uvm_free`). `->open` splits it | K1: when a whole-window `munmap` brings the window's mapping count to zero, the kernel queues the `UNMAPPED(window)` it promised when the window was made. A partial `munmap`, `mprotect` or `mremap` of a window is refused with `EINVAL` |
 | `fork` | `VM_DONTCOPY` on managed ranges, `VM_WIPEONFORK` on the semaphore pool | Nothing new: a window is inherited like every shared device mapping today, and the child's faults are served like the parent's (Linux's `MADV_DOFORK` behaviour). `MADV_DONTFORK` stays accepted and ignored |
 | Process identity, `current->mm` | `va_space_mm` holds the mm for HMM and ATS | Off (`uvm_enable_va_space_mm=0`). Faults on managed memory need no client mm, because the CPU side is the window |
 | Pinning client pages | the tools' `pin_user_pages_remote` | Not needed: the tools are refused. `cudaHostRegister` goes through RM's `os_lock_user_pages` and `request_pin` (§4.3) |
@@ -1034,46 +1044,161 @@ The customer chose on 2026-10-02 to build it "as small as possible"
 kind of region and three native calls:
 
 * **The window.** Each `mmap` of `/dev/nvidia-uvm` that `nvrm` answers
-  with "window" becomes one region backed by its own `FaultWindow` object,
-  the way a render node's `mmap` becomes a `Window` today
-  (`interfaces/render/node.rs`). The object holds:
+  with "window" becomes one region of a new kind, backed by its own
+  `FaultWindow` object. The object is generic and never names NVIDIA. It
+  holds:
   * a sparse table from page offset to a frame and an access level, read
     or read-write;
   * the list of address spaces that map it, as a VMO's mapper list does
     (`user/vmo.rs`);
-  * `nvrm`'s port.
-* **A user fault on a page the table lacks**, or a write to a page that is
-  read-only, goes to `nvrm` as `FAULT(window, offset, access)`. It is sent
-  from the `Filler` position: before the space's lock is taken, and with
-  interrupts on. The faulting thread waits for the reply, and `SIGKILL`
-  can interrupt the wait. If the reply is an error, the thread gets
-  `SIGBUS`.
+  * its mapping count;
+  * the server handle it was made for.
+* **A user fault on a page the table lacks**, or a write to an entry that
+  is read-only, queues one `FAULT(window, offset, access)` for the server.
+  It is sent from the `Filler` position: after the region is looked up,
+  with no space, window, VMO or preempt-disabling lock held. The faulting
+  thread then waits, and the wait ends in one of three ways:
+  * on the server's answer, after which the access is retried;
+  * on `Host::wait_interrupted`, for a kill or a pending signal, after
+    which the thread returns to user mode and faults again;
+  * on the server's death.
+  
+  An error answer, or a dead window, gives `SIGBUS` (`BUS_ADRERR`) at the
+  fault address. A fault from the server's own process into a window it
+  serves gets `SIGBUS` at once. The wait has no timeout: a client trusts
+  the server it mapped for the liveness of its faulting threads (AoU-17,
+  §11.7).
+* **Kernel copies never wait.** `with_page` and `with_present_page`, and
+  so `futex`, `process_vm_*` and `/proc/<pid>/mem`, reach the fault path
+  in a mode the type system carries, and that mode cannot forward. An
+  absent window page is `Refused`, so the copy fails with `EFAULT` and the
+  server sees no `FAULT`. A present page copies within its entry's
+  access. Device regions stay refused whole, as today.
 * **`window_insert(window, [(offset, pool_vmo, pool_offset, access)])`**,
-  batched, is `vm_insert_page`. The kernel checks that each pool page is
-  committed and pinned to `nvrm`. It then takes a hold on the page that
-  the window keeps until the entry is revoked. So a page cannot be
-  decommitted, or unpinned and reused, while any client maps it.
-* **`window_revoke(window, offset, len)`** is `unmap_mapping_range`. It
-  clears the entries, removes the PTEs from every mapper with one batched
-  shootdown, using the existing `forget_*` and `flush_tlb_pages` protocol
-  (`user/space.rs`), and then drops the holds.
-* **The end of a window.** A window is unmapped whole or not at all.
-  When its last mapping goes, the object is dropped, as a render
-  `Window`'s keeper is (`drop_unnamed`), and the drop queues
-  `UNMAPPED(window)` on `nvrm`'s port before `munmap` returns. A later
-  `mmap` at the same address arrives behind it on the same port, so UVM
-  has destroyed the old range first. This is how `cudaFree` of managed
-  memory works: UVM frees a managed range only when its mapping goes.
-* **If `nvrm` dies**, every window is revoked and marked dead, and later
-  faults get `SIGBUS`. The pages were `nvrm`'s pins, so they go to the
-  quarantine (§4.3, N0f).
+  batched, is `vm_insert_page`. It checks:
+  * the window handle's right;
+  * each VMO handle's rights: read, plus write for a read-write entry;
+  * that the page is committed in an anonymous VMO of the caller, not a
+    file's;
+  * that the offset is within the window.
+  
+  Any bad entry refuses the whole batch, and the table room is reserved
+  before the first change. The precondition is a hold on the page
+  (`Vmo::hold`), not an IOMMU pin: the hold is what keeps a frame at its
+  index, so the mechanism is the same on every ISA, including ARMv7-A,
+  which has no IOMMU. Holds are taken before the window lock is, and given
+  back after it on a refusal. An entry whose frame or access changes is
+  taken down and shot down before the new PTE goes in (break-before-make).
+  So read-only becomes read-write only through a take-down.
+* **The memory type of a window PTE is the pool VMO's**: cacheable,
+  coherent (uncached) or write-combining, never chosen per insert, so a
+  frame is never mapped with two types. Windows are never executable, at
+  `mmap` or at `mprotect`.
+* **`window_revoke(window, offset, len)`** is `unmap_mapping_range`:
+  1. it takes the entries out under the window lock;
+  2. it takes every mapper's PTEs down through the existing `forget_runs`,
+     including the pending-count rule;
+  3. it runs one shootdown;
+  4. only then does it drop the holds.
+  
+  A fault racing the revoke on another processor never installs a revoked
+  frame, because the entries are out before the mappers are visited.
+* **The end of a window is its mapping count reaching zero.** It is not
+  an object's `Drop`. The server's handle keeps the object alive, and the
+  render `Window` keeper is the wrong model: `drop_unnamed` can defer a
+  keeper when it has no memory for its list. The count is decremented in
+  `take_down`, without allocation. The `UNMAPPED(window)` packet is
+  promised on the server's port when the window is made, as a port promise
+  charged to the client's job. It is queued exactly once, from whatever
+  context the last mapping goes in: `munmap`, `exec`, exit, or the reaper.
+  It is queued before the unmap returns, so a later `mmap` at the same
+  address arrives behind it, and UVM has destroyed the old range first.
+  This is how `cudaFree` of managed memory works: UVM frees a managed
+  range only when its mapping goes. The window's holds go only after the
+  last mapper's shootdown has returned.
+* **Partial operations are refused.** A `munmap`, a `MAP_FIXED` or
+  `MAP_FIXED_NOREPLACE` replacement, or an `mremap` that covers part of a
+  window gets `EINVAL`, and so does any `mprotect` or `mremap` that
+  touches one. The map, the tables and the window are left unchanged.
+  `madvise` answers as it does for a device region.
+* **`fork` shares the window.** The child is attached to its mapper list,
+  no PTE is copied, and the child's faults are served as the parent's.
+* **The server's identity is its server handle.** Its rights exclude
+  duplicate and transfer, and its close is the server's death. Only
+  faults outstanding on windows whose server handle the caller holds can
+  be answered; a stale or foreign answer is ignored.
+* **When the server dies**, every window is first marked dead under its
+  lock, so faults stop waiting and inserts are refused. Then, in task
+  context, never from a `Drop`, every window is revoked with its
+  shootdown, and only then are the holds given back. The windows are
+  revoked before the pool's pins fold into the quarantine (§4.3), so
+  client writes cannot show in the quarantine's sums. A frame stays until
+  both the quarantine's release and the window's hold let it go. A new
+  `nvrm` can never map it into a client again, because dead windows
+  refuse inserts and its handles are new.
+* **A `FAULT` packet's slot is promised from the faulting job's
+  charge.** So a flood of faults is bounded by the job's tasks and memory,
+  and it can never take up `nvrm`'s port capacity.
+* **Lock order**, written into `space.rs`'s and `vmo.rs`'s module docs:
+  space lock, then the window's mapper list, then the window's table, then
+  the VMO's pages. No window lock is held while a space lock is taken, and
+  no shootdown runs under any of them. The window spin-lock sections and
+  their bounds go into MEMORY-AND-TIMING.
+* **One walker.** The new region kind is matched in `forget_in`,
+  `take_down`, naming, `copyable`, `advise_region`, `shared_object` and
+  `Named`, so revoke reuses `forget_runs`. The `ferrix-vma` variant is
+  host-tested: a window region is never split, merged, marked
+  copy-on-write or moved, and `clone_for_fork` shares it.
+
+**Rings.** The window object, its table and holds, the region kind, the
+fault forwarding and its wait, revocation and the refusals are in `core`
+(`user/space.rs`, `user/vmo.rs` or a new `object/` file, `trap.rs`'s
+`SIGBUS`, `object/oom.rs`'s fault entry). `window_insert`,
+`window_revoke` and the fault answer are `item`'s native calls
+(`syscall/native.rs`); the answer may ride on `window_insert` as an error
+entry. The forwarding core that creates windows stays in `load` and only
+calls a core constructor.
+
+**What the certification consultant found in the first K1 text**, on
+2026-10-02, and where each is met above:
+
+| Hazard | Met by |
+|---|---|
+| H1: a render `Window` keeper is no model. `drop_unnamed` can defer it when it has no memory, so `UNMAPPED` would be late; and the server's handle keeps the object alive, so its `Drop` is not the end | The mapping count, and a promised `UNMAPPED` |
+| H2: a space's last reference can go where nothing may sleep or shoot down | Revoke-all on death in task context, never in `Drop` |
+| H3: kernel copies reach `space.fault` and would wait on `nvrm`, including `nvrm`'s own `request_copy_in` (RC2) | The no-wait mode of kernel copies |
+| H4: `resolve()` treats a present page as a spurious fault, so a write to a read-only entry would loop | A write to a read-only window entry forwards |
+| H5: "pinned to `nvrm`" ties a core object to IOMMU pins, which ARMv7-A keeps for good | The hold as the precondition |
+| H6: a coherent or write-combining pool mapped cacheable is an alias of two memory types | The memory type from the VMO |
+| H7: "nvrm's port" is undefined if the server handle can be duplicated or moved | A server handle without duplicate or transfer |
+| H8: pages that clients' faults make `nvrm` commit are charged to `nvrm`'s job | Accepted as V-11 (§11.7) |
+
+**The boot checks**, under QEMU with an in-tree test server and no GPU,
+on x86-64 (KVM and TCG), AArch64, and ARMv7-A at `--smp 2` and at the
+4-core default. Each has a negative control, and the landing message
+gives the control's count of fired runs:
+
+| Check | What it shows | Its control |
+|---|---|---|
+| A | a fault forwarded once and served | no retry |
+| B | an error answer gives `SIGBUS` `BUS_ADRERR` at the address | error mapped to success |
+| C | a client stuck on a server that never answers ends on `SIGKILL` within a bound | the wait ignores `wait_interrupted` |
+| D | the server's death gives the waiter and later faults `SIGBUS`, and leaves the frames reachable by no client | no revoke on death |
+| E | a revoke against a reader spinning on another processor: the frame is poisoned the moment its hold drops, and the reader never sees the poison | holds dropped before the shootdown |
+| F | `read()`/`write()` on an absent window page fail `EFAULT`, the server's `FAULT` count unchanged; a present page copies | `with_page` forwards |
+| G | a partial `munmap`, `MAP_FIXED` over part, `mprotect`, `mremap` give `EINVAL`, the region and tables intact, no `UNMAPPED` | the refusal dropped |
+| H | a whole `munmap` makes `UNMAPPED` readable the instant `munmap` returns, also with every allocation in the unmap refused | through `drop_unnamed`'s fallible list |
+| I | each insert refusal, and one bad entry in a batch inserting nothing | one per refusal |
+| J | a write to a read-only entry makes one `FAULT` with write access, then the write lands | the spurious-fault return |
+| K | a coherent pool gives an uncached client PTE | cacheable |
+| L | `fork`: the child is served, a revoke reaches the child's PTE, the child's exit sends no `UNMAPPED` while the parent still maps it, and the last unmap does | — |
 
 **What was cut from the first draft, and what each cut costs:**
 
 | Cut | Instead | Cost |
 |---|---|---|
 | Kernel copies (`uaccess`) waiting on a window fault | A kernel copy that reaches a page the window lacks fails with `EFAULT` | A system call given managed memory the CPU has not touched since the GPU last had it fails: for example a `write` of a result buffer straight after the kernel that filled it. Programs that read the data first, as the samples do, see nothing. It also removes the deadlock RC2 described |
-| A separate unmap notice for any range (`UNMAPPED(window, offset, len)`) | Partial `munmap`, `mprotect` and `mremap` of a window are refused with `EINVAL`; the drop notice above covers a whole `munmap` | A program that unmaps part of a managed allocation, or makes it read-only, gets an error. CUDA's own allocator maps and unmaps whole allocations. C1's trace shows whether libcuda ever does otherwise |
+| A separate unmap notice for any range (`UNMAPPED(window, offset, len)`) | Partial `munmap`, `mprotect` and `mremap` of a window are refused with `EINVAL`; the end-of-window notice above covers a whole `munmap` | A program that unmaps part of a managed allocation, or makes it read-only, gets an error. CUDA's own allocator maps and unmaps whole allocations. C1's trace shows whether libcuda ever does otherwise |
 | Not inheriting windows on `fork` (`VM_DONTCOPY`) | Windows are inherited like every shared device mapping | A child forked after `cuInit` (`system`, `popen`) shares the managed memory until it `exec`s or exits, and UVM's range stays alive that long. CUDA does not support using it in the child either way |
 | `MADV_DONTFORK` honoured, `MADV_DOFORK` refused | `madvise` unchanged | None for CUDA: with windows inherited, the hint changes nothing that matters to it |
 | `VM_WIPEONFORK` for the semaphore pool | Inherited too | A child sees the parent's semaphore values; it cannot use them without a CUDA context |
@@ -1111,11 +1236,13 @@ The same object also answers two things §4.4 and §8 left open:
 | C0b | The samples: `cuda-samples` built on nazuna with the installed CUDA 12.9 `nvcc` (`/usr/local/cuda-12.9`, not on `PATH`) for `sm_86`, in a data volume beside the userspace; `test-cuda` in `xtask`, with the card guard of §6 | 2 |
 | C1 | `deviceQuery`: `/dev/nvidia-uvm` and `/dev/nvidia-uvm-tools` nodes with their dynamic major in `/proc/devices`; UVM loaded in `nvrm`, its GPU registered through `nv_uvm_interface.c`; the C1 ioctls; the logged trace of every UVM call | 6 |
 | C2 | `vectorAdd`, `bandwidthTest` (pinned and pageable), `simpleStreams`: VA-space and channel registration, external ranges, the semaphore pool window, replayable and non-replayable fault interrupts, UVM's CE channels | 10 |
-| C3-K | K1 in the kernel (`core` ring, consultant review): fault windows, insert, revoke, fault forwarding from user faults with a killable wait, the drop notice, refused splits, `nvrm`'s death; boot checks under QEMU with a test server, no GPU | 7 |
+| C3-K | K1 in the kernel (`core` ring, the consultant's conditions): fault windows, insert, revoke, fault forwarding from user faults with a killable wait, kernel copies that never wait, the promised `UNMAPPED`, refused partial operations, server death; the `ferrix-vma` host tests; boot checks A–L with their controls under QEMU on four ISAs with a test server, no GPU; the certification documents of §11.7 | 10 |
 | C3-U | Managed memory in `nvrm`: the vma shim (`close` from `UNMAPPED`, no splits), CPU faults through UVM's own handler, GPU fault migration, prefetch and advice; `UnifiedMemoryStreams`, `UnifiedMemoryPerf`, and `cudaMallocManaged` with the CPU and the GPU touching the same pages in turn | 8 |
 | C4 | Samples suite: `0_Introduction`, `1_Utilities` and `6_Performance` of `cuda-samples` minus IPC, multi-GPU, graphics interop and MPS; fix what they find | 8 |
 
-**N5 is 49 points**: C0 10, C1 6, C2 10, C3 15, C4 8.
+**N5 is 52 points**: C0 10, C1 6, C2 10, C3 18, C4 8. C3-K went from 7
+to 10 points with the consultant's conditions: four ISAs, twelve checks
+with their controls, the host tests and the certification documents.
 
 **What comes first.** CUDA needs N0 and N1. From N2 it needs the RM
 half: mapping contexts, events and `poll`, fd identity, and client pins.
@@ -1124,8 +1251,8 @@ graphics once N1 is done:
 
 * **to `deviceQuery`**: N0 15 + N1 32 + RM half of N2 about 8 + C0 10 +
   C1 6 = **71 points**;
-* **to managed memory**: + C2 10 + C3 15 = **96 points**;
-* **to the samples suite**: + C4 8 = **104 points**.
+* **to managed memory**: + C2 10 + C3 18 = **99 points**;
+* **to the samples suite**: + C4 8 = **107 points**.
 
 C0a and C3-K need no card and can start now. C0a is all ring 3, and C3-K
 is checked under QEMU.
@@ -1175,24 +1302,73 @@ NVIDIA code stays out of the item, as in §6:
 
 What enters the item is generic:
 
-* **K1, in the `core` ring** (`user/space.rs`, `user/vmo.rs`, the fault
-  path in `trap.rs`). Its native calls are in `item`. Nothing changes in
-  `fork`, `madvise` or `uaccess`.
+* **K1, in the `core` ring** (`user/space.rs`, `user/vmo.rs` or a new
+  `object/` file, the fault path in `trap.rs` and `object/oom.rs`). Its
+  three native calls are in `item`. Kernel copies gain their no-wait mode;
+  `fork` and `madvise` keep their behaviour, with the new region kind
+  matched where every other kind is.
 
-It does not name NVIDIA. K1 is the mechanism any GPU driver with shared
-virtual memory needs: AMD's KFD SVM, Intel's SVM, and RM's revocation. It
-is also the core of a later `userfaultfd`.
+It does not name NVIDIA, and `check-item-boundary.py`'s `nvidia` rule
+keeps it so. K1 is the mechanism any GPU driver with shared virtual memory
+needs: AMD's KFD SVM, Intel's SVM, and RM's own revocation. A later
+`userfaultfd` reuses this object rather than adding a second fault
+callout.
 
-Findings to argue in `docs/certification/FINDINGS.md`:
+**The requirements**, reserved on `main` before any code
+(`tools/common/data/requirement-reservations.json`) and released by
+C3-K's landing, each proven whole by one check:
 
-* **A ring-3 server can now hold a client's page fault.** This happens
-  only for a client that mapped that server's device file. The wait is
-  killable, and the server's death fails it.
-* **A server's pages are mapped into a client.** They are held for as
-  long as they are mapped, and revocation finishes its shootdown before
-  the holds drop. So no frame is reused while it is still reachable.
+* `L.user.111`–`124`: the window region (shared, never executable), the
+  forwarded fault and its wait, `SIGBUS` on error or death, the
+  interrupted wait, kernel copies that never wait, the refused partial
+  operations, the whole unmap, the memory type, break-before-make,
+  `fork`, revoke, the fault racing a revoke, server death, and the
+  `FAULT` slot charged to the faulting job;
+* `L.object.121`–`125`: the insert's checks, its holds, inserts refused
+  into a dead or closed window, the promised `UNMAPPED` queued once and in
+  order, and answers only from the server handle;
+* `H.MEM.20`: a frame a server inserted into a client window is
+  unreachable from every processor before its hold is released;
+* `H.MEM.21`: a client's thread waits on a server only for a fault in a
+  window of a device the client mapped, and the wait ends on the client's
+  kill and on the server's death.
 
-The consultant reviews C3-K before it lands, like N0.
+**What C3-K's landing adds to the certification documents.** The design
+opens no finding; it creates obligations:
+
+* **SAFETY-MANUAL**:
+  * AoU-17: a client that maps a server's fault window trusts that server
+    for the liveness of its faulting threads and for the contents of the
+    window. The wait is killable and the server's death fails it; there is
+    no timeout. Kernel copies of absent window pages fail with `EFAULT`.
+  * AoU-18: the server keeps its clients' windows apart. The kernel does
+    not stop a server inserting one client's page into another's window,
+    nor pages it has not cleared. Residual data is the server's to scrub,
+    as UVM's zeroing does.
+  * The ASR-1 and FM-1 rows name `H.MEM.20` and check E.
+  * FM-12: a partition's thread blocked by a server it mapped. Detection:
+    checks C and D. Mitigation: the wait is killable, and the server's
+    death fails it.
+* **VULNERABILITY-ANALYSIS**, both under T.EXHAUST:
+  * V-10: a stuck or malicious server stalls the faulting threads of
+    every client that mapped its windows. Accepted: the mapping is opt-in,
+    the wait is killable, and death fails it.
+  * V-11: pages that a client's faults make the server commit, and window
+    holds that keep a server VMO alive after the server unmaps it, are
+    charged to the server's job, not the client's. They are bounded by the
+    server's job limit, and the server apportions them (AoU-18's sibling).
+  * The T.MEMORY and T.RESIDUAL text cites `H.MEM.20`.
+* **ITEM.md**: the `core` paragraph ("Nothing here may depend on … a
+  device driver") is amended. Isolation never depends on the server. The
+  liveness of a client's thread that mapped a server's window does, by
+  the client's own choice. The core's line count is re-measured.
+* **MEMORY-AND-TIMING**: the window spin-lock sections and their bounds,
+  and the new wait, which has no bound.
+* **SECURITY-TARGET**: the window as a new TSF-mediated sharing
+  (FDP_ACC). The client's `mmap` of the server's device is its consent.
+
+The consultant reviews C3-K's code, with the check logs and the
+controls, before it lands.
 
 ### 11.8 Decisions for the customer
 
