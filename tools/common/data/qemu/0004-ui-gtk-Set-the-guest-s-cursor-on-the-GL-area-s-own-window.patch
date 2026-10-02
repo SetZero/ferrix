@@ -1,0 +1,80 @@
+From 67450df229574e71677406d273f3a180011e1fd3 Mon Sep 17 00:00:00 2001
+From: SetZero <info@magical.rocks>
+Date: Sat, 3 Oct 2026 01:11:57 +0200
+Subject: [PATCH] ui/gtk: Set the guest's cursor on the GL area's own window
+
+gd_update_cursor() and gd_cursor_define() set the cursor on
+gtk_widget_get_window(drawing_area). A GtkDrawingArea has a window of
+its own, but a GtkGLArea does not, and gtk_widget_get_window() returns
+the toplevel's. With an absolute pointing device, or a guest that
+defines its own cursor, the cursor meant for the guest area is then set
+on the whole QEMU window: with gl=on the host pointer disappears over
+the menu bar and the tab bar as well.
+
+A GtkGLArea creates an input-only child window at realize to receive
+its events, registered with the widget as its user data, covering
+exactly the area. Find that window and set the cursor there, falling
+back to the widget's window as before.
+---
+ ui/gtk.c | 31 +++++++++++++++++++++++++++++--
+ 1 file changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/ui/gtk.c b/ui/gtk.c
+index 48571bedbf..ec922ebb07 100644
+--- a/ui/gtk.c
++++ b/ui/gtk.c
+@@ -191,6 +191,33 @@ static bool gd_grab_on_hover(GtkDisplayState *s)
+     return gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(s->grab_on_hover_item));
+ }
+ 
++/*
++ * The window whose cursor is the guest's. A GtkDrawingArea has its own, but
++ * a GtkGLArea has none: gtk_widget_get_window() returns the toplevel's, and
++ * a cursor set there also hides the pointer over the menu bar and the tabs.
++ * What a GtkGLArea does have is an input-only window it registers at realize
++ * for its events, which covers exactly the area, so the cursor goes there.
++ */
++static GdkWindow *gd_cursor_window(VirtualConsole *vc)
++{
++    GtkWidget *area = vc->gfx.drawing_area;
++    GdkWindow *window = gtk_widget_get_window(area);
++    GList *child;
++
++    if (gtk_widget_get_has_window(area)) {
++        return window;
++    }
++    for (child = gdk_window_peek_children(window); child; child = child->next) {
++        gpointer owner;
++
++        gdk_window_get_user_data(child->data, &owner);
++        if (owner == area) {
++            return child->data;
++        }
++    }
++    return window;
++}
++
+ static void gd_update_cursor(VirtualConsole *vc)
+ {
+     GtkDisplayState *s = vc->s;
+@@ -205,7 +232,7 @@ static void gd_update_cursor(VirtualConsole *vc)
+         return;
+     }
+ 
+-    window = gtk_widget_get_window(GTK_WIDGET(vc->gfx.drawing_area));
++    window = gd_cursor_window(vc);
+     if (s->full_screen || qemu_input_is_absolute(vc->gfx.dcl.con) || s->ptr_owner == vc) {
+         gdk_window_set_cursor(window, s->null_cursor);
+     } else {
+@@ -484,7 +511,7 @@ static void gd_cursor_define(DisplayChangeListener *dcl,
+     cursor = gdk_cursor_new_from_pixbuf
+         (gtk_widget_get_display(vc->gfx.drawing_area),
+          pixbuf, c->hot_x, c->hot_y);
+-    gdk_window_set_cursor(gtk_widget_get_window(vc->gfx.drawing_area), cursor);
++    gdk_window_set_cursor(gd_cursor_window(vc), cursor);
+     g_object_unref(pixbuf);
+     g_object_unref(cursor);
+ }
+-- 
+2.53.0
+

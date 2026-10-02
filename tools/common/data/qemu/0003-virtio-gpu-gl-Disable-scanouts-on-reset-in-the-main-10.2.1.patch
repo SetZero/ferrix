@@ -1,0 +1,114 @@
+From 2acf194da8319f79adff6688659b8b76a0673414 Mon Sep 17 00:00:00 2001
+From: SetZero <info@magical.rocks>
+Date: Sat, 3 Oct 2026 00:59:03 +0200
+Subject: [PATCH] virtio-gpu-gl: Disable scanouts on reset in the main thread
+
+A guest resets the device by writing 0 to its status register, which
+calls virtio_gpu_gl_reset() in a vCPU thread. That function disables
+the scanouts itself, after virtio_gpu_reset() has returned from the
+main-thread bottom half. Disabling a scanout sets a new console surface,
+and the GL display backends then delete the old surface's texture with
+the display's context.
+
+That context belongs to the main thread. With GTK on a Wayland host,
+gtk_gl_area_make_current() in the vCPU thread binds the GL area's EGL
+context there, and the main thread can then never make it current
+again: GDK warns "eglMakeCurrent failed" (EGL_BAD_ACCESS) on every
+attempt, four times per guest frame, and the window is painted without
+a usable context. Its menu bar and tab bar turn transparent or fill with
+a repeating pattern of stale pixels from the moment the guest's driver
+first resets virtio-gpu-gl-pci.
+
+Give VirtIOGPUClass a reset_scanouts hook that the reset bottom half
+calls in the main thread, and disable the GL scanouts there.
+virtio_gpu_gl_reset() is left with moving the renderer to RS_RESET.
+
+This is the 11.1.0 fix for the same call (where WGL dispatches the
+texture delete to NULL and QEMU crashes) carried to 10.2.1, whose reset
+bottom half calls dpy_gfx_replace_surface() and whose GL class has no
+resource_destroy hook.
+---
+ hw/display/virtio-gpu-gl.c     | 21 +++++++++++++++++++--
+ hw/display/virtio-gpu.c        |  4 ++++
+ include/hw/virtio/virtio-gpu.h |  2 ++
+ 3 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/hw/display/virtio-gpu-gl.c b/hw/display/virtio-gpu-gl.c
+index c06a078fb3..5cc5d7dabb 100644
+--- a/hw/display/virtio-gpu-gl.c
++++ b/hw/display/virtio-gpu-gl.c
+@@ -101,9 +101,26 @@ static void virtio_gpu_gl_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
+     virtio_gpu_virgl_fence_poll(g);
+ }
+ 
++/*
++ * Disabling a scanout makes the display switch surfaces, which calls GL
++ * with the display's context. That context can only be made current in the
++ * main thread (WGL refuses a context current in another thread, and GL then
++ * dispatches to NULL; EGL binds it to the other thread, and the main thread
++ * can never make it current again), so this runs from the reset bottom half
++ * rather than from virtio_gpu_gl_reset(), which a guest's status write calls
++ * in a vCPU thread.
++ */
++static void virtio_gpu_gl_reset_scanouts(VirtIOGPU *g)
++{
++    VirtIOGPUGL *gl = VIRTIO_GPU_GL(g);
++
++    if (gl->renderer_state == RS_INITED) {
++        virtio_gpu_virgl_reset_scanout(g);
++    }
++}
++
+ static void virtio_gpu_gl_reset(VirtIODevice *vdev)
+ {
+-    VirtIOGPU *g = VIRTIO_GPU(vdev);
+     VirtIOGPUGL *gl = VIRTIO_GPU_GL(vdev);
+ 
+     virtio_gpu_reset(vdev);
+@@ -113,7 +130,6 @@ static void virtio_gpu_gl_reset(VirtIODevice *vdev)
+      * thread, and when the renderer is unblocked.
+      */
+     if (gl->renderer_state == RS_INITED) {
+-        virtio_gpu_virgl_reset_scanout(g);
+         gl->renderer_state = RS_RESET;
+     }
+ }
+@@ -193,6 +209,7 @@ static void virtio_gpu_gl_class_init(ObjectClass *klass, const void *data)
+     vgc->handle_ctrl = virtio_gpu_gl_handle_ctrl;
+     vgc->process_cmd = virtio_gpu_virgl_process_cmd;
+     vgc->update_cursor_data = virtio_gpu_gl_update_cursor_data;
++    vgc->reset_scanouts = virtio_gpu_gl_reset_scanouts;
+ 
+     vdc->realize = virtio_gpu_gl_device_realize;
+     vdc->unrealize = virtio_gpu_gl_device_unrealize;
+diff --git a/hw/display/virtio-gpu.c b/hw/display/virtio-gpu.c
+index 43e88a4daf..041faec9f7 100644
+--- a/hw/display/virtio-gpu.c
++++ b/hw/display/virtio-gpu.c
+@@ -1573,6 +1573,10 @@ static void virtio_gpu_reset_bh(void *opaque)
+         dpy_gfx_replace_surface(g->parent_obj.scanout[i].con, NULL);
+     }
+ 
++    if (vgc->reset_scanouts) {
++        vgc->reset_scanouts(g);
++    }
++
+     g->reset_finished = true;
+     qemu_cond_signal(&g->reset_cond);
+ }
+diff --git a/include/hw/virtio/virtio-gpu.h b/include/hw/virtio/virtio-gpu.h
+index 58e0f91fda..93f1f8d208 100644
+--- a/include/hw/virtio/virtio-gpu.h
++++ b/include/hw/virtio/virtio-gpu.h
+@@ -231,6 +231,8 @@ struct VirtIOGPUClass {
+     void (*resource_destroy)(VirtIOGPU *g,
+                              struct virtio_gpu_simple_resource *res,
+                              Error **errp);
++    /* Called by the reset bottom half, in the main thread. */
++    void (*reset_scanouts)(VirtIOGPU *g);
+ };
+ 
+ /* VirtIOGPUGL renderer states */
+-- 
+2.53.0
+

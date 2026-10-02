@@ -32,9 +32,12 @@
 //!
 //! It is QEMU's bug, not the guest's — it is reached before the compositor
 //! starts, while the loader is still drawing — and it is unfixed upstream as
-//! of v10.1. Nothing Ferrix can do from inside the guest avoids it, short of
-//! never resetting the card. So the line is hidden here and counted, and
-//! [`report`] says how many went.
+//! of v11.1.2. Nothing Ferrix can do from inside the guest avoids it, short of
+//! never resetting the card. The QEMU `tools/common/fetch/fetch-qemu-linux.sh`
+//! builds carries the fix (`tools/common/data/qemu/0003-*.patch`, see
+//! `docs/GPU.md` §3.12), so a count here means a QEMU without it. The line is
+//! still hidden and counted for any other QEMU, and [`report`] says how many
+//! went.
 //!
 //! # Why the blank lines go too
 //!

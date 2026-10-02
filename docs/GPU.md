@@ -868,6 +868,19 @@ already runs in the main thread, disables the GL scanouts. On Windows,
 (v11.1.0-1860) is not the base: built there, devmgr never reported, with
 or without the 3D card.
 
+"Fails quietly" was wrong for Linux (2026-10-03). The vCPU thread's
+`gtk_gl_area_make_current` binds the GL area's EGL context there, and the
+main thread can never make it current again: GDK warns `eglMakeCurrent
+failed` four times a frame (`tools/common/xtask/src/noise.rs` hides those),
+and on a Wayland host the window's menu bar and tab bar turn transparent or
+fill with stale pixels from the moment the kernel's driver resets the card.
+`0003-*.patch` is 0001 carried to 10.2.1, in `series-10.2.1`, so the
+Linux build `tools/common/fetch/fetch-qemu-linux.sh` makes has it too: 47
+warnings in a two-minute boot without it, none with it. `0004-*.patch`
+fixes the other thing that window got wrong with `gl=on`: a GtkGLArea has
+no window of its own, so the blank cursor QEMU sets over the guest was set
+on the whole window, and the host pointer vanished over the menu bar.
+
 ### 3a, which was not chosen for the compositor
 
 Mesa's virgl driver built on ferrousli would give *every client* OpenGL ES

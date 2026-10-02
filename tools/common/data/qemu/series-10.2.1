@@ -2,5 +2,12 @@
 # in order. One file name per line; `#` starts a comment.
 #
 # 0001 (the virtio-gpu-gl reset fix) is not here: it is the Windows build's,
-# against 11.1.0, and does not apply to 10.2.1.
+# against 11.1.0, and does not apply to 10.2.1. 0003 is the same fix carried
+# to 10.2.1: without it a GTK window on a Wayland host loses its GL context
+# to the vCPU thread when the guest resets the card, and its menu bar turns
+# transparent or fills with stale pixels.
 0002-intel_iommu-honour-CFI-and-block-compatibility-format.patch
+0003-virtio-gpu-gl-Disable-scanouts-on-reset-in-the-main-10.2.1.patch
+# 0004: with gl=on the GL area has no window of its own, and the cursor QEMU
+# hides over the guest was set on the whole window, menu bar and tabs too.
+0004-ui-gtk-Set-the-guest-s-cursor-on-the-GL-area-s-own-window.patch
