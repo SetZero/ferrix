@@ -920,6 +920,57 @@ and took the recommended answer for D2, D3 and D5.
     The gate waits 400 s for a boot unless `--timeout` says otherwise,
     because of TCG. It is x86-64 only, like `uvm-kpi`. Its unit tests
     judge the two recorded runs.
+* **2026-10-02 — N0d built: 64-bit apertures and a driver's configuration
+  window** (branch `nvidia-n0d`, for the consultant; the design and its
+  conditions D1–D4 are `nvidia-n0-designs` §12.1). QEMU only:
+  * **`device_aperture`** (0x1054) writes a 32-byte `ApertureInfo`: the
+    minted address and length whole, the BAR and the offset in it, and the
+    prefetchable, whole-pages and 64-bit flags. `DeviceInfo` keeps its 96
+    bytes. xtask's x86-64 machine carries `pci-testdev,membar=8G`, and its
+    8 GiB BAR is reported whole above 4 GiB (W1).
+  * **The window**: `device_config_read` (0x1055) and
+    `device_config_write` (0x1056), both needing `MANAGE`. Every byte reads.
+    A write is made only inside a vendor capability's body
+    (`ferrix_pci::window`, host-tested), virtio's `pci_cfg_data` excepted
+    (D1), and any other is refused whole. The first refusal at each dword
+    prints one line naming the register, after the lock is dropped, from a
+    bitmap made at stage 10 (D3).
+  * **One lock per node, as a type**: every write of a published node's
+    configuration space goes through `ConfigWrites`, which only taking the
+    node's `IrqSpinLock` makes. `MsixTable::open` has lost its own mapping
+    (D4). The node maps its configuration space once.
+  * **The breach detector** (D2): `verify_config` reads the command bits,
+    the BARs and the MSI and MSI-X registers back at each accepted HELLO
+    (`DeviceNode::hello_accepted`, beside the quarantine release) and at
+    each quiesce. On a mismatch it turns bus mastering off and refuses the
+    node until reboot, and prints the register. AoU-22 is in the
+    SAFETY-MANUAL.
+  * **Two clarifications of the design**, both small:
+    * `device_config_read` writes its value to a `u32` in the caller's
+      memory. It does not return it, because on ARMv7-A a 32-bit read of
+      all ones would be decoded as an error.
+    * A function behind a CAM window (crosvm) has 256 bytes, and reads
+      above them answer all ones.
+  * **Two departures from §12.1's check table**:
+    * W3 runs on ARMv7-A too, since its virtio-rng has the PCI
+      configuration capability.
+    * W5's control reduces the whole-range test to the *last* byte. No
+      QEMU vendor capability has an aligned pair whose first byte is
+      writable and second kernel-owned.
+  * Requirements `L.device.24`–`26` and `L.object.117`, released from the
+    reservation.
+  * **The consultant's code review: OK IF**, on 1f95d8813 (its ledger,
+    2026-10-02). D1–D4 are met and the deviations accepted. Its two
+    conditions are folded in on the rebased branch:
+    * A refused node never gets bus mastering back. `refuse` sets the flag
+      and turns bus mastering off in one hold of the configuration lock, and
+      `set_bus_master(true)` tests the flag under it. W7 now also asks for
+      bus mastering after the refusal and requires it to stay off.
+    * The walker fails closed on its own limits. More capabilities than it
+      records (304), or more vendor bodies (64), leave the function nothing
+      writable. Two host tests hold it.
+    * As its advisory asked, `hello_accepted` reads the configuration back
+      before it releases the quarantine.
 
 ## 11. CUDA (N5)
 

@@ -385,6 +385,38 @@ such a function, acknowledge the `Interrupt` before draining the device's
 status, and service the device as soon as they claim the interrupt. An
 NVIDIA GPU's re-arm write, in particular, comes after the acknowledgement.
 
+### AoU-22 — a driver writes no kernel-owned register or structure through a BAR
+A driver writes its PCI function's configuration space only through
+`device_config_write`, which makes a write only inside the function's
+vendor-specific capabilities and refuses any other whole (`L.device.25`,
+`L.device.26`). It cannot refuse what a driver writes through a BAR: some
+devices mirror their own configuration space in a BAR -- NVIDIA GPUs at BAR0
++ 0x88000 (`NV_PCFG`) -- and virtio's `VIRTIO_PCI_CAP_PCI_CFG` is the reverse
+path. Through such a mirror a driver can move a BAR, so the device decodes
+an address range it was not given and may answer another device's driver's
+accesses; rewrite its MSI message; or turn bus mastering on, which the IOMMU
+still confines (H.DMA.1-3). The MSI-X table and its pending-bit array are
+kernel-owned structures in a BAR too, withheld from every aperture. The
+integrator shall use drivers that write no kernel-owned register or
+structure -- the command register, the BARs, the MSI and MSI-X
+capabilities, the MSI-X table and pending-bit array -- through any BAR path:
+for NVIDIA's driver, `nvrm`'s OS layer routes `NV_PCFG` writes to the
+configuration window, where they are refused. The device's own firmware can
+rewrite its configuration without the driver, so this rests on the device as
+much as on the driver.
+
+The element detects a breach rather than preventing it: at each accepted
+`HELLO` and each quiesce `DeviceNode::verify_config` reads the command
+register's decoding, bus-mastering and `INTx` bits, every assigned memory BAR,
+and the MSI or MSI-X registers and table entries it programmed back against
+what it made them, and on a mismatch turns bus mastering off and refuses the
+node in one hold of the node's configuration lock -- after which no request,
+a driver's pin or the kernel's own, turns bus mastering on again -- until the
+element restarts (every call that needs `MANAGE` answers
+`BAD_STATE`, the quiesce too, so devmgr starts no driver on it again), and
+prints the register. What a breach does between two read-backs is not
+detected.
+
 ## 5. Element failure analysis
 
 The hazard analysis the element *can* do: not what harm the system causes —

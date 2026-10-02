@@ -617,6 +617,33 @@ two types are mapped at once, so the effect is stale data over the
 device's own memory, not a machine-wide one (VULNERABILITY-ANALYSIS
 T.DMA path 7). A flush when a cached hold is released would close it.
 
+### 2.2f A device's configuration lock (`DeviceNode::config`)
+
+One interrupt-masking spin lock per device node, held across every write of
+a published PCI function's configuration space (`L.object.117`): bus
+mastering's read-modify-write of the command register, an MSI mint's
+`INTx` off and its message (`Msi::program`: at most seven accesses), an MSI
+vector's mask (one read and one write, from an interrupt handler), MSI-X's
+enable and function mask (a read and a write), a driver's
+`device_config_write` (one write), `verify_config`'s read-back -- the
+command register, at most twelve BAR dwords and, with MSI, five more reads --
+and a refusal's (a read and a write of the command register).
+It masks interrupts because an MSI vector is masked from interrupt handlers.
+It is a leaf: nothing is mapped, allocated, waited for or locked under it.
+The function's configuration space is mapped once, before the lock is first
+taken, and kept; an MSI mint takes it inside the vector's own `minted` lock,
+which is the order (`minted`, then `config`). So the longest hold is about
+twenty uncached configuration accesses, a few microseconds on any machine
+Ferrix boots, with interrupts masked on the holding processor; it adds to the
+masked windows AoU-4 budgets.
+
+What the window keeps per node is made with the node at stage 10 and never
+grows: the allowlist, one bit per byte of the 4 KiB (512 bytes, and 128 more
+naming up to 32 capabilities), and the record of refusals printed, one bit
+per dword (128 bytes), which `device_config_write` reads and sets only under
+the lock and prints from after it is dropped. A refused write allocates
+nothing.
+
 ### 2.3 What is missing, per standard
 
 * **DO-178C DAL C** does not require WCET as such, but does require that

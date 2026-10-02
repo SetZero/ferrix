@@ -250,7 +250,9 @@ crates the manifest does not classify, `ferrix-pci`, `ferrix-acpi` and
 since 2026-10-02 whether a function is its own requester -- the rule that
 decides whether it gets an IOMMU domain (`L.iommu.45`) -- and which of an MSI
 capability's registers mask it (`L.device.23`) are `ferrix_pci::topology` and
-`ferrix_pci::msi`. Also since 2026-10-02 (F-58), which VT-d table writes are
+`ferrix_pci::msi`, and since NVIDIA's N0d which bytes of its configuration
+space a driver may write (`L.device.26`) is `ferrix_pci::window`. Also since
+2026-10-02 (F-58), which VT-d table writes are
 cleaned to memory before a unit that does not snoop is told of them is
 `ferrix_paging::coherence`: `Unpublished`, the record of writes not yet
 cleaned, and `Walked`, the `unsafe impl PhysMem` that puts the mapper's own
