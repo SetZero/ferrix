@@ -28,6 +28,11 @@ use std::time::{Duration, Instant};
 pub(crate) struct Pace {
     /// When the next frame may be drawn, or `None` before the first.
     next: Option<Instant>,
+    /// When the frame last allowed was due: the refresh it stands for,
+    /// which is what its presentation time says. On the grid of refreshes,
+    /// where a real screen's vblanks are, rather than whenever the loop
+    /// got round to it.
+    drawn: Option<Instant>,
 }
 
 impl Pace {
@@ -53,14 +58,22 @@ impl Pace {
         match self.next {
             Some(next) if now < next => false,
             Some(next) if now.saturating_duration_since(next) < period => {
+                self.drawn = Some(next);
                 self.next = next.checked_add(period);
                 true
             }
             _ => {
+                self.drawn = Some(now);
                 self.next = now.checked_add(period);
                 true
             }
         }
+    }
+
+    /// When the frame [`Pace::due`] last allowed was due, if one was.
+    #[must_use]
+    pub(crate) fn drawn(&self) -> Option<Instant> {
+        self.drawn
     }
 }
 

@@ -262,10 +262,16 @@ fn global(name: &str, around: &mut Around<'_>) -> bool {
 /// The compositor's clock as these protocols carry it: seconds and
 /// nanoseconds.
 fn now_monotonic() -> (u64, u32) {
-    let since = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    (since.as_secs(), since.subsec_nanos())
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a valid timespec for clock_gettime to write.
+    let _ = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut now) };
+    (
+        u64::try_from(now.tv_sec).unwrap_or(0),
+        u32::try_from(now.tv_nsec).unwrap_or(0),
+    )
 }
 
 /// `dpms on|off|toggle [monitor]`: turn a screen off, or every screen.

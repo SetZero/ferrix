@@ -2280,7 +2280,7 @@ fn drawn_with(
 /// the same way.
 #[expect(
     clippy::too_many_arguments,
-    reason = "a frame's surfaces come from four places and the event carries the clock, the count and the refresh"
+    reason = "a frame's surfaces come from four places and the event carries the clock, the count, the refresh and its time"
 )]
 fn frames_done(
     slots: &mut [Slot],
@@ -2291,6 +2291,7 @@ fn frames_done(
     now: u32,
     drawn: u32,
     refresh: u32,
+    due: Option<Instant>,
 ) {
     let mut surfaces: Vec<(usize, ObjectId)> = sources
         .values()
@@ -2309,7 +2310,17 @@ fn frames_done(
                 .map(|(_, surface)| (held.client, *surface)),
         );
     }
-    let at = now_monotonic();
+    // The frame's refresh on the monotonic clock: the pace's grid, so that
+    // a client deriving its vsync from these times -- Chrome's BeginFrames,
+    // a video's cadence -- sees one refresh after another, not the loop's
+    // jitter.
+    let at = match due {
+        Some(due) => before(
+            now_monotonic(),
+            Instant::now().saturating_duration_since(due),
+        ),
+        None => now_monotonic(),
+    };
     for (index, surface) in surfaces {
         let Some(slot) = slots.get_mut(index) else {
             continue;
@@ -3832,12 +3843,29 @@ fn copy_screen(
     true
 }
 
+/// `at` moved back by `by`, in the seconds and nanoseconds the protocols
+/// carry.
+fn before((seconds, nanos): (u64, u32), by: Duration) -> (u64, u32) {
+    let total = u128::from(seconds) * 1_000_000_000 + u128::from(nanos);
+    let total = total.saturating_sub(by.as_nanos());
+    (
+        u64::try_from(total / 1_000_000_000).unwrap_or(0),
+        u32::try_from(total % 1_000_000_000).unwrap_or(0),
+    )
+}
+
 /// The monotonic clock, as `zwlr_screencopy_frame_v1.ready` carries it.
 fn now_monotonic() -> (u64, u32) {
-    let since = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    (since.as_secs(), since.subsec_nanos())
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a valid timespec for clock_gettime to write.
+    let _ = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut now) };
+    (
+        u64::try_from(now.tv_sec).unwrap_or(0),
+        u32::try_from(now.tv_nsec).unwrap_or(0),
+    )
 }
 
 /// Everything `hyprctl` answers about that the layout does not know.

@@ -166,6 +166,7 @@ impl Compositor<'_> {
             now,
             self.tally.drawn,
             refresh_ns(&self.screens),
+            self.pace.drawn(),
         );
         // And only now each screen's flip, which waits for the host to show
         // the frame: on QEMU's GL display that is the window's next repaint,

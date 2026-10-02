@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use compositor_protocol::core::{self, wl_display, wl_registry, wl_seat, wl_shm};
+use compositor_protocol::presentation::wp_presentation;
 use compositor_wire::{
     Arg, ArgType, Error as WireError, Fd, ObjectError, ObjectId, Objects, Reader, Writer,
 };
@@ -914,6 +915,19 @@ impl Client {
                     &[Arg::Uint(format.to_wl_shm())],
                 );
             }
+        }
+        if global.role == Role::Presentation {
+            // The protocol has the clock said at once after binding: a
+            // client reads every `presented` time on it. CLOCK_MONOTONIC,
+            // which a toolkit compares with its own frame times; with
+            // nothing said Chrome assumed it and was handed the wall clock.
+            const CLOCK_MONOTONIC: u32 = 1;
+            let _ = self.out.write(
+                id,
+                wp_presentation::event::CLOCK_ID,
+                &[ArgType::Uint],
+                &[Arg::Uint(CLOCK_MONOTONIC)],
+            );
         }
         if global.role == Role::ForeignToplevelManager {
             // A bar that has just bound is owed a handle for every window
