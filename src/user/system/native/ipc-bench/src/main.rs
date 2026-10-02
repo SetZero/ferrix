@@ -30,9 +30,10 @@ use core::fmt::Write as _;
 use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_rt::linux::{self, numbers};
 use ferrix_rt::native::channel::{self, Channel, ReadError};
-use ferrix_rt::native::job::for_cgroup;
+use ferrix_rt::native::job::{Job, for_cgroup};
 use ferrix_rt::native::pending::create_process;
-use ferrix_rt::native::{Deadline, Error, Handle, Object, Signals, vmo};
+use ferrix_rt::native::vmo::{self, Vmo};
+use ferrix_rt::native::{Deadline, Error, Handle, Object, OwnedHandle, Signals};
 use ferrix_rt::{Bootstrap, Kernel};
 
 ferrix_rt::entry!(main);
@@ -55,10 +56,11 @@ const O_DIR: usize = 0o2_000_000 | 0o200_000;
 /// `SEEK_END`.
 const SEEK_END: usize = 2;
 
-/// Client or server, by whether there is a bootstrap handle.
+/// The launcher with no bootstrap handle; with one, a server, or the client
+/// of the domain run if its first message carries a channel.
 fn main(bootstrap: Bootstrap) -> i32 {
     match bootstrap {
-        Some(channel) => serve(&channel),
+        Some(channel) => started(&channel),
         None => match client() {
             Ok(()) => 0,
             Err(step) => {
@@ -67,6 +69,69 @@ fn main(bootstrap: Bootstrap) -> i32 {
             }
         },
     }
+}
+
+/// A process the launcher started: the domain run's client if its first
+/// message carries the channel to time trips on, and otherwise a server,
+/// which that first message was the first request to.
+fn started(bootstrap: &Channel<Kernel>) -> i32 {
+    let mut bytes = [0_u8; 64];
+    let mut handles = [Handle::INVALID; 1];
+    let received = loop {
+        match bootstrap.read(&mut bytes, &mut handles) {
+            Ok(received) => break received,
+            Err(ReadError::Failed(Error::ShouldWait)) => {
+                if bootstrap
+                    .wait_one(Signals::READABLE | Signals::PEER_CLOSED, Deadline::Never)
+                    .is_err()
+                {
+                    return 36;
+                }
+            }
+            Err(ReadError::Failed(Error::PeerClosed)) => return 0,
+            Err(_) => return 37,
+        }
+    };
+    let message = bytes.get(..received.bytes).unwrap_or_default();
+    if received.handles == 1
+        && let Some(&handle) = handles.first()
+    {
+        let server = Channel::from_owned(OwnedHandle::from_raw(Kernel, handle));
+        return match domain_client(bootstrap, &server) {
+            Ok(()) => 0,
+            Err(step) => step,
+        };
+    }
+    if message == FAST {
+        return serve_fast(bootstrap);
+    }
+    if bootstrap.write(message).is_err() {
+        return 31;
+    }
+    serve(bootstrap)
+}
+
+/// The domain run's client: time the `channel_write_read` trip to `server`,
+/// a process of the same speculation domain, and send the line back to the
+/// launcher, which has the console.
+fn domain_client(launcher: &Channel<Kernel>, server: &Channel<Kernel>) -> Result<(), i32> {
+    let message = 0x5EED_u64.to_ne_bytes();
+    server.write(FAST).map_err(|_| 40)?;
+    let mut call = Histogram::new();
+    for _ in 0..WARMUP {
+        call_trip(server, &message)?;
+    }
+    let clock = Clock::start();
+    for _ in 0..ROUNDS {
+        let before = ferrix_rt::counter().unwrap_or(0);
+        call_trip(server, &message)?;
+        call.add(ferrix_rt::counter().unwrap_or(0).wrapping_sub(before));
+    }
+    let scale = clock.stop();
+    let line = call.line("domain-call", scale);
+    launcher
+        .write(line.bytes.get(..line.len).unwrap_or_default())
+        .map_err(|_| 41)
 }
 
 /// Echo every message until the client lets go.
@@ -121,9 +186,12 @@ fn serve_fast(channel: &Channel<Kernel>) -> i32 {
     }
 }
 
-/// Start the server, time the floor and the trip, print both.
+/// Start the server, time the floor and the trips, print them; then the
+/// same `channel_write_read` trip between two processes of one speculation
+/// domain.
 fn client() -> Result<(), i32> {
-    let mine = start_server()?;
+    let (image, job) = prepare()?;
+    let mine = spawn(&job, &image, "ipc-echo")?;
 
     let mut floor = Histogram::new();
     let clock = Clock::start();
@@ -167,7 +235,41 @@ fn client() -> Result<(), i32> {
     }
     let scale = clock.stop();
     call.print("call", scale);
-    Ok(())
+    drop(mine);
+    domain_run(&job, &image)
+}
+
+/// A client and a server born in one new speculation domain, so that their
+/// switches skip the predictor barrier (`docs/OPAQUE-KERNEL.md` §9.2): the
+/// client is told the server's channel in its first message and sends its
+/// line back. Both must be made in the job, which this process is not.
+fn domain_run(job: &Job<Kernel>, image: &Vmo<Kernel>) -> Result<(), i32> {
+    let domain = job.create_speculation_domain().map_err(|error| {
+        say(format_args!("ipc-bench: speculation domain: {error:?}"));
+        50
+    })?;
+    let to_server = spawn(&domain, image, "ipc-echo")?;
+    let to_client = spawn(&domain, image, "ipc-client")?;
+    to_client
+        .write_with(b"CLIENT", [to_server.into_owned()])
+        .map_err(|_| 51)?;
+    let mut bytes = [0_u8; 160];
+    let mut handles = [Handle::INVALID; 1];
+    loop {
+        match to_client.read(&mut bytes, &mut handles) {
+            Ok(received) => {
+                let line = bytes.get(..received.bytes).unwrap_or_default();
+                let _ = linux::write(1, line);
+                return Ok(());
+            }
+            Err(ReadError::Failed(Error::ShouldWait)) => {
+                let _ = to_client
+                    .wait_one(Signals::READABLE | Signals::PEER_CLOSED, Deadline::Never)
+                    .map_err(|_| 52)?;
+            }
+            Err(_) => return Err(53),
+        }
+    }
 }
 
 /// One message there and back by `channel_write_read`, checked.
@@ -200,9 +302,19 @@ fn round_trip(
     }
 }
 
-/// Load this program into a VMO, start it in the root cgroup's job with one
-/// end of a new channel, and keep the other.
-fn start_server() -> Result<Channel<Kernel>, i32> {
+/// Start a copy of this program, named `name`, in `job`, with one end of a
+/// new channel as its bootstrap, and keep the other.
+fn spawn(job: &Job<Kernel>, image: &Vmo<Kernel>, name: &str) -> Result<Channel<Kernel>, i32> {
+    let (mine, theirs) = channel::create(Kernel).map_err(|_| 8)?;
+    let process = create_process(job, image, name).map_err(|_| 9)?;
+    process.start(theirs.into_owned()).map_err(|_| 9)?;
+    // The process handle goes; the process lives until its channel does.
+    drop(process);
+    Ok(mine)
+}
+
+/// Load this program into a VMO, and find the job of a cgroup of its own.
+fn prepare() -> Result<(Vmo<Kernel>, Job<Kernel>), i32> {
     // SAFETY: `SELF` is NUL-terminated and borrowed for the call.
     let fd = unsafe {
         linux::call(
@@ -284,13 +396,7 @@ fn start_server() -> Result<Channel<Kernel>, i32> {
         7
     })?;
     let _ = linux::close(dir);
-
-    let (mine, theirs) = channel::create(Kernel).map_err(|_| 8)?;
-    let server = create_process(&job, &image, "ipc-echo").map_err(|_| 9)?;
-    server.start(theirs.into_owned()).map_err(|_| 9)?;
-    // The process handle goes; the server lives until the channel does.
-    drop(server);
-    Ok(mine)
+    Ok((image, job))
 }
 
 /// The counter against the monotonic clock, over one run.
@@ -395,11 +501,17 @@ impl Histogram {
         0
     }
 
-    /// One line, in nanoseconds, `scale` being nanoseconds per thousand ticks.
+    /// One line on standard output: see [`Histogram::line`].
     fn print(&self, what: &str, scale: u64) {
+        let line = self.line(what, scale);
+        let _ = linux::write(1, line.bytes.get(..line.len).unwrap_or_default());
+    }
+
+    /// One line, in nanoseconds, `scale` being nanoseconds per thousand ticks.
+    fn line(&self, what: &str, scale: u64) -> Line {
         let ns = |ticks: u64| ticks.saturating_mul(scale) / 1000;
         let mean = self.sum / u64::from(self.total.max(1));
-        say(format_args!(
+        format_line(format_args!(
             "ipc-bench {what} n={} min={} p50={} p90={} p99={} mean={}",
             self.total,
             ns(self.least),
@@ -407,19 +519,25 @@ impl Histogram {
             ns(self.at(900)),
             ns(self.at(990)),
             ns(mean),
-        ));
+        ))
     }
 }
 
 /// A line on standard output.
 fn say(line: core::fmt::Arguments<'_>) {
+    let out = format_line(line);
+    let _ = linux::write(1, out.bytes.get(..out.len).unwrap_or_default());
+}
+
+/// `line` formatted, with its newline.
+fn format_line(line: core::fmt::Arguments<'_>) -> Line {
     let mut out = Line {
         bytes: [0; 160],
         len: 0,
     };
     let _ = out.write_fmt(line);
     let _ = out.write_str("\n");
-    let _ = linux::write(1, out.bytes.get(..out.len).unwrap_or_default());
+    out
 }
 
 /// A line being formatted, cut short rather than overflowing.
