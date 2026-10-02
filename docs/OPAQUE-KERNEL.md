@@ -1290,6 +1290,37 @@ What this changes in §9.5:
   its p50 (a histogram floored to an eighth of a power of two). Those are the
   "made exact" part of step 0, still to do.
 
+**The address-space switch without PCID.** sel4bench's one-way figures,
+matched build: `seL4_Call` and `seL4_ReplyRecv` take 748 ticks each in one
+address space and 1,320 across two. The difference, about 130 ns a
+direction, is the cost of a switch of address space here. Of it, about 20 ns
+is the refill. The rest is the `CR3` write and the user TLB refilled after it,
+each miss a two-level walk under nested paging. The budget's 20 ns for "`CR3`
+with a PCID" is about 110 ns on nazuna, for both kernels.
+
+**Later: what seL4 does not do** (after steps 1 to 4, which carry the
+2 us; each is measured with the timing build's ablations first):
+- *ERAPS in place of the refill* (about 40 ns a round trip). Zen 5 clears
+  the return-address predictor on every `MOV CR3` (CPUID 0x8000_0021 EAX
+  bit 24). nazuna has it, KVM reports it to guests and QEMU 10.2.1 names it
+  `eraps`. With `+eraps` in the gate's model, the switch may skip the
+  refill where the processor reports it. §9.3a's A2 keeps the refill at every
+  switch, so this needs the consultant first.
+- *Fewer user pages touched per trip* (part of the 110 ns): the stub and the
+  loop on one code page, stack top, message and TLS on one data page; 2 MiB
+  pages for native programs' text and data.
+- *Global user pages for the runtime's shared read-only text*, mapped
+  identically in every native process, so that it survives `CR3`. It needs
+  the address reserved in every space and `INVLPG` everywhere to unmap, and
+  it gives up ASLR for that text. It is an isolation change and goes to the
+  consultant as a design first.
+- *FSGSBASE* in the gate's model (10 to 20 ns): cheaper FS base writes, at
+  the price of user-mode GS writes the entry path must then handle.
+- *Not pursued:* PKU in place of separate spaces (its switch is a user
+  instruction), segment-limited small spaces (long mode has no limits, and
+  nazuna has no LMSLE), AMD's SVM ASIDs (they tag virtual machines, not
+  processes).
+
 To repeat: `~/.local/share/ferrix/sel4/` on nazuna (`fetch.sh`, `build.sh`,
 `run.sh`, `series.sh`, `summarize.py`, the patch to sel4bench's `apps/ipc`,
 and every run's log). The sources are sel4bench-manifest 80add415, with seL4
