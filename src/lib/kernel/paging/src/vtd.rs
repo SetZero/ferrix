@@ -23,6 +23,11 @@
 
 use crate::{Encoding, Level, MapFlags, PhysAddr, VirtAddr};
 
+pub mod queue;
+
+#[cfg(test)]
+mod tests;
+
 /// The device may read through this entry.
 const READ: u64 = 1 << 0;
 /// The device may write through this entry.
