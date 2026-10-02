@@ -363,6 +363,8 @@ fn record_call(
             let asked = a.get(1).copied().unwrap_or(0);
             (audit::WIDEN, named(a[0]), [number, asked as u32, 0])
         }
+        // Audited by the call itself, with the device and the values.
+        (NativeCall::DeviceSetLimit, _) => return,
         (_, Err(status::ACCESS_DENIED)) => (audit::RIGHTS, named(a[0]), [number, 0, 0]),
         (NativeCall::JobForCgroup, Ok(given)) => {
             (audit::DELEGATED, named(*given as u64), [number, 0, 0])
@@ -2202,13 +2204,40 @@ fn pin_status(why: object::pin::PinError) -> Errno {
 /// belongs to the node, through its domain, and outlives every driver.
 /// `BAD_STATE` while the device has live pins, and `NO_MEMORY` past the
 /// kernel's ceiling, with nothing changed.
+///
+/// Every answer on a device handle is audited, as `job_set_limit`'s is: a
+/// set as `DEVICE_LIMIT_SET`, a refusal -- `SET_LIMIT` missing included --
+/// as `DEVICE_LIMIT`, each with the device, the limit, and the old and new
+/// values. So the rights refusal is made here, with the device in hand,
+/// rather than by `device_in`, and `record_call` leaves this call to it.
 fn device_set_limit(
     process: &Process,
     device: Handle,
     which: u64,
     value: u64,
 ) -> Result<usize, Errno> {
-    let node = device_in(process, device, Rights::SET_LIMIT)?;
+    let (node, rights) = device_and_rights(process, device)?;
+    let mut old = object::pin::budget_of(&node) as u64;
+    let answered = set_limit_on(&node, rights, which, value).map(|was| {
+        old = was as u64;
+        0
+    });
+    audit::device_limit(
+        audit::Subject::of(process),
+        node.index(),
+        which,
+        [old, value],
+        &answered,
+    );
+    answered
+}
+
+/// [`device_set_limit`]'s decision on `node` for a handle with `rights`:
+/// the budget it replaced, or why not.
+fn set_limit_on(node: &DeviceNode, rights: Rights, which: u64, value: u64) -> Result<usize, Errno> {
+    if !rights.contains(Rights::SET_LIMIT) {
+        return Err(status::ACCESS_DENIED);
+    }
     if which != types::DEVICE_LIMIT_PIN_PAGES {
         return Err(status::INVALID_ARGS);
     }
@@ -2218,8 +2247,21 @@ fn device_set_limit(
     object::pin::set_budget(&domain, pages).map_err(|why| match why {
         object::pin::BudgetError::LivePins => status::BAD_STATE,
         object::pin::BudgetError::PastCeiling => status::NO_MEMORY,
-    })?;
-    Ok(0)
+    })
+}
+
+/// The device node a handle names, and the rights the handle carries.
+fn device_and_rights(
+    process: &Process,
+    device: Handle,
+) -> Result<(Arc<DeviceNode>, Rights), Errno> {
+    process.with_handles(|table| {
+        let (object, rights) = table.get(device).map_err(table_error)?;
+        let Object::Device(node) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        Ok((Arc::clone(node), rights))
+    })
 }
 
 /// `device_get_limit`. Any device handle will do: the numbers say what a
@@ -2227,11 +2269,7 @@ fn device_set_limit(
 fn device_get_limit(process: &Process, device: Handle, which: u64) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::NONE)?;
     match which {
-        types::DEVICE_LIMIT_PIN_PAGES => Ok(node
-            .domain_made()
-            .map_or(object::pin::DEFAULT_PIN_BUDGET_PAGES, |domain| {
-                object::pin::counts(&domain).budget
-            })),
+        types::DEVICE_LIMIT_PIN_PAGES => Ok(object::pin::budget_of(&node)),
         types::DEVICE_LIMIT_PIN_CEILING => Ok(object::pin::ceiling()),
         types::DEVICE_LIMIT_PIN_ROOM => Ok(node
             .domain_made()

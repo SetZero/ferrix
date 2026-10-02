@@ -7,6 +7,7 @@
 //! domain there is no quarantine, and nothing is checked (ARMv7-A).
 
 use alloc::sync::Arc;
+use alloc::vec;
 
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
@@ -18,6 +19,7 @@ use ferrix_native_abi::types::{
 use ferrix_paging::MapFlags;
 
 use super::{Counts, DEFAULT_PIN_BUDGET_PAGES, Pin, PinError, ceiling, counts, release};
+use crate::audit::{self, DEVICE_LIMIT, DEVICE_LIMIT_SET};
 use crate::device::DeviceNode;
 use crate::iommu::{Domain, DomainError};
 use crate::object::Object;
@@ -32,6 +34,8 @@ const BUDGET: usize = 2;
 pub(crate) struct Report {
     /// Pins refused as the budget's rules say.
     pub(crate) refusals: u32,
+    /// `device_set_limit` calls refused as P5 provokes them.
+    pub(crate) set_refused: u32,
     /// Pages a release could not unpin, moved to `kept` (one per boot).
     pub(crate) kept: usize,
 }
@@ -289,13 +293,13 @@ fn set_limit_through(
     if set(driver, DEFAULT_PIN_BUDGET_PAGES) != Err(status::ACCESS_DENIED) {
         return Err("a pin budget was set through a handle without SET_LIMIT");
     }
-    report.refusals += 1;
+    report.set_refused += 1;
     let live = check_pin_under(domain, &owners.live, 1, None)
         .map_err(|_| "a pin within the device's own budget was refused")?;
     if set(manager, DEFAULT_PIN_BUDGET_PAGES) != Err(status::BAD_STATE) {
         return Err("a pin budget was changed under a live pin");
     }
-    report.refusals += 1;
+    report.set_refused += 1;
     drop(live);
 
     let room = get(DEVICE_LIMIT_PIN_ROOM).map_err(|_| "device_get_limit refused the room")?;
@@ -310,10 +314,25 @@ fn set_limit_through(
     if set(manager, past) != Err(status::NO_MEMORY) {
         return Err("a pin budget past the kernel's ceiling was set");
     }
-    report.refusals += 1;
+    report.set_refused += 1;
     if get(DEVICE_LIMIT_PIN_PAGES) != Ok(before.budget) || get(DEVICE_LIMIT_PIN_ROOM) != Ok(room) {
         return Err("a pin budget refused past the ceiling changed something");
     }
+    if set(manager, before.budget) != Ok(0) {
+        return Err("a pin budget set again to its own value was refused");
+    }
+    let budget = before.budget as u64;
+    let default = DEFAULT_PIN_BUDGET_PAGES as u64;
+    audited(
+        side,
+        node,
+        &[
+            (DEVICE_LIMIT, status::ACCESS_DENIED.0, [budget, default]),
+            (DEVICE_LIMIT, status::BAD_STATE.0, [budget, default]),
+            (DEVICE_LIMIT, status::NO_MEMORY.0, [budget, past as u64]),
+            (DEVICE_LIMIT_SET, 0, [budget, budget]),
+        ],
+    )?;
     // Raised within the room, where the machine has room for a raise, and
     // put back.
     let within = room / 2;
@@ -327,6 +346,47 @@ fn set_limit_through(
     }
     if counts(domain) != before {
         return Err("device_set_limit's checks left the device's budget changed");
+    }
+    Ok(())
+}
+
+/// Require the audit record to hold, for each of `wanted`, a record of
+/// `side`'s process on `node` of that event and status, naming the pin
+/// budget and the old and new values (condition 1 of the consultant's
+/// review of N0f).
+fn audited(
+    side: &Side,
+    node: &DeviceNode,
+    wanted: &[(audit::Event, u16, [u64; 2])],
+) -> Result<(), &'static str> {
+    let mut high = vec![audit::Record::EMPTY; audit::HIGH_RECORDS];
+    let mut refusals = vec![audit::Record::EMPTY; audit::REFUSAL_RECORDS];
+    let kept = audit::read(audit::Which::High, 0, &mut high).copied;
+    high.truncate(kept);
+    let kept = audit::read(audit::Which::Refusals, 0, &mut refusals).copied;
+    refusals.truncate(kept);
+    let pid = side.process.pid();
+    let device = u32::try_from(node.index()).unwrap_or(u32::MAX);
+    for &(event, errno, [old, new]) in wanted {
+        let detail = [
+            audit::saturated(DEVICE_LIMIT_PIN_PAGES),
+            audit::saturated(old),
+            audit::saturated(new),
+        ];
+        let found = high.iter().chain(refusals.iter()).any(|record| {
+            record.is(event)
+                && record.pid == pid
+                && record.status == i16::try_from(errno).unwrap_or(i16::MAX)
+                && record.target_kind == audit::target::DEVICE
+                && record.target_id == [device, 0]
+                && record.detail == detail
+        });
+        if !found {
+            return Err(
+                "device_set_limit left no audit record of the device, the limit and \
+                        its old and new values",
+            );
+        }
     }
     Ok(())
 }

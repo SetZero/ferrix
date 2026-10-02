@@ -654,19 +654,26 @@ package FerrixObjectRequirements {
                 budget only through a handle carrying SET_LIMIT, never while the
                 device has live pins, and never so that twice every budget raised
                 above the default would pass the ceiling, a quarter of RAM; a
-                refusal shall change nothing. device_get_limit shall answer the
-                budget, the ceiling and the room.";
+                refusal shall change nothing. Every answer on a device handle
+                shall be audited with the device, the limit, and the old and new
+                values: a set as DEVICE_LIMIT_SET, a refusal as DEVICE_LIMIT with
+                its status. device_get_limit shall answer the budget, the ceiling
+                and the room.";
             attribute :>> criterion = "Without SET_LIMIT the set is ACCESS_DENIED;
                 with a live pin, BAD_STATE; a budget whose double passes the room,
-                NO_MEMORY, with the budget and the room read back unchanged; the
-                ceiling read back is the kernel's, nonzero, and the room no more
-                than it.";
-            attribute :>> parent = ("H.DMA.4", "H.OBJ.2");
+                NO_MEMORY, with the budget and the room read back unchanged; a set
+                to the budget it has is taken; the ceiling read back is the
+                kernel's, nonzero, and the room no more than it; and the audit
+                record holds, for the checking process and the device, the three
+                refusals with their statuses and the set, each naming the pin
+                budget and its old and new values.";
+            attribute :>> parent = ("H.DMA.4", "H.OBJ.2", "H.AUD.8");
             attribute :>> unit = ("object::pin::set_budget", "object::pin::raise_of",
                 "object::pin::room", "object::pin::ceiling_room",
                 "object::pin::count_ceiling", "object::pin::counts",
-                "syscall::native::device_set_limit",
-                "syscall::native::device_get_limit");
+                "object::pin::budget_of", "syscall::native::device_set_limit",
+                "syscall::native::set_limit_on", "syscall::native::device_and_rights",
+                "syscall::native::device_get_limit", "audit::device_limit");
         }
         requirement <'L.object.119'> aPinPastTheBudgetIsRefused : ItemLowLevel {
             attribute :>> statement = "A pin shall be refused LimitReached, with

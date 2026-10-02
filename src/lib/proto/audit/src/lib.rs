@@ -146,6 +146,19 @@ pub const LIMIT_SET: Event = Event::new(Class::Changed, 1);
 /// as [`LIMIT_SET`].
 pub const CGROUP_LIMIT: Event = Event::new(Class::Changed, 2);
 
+/// A device's limit set through its handle (`device_set_limit`): the
+/// target is the device, by its place in the kernel's device list; the
+/// detail the limit's number, its old value and its new one, each
+/// saturated.
+pub const DEVICE_LIMIT_SET: Event = Event::new(Class::Changed, 3);
+
+/// A `device_set_limit` refused: as [`DEVICE_LIMIT_SET`], with the value
+/// asked for as the new one, and the status saying why -- `ACCESS_DENIED`
+/// without `SET_LIMIT`, `BAD_STATE` under live pins, `NO_MEMORY` past the
+/// kernel's ceiling. In the refusal ring, since any holder of a device
+/// handle can provoke one.
+pub const DEVICE_LIMIT: Event = Event::new(Class::Refused, 5);
+
 /// The resources a [`LIMIT`] or [`LIMIT_SET`] record names, by number.
 pub mod resource {
     /// Memory, in bytes.
@@ -193,7 +206,7 @@ pub mod power {
 }
 
 /// Every event this crate names, with its name.
-pub const NAMED: [(Event, &str); 23] = [
+pub const NAMED: [(Event, &str); 25] = [
     (START, "START"),
     (CONFIG, "CONFIG"),
     (BOOTED, "BOOTED"),
@@ -203,6 +216,7 @@ pub const NAMED: [(Event, &str); 23] = [
     (RIGHTS, "RIGHTS"),
     (WIDEN, "WIDEN"),
     (LIMIT, "LIMIT"),
+    (DEVICE_LIMIT, "DEVICE_LIMIT"),
     (PROCESS_MADE, "PROCESS_MADE"),
     (DELEGATED, "DELEGATED"),
     (CONTROL, "CONTROL"),
@@ -217,6 +231,7 @@ pub const NAMED: [(Event, &str); 23] = [
     (DMA_FAULT, "DMA_FAULT"),
     (LIMIT_SET, "LIMIT_SET"),
     (CGROUP_LIMIT, "CGROUP_LIMIT"),
+    (DEVICE_LIMIT_SET, "DEVICE_LIMIT_SET"),
 ];
 
 /// What a record's target names, in its `target_kind`.

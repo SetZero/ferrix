@@ -122,11 +122,12 @@ pub(crate) fn check_iommu() {
     match object::pin::check::check_budget(device::devices()) {
         Ok(Some(report)) => println!(
             "  iommu    pin budget: {} pins refused at a budget of 2 pages and at twice it, a dead \
-             driver's pins quarantined and released, {} page kept and still counted, \
-             device_set_limit refused without SET_LIMIT, under a live pin and past the ceiling \
-             of {} pages",
+             driver's pins quarantined and released, {} page kept and still counted, and \
+             device_set_limit refused {} times -- without SET_LIMIT, under a live pin and past \
+             the ceiling of {} pages -- each audited",
             report.refusals,
             report.kept,
+            report.set_refused,
             object::pin::ceiling(),
         ),
         Ok(None) => {}

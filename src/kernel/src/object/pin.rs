@@ -246,6 +246,13 @@ pub(crate) fn counts(domain: &Domain) -> Counts {
     domain.pin_budget().read(&held)
 }
 
+/// `node`'s pin budget: its domain's, or the default for a node whose
+/// domain was never made.
+pub(crate) fn budget_of(node: &DeviceNode) -> usize {
+    node.domain_made()
+        .map_or(DEFAULT_PIN_BUDGET_PAGES, |domain| counts(&domain).budget)
+}
+
 /// Count the kernel's ceiling: a quarter of the RAM the allocator manages.
 /// Stage 10 calls it once, before any budget can be set.
 pub(crate) fn count_ceiling() {
@@ -293,7 +300,7 @@ pub(crate) enum BudgetError {
 }
 
 /// Set `domain`'s pin budget to `pages`: for `device_set_limit`, whose
-/// caller holds `SET_LIMIT`.
+/// caller holds `SET_LIMIT`. Answers the budget it replaced.
 ///
 /// # Errors
 ///
@@ -302,7 +309,7 @@ pub(crate) enum BudgetError {
 /// budget and held against another; [`BudgetError::PastCeiling`] when twice
 /// every raised budget, this one's new value counted and its old one not,
 /// would pass [`ceiling`]. Nothing changes on either.
-pub(crate) fn set_budget(domain: &Domain, pages: usize) -> Result<(), BudgetError> {
+pub(crate) fn set_budget(domain: &Domain, pages: usize) -> Result<usize, BudgetError> {
     let mut held = QUARANTINE.lock();
     let pins = domain.pin_budget();
     let mut now = pins.read(&held);
@@ -317,9 +324,10 @@ pub(crate) fn set_budget(domain: &Domain, pages: usize) -> Result<(), BudgetErro
         return Err(BudgetError::PastCeiling);
     }
     held.raised = raised;
+    let old = now.budget;
     now.budget = pages;
     pins.write(&mut held, now);
-    Ok(())
+    Ok(old)
 }
 
 /// Reserve `pages` of live pins against `domain`'s budget, or `budget` for a

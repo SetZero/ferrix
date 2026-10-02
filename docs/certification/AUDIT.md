@@ -25,6 +25,7 @@ changes nothing about the decision.
 | `REFUSED` | A handle's rights did not cover a call: `ACCESS_DENIED` from the rights check | `syscall/native.rs`, where every native call asks for rights (`job_in`, `device_in`, the table's `get_with`) |
 | `REFUSED` | A rights request that would widen a handle | `object` table, `Requested::resolve` returning `None` |
 | `REFUSED` | A limit refused a charge: tasks, memory, objects at a job's limit | `object/quota.rs`, the one refusal path per resource |
+| `REFUSED` | A device's pin budget refused (`DEVICE_LIMIT`): `ACCESS_DENIED` without `SET_LIMIT`, `BAD_STATE` under live pins, `NO_MEMORY` past the ceiling; the device, the limit, the old value and the one asked for. Recorded by the call in place of the generic rights record | `syscall/native.rs` `device_set_limit` |
 | `GRANTED` | A job handle with `MANAGE` or `SET_LIMIT` given for a cgroup | `fs/cgroupfs.rs` `job_for_cgroup` (a load-ring caller; recorded through the item's call) |
 | `GRANTED` | A native process made, with its creator's ids (P0) | `syscall/native.rs` `process_create` |
 | `GRANTED` | `devmgr` started through the starter; the starter given to pid 1 | `devmgr.rs` `devmgr_start`, `init.rs` `next_bootstrap` |
@@ -32,7 +33,7 @@ changes nothing about the decision.
 | `GRANTED` | A job made one speculation domain (`DOMAIN`): the new job, its parent and the domain's number (`docs/OPAQUE-KERNEL.md` §9) | `syscall/native.rs` `job_create` |
 | `ENDED` | A process or job ended from outside: a job's kill, the scoped OOM kill, `cgroup.kill` | `object/job.rs` `kill`, `kill_members`; `object/oom.rs` |
 | `DEVICE` | A device quiesced; a DMA fault the IOMMU reported for a device | `native::quiesce`; `iommu` fault handlers |
-| `CHANGED` | TSF data changed by a call that succeeded: a job's limit set (`job_set_limit`), a cgroup's limit file written | `syscall/native.rs` `job_set_limit`; cgroupfs limit writes |
+| `CHANGED` | TSF data changed by a call that succeeded: a job's limit set (`job_set_limit`), a cgroup's limit file written, a device's pin budget set (`DEVICE_LIMIT_SET`, with the old and new values) | `syscall/native.rs` `job_set_limit` and `device_set_limit`; cgroupfs limit writes |
 | `SYSTEM` | The audit function's own start-up, with the ring sizes; and its shutdown, the last record before a power action | `audit::start` at bring-up; `power` |
 | `SYSTEM` | The boot's configuration: `--mitigations`, the KASLR state (randomised or not, and why), `ferrix.devmgr=kernel\|init`, and **`ferrix.checks=skip`** -- a boot that skipped its self-tests leaves a record of it -- and each self-check stage's verdict | bring-up in `main.rs` |
 | `SYSTEM` | The root switch and pid 1's re-root; a power action | `fs::root_disk`; `power` |
@@ -287,7 +288,11 @@ Three slices, each reviewed before it lands:
    * a device quiesced, and a DMA fault an IOMMU reported, with the kernel
      as subject;
    * a limit set through a job's handle (`job_set_limit`), and a cgroup's
-     limit file written, as two events.
+     limit file written, as two events;
+   * a device's pin budget set or refused (`device_set_limit`, NVIDIA N0f),
+     as `DEVICE_LIMIT_SET` and `DEVICE_LIMIT`, which the pin budget's own
+     stage-10 check (P5) reads back with the device and both values, on
+     the architectures that translate DMA.
    At the end of boot `audit::check::booted` requires a record of each that
    the boot's own checks provoke, with its outcome and subject, and the
    boot's own records pinned; a negative control per site names the event.

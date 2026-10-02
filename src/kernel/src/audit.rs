@@ -78,10 +78,10 @@ pub(crate) mod check;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub(crate) use ferrix_audit::{
-    BOOTED, CGROUP_KILLED, CGROUP_LIMIT, CONFIG, CONTROL, Class, Config, DELEGATED, DEVMGR_STARTED,
-    DMA_FAULT, DOMAIN, Event, JOB_KILLED, LIMIT, LIMIT_SET, NO_UID, OOM_KILLED, Outcome, POWER,
-    PROCESS_MADE, QUIESCED, READER_GIVEN, RIGHTS, ROOT_SWITCHED, Record, STARTER_GIVEN, SUPPRESSED,
-    WIDEN, saturated, target,
+    BOOTED, CGROUP_KILLED, CGROUP_LIMIT, CONFIG, CONTROL, Class, Config, DELEGATED, DEVICE_LIMIT,
+    DEVICE_LIMIT_SET, DEVMGR_STARTED, DMA_FAULT, DOMAIN, Event, JOB_KILLED, LIMIT, LIMIT_SET,
+    NO_UID, OOM_KILLED, Outcome, POWER, PROCESS_MADE, QUIESCED, READER_GIVEN, RIGHTS,
+    ROOT_SWITCHED, Record, STARTER_GIVEN, SUPPRESSED, WIDEN, saturated, target,
 };
 use ferrix_sync::IrqSpinLock;
 
@@ -684,6 +684,39 @@ pub(crate) fn limit_set(event: Event, subject: Subject, job: u64, resource: u64,
         subject,
         target,
         [job as u32, (job >> 32) as u32, saturated(limit)],
+    );
+}
+
+/// Record `subject` setting limit number `which` of the device at `device`
+/// in the kernel's list from `old` to `new` (`device_set_limit`), as
+/// `answered` says: [`DEVICE_LIMIT_SET`] when it was set, [`DEVICE_LIMIT`]
+/// with the status when it was refused.
+pub(crate) fn device_limit(
+    subject: Subject,
+    device: usize,
+    which: u64,
+    [old, new]: [u64; 2],
+    answered: &Result<usize, ferrix_linux_abi::errno::Errno>,
+) {
+    let (event, outcome, status) = match answered {
+        Ok(_) => (DEVICE_LIMIT_SET, Outcome::Done, 0),
+        Err(refused) => (
+            DEVICE_LIMIT,
+            Outcome::Refused,
+            i16::try_from(refused.0).unwrap_or(i16::MAX),
+        ),
+    };
+    let target = Target {
+        kind: target::DEVICE,
+        id: device as u64,
+    };
+    record(
+        event,
+        outcome,
+        status,
+        subject,
+        target,
+        [saturated(which), saturated(old), saturated(new)],
     );
 }
 

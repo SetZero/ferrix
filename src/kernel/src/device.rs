@@ -684,7 +684,7 @@ impl MappedConfig {
 /// for `ferrix_pci::msi`'s sequences, and holds the [`ConfigState`] those
 /// writes change. The lock is a leaf and masks interrupts: an MSI vector is
 /// masked from interrupt handlers. Nothing is mapped, allocated, waited for
-/// or locked while it is held (MEMORY-AND-TIMING §2.2f).
+/// or locked while it is held (MEMORY-AND-TIMING §2.2h).
 struct ConfigWrites<'a> {
     /// The function's space.
     space: MappedConfig,
