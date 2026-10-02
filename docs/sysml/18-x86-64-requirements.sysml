@@ -1856,4 +1856,109 @@ package FerrixX8664Requirements {
                 "trap::register", "trap::ask");
         }
     }
+
+    package InterruptRemapping {
+        doc /* NVIDIA's N0g on x86-64 (docs/NVIDIA.md section 12.3): remapped
+             * messages, the console's I/O APIC line converted at bring-up, and
+             * x2APIC handled on every processor. */
+
+        requirement <'L.x86_64.129'> messagesAreRemappable : ItemLowLevel {
+            attribute :>> statement = "Where a unit remaps, msi_allocate shall
+                write the vector's interrupt remapping entry, indexed by the
+                vector's slot among the sixty-four, for the function's requester
+                ID and the asking processor, and answer a remappable-format message
+                naming it with data 0; where no unit remaps, a compatibility-format
+                message as before. The check vector 0xFC shall be outside the
+                sixty-four, only counted and acknowledged, and counted stray outside
+                checks R1 and R2.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG edu's remapped
+                MSI is delivered unmasked and not masked (R4) and virtio-rng's
+                MSI-X completes; edu's MSI capability programmed in compatibility
+                format to 0xFC (R1), and as an NMI (R2), faults 0x25 and arrives
+                nowhere, and programmed with another function's entry (R3) faults
+                0x26 and arrives nowhere within the unit's patience; with remapping left off the forged 0xFC
+                arrives and R1 fails. Host test: a remappable message names its
+                handle by bits 19:5 and 2, format bit 4.";
+            attribute :>> parent = "H.DMA.9";
+            attribute :>> unit = ("arch::x86_64::msi::msi_allocate",
+                "iommu::remapping::route", "iommu::remapping::remap_message",
+                "arch::x86_64::service_interrupts", "iommu::remapping::note_check_vector",
+                "iommu::remapping::stray_deliveries");
+        }
+        requirement <'L.x86_64.130'> theConsoleLineIsConverted : ItemLowLevel {
+            attribute :>> statement = "At a unit's interrupt remapping bring-up, the
+                console's I/O APIC line, live in compatibility format since stage 3,
+                shall be converted when that unit's DMAR scope names its I/O APIC by
+                its MADT identifier: masked under its lock; a fresh vector V1 taken
+                and its entry written, with the line's destination, trigger and the
+                I/O APIC's source ID, outside the lock; V0 kept taken for good;
+                and its handler moved to V1 through the generic interrupt layer,
+                still masked, leaving V0 a handler that counts. No vector shall
+                have been handed out by then but the line's, or the boot stops by
+                name. After IRE, its entry shall be rewritten in remappable format
+                with V1 as its vector, unmasked, and the port serviced once. With no scope naming its I/O APIC, no unit shall
+                remap. A delivery on V0 afterwards shall be counted and fail the
+                boot.";
+            attribute :>> criterion = "On x86-64 under KVM (split irqchip) and TCG
+                the bring-up line says the console's line is converted, V0 retired;
+                check R9's line says every vector handed out is the console's; a
+                byte looped back while the line is masked is read by the service
+                once, by reading the port; check R5 sees a looped-back byte arrive
+                through V1 and none on V0, and on a UART that raises no interrupt in
+                loopback says it is not observable and fails only on a delivery to
+                V0 (test-boot requires the positive line on the reference machine); the end-of-boot line counts 0 on V0. Controls: the line left
+                unmasked through the conversion lets KVM's old compatibility route
+                deliver on V0 after IRE, which is counted, and the boot fails; the entry left not present, the byte never
+                arrives; the service dropped, the masked byte is not read; edu
+                minted before bring-up, the boot stops on R9. Host tests: the
+                remappable entry's handle and vector, and the I/O APIC's source ID
+                matched by its identifier.";
+            attribute :>> parent = ("H.DMA.9", "H.IRQ.1");
+            attribute :>> unit = ("arch::x86_64::console_receive_irq",
+                "arch::x86_64::route_console", "arch::x86_64::mask_console_line",
+                "arch::x86_64::unmask_console_line", "arch::x86_64::convert_console_line",
+                "arch::x86_64::retire_console_line", "arch::x86_64::restore_console_line",
+                "irq::return_handler",
+                "arch::x86_64::apic::IoApicInput::mask",
+                "arch::x86_64::apic::IoApicInput::routed",
+                "arch::x86_64::apic::IoApicInput::redirection",
+                "arch::x86_64::apic::IoApicInput::write", "irq::move_handler",
+                "iommu::remapping::note_hooks", "iommu::remapping::console_source",
+                "iommu::remapping::prepare_console", "iommu::remapping::unmask_console",
+                "iommu::remapping::finish_console",
+                "iommu::remapping::require_no_compatibility_vector",
+                "iommu::remapping::console_vectors");
+        }
+        requirement <'L.x86_64.131'> x2apicIsLeftOnEveryProcessor : ItemLowLevel {
+            attribute :>> statement = "Every processor, the boot processor in
+                apic::init and each application processor first in
+                secondary_start, shall read its own IA32_APIC_BASE before it uses
+                the local APIC's MMIO window, and one in x2APIC mode shall be taken
+                to disabled and then to xAPIC; where the platform locks legacy xAPIC
+                (IA32_XAPIC_DISABLE_STATUS), the boot shall stop naming the
+                processor.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG the check puts
+                the first application processor in x2APIC mode before its own look;
+                every processor looks, that one is switched to xAPIC and comes up,
+                and stage 4's apic line counts them; with secondary_start's look
+                removed that processor never comes up and stage 4 fails.";
+            attribute :>> parent = ("H.IRQ.1", "H.FAIL.1");
+            attribute :>> unit = ("arch::x86_64::apic::leave_x2apic",
+                "arch::x86_64::apic::xapic_locked", "arch::x86_64::apic::init",
+                "arch::x86_64::smp::secondary_start", "arch::x86_64::smp::CpuStarter::finish");
+        }
+        requirement <'L.x86_64.132'> oneDestinationEncoder : ItemLowLevel {
+            attribute :>> statement = "An interrupt remapping entry's destination
+                shall be built only by ferrix_paging::vtd::remap::destination, in
+                xAPIC format (the APIC ID in bits 15:8), and an APIC ID above 255
+                shall be refused rather than truncated; the x2APIC work must set
+                EIME and widen it.";
+            attribute :>> criterion = "Host tests: IDs 0 and 255 encode in bits
+                15:8, 256 and above are refused, and an entry carries the encoded
+                destination in DST.";
+            attribute :>> parent = "H.DMA.9";
+            attribute :>> unit = ("iommu::remapping::remap_message",
+                "iommu::remapping::prepare_console");
+        }
+    }
 }

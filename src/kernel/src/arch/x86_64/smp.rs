@@ -233,6 +233,8 @@ pub(crate) struct CpuStarter {
     header_offset: u64,
     /// The header, to be written before each start.
     header: Header,
+    /// Processors started.
+    started: u64,
 }
 
 impl CpuStarter {
@@ -302,6 +304,7 @@ impl CpuStarter {
             root,
             header_offset,
             header,
+            started: 0,
         })
     }
 
@@ -335,6 +338,7 @@ impl CpuStarter {
         // last processor started has reported in and the next is not started.
         unsafe { at.write(self.header) };
 
+        self.started += 1;
         apic::send_init(apic_id)?;
         spin_nanos(INIT_DELAY_NANOS);
         apic::send_startup(apic_id, page)?;
@@ -350,6 +354,11 @@ impl CpuStarter {
     /// Only once every processor started has reported in: each one has left
     /// the trampoline's tree and GDT before it does.
     pub(crate) fn finish(self) -> Result<(), &'static str> {
+        // Every processor started has looked at its local APIC's mode, the
+        // boot processor's included (check R8).
+        if let Some(line) = apic::check::require_every_processor(self.started + 1)? {
+            crate::println!("  apic     {line}");
+        }
         crate::mm::unmap_unwalked(self.root, self.code, PAGE_SIZE)
             .map_err(|_| "could not take down the trampoline's identity map")?;
         crate::mm::deallocate_frames(self.root / PAGE_SIZE, 0);
@@ -370,6 +379,17 @@ fn spin_nanos(nanos: u64) {
 /// the upper half, on its own stack, with interrupts masked — and still on the
 /// trampoline's tree and GDT, both of which are about to be given back.
 extern "C" fn secondary_start(record: u64) -> ! {
+    // Before anything that may use the local APIC's MMIO window -- an IPI a
+    // failed allocation's shootdown sends included: in x2APIC mode it does
+    // not exist, and INIT does not take a processor out of it (G6).
+    apic::check::put_first_in_x2apic();
+    if let Err(problem) = apic::leave_x2apic() {
+        let initial = core::arch::x86_64::__cpuid(1).ebx >> 24;
+        crate::panic::fatal!(
+            crate::panic::catalog::X2APIC_LOCKED,
+            "processor with APIC ID {initial}: {problem}"
+        );
+    }
     // SAFETY: (TRANSLATE) the kernel's root maps the upper half exactly as the
     // trampoline's copy of it does — this code, this stack, every record —
     // and nothing from here on touches the lower half, the only part in which

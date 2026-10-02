@@ -664,6 +664,22 @@ package FerrixItemRequirements {
                 the table out of the allocator.";
             attribute :>> parent = ("O.DMA", "ASR-4");
         }
+        requirement <'H.DMA.9'> aDeviceRaisesOnlyItsOwnVectors : ItemHighLevel {
+            attribute :>> statement = "Where the machine's interrupts are isolated, a
+                device shall raise only the interrupt vectors minted for it: a
+                message in compatibility format, or naming another function's
+                remapping entry, shall be refused, whatever vector or delivery
+                mode it asks for.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG, edu's forged
+                compatibility-format messages to 0xFC and as an NMI, and its message
+                naming another function's entry, are refused with faults 0x25 and
+                0x26 and arrive nowhere; the console's line is delivered only
+                through its own entry; a device marked for isolated interrupts is
+                refused vectors while they are not (the remap lines). AArch64 under
+                GICv2m, ARMv7-A and a machine without VT-d interrupt remapping are
+                its stated residuals.";
+            attribute :>> parent = ("O.DMA", "ASR-4");
+        }
         requirement <'H.DMA.4'> deadDriversPinsQuarantined : ItemHighLevel {
             attribute :>> statement = "Frames a driver pinned shall not be reused
                 after the driver dies until its replacement announces itself, and the

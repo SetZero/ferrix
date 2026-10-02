@@ -18,6 +18,8 @@
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+pub(super) mod check;
+
 use ferrix_acpi::{Acpi, IsaInterrupt, Madt, MadtEntry};
 use ferrix_sync::IrqControl;
 
@@ -128,6 +130,97 @@ const IOAPIC_DESTINATION_SHIFT: u32 = 24;
 /// Bytes of register window an I/O APIC occupies.
 const IOAPIC_WINDOW_BYTES: u64 = 0x20;
 
+/// `IA32_APIC_BASE`: where the local APIC is, and its mode.
+const IA32_APIC_BASE: u32 = 0x1B;
+/// `IA32_APIC_BASE`: the local APIC is enabled.
+const APIC_BASE_ENABLE: u64 = 1 << 11;
+/// `IA32_APIC_BASE`: x2APIC mode, in which the MMIO window does not exist.
+const APIC_BASE_X2APIC: u64 = 1 << 10;
+/// `IA32_ARCH_CAPABILITIES`, which CPUID leaf 7 enumerates.
+const IA32_ARCH_CAPABILITIES: u32 = 0x10A;
+/// `IA32_ARCH_CAPABILITIES`: `IA32_XAPIC_DISABLE_STATUS` exists.
+const ARCH_CAPABILITIES_XAPIC_DISABLE_STATUS: u64 = 1 << 21;
+/// `IA32_XAPIC_DISABLE_STATUS`.
+const IA32_XAPIC_DISABLE_STATUS: u32 = 0xBD;
+/// `IA32_XAPIC_DISABLE_STATUS`: legacy xAPIC is disabled; the platform
+/// locks the local APIC in x2APIC mode.
+const LEGACY_XAPIC_DISABLED: u64 = 1 << 0;
+
+/// Processors that looked at their local APIC's mode before using its MMIO
+/// window ([`leave_x2apic`]).
+static MODE_CHECKED: AtomicU64 = AtomicU64::new(0);
+/// Of those, the ones found in x2APIC mode and switched to xAPIC.
+static SWITCHED_TO_XAPIC: AtomicU64 = AtomicU64::new(0);
+
+/// Make sure this processor's local APIC is in xAPIC mode before its MMIO
+/// window is used, which is all this kernel drives (`docs/NVIDIA.md` §12.3,
+/// condition G6). Firmware may have left any processor in x2APIC mode, and
+/// INIT does not take one out of it, so the boot processor ([`init`]) and
+/// every application processor (`smp.rs`, `secondary_start`) ask, each of
+/// its own MSR.
+///
+/// From x2APIC mode the SDM's path is taken: disabled (`EN` = 0, `EXTD` = 0),
+/// then xAPIC (`EN` = 1). Counted, for stage 4's line.
+///
+/// # Errors
+///
+/// The platform locks the local APIC in x2APIC mode
+/// (`IA32_XAPIC_DISABLE_STATUS`): the caller stops the boot by name, the
+/// customer's decision 4.
+pub(crate) fn leave_x2apic() -> Result<(), &'static str> {
+    let _ = MODE_CHECKED.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: (SYSREG) `IA32_APIC_BASE` exists on every processor with a
+    // local APIC, which every x86-64 processor has.
+    let base = unsafe { super::cpu::read_msr(IA32_APIC_BASE) };
+    if base & APIC_BASE_X2APIC == 0 {
+        return Ok(());
+    }
+    if xapic_locked() {
+        return Err(
+            "the platform locks the local APIC in x2APIC mode, which this kernel does \
+                    not drive yet",
+        );
+    }
+    let disabled = base & !(APIC_BASE_ENABLE | APIC_BASE_X2APIC);
+    // SAFETY: (SYSREG) x2APIC to disabled, the first of the two transitions
+    // the SDM allows from x2APIC mode, on this processor's own register,
+    // with its base address unchanged. Nothing on this processor uses its
+    // local APIC until the second: interrupts are masked here.
+    unsafe { super::cpu::write_msr(IA32_APIC_BASE, disabled) };
+    // SAFETY: (SYSREG) disabled to xAPIC, the second transition, on the same
+    // register with the same base.
+    unsafe { super::cpu::write_msr(IA32_APIC_BASE, disabled | APIC_BASE_ENABLE) };
+    let _ = SWITCHED_TO_XAPIC.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Whether the platform has disabled legacy xAPIC mode: enumerated by
+/// `IA32_ARCH_CAPABILITIES`, itself enumerated by CPUID leaf 7's `EDX`
+/// bit 29.
+fn xapic_locked() -> bool {
+    use core::arch::x86_64::{__cpuid, __cpuid_count};
+    if __cpuid(0).eax < 7 || __cpuid_count(7, 0).edx & 1 << 29 == 0 {
+        return false;
+    }
+    // SAFETY: (SYSREG) CPUID says `IA32_ARCH_CAPABILITIES` exists.
+    let capabilities = unsafe { super::cpu::read_msr(IA32_ARCH_CAPABILITIES) };
+    if capabilities & ARCH_CAPABILITIES_XAPIC_DISABLE_STATUS == 0 {
+        return false;
+    }
+    // SAFETY: (SYSREG) `IA32_ARCH_CAPABILITIES` says
+    // `IA32_XAPIC_DISABLE_STATUS` exists.
+    unsafe { super::cpu::read_msr(IA32_XAPIC_DISABLE_STATUS) & LEGACY_XAPIC_DISABLED != 0 }
+}
+
+/// Processors that checked their local APIC's mode, and of those the ones
+/// switched from x2APIC to xAPIC.
+pub(crate) fn modes_checked() -> (u64, u64) {
+    (
+        MODE_CHECKED.load(Ordering::Relaxed),
+        SWITCHED_TO_XAPIC.load(Ordering::Relaxed),
+    )
+}
+
 /// Virtual address of this CPU's local APIC registers.
 static LAPIC: AtomicU64 = AtomicU64::new(0);
 
@@ -153,6 +246,12 @@ fn lapic() -> Mmio {
 /// with no handler.
 pub(crate) unsafe fn init(acpi: &Acpi<'_, DirectMap>) -> Result<(), &'static str> {
     let madt = acpi.madt().map_err(|_| "the machine has no MADT")?;
+    // Before the window is mapped, let alone used: it does not exist in
+    // x2APIC mode.
+    leave_x2apic().map_err(|_| {
+        "processor 0: the platform locks the local APIC in x2APIC mode, which this kernel does \
+         not drive yet"
+    })?;
 
     let phys = match madt.local_apic_address() {
         0 => LAPIC_DEFAULT_BASE,
@@ -229,6 +328,9 @@ fn quiesce_io_apics(madt: &Madt<'_>) -> Result<(), &'static str> {
 /// One input of one I/O APIC, and how its line is signalled.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IoApicInput {
+    /// The I/O APIC's identifier in the MADT, which the DMAR's scope for it
+    /// names as its enumeration ID.
+    id: u8,
     /// The I/O APIC's register window, mapped.
     regs: Mmio,
     /// Which redirection entry: the GSI less the I/O APIC's base.
@@ -273,6 +375,7 @@ impl IoApicInput {
             0
         } | if level { IOAPIC_ENTRY_LEVEL } else { 0 };
         Ok(IoApicInput {
+            id: io_apic.id,
             regs,
             input,
             signalling,
@@ -296,6 +399,53 @@ impl IoApicInput {
             low_register,
             vector as u32 | self.signalling | mask,
         );
+    }
+}
+
+impl IoApicInput {
+    /// The I/O APIC's MADT identifier.
+    pub(crate) fn io_apic_id(self) -> u8 {
+        self.id
+    }
+
+    /// Whether the line is level-triggered.
+    pub(crate) fn level(self) -> bool {
+        self.signalling & IOAPIC_ENTRY_LEVEL != 0
+    }
+
+    /// Whether the line is asserted low.
+    pub(crate) fn active_low(self) -> bool {
+        self.signalling & IOAPIC_ENTRY_ACTIVE_LOW != 0
+    }
+
+    /// The redirection entry as it is now: its high word in bits 63:32.
+    pub(crate) fn redirection(self) -> u64 {
+        let low_register = IOAPIC_REDIRECTION_BASE + self.input * 2;
+        u64::from(io_apic_read(self.regs, low_register))
+            | u64::from(io_apic_read(self.regs, low_register + 1)) << 32
+    }
+
+    /// Mask the input, leaving the rest of its entry as it is.
+    pub(crate) fn mask(self) {
+        let low_register = IOAPIC_REDIRECTION_BASE + self.input * 2;
+        let low = io_apic_read(self.regs, low_register);
+        io_apic_write(self.regs, low_register, low | IOAPIC_ENTRY_MASKED);
+    }
+
+    /// The vector and the destination APIC ID the entry is routed to now,
+    /// in compatibility format.
+    pub(crate) fn routed(self) -> (u8, u32) {
+        let entry = self.redirection();
+        ((entry & 0xFF) as u8, (entry >> 56) as u32)
+    }
+
+    /// Write the whole redirection entry `entry`, high word first and the
+    /// low word -- which holds the mask bit -- last, so an unmasked entry is
+    /// never live half written.
+    pub(crate) fn write(self, entry: u64) {
+        let low_register = IOAPIC_REDIRECTION_BASE + self.input * 2;
+        io_apic_write(self.regs, low_register + 1, (entry >> 32) as u32);
+        io_apic_write(self.regs, low_register, entry as u32);
     }
 }
 

@@ -74,8 +74,14 @@ use crate::{arch, mm, println};
 
 mod check;
 mod gate;
+pub(crate) mod remapping;
 mod smmuv3;
 mod vtd;
+
+pub(crate) use remapping::{
+    CHECK_VECTOR, LiveLine, close_check_window, console_vectors, function_isolated, nmis,
+    open_check_window, route, stray_deliveries,
+};
 
 pub(crate) use check::{check_dma_faults, check_iommu, run as check_gate};
 pub(crate) use vtd::{Invalidations, invalidations};
@@ -425,6 +431,7 @@ fn discover(view: &BootView<'_>, nodes: &[Arc<DeviceNode>]) -> (Report, Vec<Unit
 /// requires the placements on the machines it configures.
 pub(crate) fn report(view: &BootView<'_>, nodes: &[Arc<DeviceNode>]) {
     let (report, units, placements) = discover(view, nodes);
+    remapping::note_bypassing(report.bypassing);
     println!(
         "  iommu    {} VT-d units, {} SMMUv3s; {} PCI functions behind one, {} bypassing, \
          {} unresolved",
@@ -435,6 +442,30 @@ pub(crate) fn report(view: &BootView<'_>, nodes: &[Arc<DeviceNode>]) {
             println!(
                 "  iommu    pci {} behind the {:?} unit at {:#x} as stream {:#x}",
                 placement.function, unit.kind, unit.phys, placement.stream,
+            );
+        }
+    }
+    name_functions_without_vectors(nodes);
+}
+
+/// While a unit remaps interrupts, name every PCI function that gets no
+/// message vector: one no unit that remaps places as its own requester --
+/// behind no unit, behind one that does not remap, or under a bridge's
+/// alias. Its messages could not be told from another's, so it gets no
+/// MSI at all (`L.device.28`): fail-closed for isolation, an availability
+/// loss on a machine whose units do not cover every function
+/// (SAFETY-MANUAL AoU-23).
+fn name_functions_without_vectors(nodes: &[Arc<DeviceNode>]) {
+    if !remapping::any_remapping() {
+        return;
+    }
+    for node in nodes {
+        if let Location::Pci(function) = node.location()
+            && route(function.requester_id()).is_err()
+        {
+            println!(
+                "  iommu    pci {function} gets no message vector: no unit that remaps \
+                 interrupts places it as its own requester"
             );
         }
     }
@@ -500,6 +531,32 @@ pub(crate) enum Cause {
     /// which was marked failed: it names no stream, nothing provokes it, and
     /// it counts as stray, so the boot fails on it (FX-1007).
     Queue,
+    /// An interrupt request a VT-d unit refused to remap, by its fault
+    /// reason, 0x20 to 0x26, and the entry index it named: a request in
+    /// compatibility format while it is blocked (0x25), one whose source ID
+    /// failed its entry's check (0x26), or one naming no present entry
+    /// (0x21, 0x22). Its page is not used. Provoked only by checks R1 to R3,
+    /// which register the stream and reason ([`record_provoked_interrupt`]).
+    Interrupt {
+        /// The fault reason.
+        reason: u8,
+        /// The interrupt entry index the request named.
+        index: u16,
+    },
+}
+
+/// What an interrupt fault reason means, for the log.
+fn interrupt_reason_name(reason: u8) -> &'static str {
+    match reason {
+        0x20 => "reserved field in the request",
+        0x21 => "index past the table",
+        0x22 => "entry not present",
+        0x23 => "table address invalid",
+        0x24 => "reserved field in the entry",
+        0x25 => "compatibility format blocked",
+        0x26 => "source ID check",
+        _ => "reserved",
+    }
 }
 
 /// How a VT-d invalidation's wait descriptor completes.
@@ -553,6 +610,12 @@ impl core::fmt::Display for Fault {
             Cause::Queue => write!(
                 f,
                 "a VT-d unit's invalidation queue stopped, and the unit was marked failed"
+            ),
+            Cause::Interrupt { reason, index } => write!(
+                f,
+                "stream {:#x}, interrupt index {index}, reason {reason:#x} ({})",
+                self.stream,
+                interrupt_reason_name(reason)
             ),
         }
     }
@@ -788,6 +851,16 @@ impl Domain {
         self.clear_faults();
         if let Some(stream) = self.stream() {
             record_provoked(stream, page);
+        }
+    }
+
+    /// Clear the unit's faults, and say that this domain's device is about to
+    /// send an interrupt request its unit refuses with `reason`, so the fault
+    /// is known for the check's own (checks R1 to R3).
+    pub(crate) fn provoke_interrupt(&self, reason: u8) {
+        self.clear_faults();
+        if let Some(stream) = self.stream() {
+            record_provoked_interrupt(stream, reason);
         }
     }
 
@@ -1072,16 +1145,35 @@ pub(crate) fn bring_up(view: &BootView<'_>) -> BringUp {
 /// Program every VT-d unit the DMAR describes, and record the functions its
 /// endpoint scopes name.
 fn bring_up_vtd(table: &dmar::Dmar<'_>, programmed: &mut Programmed, report: &mut BringUp) {
+    let intr_remap = table.flags() & dmar::FLAG_INTR_REMAP != 0;
+    let mut states = Vec::new();
     for structure in table.structures() {
         let Structure::Drhd(unit) = structure else {
             continue;
         };
-        let opened = vtd::Unit::open(unit.register_base).and_then(|opened| {
+        let mut state = ferrix_paging::vtd::remap::UnitState {
+            remapping: false,
+            compatibility_blocked: false,
+        };
+        let opened = vtd::Unit::open(unit.register_base, intr_remap).and_then(|opened| {
             check::check_firmware_left_on(&opened);
-            opened.enable().map(|()| opened)
+            opened.enable()?;
+            state = remapping::bring_up(&opened, &unit, table);
+            opened.translate().map(|()| opened)
         });
+        // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
+        states.push(state);
         match opened {
             Ok(opened) => {
+                println!(
+                    "  iommu    vt-d unit {:#x}: translating, queue on, {}",
+                    unit.register_base,
+                    if state.remapping {
+                        "remapping on (256 entries, xAPIC format), CFIS=0 read back"
+                    } else {
+                        "remapping off"
+                    }
+                );
                 let index = programmed.vtd.len();
                 programmed
                     .behind
@@ -1116,6 +1208,7 @@ fn bring_up_vtd(table: &dmar::Dmar<'_>, programmed: &mut Programmed, report: &mu
             }
         }
     }
+    remapping::record(states);
 }
 
 /// Program every `SMMUv3` the IORT describes, and record which requester IDs
@@ -1231,6 +1324,12 @@ pub(crate) fn register_invalidations_pending() -> (usize, usize) {
     })
 }
 
+/// The VT-d unit the DMAR puts `function` behind as its own requester, if
+/// it is translating.
+fn programmed_unit_for(function: Address) -> Option<&'static vtd::Unit> {
+    vtd_unit_for(PROGRAMMED.get()?, function)
+}
+
 /// The VT-d unit the DMAR puts `function` behind, if it is translating.
 ///
 /// A single-hop endpoint scope names it directly; any other scope is
@@ -1287,6 +1386,24 @@ fn smmu_stream_for(
 /// across a reset, and [`audit_faults`] fails the boot on it.
 static PROVOKED: SpinLock<Vec<(u32, u64)>> = SpinLock::new(Vec::new());
 
+/// The interrupt requests a check made a unit refuse on purpose, by stream
+/// and fault reason: checks R1 and R2's compatibility-format messages
+/// (0x25) and R3's message naming another function's entry (0x26).
+static PROVOKED_INTERRUPTS: SpinLock<Vec<(u32, u8)>> = SpinLock::new(Vec::new());
+
+/// Record that `stream`'s device is about to send an interrupt request its
+/// unit refuses with `reason`, so the fault is not stray. Said on the
+/// console too, as [`record_provoked`] says a DMA fault.
+pub(crate) fn record_provoked_interrupt(stream: u32, reason: u8) {
+    // FATAL-ALLOC: boot only: a boot check provokes the fault this records.
+    PROVOKED_INTERRUPTS.lock().push((stream, reason));
+    println!(
+        "  iommu    stream {stream:#x} is made to send an interrupt its unit refuses with reason \
+         {reason:#x} ({}), on purpose",
+        interrupt_reason_name(reason)
+    );
+}
+
 /// Faults taken from a unit that nothing provoked: cleared before a check
 /// began, or read by one and not recognised. Counted here so that no fault is
 /// taken and then dropped unseen.
@@ -1329,6 +1446,12 @@ fn record_provoked(stream: u32, page: u64) {
 /// still fails such a run, since QEMU traces `vtd_dmar_fault` for every
 /// fault before it decides whether to record it (`tools/common/xtask/src/dma_faults.rs`).
 fn provoked(fault: Fault) -> bool {
+    if let Cause::Interrupt { reason, .. } = fault.cause {
+        return PROVOKED_INTERRUPTS
+            .lock()
+            .iter()
+            .any(|&(stream, provoked)| fault.stream == stream && reason == provoked);
+    }
     matches!(fault.cause, Cause::Access | Cause::Overflow)
         && PROVOKED
             .lock()
@@ -1399,8 +1522,24 @@ pub(crate) fn audit_faults() -> FaultAudit {
 /// is not the device's.
 fn recorded(fault: Option<Fault>) -> Option<Fault> {
     if let Some(fault) = fault {
+        // An interrupt fault is its own event, with its reason and index
+        // where a DMA fault has its page (`L.iommu.54`).
+        let (event, detail) = match fault.cause {
+            Cause::Interrupt { reason, index } => (
+                crate::audit::INTERRUPT_FAULT,
+                [u32::from(reason), u32::from(index), 0],
+            ),
+            _ => (
+                crate::audit::DMA_FAULT,
+                [
+                    (fault.page >> 12) as u32,
+                    (fault.page >> 44) as u32,
+                    u32::from(fault.write),
+                ],
+            ),
+        };
         crate::audit::record(
-            crate::audit::DMA_FAULT,
+            event,
             crate::audit::Outcome::Refused,
             0,
             crate::audit::Subject::KERNEL,
@@ -1408,11 +1547,7 @@ fn recorded(fault: Option<Fault>) -> Option<Fault> {
                 kind: crate::audit::target::DEVICE,
                 id: u64::from(fault.stream),
             },
-            [
-                (fault.page >> 12) as u32,
-                (fault.page >> 44) as u32,
-                u32::from(fault.write),
-            ],
+            detail,
         );
     }
     fault

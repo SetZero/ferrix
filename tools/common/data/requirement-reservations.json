@@ -26,13 +26,6 @@
       "purpose": "S4: Verdict::Trap (allocated by os-bd)"
     },
     {
-      "ids": ["L.iommu.50", "L.iommu.52-55", "L.x86_64.129-132", "L.device.27-28", "H.DMA.9"],
-      "owner": "nvidia",
-      "branch": "nvidia-n0g",
-      "date": "2026-10-02",
-      "purpose": "NVIDIA N0g (docs/NVIDIA.md §12.3, the consultant's OK IF C1): interrupt remapping (L.iommu.47, 48 and 51 written by slice 1, which released L.iommu.49 to F-58's L.iommu.56/57) on VT-d, remappable MSI and I/O APIC messages, x2APIC left on, interrupt faults, the isolated-interrupts mark; a device raises only the vectors minted for it"
-    },
-    {
       "ids": ["L.user.111-124", "L.object.121-125", "H.MEM.20-21"],
       "owner": "nvidia",
       "branch": "nvidia-c3k",

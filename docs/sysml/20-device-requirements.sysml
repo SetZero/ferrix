@@ -519,4 +519,49 @@ package FerrixDeviceRequirements {
             attribute :>> unit = "syscall::native::quiesce_while";
         }
     }
+
+    package IsolatedInterrupts {
+        doc /* NVIDIA's N0g (docs/NVIDIA.md section 12.3, condition G5): the
+             * isolated-interrupts mark, device_isolation, and no vector for a
+             * function whose messages arrive under another's source ID. */
+
+        requirement <'L.device.27'> aMarkedDeviceNeedsIsolatedInterrupts : ItemLowLevel {
+            attribute :>> statement = "device_set_limit's
+                DEVICE_LIMIT_ISOLATED_INTERRUPTS shall set a node's
+                isolated-interrupts mark through a handle with SET_LIMIT, and a
+                value that would clear a set mark shall be refused ACCESS_DENIED;
+                nothing else shall clear it. While a node's mark is set and its
+                interrupts are not isolated, interrupt_create and vmo_pin shall be
+                refused ACCESS_DENIED. device_isolation shall answer bit 0 for a
+                translated domain and bit 1 for isolated interrupts. devmgr shall
+                start no driver of a device that runs firmware of its own whose
+                mark the kernel refused.";
+            attribute :>> criterion = "On x86-64 check R10 sets edu's mark,
+                reads device_isolation 0x3, is given a vector, is refused one
+                ACCESS_DENIED while the machine's interrupts are forced not
+                isolated, and is refused clearing the mark; with the refusal
+                skipped R10 panics. devmgr-proto's host tests: a firmware device
+                starts only once marked, with its line when refused; with the
+                refusal ignored they fail.";
+            attribute :>> parent = ("H.DMA.9", "H.DEV.1");
+            attribute :>> unit = ("syscall::native::set_isolated_mark",
+                "syscall::native::set_limit_on", "syscall::native::device_set_limit",
+                "syscall::native::device_get_limit", "syscall::native::device_isolation",
+                "syscall::native::device_isolated_in", "syscall::native::interrupt_create",
+                "syscall::native::vmo_pin", "device::DeviceNode::interrupts_isolated",
+                "device::DeviceNode::may_take_vectors_and_pins");
+        }
+        requirement <'L.device.28'> noVectorUnderAnothersSourceId : ItemLowLevel {
+            attribute :>> statement = "While a unit remaps, a function the
+                remapping units do not place as its own requester -- behind no unit,
+                or under a bridge's alias -- shall be given no message route, and
+                so no vector, and the boot shall name each such function.";
+            attribute :>> criterion = "On x86-64 a requester no unit places is
+                refused a route (the remap line); with the refusal turned into a
+                compatibility route the boot panics.";
+            attribute :>> parent = "H.DMA.9";
+            attribute :>> unit = ("iommu::remapping::route",
+                "arch::x86_64::msi::msi_allocate", "iommu::name_functions_without_vectors");
+        }
+    }
 }

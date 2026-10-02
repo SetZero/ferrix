@@ -228,6 +228,26 @@ impl Transmit {
     }
 }
 
+/// Run `f` with the port's transmit side quiet: under the port's lock, with
+/// the ring polled out and the port drained, so nothing a writer sends is on
+/// the wire while `f` has the port. For x86-64's check R5, which loops the
+/// port back on itself for one byte (`docs/NVIDIA.md` §12.3).
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(dead_code, reason = "only x86-64 loops its port back for check R5")
+)]
+pub(crate) fn with_port_quiet<R>(f: impl FnOnce() -> R) -> R {
+    let mut port = PORT.lock();
+    let wake = port.flush();
+    arch::drain_console();
+    let result = f();
+    drop(port);
+    if wake {
+        wake_writers();
+    }
+    result
+}
+
 /// Let writers queue: the port's interrupt is installed. Called by
 /// `console::input::init`, with interrupts masked, before the line is enabled.
 pub(super) fn start() {

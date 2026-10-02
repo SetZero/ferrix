@@ -204,6 +204,19 @@ fn receive(mut take: impl FnMut() -> Option<u8>) {
 }
 
 /// The oldest byte in the ring.
+/// Take `byte` from the front of the ring, if it is there: for x86-64's
+/// check R5, whose looped-back byte must arrive through the port's
+/// interrupt and must not reach a reader of the console.
+pub(crate) fn take_check_byte(byte: u8) -> bool {
+    let mut ring = RING.lock();
+    if ring.len() == 0 || ring.bytes.get(ring.head).copied() != Some(byte) {
+        return false;
+    }
+    let _ = ring.pop();
+    HELD.store(ring.len, Ordering::Relaxed);
+    true
+}
+
 fn pop() -> Option<u8> {
     let mut ring = RING.lock();
     let byte = ring.pop();

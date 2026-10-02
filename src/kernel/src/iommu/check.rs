@@ -146,6 +146,7 @@ pub(crate) fn check_iommu() {
             "stage 10 self-check failed: {problem}"
         ),
     };
+    check_remapping();
     match check_queue(super::invalidations(), failed_kept, planted) {
         Ok(Some(line)) => println!("  iommu    {line}"),
         Ok(None) => {}
@@ -215,6 +216,39 @@ fn check_cleaning(
         cleaning.units,
         cleaning.checked
     )))
+}
+
+/// Interrupt remapping's stage 10 checks, each printing its line where a
+/// unit remaps (`docs/NVIDIA.md` §12.3): R5 first, while the console's
+/// entry is as bring-up wrote it, then `L.device.28` and `L.iommu.52`, then
+/// R10.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_remapping() {
+    match check_console_line() {
+        Ok(Some(line)) => println!("  remap    {line}"),
+        Ok(None) => {}
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    }
+    match check_no_route_unplaced() {
+        Ok(Some(line)) => println!("  remap    {line}"),
+        Ok(None) => {}
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    }
+    match check_isolation_mark() {
+        Ok(Some(line)) => println!("  remap    {line}"),
+        Ok(None) => {}
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    }
 }
 
 /// VT-d units on which [`check_firmware_left_on`] left the queue on as
@@ -311,13 +345,21 @@ fn check_queue(
              units"
         ));
     }
+    if super::remapping::any_remapping() && queued.interrupt_entry == 0 {
+        return Err(
+            "a unit remaps interrupts and the boot queued no interrupt entry cache invalidation"
+                .into(),
+        );
+    }
     Ok(Some(alloc::format!(
-        "{} context-cache and {} IOTLB invalidations queued and each waited for, none by \
+        "{} context-cache, {} IOTLB and {} interrupt entry invalidations queued and each waited \
+         for, none by \
          register on {units} VT-d units; {unplanted} failed as check R7 made it, its \
          {failed_kept} pages kept; {planted} completion errors planted, cleared, and the next \
          invalidation completed; a queue left on as firmware leaves it turned off on {stopped}",
         queued.context,
         queued.iotlb,
+        queued.interrupt_entry,
     )))
 }
 
@@ -470,6 +512,7 @@ pub(crate) fn check_dma_faults() -> bool {
          out-of-domain probe",
         audit.stray, audit.stray_events, audit.units, audit.provoked,
     );
+    check_stray_deliveries();
     if audit.stray == 0 {
         return audit.units > 0;
     }
@@ -481,4 +524,312 @@ pub(crate) fn check_dma_faults() -> bool {
         "stage 10 self-check failed: {} DMA faults no check provoked",
         audit.stray
     );
+}
+
+/// Interrupt remapping's two stray-delivery counts, read last in the boot
+/// beside the stray faults: the check vector 0xFC delivered outside checks
+/// R1 and R2's window (ruling 3), and the console line's retired vector
+/// delivered after its conversion. Either is a message that should have
+/// been refused or a route that should have gone, and fails the boot. Said
+/// only where a unit remaps.
+///
+/// Halts rather than returning, as every other stage's check does.
+///
+/// Verifies: `L.x86_64.130`, H.DMA.9
+fn check_stray_deliveries() {
+    if !super::remapping::any_remapping() {
+        return;
+    }
+    let (check, retired) = super::stray_deliveries();
+    let old = super::console_vectors().map_or(0, |(old, _)| old);
+    println!(
+        "  remap    {check} deliveries of the check vector {:#x} outside its window, {retired} on \
+         the console's retired vector {old:#x} after its conversion",
+        super::CHECK_VECTOR
+    );
+    if check != 0 || retired != 0 {
+        fatal!(
+            catalog::STAGE10_DMA_FAULT,
+            "stage 10 self-check failed: {check} stray deliveries of the check vector and \
+             {retired} on the console's retired vector"
+        );
+    }
+}
+
+/// The byte looped back while the console's line is masked for its
+/// conversion, which only the service after it can read (G3).
+const MASKED_BYTE: u8 = 0xF5;
+
+/// The byte check R5 loops back once the line is converted.
+const CONVERTED_BYTE: u8 = 0xF6;
+
+/// Whether [`plant_masked_byte`] planted one.
+static PLANTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// G3, at bring-up, while the console's line is masked for its conversion,
+/// unless the boot was told to skip its checks: loop a byte back into the
+/// port, whose edge the I/O APIC drops, so that only the service once after
+/// the conversion can read it ([`require_masked_byte_served`]).
+pub(crate) fn plant_masked_byte(line: &super::LiveLine) {
+    if !crate::checks::run() {
+        return;
+    }
+    (line.loop_back)(MASKED_BYTE);
+    PLANTED.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// G3, at bring-up, after the console's line is converted: the byte
+/// [`plant_masked_byte`] planted was read by the service once, into the
+/// console's ring, and is taken out of it again. The service reads the port
+/// whether or not the loopback raised an interrupt, so this holds on a UART
+/// that raises none in loopback too.
+///
+/// Halts rather than returning, as every other stage's check does.
+///
+/// Verifies: `L.x86_64.130`
+pub(crate) fn require_masked_byte_served() {
+    if !PLANTED.swap(false, core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if !crate::console::input::take_check_byte(MASKED_BYTE) {
+        fatal!(
+            catalog::STAGE10_REMAP,
+            "a byte the port received while its line was masked was not read by the service \
+             after the conversion"
+        );
+    }
+    MASKED_BYTE_SERVED.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether [`require_masked_byte_served`] found its byte read.
+static MASKED_BYTE_SERVED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Check R5 (`docs/NVIDIA.md` §12.3), at stage 10 once the console's I/O
+/// APIC line is converted: a byte looped back through the port arrives in
+/// the console's ring through the line's interrupt, now delivered on its
+/// new vector through its interrupt remapping entry -- its handler is there
+/// alone -- and nothing arrives on the retired vector, which a compatibility
+/// or stale KVM route would deliver on. `None` where no line was converted.
+/// Only a delivery on the retired vector fails: a UART that raises no
+/// interrupt in loopback (a PC's 16550 loops OUT2 internally) leaves nothing
+/// to observe, and the line says so (condition 2 of the C6 review).
+///
+/// # Errors
+///
+/// A delivery came on the retired vector.
+///
+/// Verifies: `L.x86_64.130`, H.DMA.9
+fn check_console_line() -> Result<Option<alloc::string::String>, &'static str> {
+    let (Some((old, new)), Some(line)) = (super::console_vectors(), super::remapping::live_line())
+    else {
+        return Ok(None);
+    };
+    let retired = super::stray_deliveries().1;
+    (line.loop_back)(CONVERTED_BYTE);
+    let deadline = crate::timer::now_nanos().saturating_add(50_000_000);
+    let mut arrived = false;
+    while crate::timer::now_nanos() <= deadline {
+        if crate::console::input::take_check_byte(CONVERTED_BYTE) {
+            arrived = true;
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    if super::stray_deliveries().1 != retired {
+        return Err("the console's line was delivered on its retired vector");
+    }
+    if !arrived {
+        // A PC's 16550 loops OUT2 back internally in loopback mode, so its
+        // interrupt line to the I/O APIC is not driven and nothing can
+        // arrive on either vector (the consultant's condition 2): not a
+        // failure, only not observable. The byte is taken out of the port,
+        // or out of the ring if a late delivery put it there, so no reader
+        // sees it. test-boot still requires the positive line on the
+        // reference machine, whose UART raises its interrupt in loopback.
+        let mut taken = crate::console::input::take_check_byte(CONVERTED_BYTE);
+        for _ in 0..16 {
+            if taken {
+                break;
+            }
+            taken = crate::arch::take_console_byte().is_none_or(|byte| byte == CONVERTED_BYTE);
+        }
+        return Ok(Some(alloc::format!(
+            "R5: the UART raised no interrupt in loopback; not observable here (none on the \
+             retired vector {old:#x} either); {} byte received while the line was masked read \
+             by the service after its conversion",
+            u8::from(MASKED_BYTE_SERVED.load(core::sync::atomic::Ordering::Relaxed))
+        )));
+    }
+    Ok(Some(alloc::format!(
+        "the console's I/O APIC line delivered a looped-back byte on vector {new:#x} through its \
+         interrupt entry and none on its retired {old:#x}; {} byte received while it was masked \
+         read by the service after its conversion",
+        u8::from(MASKED_BYTE_SERVED.load(core::sync::atomic::Ordering::Relaxed))
+    )))
+}
+
+/// Check R10 (`docs/NVIDIA.md` §12.3, condition G5), through the system
+/// call a driver and `devmgr` make, on QEMU's `edu`, which no driver takes,
+/// once its interrupts are isolated: the isolated-interrupts mark set through a handle with
+/// `SET_LIMIT`; `interrupt_create` allowed while the machine's interrupts
+/// are isolated, and refused `ACCESS_DENIED` while the check forces them
+/// not to be (`FORCED_UNISOLATED`, check-only); `device_isolation` saying
+/// so each time; and a `device_set_limit` that would clear the mark
+/// refused `ACCESS_DENIED`, the mark still set. `None` where no node's
+/// interrupts are isolated. The node stays marked, as `devmgr` would leave
+/// it.
+///
+/// # Errors
+///
+/// What did not hold, as a sentence.
+///
+/// Verifies: L.device.27, L.iommu.55, H.DMA.9
+fn check_isolation_mark() -> Result<Option<alloc::string::String>, &'static str> {
+    use ferrix_native_abi::nr;
+    use ferrix_native_abi::rights::Rights;
+    use ferrix_native_abi::status;
+    use ferrix_native_abi::types::{
+        DEVICE_ISOLATION_DMA_TRANSLATED, DEVICE_ISOLATION_INTERRUPTS,
+        DEVICE_LIMIT_ISOLATED_INTERRUPTS,
+    };
+
+    let Some(node) = device::devices().iter().find(|node| {
+        node.pci_function()
+            .is_some_and(|function| (function.vendor, function.device) == (0x1234, 0x11E8))
+            && node.interrupts_isolated()
+            && node.vector_count() > 0
+            && !node.isolated_marked()
+    }) else {
+        return Ok(None);
+    };
+    let side = object::check::Side::new()?;
+    let outcome = (|| {
+        let manager = side
+            .process
+            .with_handles(|table| {
+                table.insert(
+                    object::Object::Device(Arc::clone(node)),
+                    Rights(Rights::DEVICE.0 | Rights::SET_LIMIT.0),
+                )
+            })
+            .map_err(|_| "no room for a device handle")?;
+        let reg = object::check::reg;
+        let mark = |value: u64| {
+            side.call(
+                nr::DEVICE_SET_LIMIT,
+                &[reg(manager), DEVICE_LIMIT_ISOLATED_INTERRUPTS, value],
+            )
+        };
+        let isolation = || side.call(nr::DEVICE_ISOLATION, &[reg(manager)]);
+        let take = || side.call(nr::INTERRUPT_CREATE, &[reg(manager), 0]);
+        if mark(1) != Ok(0) {
+            return Err("the isolated-interrupts mark could not be set");
+        }
+        let isolated = isolation().map_err(|_| "device_isolation refused")?;
+        let interrupts = DEVICE_ISOLATION_INTERRUPTS as usize;
+        if isolated & interrupts == 0 {
+            return Err("device_isolation did not say the node's interrupts are isolated");
+        }
+        let interrupt = take().map_err(|_| "a marked node was refused a vector while isolated")?;
+        let _ = side.call(nr::HANDLE_CLOSE, &[interrupt as u64]);
+        super::remapping::FORCED_UNISOLATED.store(true, core::sync::atomic::Ordering::Release);
+        let refused = take();
+        let forced = isolation();
+        super::remapping::FORCED_UNISOLATED.store(false, core::sync::atomic::Ordering::Release);
+        if let Ok(interrupt) = refused {
+            let _ = side.call(nr::HANDLE_CLOSE, &[interrupt as u64]);
+            return Err(
+                "a marked node was given a vector while the machine's interrupts were not isolated",
+            );
+        }
+        if refused != Err(status::ACCESS_DENIED) {
+            return Err("a marked node's vector was refused other than ACCESS_DENIED");
+        }
+        if forced.map(|bits| bits & interrupts) != Ok(0) {
+            return Err(
+                "device_isolation said a node's interrupts were isolated when they were not",
+            );
+        }
+        if mark(0) != Err(status::ACCESS_DENIED) {
+            return Err("the isolated-interrupts mark was cleared");
+        }
+        if side.call(
+            nr::DEVICE_GET_LIMIT,
+            &[reg(manager), DEVICE_LIMIT_ISOLATED_INTERRUPTS],
+        ) != Ok(1)
+        {
+            return Err("the isolated-interrupts mark did not stay set");
+        }
+        Ok(alloc::format!(
+            "the isolated-interrupts mark set on {}: device_isolation {isolated:#x} (DMA \
+             translated {}, interrupts isolated), interrupt_create allowed while isolated and \
+             refused ACCESS_DENIED with them forced not to be, its clearing refused \
+             ACCESS_DENIED",
+            node.location(),
+            isolated & DEVICE_ISOLATION_DMA_TRANSLATED as usize != 0
+        ))
+    })();
+    side.close_everything();
+    outcome.map(Some)
+}
+
+/// `L.device.28`: while a unit remaps, a requester ID that no unit places as
+/// its own -- here one on bus 0xFE, where nothing is enumerated -- is given
+/// no route, so the function gets no vector. Every function QEMU's machines
+/// have is placed, and none under a bridge's alias, so the refusal is
+/// shown on a requester that cannot be; the aliased case takes the same
+/// path (`vtd_unit_for` answers none). `None` where no unit remaps.
+///
+/// # Errors
+///
+/// The unplaced requester was given a route.
+///
+/// Verifies: L.device.28
+fn check_no_route_unplaced() -> Result<Option<alloc::string::String>, &'static str> {
+    if !super::remapping::any_remapping() {
+        return Ok(None);
+    }
+    /// Bus 0xFE, device 31, function 7.
+    const UNPLACED: u16 = 0xFEFF;
+    if super::route(UNPLACED).is_ok() {
+        return Err("a requester no unit places was given a message route");
+    }
+    let rewrites = check_entry_never_rewritten()?;
+    Ok(Some(alloc::format!(
+        "a requester no unit places ({UNPLACED:#x}) is given no message route, so no vector; \
+         {rewrites} rewrite of a present interrupt entry refused"
+    )))
+}
+
+/// `L.iommu.52`: an interrupt remapping entry in use is never rewritten.
+/// The console line's entry, present since bring-up and shown delivering by
+/// check R5 just before, is offered a rewrite on every unit that remaps,
+/// aimed elsewhere, and each refuses it. Answers how many refused.
+///
+/// # Errors
+///
+/// A unit rewrote a present entry.
+///
+/// Verifies: L.iommu.52
+fn check_entry_never_rewritten() -> Result<usize, &'static str> {
+    let (Some((_, new)), Some(programmed)) = (super::console_vectors(), super::PROGRAMMED.get())
+    else {
+        return Ok(0);
+    };
+    let handle = u16::from(new.wrapping_sub(0x40));
+    let elsewhere = ferrix_paging::vtd::remap::Remap {
+        vector: super::CHECK_VECTOR,
+        destination: 0,
+        level: false,
+        source: 0,
+    };
+    let mut refused = 0;
+    for unit in programmed.vtd.iter().filter(|unit| unit.remapping()) {
+        if unit.remap(handle, elsewhere).is_ok() {
+            return Err("a present interrupt entry was rewritten");
+        }
+        refused += 1;
+    }
+    Ok(refused)
 }

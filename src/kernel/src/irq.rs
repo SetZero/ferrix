@@ -107,6 +107,67 @@ pub(crate) fn register(irq: u32, handler: Handler) -> Result<(), IrqError> {
     Ok(())
 }
 
+/// Move the handler registered on `from` to `to`, and leave `from` with
+/// `left`, in one hold of the table's lock: so an interrupt arriving on
+/// either number finds a handler, and none finds the moved one twice.
+///
+/// For x86-64's conversion of the console's I/O APIC line to a remapped
+/// vector of its own at interrupt remapping's bring-up (`docs/NVIDIA.md`
+/// §12.3): the handler goes to the new vector before the line is unmasked,
+/// and the old vector keeps a handler that counts what still arrives on it.
+///
+/// # Errors
+///
+/// [`IrqError::OutOfRange`] for either number past the table, and
+/// [`IrqError::AlreadyTaken`] when `to` has a handler or `from` has none;
+/// the table is then unchanged.
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(dead_code, reason = "only x86-64 converts a live interrupt line")
+)]
+pub(crate) fn move_handler(from: u32, to: u32, left: Handler) -> Result<(), IrqError> {
+    let mut table = HANDLERS.lock();
+    if table
+        .get(to as usize)
+        .ok_or(IrqError::OutOfRange(to))?
+        .is_some()
+    {
+        return Err(IrqError::AlreadyTaken(to));
+    }
+    let slot = table
+        .get_mut(from as usize)
+        .ok_or(IrqError::OutOfRange(from))?;
+    let Some(moved) = *slot else {
+        return Err(IrqError::AlreadyTaken(from));
+    };
+    *slot = Some(left);
+    if let Some(slot) = table.get_mut(to as usize) {
+        *slot = Some(moved);
+    }
+    Ok(())
+}
+
+/// Undo [`move_handler`]: the handler on `from` goes back to `to`, over
+/// what [`move_handler`] left there, and `from` is left empty. Nothing
+/// changes unless both have a handler.
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(dead_code, reason = "only x86-64 converts a live interrupt line")
+)]
+pub(crate) fn return_handler(from: u32, to: u32) {
+    let mut table = HANDLERS.lock();
+    let (Some(&Some(moved)), Some(&Some(_))) = (table.get(from as usize), table.get(to as usize))
+    else {
+        return;
+    };
+    if let Some(slot) = table.get_mut(to as usize) {
+        *slot = Some(moved);
+    }
+    if let Some(slot) = table.get_mut(from as usize) {
+        *slot = None;
+    }
+}
+
 /// Whether something is registered on `irq`.
 ///
 /// For stage 10's device nodes: a line the kernel handles itself is not one a

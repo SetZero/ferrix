@@ -1173,14 +1173,122 @@ static CONSOLE_INPUT: SpinLock<Option<(apic::IoApicInput, u64)>> = SpinLock::new
 /// nothing arrives before the generic layer has a handler; `None` — input stays
 /// polled — when the machine has no readable MADT, no I/O APIC covering the
 /// line, or no vector left.
+///
+/// Also registers with `iommu` what interrupt remapping's bring-up needs of
+/// this architecture at stage 10: the vectors handed out, and this line,
+/// which it converts to remappable format (`iommu::remapping`).
 pub(crate) fn console_receive_irq(view: &BootView<'_>) -> Option<u32> {
+    let routed = route_console(view);
+    crate::iommu::remapping::note_hooks(crate::iommu::remapping::Hooks {
+        vector: msi::take_vector,
+        taken: msi::taken,
+        nmis: paranoid::nmis,
+        line: routed.map(|(io_apic, _)| crate::iommu::LiveLine {
+            io_apic,
+            routed: console_vector,
+            mask: mask_console_line,
+            unmask: unmask_console_line,
+            retire: retire_console_line,
+            restore: restore_console_line,
+            convert: convert_console_line,
+            loop_back: loop_back_console,
+        }),
+    });
+    routed.map(|(_, irq)| irq)
+}
+
+/// Route the console's line masked, as [`console_receive_irq`] describes:
+/// its I/O APIC's MADT identifier and the interrupt's number.
+fn route_console(view: &BootView<'_>) -> Option<(u8, u32)> {
     let firmware = crate::discovery::acpi::Firmware::open(view).ok()?;
     let madt = firmware.acpi().madt().ok()?;
     let input = apic::IoApicInput::for_isa(&madt, console::ISA_IRQ).ok()?;
     let vector = msi::allocate_vector()?;
     input.route(vector, true);
     *CONSOLE_INPUT.lock() = Some((input, vector));
-    Some((vector - trap::IRQ_BASE) as u32)
+    Some((input.io_apic_id(), (vector - trap::IRQ_BASE) as u32))
+}
+
+/// The vector the console's line is routed to now.
+fn console_vector() -> Option<u8> {
+    CONSOLE_INPUT
+        .lock()
+        .and_then(|(_, vector)| u8::try_from(vector).ok())
+}
+
+/// Mask the console's line for its conversion, under its lock, and say what
+/// it is routed to.
+fn mask_console_line() -> Option<crate::iommu::remapping::Masked> {
+    let (input, _) = (*CONSOLE_INPUT.lock())?;
+    let held = CONSOLE_INPUT.lock();
+    input.mask();
+    let (vector, apic_id) = input.routed();
+    drop(held);
+    Some(crate::iommu::remapping::Masked {
+        vector,
+        apic_id,
+        level: input.level(),
+    })
+}
+
+/// Unmask the console's line as it is, a conversion having been given up.
+fn unmask_console_line() {
+    let held = CONSOLE_INPUT.lock();
+    if let Some((input, _)) = *held {
+        input.write(input.redirection() & !(1 << 16));
+    }
+}
+
+/// Loop `byte` back through the console's port to its own receiver, with
+/// the port's transmit side quiet.
+fn loop_back_console(byte: u8) {
+    crate::console::output::with_port_quiet(|| console::loop_back(byte));
+}
+
+/// The interrupt number `vector` arrives as.
+fn vector_number(vector: u8) -> u32 {
+    (u64::from(vector) - trap::IRQ_BASE) as u32
+}
+
+/// Move the console line's handler from `old` to `new` through the generic
+/// interrupt layer, with the line masked, leaving `old` a handler that counts
+/// what still arrives on it.
+fn retire_console_line(old: u8, new: u8) -> Result<(), &'static str> {
+    crate::irq::move_handler(
+        vector_number(old),
+        vector_number(new),
+        crate::iommu::remapping::note_retired_delivery,
+    )
+    .map_err(|_| "its handler could not be moved to its new vector")
+}
+
+/// Give the console line's handler back to `old`, a conversion given up.
+fn restore_console_line(old: u8, new: u8) {
+    crate::irq::return_handler(vector_number(new), vector_number(old));
+}
+
+/// Finish the console line's conversion to interrupt remapping, its handler
+/// already on `new`: its entry written in remappable format naming entry
+/// `handle`, with `new` as its vector and its trigger the entry's,
+/// unmasked; then the port serviced once, as its handler would, since an
+/// edge raised while the line was masked was lost.
+fn convert_console_line(new: u8, handle: u16) -> Result<(), &'static str> {
+    {
+        let mut held = CONSOLE_INPUT.lock();
+        let Some((input, _)) = *held else {
+            return Err("the console's line is not routed");
+        };
+        input.write(ferrix_paging::vtd::remap::redirection_entry(
+            handle,
+            new,
+            input.level(),
+            input.active_low(),
+            false,
+        ));
+        *held = Some((input, u64::from(new)));
+    }
+    crate::irq::dispatch(vector_number(new));
+    Ok(())
 }
 
 /// Enable the console port's receive interrupt, at the I/O APIC and in the
@@ -1678,6 +1786,13 @@ pub(crate) fn unmask_interrupt(number: u32) -> Result<(), &'static str> {
 /// was genuinely in service.
 pub(crate) fn service_interrupts(frame: &mut TrapFrame, handle: fn(u32)) {
     if frame.vector == apic::SPURIOUS_VECTOR {
+        return;
+    }
+    // Interrupt remapping's check vector: counted and acknowledged, never
+    // dispatched (ruling 3).
+    if frame.vector == u64::from(crate::iommu::CHECK_VECTOR) {
+        crate::iommu::remapping::note_check_vector();
+        apic::end_of_interrupt();
         return;
     }
     handle((frame.vector - trap::IRQ_BASE) as u32);

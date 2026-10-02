@@ -168,9 +168,224 @@ fn check_msi(nodes: &[Arc<DeviceNode>], report: &mut Report) -> Result<(), Failu
         .and_then(|aperture| vmap::map_device(aperture.phys(), 0x1000).ok())
         .ok_or_else(|| fail("edu's registers could not be mapped"))?;
     let delivered = deliver(node, Mmio::at(registers), first);
+    let forged = delivered
+        .is_ok()
+        .then(|| check_forged(node, Mmio::at(registers), nodes));
     let _ = vmap::unmap_device(registers);
     report.msi_delivered += delivered.map_err(fail)?;
+    if let Some(forged) = forged
+        && let Some(line) = forged.map_err(fail)?
+    {
+        crate::println!("  remap    {line}");
+    }
     Ok(())
+}
+
+/// The data of a compatibility-format message in delivery mode NMI (bits
+/// 10:8 = 100): its vector is ignored.
+const DATA_NMI: u16 = 0b100 << 8;
+
+/// How long check R3 holds the other function's vector after its forged
+/// message before it requires that nothing arrived: a VT-d unit's patience.
+const R3_PATIENCE_NANOS: u64 = 100_000_000;
+
+/// How long after a refused message's fault is read a delivery is still
+/// looked for.
+const GRACE_NANOS: u64 = 2_000_000;
+
+/// Checks R1 to R4 of `docs/NVIDIA.md` §12.3, on QEMU's `edu`, once its
+/// own vector has been delivered remapped: `None` where its message is not
+/// in remappable format, so no unit remaps it.
+///
+/// * **R1**: `edu`'s MSI capability programmed in compatibility format,
+///   aimed at the check vector 0xFC, then raised: fault 0x25 from `edu`'s
+///   source ID, and nothing delivered.
+/// * **R2**: the same in delivery mode NMI: fault 0x25, and no NMI taken.
+/// * **R3**: `edu`'s message programmed in remappable format naming another
+///   function's entry -- the first MSI-X table's entry 0, minted by
+///   [`check_msix`] -- then raised: fault 0x26 from `edu`, and nothing
+///   delivered on that function's vector.
+/// * **R4** is [`deliver`]'s, on `edu`'s own remapped vector, which this
+///   requires to be remappable.
+///
+/// `edu`'s minted message is programmed back, masked, after each.
+///
+/// Verifies: `L.x86_64.129`, L.iommu.54, H.DMA.9
+fn check_forged(
+    node: &DeviceNode,
+    edu: Mmio,
+    nodes: &[Arc<DeviceNode>],
+) -> Result<Option<alloc::string::String>, &'static str> {
+    let msi = node.msi.as_ref().ok_or("edu has no MSI capability")?;
+    let Some((minted, minted_data)) = node.config_writes()?.state.msi else {
+        return Err("edu's minted message was not recorded");
+    };
+    if minted >> 20 != 0xFEE || minted & 1 << 4 == 0 {
+        return Ok(None);
+    }
+    let domain = node.domain().map_err(|_| "no memory for edu's domain")?;
+    node.enable_dma()?;
+    let result = (|| {
+        let compatibility = ferrix_pci::msix::local_apic_message(
+            u8::try_from(crate::arch::hardware_id()).unwrap_or(0),
+            crate::iommu::CHECK_VECTOR,
+        );
+        // R1.
+        let before = crate::iommu::open_check_window();
+        let r1 = forge(
+            node,
+            edu,
+            msi,
+            &domain,
+            compatibility.address,
+            compatibility.data as u16,
+            0x25,
+            8,
+            || crate::iommu::open_check_window() != before,
+        );
+        let seen = crate::iommu::close_check_window() - before;
+        restore(node, msi, minted, minted_data)?;
+        if !r1? || seen != 0 {
+            return Err(if seen == 0 {
+                "a compatibility-format message was not refused with fault 0x25"
+            } else {
+                "a compatibility-format message to 0xfc was delivered"
+            });
+        }
+        // R2.
+        let nmis = crate::iommu::nmis();
+        let r2 = forge(
+            node,
+            edu,
+            msi,
+            &domain,
+            compatibility.address,
+            DATA_NMI,
+            0x25,
+            16,
+            || crate::iommu::nmis() != nmis,
+        );
+        restore(node, msi, minted, minted_data)?;
+        if crate::iommu::nmis() != nmis {
+            return Err("a compatibility-format NMI was delivered");
+        }
+        if !r2? {
+            return Err("a compatibility-format NMI was not refused with fault 0x25");
+        }
+        // R3.
+        let (other, vector, address) = minted_elsewhere(node, nodes)?;
+        let interrupt = Interrupt::new(vector)
+            .map_err(|_| "the other function's vector could not be claimed")?;
+        let r3 = forge(node, edu, msi, &domain, address, 0, 0x26, 32, || {
+            interrupt.is_pending()
+        });
+        restore(node, msi, minted, minted_data)?;
+        // Held for the unit's whole patience before it is looked at, so a
+        // late delivery on the other function's vector is still caught
+        // (condition 3 of the C6 review).
+        let late = timer::now_nanos().saturating_add(R3_PATIENCE_NANOS);
+        while timer::now_nanos() <= late && !interrupt.is_pending() {
+            core::hint::spin_loop();
+        }
+        if interrupt.is_pending() {
+            return Err("a message naming another function's entry was delivered");
+        }
+        if !r3? {
+            return Err(
+                "a message naming another function's entry was not refused with fault 0x26",
+            );
+        }
+        drop(interrupt);
+        Ok(Some(alloc::format!(
+            "edu's forged messages refused: a compatibility-format one to 0xfc and an NMI each \
+             faulted 0x25 and arrived nowhere, one naming {}'s entry faulted 0x26 and arrived \
+             nowhere; its own remapped message delivered",
+            other.location()
+        )))
+    })();
+    node.disable_dma()?;
+    result
+}
+
+/// Program `edu`'s MSI capability with `address` and `data`, raise its
+/// interrupt with status bit `bit`, and say whether its unit refused it
+/// with fault `reason` from `edu`'s stream before `arrived` said it was
+/// delivered. The fault is registered as provoked first.
+///
+/// # Errors
+///
+/// The capability could not be written or masked.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one forged message, every part of it named"
+)]
+fn forge(
+    node: &DeviceNode,
+    edu: Mmio,
+    msi: &MsiFunction,
+    domain: &crate::iommu::Domain,
+    address: u64,
+    data: u16,
+    reason: u8,
+    bit: u32,
+    arrived: impl Fn() -> bool,
+) -> Result<bool, &'static str> {
+    domain.provoke_interrupt(reason);
+    {
+        let mut config = node.config_writes()?;
+        msi.msi
+            .program(&mut config, ConfigWrites::FUNCTION, address, data);
+    }
+    msi.set_masked(node, false)?;
+    edu.write32(EDU_RAISE, bit);
+    let deadline = timer::now_nanos().saturating_add(MSI_WAIT_NANOS);
+    let mut faulted = false;
+    while timer::now_nanos() <= deadline && !arrived() {
+        if let Some(fault) = domain.take_fault() {
+            faulted = domain.stream() == Some(fault.stream)
+                && matches!(fault.cause, crate::iommu::Cause::Interrupt { reason: seen, .. } if seen == reason);
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let grace = timer::now_nanos().saturating_add(GRACE_NANOS);
+    while timer::now_nanos() <= grace && !arrived() {
+        core::hint::spin_loop();
+    }
+    edu.write32(EDU_ACKNOWLEDGE, bit);
+    msi.set_masked(node, true)?;
+    Ok(faulted && !arrived())
+}
+
+/// Program `edu`'s minted message back, masked.
+fn restore(
+    node: &DeviceNode,
+    msi: &MsiFunction,
+    address: u64,
+    data: u16,
+) -> Result<(), &'static str> {
+    msi.set_masked(node, true)?;
+    let mut config = node.config_writes()?;
+    msi.msi
+        .program(&mut config, ConfigWrites::FUNCTION, address, data);
+    Ok(())
+}
+
+/// Another function's minted MSI-X entry 0: the node, its vector and the
+/// message address that names its entry.
+fn minted_elsewhere<'a>(
+    edu: &DeviceNode,
+    nodes: &'a [Arc<DeviceNode>],
+) -> Result<(&'a Arc<DeviceNode>, Vector, u64), &'static str> {
+    nodes
+        .iter()
+        .filter(|other| !core::ptr::eq(other.as_ref(), edu))
+        .find_map(|other| {
+            let table = other.msix.as_ref()?;
+            let &(_, address, _) = table.minted.lock().get(&0)?;
+            Some((other, other.vector(0)?, address))
+        })
+        .ok_or("no other function has a minted MSI-X entry")
 }
 
 /// Raise `edu`'s interrupt with its vector claimed, masked and unmasked:

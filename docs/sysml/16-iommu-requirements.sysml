@@ -657,7 +657,10 @@ package FerrixIommuRequirements {
                 check plants fails one invalidation, is cleared and counted, and the
                 next invalidation completes with the unit not failed; with the clear
                 dropped the boot panics with 'an invalidation after a cleared
-                completion error failed'. Host tests: a wait writes its sequence
+                completion error failed'. QEMU's unit cannot raise ICE, so the check
+                plants it in the unit's software mirror of FSTS; that writing one
+                clears it on a real unit rests on the specification's
+                write-one-to-clear semantics for FSTS.ICE, not on a boot. Host tests: a wait writes its sequence
                 number, or with Unwritten nothing, as a valid descriptor; a stopped
                 queue is never taken for a completion, nor a completion error for a
                 timeout.";
@@ -756,6 +759,107 @@ package FerrixIommuRequirements {
             attribute :>> parent = ("H.DMA.2", "H.DMA.3");
             attribute :>> unit = ("iommu::smmuv3::Unit::open",
                 "iommu::smmuv3::Unit::program", "iommu::smmuv3::Unit::attach");
+        }
+    }
+
+    package InterruptRemapping {
+        doc /* src/kernel/src/iommu/remapping.rs and the interrupt-remapping half
+             * of iommu/vtd.rs: NVIDIA's N0g, docs/NVIDIA.md section 12.3, which
+             * closes F-57. */
+
+        requirement <'L.iommu.50'> remappingOnlyWithCompatibilityBlocked : ItemLowLevel {
+            attribute :>> statement = "A VT-d unit shall remap interrupts only where
+                the DMAR says INTR_REMAP and the unit's ECAP.IR is set. Such a unit
+                shall be given one zeroed interrupt remapping table of 256 entries,
+                cleaned whole before it is linked, pointed at by IRTA in xAPIC
+                format (EIME 0) and taken with SIRTP, every cached entry
+                invalidated, before IRE. IRE shall be set without CFI and GSTS read
+                back: a unit whose CFIS reads set shall have IRE cleared again and
+                count as not blocking compatibility format, and a unit that
+                remaps with CFIS clear shall say so on its line.";
+            attribute :>> criterion = "On x86-64 under KVM (split irqchip) and TCG,
+                on the patched QEMU whose CFIS follows CFI, the unit's line says
+                remapping on (256 entries, xAPIC format), CFIS=0 read back, and
+                test-boot requires it and fails on 'remapping not enabled'; with
+                CFI set in the IRE write the unit reads CFIS set, turns remapping
+                off and test-boot fails. Host test: IRTA holds the table with EIME
+                0 and 256 entries.";
+            attribute :>> parent = ("H.DMA.9", "H.DMA.2");
+            attribute :>> unit = ("iommu::vtd::Unit::open", "iommu::vtd::unit_frames",
+                "iommu::vtd::Unit::enable", "iommu::vtd::Unit::start_table",
+                "iommu::vtd::Unit::start_remapping", "iommu::vtd::Unit::translate",
+                "iommu::bring_up_vtd", "iommu::remapping::bring_up",
+                "iommu::remapping::record");
+        }
+        requirement <'L.iommu.52'> anEntryIsWrittenOnceAndInvalidated : ItemLowLevel {
+            attribute :>> statement = "An interrupt remapping table entry shall be
+                written only while it is not present: its high quadword, the source
+                ID it checks, first, then its low quadword with P last, both
+                cleaned to memory on a unit that does not snoop, then the entry
+                invalidated index by index in the interrupt entry cache and waited
+                for, before the message or I/O APIC entry that names it is
+                programmed. A present entry shall never be rewritten, and an index
+                whose invalidation failed shall not be used.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG the console's
+                present entry is offered a rewrite on every unit that remaps and
+                each refuses it, the console's next delivery still coming through
+                it (the remap line); with the refusal of a present entry dropped,
+                the boot panics with 'a present interrupt entry was rewritten'. The
+                invalidation's order is argued from the code: remap's last
+                statement is the invalidation and its wait, and QEMU does not cache
+                entries, so a check of a skipped invalidation would prove nothing
+                (the consultant's acceptance, 2026-10-02).";
+            attribute :>> parent = ("H.DMA.9", "H.DMA.8");
+            attribute :>> unit = ("iommu::vtd::Unit::remap",
+                "iommu::vtd::Unit::invalidate_interrupt_entry");
+        }
+        requirement <'L.iommu.53'> anEntryCarriesItsFixedFields : ItemLowLevel {
+            attribute :>> statement = "Every interrupt remapping entry the kernel
+                writes shall be present, record its faults (FPD 0), name one
+                physical destination (DM 0, RH 0) in fixed delivery mode, remap and
+                never post (IM 0), carry the vector minted and the trigger of its
+                source -- edge for a message, the input's for an I/O APIC line --
+                and check the requester's whole source ID (SQ 00, SVT 01).";
+            attribute :>> criterion = "Host test: an entry carries exactly those
+                fields and none of QEMU's reserved bits; with SVT 0 in the
+                builder, check R3's message naming another function's entry is
+                delivered and the boot panics.";
+            attribute :>> parent = "H.DMA.9";
+            attribute :>> unit = ("iommu::remapping::remap_message",
+                "iommu::remapping::prepare_console");
+        }
+        requirement <'L.iommu.54'> interruptFaultsAreToldApart : ItemLowLevel {
+            attribute :>> statement = "A VT-d fault record whose reason is 0x20 to
+                0x26 shall be read as an interrupt fault, with its reason and the
+                entry index it named and no page, recorded in the audit as
+                INTERRUPT_FAULT, and counted stray unless a check registered its
+                stream and reason before provoking it.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG checks R1 and R2
+                read fault 0x25 and R3 fault 0x26 from edu's source ID, each
+                registered, and the end-of-boot audit counts no stray fault;
+                test-boot requires exactly those three reasons provoked and fails
+                on any other. Host test: a fault record's reason tells an interrupt
+                request from DMA, and its index is FI's bits 63:48.";
+            attribute :>> parent = ("H.DMA.9", "H.DMA.6");
+            attribute :>> unit = ("iommu::vtd::Unit::take_fault", "iommu::provoked",
+                "iommu::recorded", "iommu::interrupt_reason_name");
+        }
+        requirement <'L.iommu.55'> isolationIsTheWholeMachines : ItemLowLevel {
+            attribute :>> statement = "The machine's interrupts shall count as
+                isolated exactly when every unit its DMAR lists, refused ones
+                included, remaps with CFIS read clear, and stage 10's discovery
+                placed no PCI function behind no unit; a device's, when the
+                machine's are and the unit it is placed behind as its own requester
+                remaps. Before discovery they are not isolated.";
+            attribute :>> criterion = "Host test: the rule over a list of units,
+                one refused, one with CFIS set, and a function bypassing, each
+                clears it. On x86-64 check R10 reads device_isolation 0x3 for edu,
+                and bit 1 clear while the check forces the machine's interrupts not
+                isolated.";
+            attribute :>> parent = "H.DMA.9";
+            attribute :>> unit = ("iommu::remapping::interrupts_isolated",
+                "iommu::remapping::function_isolated", "iommu::remapping::note_bypassing",
+                "iommu::report", "iommu::programmed_unit_for");
         }
     }
 }

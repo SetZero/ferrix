@@ -1114,6 +1114,11 @@ pub(crate) struct DeviceNode {
     /// rewritten: from then on, until reboot, every call that needs `MANAGE`
     /// on the node answers `BAD_STATE`.
     refused: AtomicBool,
+    /// The isolated-interrupts mark (`DEVICE_LIMIT_ISOLATED_INTERRUPTS`):
+    /// set once by `devmgr` and never cleared. While it is set and the
+    /// machine's interrupts are not isolated, the node's vectors and pins
+    /// are refused (`L.device.27`).
+    isolated_mark: AtomicBool,
     /// Its memory, in BAR or `reg` order.
     apertures: Vec<Aperture>,
     /// A device tree node's interrupts, in firmware's order, or a PCI
@@ -1177,6 +1182,7 @@ impl DeviceNode {
             dma_on: AtomicBool::new(false),
             index: 0,
             refused: AtomicBool::new(false),
+            isolated_mark: AtomicBool::new(false),
             apertures: Vec::new(),
             vectors: Vec::new(),
             msix: None,
@@ -1816,6 +1822,35 @@ impl DeviceNode {
         })?;
         *held = Some(Arc::clone(&domain));
         Ok(domain)
+    }
+
+    /// Set the isolated-interrupts mark. It is never cleared.
+    pub(crate) fn mark_isolated(&self) {
+        self.isolated_mark.store(true, Ordering::Release);
+    }
+
+    /// Whether the isolated-interrupts mark is set.
+    pub(crate) fn isolated_marked(&self) -> bool {
+        self.isolated_mark.load(Ordering::Acquire)
+    }
+
+    /// Whether the node's interrupts are isolated: a PCI function whose
+    /// unit remaps, on a machine whose interrupts are isolated
+    /// (`iommu::function_isolated`). Never a device tree or virtio-mmio
+    /// node's, nor any on ARMv7-A, nor yet an AArch64 one behind a GICv3
+    /// ITS.
+    pub(crate) fn interrupts_isolated(&self) -> bool {
+        match self.location {
+            Location::Pci(address) => iommu::function_isolated(address),
+            Location::VirtioMmio(_) | Location::Tree(_) => false,
+        }
+    }
+
+    /// Whether the node may be given vectors and pins: not while its
+    /// isolated-interrupts mark is set and its interrupts are not isolated
+    /// (`L.device.27`).
+    pub(crate) fn may_take_vectors_and_pins(&self) -> bool {
+        !self.isolated_marked() || self.interrupts_isolated()
     }
 
     /// The device's IOMMU domain if one was ever made: [`DeviceNode::domain`]

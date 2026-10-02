@@ -33,6 +33,13 @@
 //! Either way the answer is a counter and a frequency, and the rest of the
 //! kernel is told neither which one it got nor that there was a choice.
 //!
+//! # The HPET raises nothing
+//!
+//! The HPET is only ever read here, as a counter: no comparator is armed and
+//! no FSB message programmed, so under interrupt remapping it needs no entry
+//! of its own (`docs/NVIDIA.md` §12.3). An FSB message firmware left armed
+//! would be in compatibility format, and a unit that remaps blocks it.
+//!
 //! # A 32-bit HPET
 //!
 //! The HPET's main counter may be 32 bits wide — capability bit 13 says, and

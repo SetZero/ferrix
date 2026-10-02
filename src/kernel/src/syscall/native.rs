@@ -488,7 +488,8 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         | NativeCall::DeviceQuiesce
         | NativeCall::DeviceClock
         | NativeCall::DeviceSetLimit
-        | NativeCall::DeviceGetLimit => device_call(call, process, &a),
+        | NativeCall::DeviceGetLimit
+        | NativeCall::DeviceIsolation => device_call(call, process, &a),
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortCreate => port_create(process),
@@ -1409,6 +1410,7 @@ fn device_call(call: NativeCall, process: &Process, a: &[u64; 6]) -> Result<usiz
         NativeCall::DeviceClock => device_clock(process, device, second, third),
         NativeCall::DeviceSetLimit => device_set_limit(process, device, second, third),
         NativeCall::DeviceGetLimit => device_get_limit(process, device, second),
+        NativeCall::DeviceIsolation => device_isolation(process, device),
         _ => Err(Errno::ENOSYS),
     }
 }
@@ -1944,8 +1946,22 @@ fn device_in(process: &Process, device: Handle, needed: Rights) -> Result<Arc<De
 ///
 /// The vector is the device's own by index, so a driver names "my second
 /// interrupt" and cannot name a line its device does not have.
-fn interrupt_create(process: &Process, device: Handle, index: u64) -> Result<usize, Errno> {
+/// The device node `device` names in `process`, with `MANAGE`, for a call
+/// that gives it a vector or a pin: refused `ACCESS_DENIED` while its
+/// isolated-interrupts mark is set and the machine's interrupts are not
+/// isolated. The refusal is the kernel's, whatever `devmgr` does
+/// (`L.device.27`).
+fn device_isolated_in(process: &Process, device: Handle) -> Result<Arc<DeviceNode>, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
+    if node.may_take_vectors_and_pins() {
+        Ok(node)
+    } else {
+        Err(status::ACCESS_DENIED)
+    }
+}
+
+fn interrupt_create(process: &Process, device: Handle, index: u64) -> Result<usize, Errno> {
+    let node = device_isolated_in(process, device)?;
     // Taking a device's interrupt is what its driver does, and devmgr and a
     // quiesce never do: noted, so that a check waiting for the driver's work
     // can say how the driver ended.
@@ -2258,7 +2274,7 @@ fn vmo_pin(
         return Err(status::INVALID_ARGS);
     }
     let read_only = options & PIN_READ_ONLY != 0;
-    let node = device_in(process, device, Rights::MANAGE)?;
+    let node = device_isolated_in(process, device)?;
     // The first pin is what gives the device DMA, so it is where bus
     // mastering goes on; a device whose switch cannot be reached gets no pin.
     node.enable_dma().map_err(|_| status::BAD_STATE)?;
@@ -2334,7 +2350,11 @@ fn device_set_limit(
     value: u64,
 ) -> Result<usize, Errno> {
     let (node, rights) = device_and_rights(process, device)?;
-    let mut old = object::pin::budget_of(&node) as u64;
+    let mut old = if which == types::DEVICE_LIMIT_ISOLATED_INTERRUPTS {
+        u64::from(node.isolated_marked())
+    } else {
+        object::pin::budget_of(&node) as u64
+    };
     let answered = set_limit_on(&node, rights, which, value).map(|was| {
         old = was as u64;
         0
@@ -2354,6 +2374,9 @@ fn device_set_limit(
 fn set_limit_on(node: &DeviceNode, rights: Rights, which: u64, value: u64) -> Result<usize, Errno> {
     if !rights.contains(Rights::SET_LIMIT) {
         return Err(status::ACCESS_DENIED);
+    }
+    if which == types::DEVICE_LIMIT_ISOLATED_INTERRUPTS {
+        return set_isolated_mark(node, value);
     }
     if which != types::DEVICE_LIMIT_PIN_PAGES {
         return Err(status::INVALID_ARGS);
@@ -2383,9 +2406,41 @@ fn device_and_rights(
 
 /// `device_get_limit`. Any device handle will do: the numbers say what a
 /// pin may take, which a driver may know.
+/// The isolated-interrupts mark, set-once (`L.device.27`, G5): a value other
+/// than 0 sets it, and 0 on a marked node would clear it, which is refused.
+/// Answers what the mark was.
+fn set_isolated_mark(node: &DeviceNode, value: u64) -> Result<usize, Errno> {
+    let was = node.isolated_marked();
+    if value == 0 {
+        return if was {
+            Err(status::ACCESS_DENIED)
+        } else {
+            Ok(0)
+        };
+    }
+    node.mark_isolated();
+    Ok(usize::from(was))
+}
+
+/// `device_isolation`: how the device is isolated, as
+/// `DEVICE_ISOLATION_*` bits (`L.device.27`).
+fn device_isolation(process: &Process, device: Handle) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::NONE)?;
+    let translated = node.domain_made().is_some_and(|domain| domain.translated());
+    let mut bits = 0;
+    if translated {
+        bits |= types::DEVICE_ISOLATION_DMA_TRANSLATED;
+    }
+    if node.interrupts_isolated() {
+        bits |= types::DEVICE_ISOLATION_INTERRUPTS;
+    }
+    Ok(bits as usize)
+}
+
 fn device_get_limit(process: &Process, device: Handle, which: u64) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::NONE)?;
     match which {
+        types::DEVICE_LIMIT_ISOLATED_INTERRUPTS => Ok(usize::from(node.isolated_marked())),
         types::DEVICE_LIMIT_PIN_PAGES => Ok(object::pin::budget_of(&node)),
         types::DEVICE_LIMIT_PIN_CEILING => Ok(object::pin::ceiling()),
         types::DEVICE_LIMIT_PIN_ROOM => Ok(node

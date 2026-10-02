@@ -105,6 +105,12 @@ const RFLAGS_RF: u64 = 1 << 16;
 
 /// NMIs taken.
 static NMIS: AtomicU64 = AtomicU64::new(0);
+
+/// NMIs taken since boot: for interrupt remapping's check R2, that a forged
+/// NMI-mode message arrived nowhere.
+pub(crate) fn nmis() -> u64 {
+    NMIS.load(Ordering::Relaxed)
+}
 /// Kernel `#DB`s taken for each hardware breakpoint, by the slot DR6 named.
 static BREAKPOINTS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 /// Paranoid handlers that found `GS` naming no processor's record.

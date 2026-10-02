@@ -160,6 +160,29 @@ pub(crate) fn transmit_buffer() -> &'static str {
 /// Safe, and the reason it is safe is worth stating once here rather than at
 /// seven call sites: every `port` passed in is one of the constants above, all
 /// of which name a register of the 16550 the platform fixes at `COM1`.
+/// `MODEM_CONTROL`: loopback, the transmitter wired to the receiver.
+const LOOPBACK: u8 = 1 << 4;
+
+/// Send `byte` to the port's own receiver, through its loopback, and wait
+/// until it has left the transmitter: for interrupt remapping's check R5,
+/// which then requires it to arrive by the line's interrupt. The caller has
+/// the port quiet (`console::output::with_port_quiet`), so no byte a writer
+/// sends is looped back with it.
+pub(crate) fn loop_back(byte: u8) {
+    /// `LINE_STATUS`: the holding register and the shift register are both
+    /// empty.
+    const TRANSMITTER_IDLE: u8 = 1 << 6;
+    write_register(MODEM_CONTROL, MODEM_READY | LOOPBACK);
+    write_register(DATA, byte);
+    for _ in 0..1_000_000 {
+        if read_register(LINE_STATUS) & TRANSMITTER_IDLE != 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    write_register(MODEM_CONTROL, MODEM_READY);
+}
+
 fn write_register(port: u16, value: u8) {
     // SAFETY: (DEVICE) `port` is one of COM1's own registers and `value` is the setting
     // the device's documented initialisation sequence calls for.

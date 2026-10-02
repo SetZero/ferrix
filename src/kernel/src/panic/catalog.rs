@@ -1720,6 +1720,12 @@ pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
          unpin with a wait that writes no status did not fail, or released its frames, or left \
          them counted live rather than kept (`object/pin/check.rs` \
          check_failed_invalidation).",
+        "Interrupt remapping's stage 10 checks (`docs/NVIDIA.md` section 12.3): the console's I/O \
+         APIC line did not deliver a looped-back byte through its entry, or delivered on its \
+         retired vector (R5); a requester no unit places was given a message route \
+         (`L.device.28`); a present interrupt entry was rewritten (`L.iommu.52`); or the \
+         isolated-interrupts mark was not set, did not refuse a vector while interrupts were \
+         forced not isolated, or was cleared (R10).",
         "A completion error (`ICE`) the check planted on a unit did not fail its invalidation, \
          was not cleared and counted, or left the next invalidation failing or the unit marked \
          failed (`iommu/check.rs` check_completion_errors).",
@@ -1771,6 +1777,10 @@ pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
          fault, when the lost one may have been the probe's next; the `first read here` line \
          names the record that was full. QEMU's unit never overflows on one device's faults, \
          so there it means a second device faulted.",
+        "Interrupt remapping let a message through that it should have refused: the check \
+         vector 0xFC was delivered outside checks R1 and R2's window, or the console's I/O APIC \
+         line was delivered on its retired vector after its conversion -- a compatibility-format \
+         route that survived, which under KVM's split irqchip is an entry rewritten unmasked.",
         "A VT-d unit's invalidation queue stopped (`FSTS.IQE` or `ITE`) and the unit was marked \
          failed: it takes no invalidation again, and nothing its domains may reach is released \
          until reboot. The line before names the unit and which error stopped it; a descriptor \
@@ -1805,6 +1815,12 @@ pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
          driver could be given memory that is not its device's.",
         "`DeviceNode::pci` minted an aperture from a BAR whose size or address enumeration had \
          not checked.",
+        "Where a VT-d unit remaps interrupts, `edu`'s forged messages were not refused as \
+         `device/check.rs` check_forged requires (checks R1 to R3, `docs/NVIDIA.md` section \
+         12.3): a compatibility-format message to 0xFC or in NMI mode was delivered, or not \
+         faulted 0x25 -- the QEMU is not the patched one, or remapping is off -- or one naming \
+         another function's entry was delivered, or not faulted 0x26, because the entry does \
+         not check the source ID.",
     ],
     see: "src/kernel/src/device.rs publish; src/kernel/src/discovery/pci.rs; docs/ROADMAP.md stage 10",
 };
@@ -1864,6 +1880,54 @@ pub(crate) static STAGE10_CONFIG: Explanation = Explanation {
     see: "src/kernel/src/device.rs ConfigWrites, config_write, verify_config; \
           src/kernel/src/device/config_check.rs; src/lib/platform/pci/src/window.rs; \
           docs/NVIDIA.md §12.1; docs/certification/SAFETY-MANUAL.md AoU-22",
+};
+
+/// For `iommu::remapping`, when interrupt remapping's bring-up finds a
+/// vector minted in compatibility format before it, or cannot finish
+/// converting the console's I/O APIC line once remapping is on.
+pub(crate) static STAGE10_REMAP: Explanation = Explanation {
+    code: "FX-1012",
+    title: "interrupt remapping could not come up as specified",
+    meaning: "A VT-d unit that remaps interrupts with compatibility format blocked drops any \
+              message that is not in remappable format. `iommu::remapping` brings it up \
+              (`docs/NVIDIA.md` section 12.3): the console's I/O APIC line, live since stage 3, \
+              is masked, given a fresh vector and an entry in the unit's table, then turned \
+              into a remappable entry once remapping is on. Before remapping goes on, every \
+              vector handed out must be the console's (check R9): a vector minted in \
+              compatibility format before it would either pass through every unit or, once \
+              blocked, never arrive.",
+    causes: &[
+        "A message vector was minted before `iommu::bring_up`: `arch::msi_allocate` was called \
+         at an earlier stage, so its device's message is in compatibility format.",
+        "A byte the console's port received while its line was masked for the conversion was \
+         not read by the service once after it (G3): the conversion did not service the port.",
+        "The console's line was masked and its entry written, but moving its handler to the \
+         new vector, or writing its remappable entry, failed: the generic interrupt table \
+         already had a handler on the new vector, or none on the old one.",
+    ],
+    see: "src/kernel/src/iommu/remapping.rs; src/kernel/src/arch/x86_64/mod.rs \
+          convert_console_line; src/kernel/src/irq.rs move_handler; docs/NVIDIA.md section 12.3",
+};
+
+/// For `secondary_start` in `arch/x86_64/smp.rs` (and, as stage 3's error,
+/// `apic::init` on the boot processor), when a processor's local APIC is
+/// locked in x2APIC mode.
+pub(crate) static X2APIC_LOCKED: Explanation = Explanation {
+    code: "FX-0408",
+    title: "a processor's local APIC is locked in x2APIC mode",
+    meaning: "This kernel drives the local APIC through its MMIO window, which does not exist in \
+              x2APIC mode. Every processor looks at its own `IA32_APIC_BASE` before it uses the \
+              window, and one firmware left in x2APIC mode is switched back to xAPIC \
+              (`docs/NVIDIA.md` section 12.3, condition G6). A platform that has disabled legacy \
+              xAPIC (`IA32_XAPIC_DISABLE_STATUS`) cannot be switched, and the boot stops here by \
+              name rather than drive a window that is not there: the customer's decision.",
+    causes: &[
+        "The platform's firmware locks the local APIC in x2APIC mode, as some recent Intel \
+         platforms do. The kernel needs x2APIC support (and `IRTA.EIME` = 1 in interrupt \
+         remapping) to boot there.",
+    ],
+    see: "src/kernel/src/arch/x86_64/apic.rs leave_x2apic; src/kernel/src/arch/x86_64/smp.rs \
+          secondary_start; docs/NVIDIA.md section 12.3",
 };
 
 /// For `check_path_calls` in `stages_check.rs`, when `syscall::check::run_paths` fails.
@@ -2913,6 +2977,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SECONDARY_RECORD_MISMATCH,
     &PROCESSORS_MISSING,
     &STAGE4_SMP,
+    &X2APIC_LOCKED,
     &SCHEDULER_BRING_UP,
     &STAGE5_SCHEDULER,
     &SCHEDULE_WITH_PREEMPTION_HELD,
@@ -2966,6 +3031,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &DEVMGR_BY_INIT,
     &STAGE10_DISTRIBUTOR,
     &STAGE10_CONFIG,
+    &STAGE10_REMAP,
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,

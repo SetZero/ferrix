@@ -75,9 +75,10 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_paging::coherence::Unpublished;
 use ferrix_paging::vtd::VtdSecondLevel;
 use ferrix_paging::vtd::queue::{
-    self, Completion, ContextScope, Descriptor, FSTS_ICE, FSTS_IQE, FSTS_QUEUE_ERRORS, IotlbScope,
-    Outcome,
+    self, Completion, ContextScope, Descriptor, FSTS_ICE, FSTS_IQE, FSTS_QUEUE_ERRORS,
+    InterruptEntryScope, IotlbScope, Outcome,
 };
+use ferrix_paging::vtd::remap::{self, Remap};
 use ferrix_paging::{MapError, MapFlags, PhysAddr};
 use ferrix_pci::Address;
 use ferrix_sync::IrqSpinLock;
@@ -125,6 +126,14 @@ const SRTP: u32 = 1 << 30;
 const QIE: u32 = 1 << 26;
 /// GCMD: turn interrupt remapping on; GSTS (`IRES`): it is on.
 const IRE: u32 = 1 << 25;
+/// GCMD: take the interrupt remapping table pointer; GSTS (`IRTPS`): it
+/// is taken.
+const SIRTP: u32 = 1 << 24;
+/// GSTS (`CFIS`): compatibility-format interrupts pass through untranslated.
+/// Read back clear after `IRE`, or remapping is turned off again.
+const CFIS: u32 = 1 << 23;
+/// Interrupt remapping table address register.
+const IRTA: u64 = 0xB8;
 /// GSTS bits reporting a standing enable, which every GCMD write repeats so as
 /// not to turn it off: translation, queued invalidation and interrupt
 /// remapping. Not `CFI` (bit 23): a compatibility-format permission
@@ -143,6 +152,8 @@ const ECAP_C: u64 = 1 << 0;
 /// ECAP: queued invalidation. Required: the queue is the kernel's only way to
 /// invalidate.
 const ECAP_QI: u64 = 1 << 1;
+/// ECAP: interrupt remapping.
+const ECAP_IR: u64 = 1 << 3;
 
 /// CAP: the unit needs its write buffer flushed after every change, which this
 /// driver does not do.
@@ -210,6 +221,8 @@ static INVALIDATIONS_FAILED: AtomicU64 = AtomicU64::new(0);
 static UNITS_FAILED: AtomicU64 = AtomicU64::new(0);
 /// Invalidation completion errors taken and cleared.
 static COMPLETION_ERRORS: AtomicU64 = AtomicU64::new(0);
+/// Interrupt entry cache invalidations queued and waited for.
+static QUEUED_INTERRUPT_ENTRY: AtomicU64 = AtomicU64::new(0);
 
 /// Why an invalidation on a failed unit is refused at once.
 const FAILED_WHY: &str = "its invalidation queue stopped at a bad descriptor, so it takes no \
@@ -222,6 +235,8 @@ pub(crate) struct Invalidations {
     pub(crate) context: u64,
     /// IOTLB invalidations queued, each waited for.
     pub(crate) iotlb: u64,
+    /// Interrupt entry cache invalidations queued, each waited for.
+    pub(crate) interrupt_entry: u64,
     /// Invalidations that failed.
     pub(crate) failed: u64,
     /// Units marked failed.
@@ -236,6 +251,7 @@ pub(crate) fn invalidations() -> Invalidations {
     Invalidations {
         context: QUEUED_CONTEXT.load(Ordering::Relaxed),
         iotlb: QUEUED_IOTLB.load(Ordering::Relaxed),
+        interrupt_entry: QUEUED_INTERRUPT_ENTRY.load(Ordering::Relaxed),
         failed: INVALIDATIONS_FAILED.load(Ordering::Relaxed),
         units_failed: UNITS_FAILED.load(Ordering::Relaxed),
         completion_errors: COMPLETION_ERRORS.load(Ordering::Relaxed),
@@ -299,6 +315,13 @@ pub(crate) struct Unit {
     /// any. QEMU's unit never raises `ICE` and ignores a write to it, so
     /// the clearing path would otherwise never run.
     planted: AtomicU32,
+    /// Physical address of its interrupt remapping table, one frame of
+    /// [`remap::TABLE_ENTRIES`], or 0 on a unit that cannot remap: the DMAR
+    /// does not say `INTR_REMAP`, or `ECAP.IR` is clear.
+    irt: u64,
+    /// Whether `IRE` read back set and `CFIS` clear after it: the unit
+    /// remaps every interrupt request and blocks compatibility format.
+    remapping: AtomicBool,
     /// Offset of the first fault recording register.
     faults: u64,
     /// Offset of the IOTLB invalidation register.
@@ -359,7 +382,10 @@ impl Unit {
     /// # Errors
     ///
     /// Why the unit is left alone.
-    pub(crate) fn open(phys: u64) -> Result<Unit, &'static str> {
+    ///
+    /// `intr_remap` is the DMAR's `INTR_REMAP` flag: with it and `ECAP.IR`
+    /// the unit is given an interrupt remapping table, and may remap.
+    pub(crate) fn open(phys: u64, intr_remap: bool) -> Result<Unit, &'static str> {
         let base =
             vmap::map_device(phys, WINDOW).map_err(|_| "its registers could not be mapped")?;
         let registers = Mmio::at(base);
@@ -389,17 +415,9 @@ impl Unit {
         }
         let coherent = ecap & ECAP_C != 0;
         let mut writes = Unpublished::new(coherent);
-        let Some(root) = table(&mut writes) else {
-            return refuse("no frame for its root table");
-        };
-        let Some(queue) = table(&mut writes) else {
-            mm::deallocate_frames(root / PAGE_SIZE, 0);
-            return refuse("no frame for its invalidation queue");
-        };
-        let Some(status) = table(&mut writes) else {
-            mm::deallocate_frames(root / PAGE_SIZE, 0);
-            mm::deallocate_frames(queue / PAGE_SIZE, 0);
-            return refuse("no frame for its invalidation queue's status");
+        let remaps = intr_remap && ecap & ECAP_IR != 0;
+        let Some([root, queue, status, irt]) = unit_frames(&mut writes, remaps) else {
+            return refuse("no frames for its tables");
         };
         settle(&writes);
         if !coherent {
@@ -416,6 +434,8 @@ impl Unit {
             failed: AtomicBool::new(false),
             failure_reported: AtomicBool::new(false),
             planted: AtomicU32::new(0),
+            irt,
+            remapping: AtomicBool::new(false),
             faults: ((cap >> 24) & 0x3FF) * 16,
             iotlb: ((ecap >> 8) & 0x3FF) * 16 + 8,
             caching: cap & CAP_CM != 0,
@@ -442,13 +462,118 @@ impl Unit {
         // been written since: no record to check.
         self.invalidate_context(ContextScope::Global, None)?;
         self.invalidate_iotlb(IotlbScope::Global, None, Wait::Status)?;
+        if self.irt != 0 {
+            self.start_table()?;
+        }
         // A fault firmware left recorded would otherwise be read as ours.
         if self.registers.read32(self.faults + 12) & FRCD_F != 0 {
             self.registers.write32(self.faults + 12, FRCD_F);
         }
         self.registers.write32(FSTS, PFO);
         *self.taken.lock() = None;
+        Ok(())
+    }
+
+    /// Turn translation on, after [`Unit::enable`] and, on a unit that
+    /// remaps, after [`Unit::start_remapping`]. From here a function with
+    /// no context entry reaches nothing.
+    ///
+    /// # Errors
+    ///
+    /// The unit never started translating.
+    pub(crate) fn translate(&self) -> Result<(), &'static str> {
         self.command(TE, "it never started translating")
+    }
+
+    /// Point the unit at its interrupt remapping table -- `EIME` = 0, 256
+    /// entries, every one not present -- and make it forget any entry it
+    /// cached. Remapping itself stays off until [`Unit::start_remapping`].
+    fn start_table(&self) -> Result<(), &'static str> {
+        write64(self.registers, IRTA, remap::table_address(self.irt));
+        self.command(SIRTP, "it never took its interrupt remapping table")?;
+        self.invalidate_interrupt_entry(InterruptEntryScope::Global)
+    }
+
+    /// Physical address of its registers, which names it on the console.
+    pub(crate) fn phys(&self) -> u64 {
+        self.phys
+    }
+
+    /// Whether the unit has an interrupt remapping table: the DMAR says
+    /// `INTR_REMAP` and the unit `ECAP.IR`.
+    pub(crate) fn can_remap(&self) -> bool {
+        self.irt != 0
+    }
+
+    /// Whether the unit remaps every interrupt request and blocks
+    /// compatibility format: `IRE` read back set and `CFIS` clear.
+    pub(crate) fn remapping(&self) -> bool {
+        self.remapping.load(Ordering::Acquire)
+    }
+
+    /// Turn interrupt remapping on, without `CFI`, and read `GSTS` back:
+    /// `true` when `CFIS` reads clear, so compatibility-format requests are
+    /// blocked from here. When it reads set, remapping is turned off again
+    /// and `false` comes back: a unit that remaps but lets compatibility
+    /// format through isolates nothing (condition G4).
+    ///
+    /// # Errors
+    ///
+    /// The unit never started remapping, or never stopped after `CFIS`
+    /// read set.
+    pub(crate) fn start_remapping(&self) -> Result<bool, &'static str> {
+        self.command(IRE, "it never started remapping interrupts")?;
+        if self.registers.read32(GSTS) & CFIS == 0 {
+            self.remapping.store(true, Ordering::Release);
+            return Ok(true);
+        }
+        let _held = self.commands.enter()?;
+        let standing = self.registers.read32(GSTS) & STANDING & !IRE;
+        self.registers.write32(GCMD, standing);
+        self.wait(
+            || self.registers.read32(GSTS) & IRE == 0,
+            "compatibility format still accepted, and it would not stop remapping",
+        )?;
+        Ok(false)
+    }
+
+    /// Write interrupt remapping table entry `index` to deliver as `entry`
+    /// says, and make the unit forget any copy of it it cached, before the
+    /// message or I/O APIC entry that names it is programmed.
+    ///
+    /// The entry must not be present: it is never rewritten while it is
+    /// (`ferrix_paging::vtd::remap`'s rule). Its high quadword -- the source
+    /// ID it checks -- is written first, its low quadword with `P` last, so
+    /// the unit never reads a present entry with a stale check. Both are
+    /// cleaned to memory on a unit that does not snoop, then the entry is
+    /// invalidated index by index and waited for. An index whose
+    /// invalidation fails is not used: the caller gets an error and the
+    /// vector behind it is never handed out.
+    ///
+    /// # Errors
+    ///
+    /// No table, an index past it, an entry already present, a write not
+    /// cleaned, or a failed invalidation.
+    pub(crate) fn remap(&self, index: u16, entry: Remap) -> Result<(), &'static str> {
+        if self.irt == 0 {
+            return Err("the unit has no interrupt remapping table");
+        }
+        if index >= remap::TABLE_ENTRIES {
+            return Err("an interrupt entry index past the unit's table");
+        }
+        let at = self.irt + u64::from(index) * 16;
+        if remap::is_present(read_entry(at)) {
+            return Err("an interrupt entry in use is never rewritten");
+        }
+        let [low, high] = remap::entry(entry);
+        let mut writes = self.writes();
+        write_entry(at + 8, high, &mut writes);
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        write_entry(at, low, &mut writes);
+        self.publish(&mut writes);
+        settle(&writes);
+        require_published(&writes)?;
+        self.invalidate_interrupt_entry(InterruptEntryScope::Index(index))
     }
 
     /// Turn the invalidation queue on: its frame, 256 descriptors of 128
@@ -530,8 +655,25 @@ impl Unit {
         if flags & FRCD_F != 0 {
             // F is set, so every other field was written before it and is whole.
             let stream = self.registers.read32(self.faults + 8) & 0xFFFF;
-            let page = read64(self.registers, self.faults) & !0xFFF;
+            let low = read64(self.registers, self.faults);
             self.registers.write32(self.faults + 12, FRCD_F);
+            let reason = remap::fault_reason(flags);
+            // An interrupt request's fault names an entry index, not a page:
+            // recorded apart (`L.iommu.54`), and never a page a DMA check
+            // provoked, so an overflow behind it counts stray.
+            if remap::is_interrupt_reason(reason) {
+                *taken = Some((stream, u64::MAX));
+                return Some(Fault {
+                    stream,
+                    page: 0,
+                    write: false,
+                    cause: Cause::Interrupt {
+                        reason,
+                        index: remap::fault_index(low),
+                    },
+                });
+            }
+            let page = low & !0xFFF;
             *taken = Some((stream, page));
             return Some(Fault {
                 stream,
@@ -786,6 +928,14 @@ impl Unit {
         Ok(())
     }
 
+    /// Invalidate the interrupt entry cache for `scope` through the queue,
+    /// and wait until it has.
+    fn invalidate_interrupt_entry(&self, scope: InterruptEntryScope) -> Result<(), &'static str> {
+        self.submit(queue::interrupt_entry(scope), Wait::Status)?;
+        let _ = QUEUED_INTERRUPT_ENTRY.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Invalidate the IOTLB for `scope` through the queue, and wait until it
     /// has, as `wait` says. Refused as [`Unit::invalidate_context`] is.
     fn invalidate_iotlb(
@@ -1018,6 +1168,32 @@ pub(super) fn leave_queue_on_and_stop(unit: &Unit) -> Result<(), &'static str> {
         return Err("a queue firmware left on was still on after it was stopped");
     }
     Ok(())
+}
+
+/// The frames a unit is given, each zeroed and, on a unit that does not
+/// snoop, cleaned whole before anything links it (G8): its root table, its
+/// invalidation queue, the queue's status word and -- when `remaps` -- its
+/// interrupt remapping table, else 0 for it. None, with every frame taken
+/// given back, when one cannot be had.
+fn unit_frames(writes: &mut Unpublished, remaps: bool) -> Option<[u64; 4]> {
+    let wanted = if remaps { 4 } else { 3 };
+    let mut frames = [0; 4];
+    for at in 0..wanted {
+        match table(writes) {
+            Some(frame) => {
+                if let Some(slot) = frames.get_mut(at) {
+                    *slot = frame;
+                }
+            }
+            None => {
+                for &taken in frames.iter().take(at) {
+                    mm::deallocate_frames(taken / PAGE_SIZE, 0);
+                }
+                return None;
+            }
+        }
+    }
+    Some(frames)
 }
 
 /// Turn off what firmware left on that the kernel sets up itself: interrupt

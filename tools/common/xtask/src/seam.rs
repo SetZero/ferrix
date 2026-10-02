@@ -193,11 +193,11 @@ fn machine(arch: Arch, args: &Args, binary: &Path, accelerator: &str) -> Result<
     if arch == Arch::X86_64 {
         let _ = command.args([
             "-machine",
-            &qemu::x86_machine(),
+            &qemu::x86_machine(accelerator),
             "-cpu",
             &qemu::x86_cpu(accelerator),
             "-device",
-            "intel-iommu,intremap=off",
+            qemu::INTEL_IOMMU,
         ]);
     } else {
         let _ = command

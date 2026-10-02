@@ -75,11 +75,20 @@ const PROVOKED: &str = " outside its domain, on purpose";
 /// The remarks QEMU's VT-d unit makes about a fault, each once per run. The
 /// first two carry the faulting address; the last two are what a probe that
 /// masks the fault event and faults several times in a row is told.
-const REMARKS: [&str; 4] = [
+///
+/// The last two are interrupt remapping's: the patched QEMU's report of a
+/// compatibility-format message it blocked (checks R1 and R2) and its
+/// report of a message whose source ID failed its entry's check (R3). The
+/// kernel judges those faults itself, by their reasons, and test-boot holds
+/// them to the three the checks provoke (`qemu::remap_problem`); here they
+/// are remarks like the rest.
+const REMARKS: [&str; 6] = [
     "vtd_iova_to_slpte: detected",
     "vtd_iommu_translate: detected translation failure",
     "Interrupt Mask set, irq is not generated",
     "New fault is not recorded due to compression of faults",
+    "vtd_interrupt_remap_msi: compatibility format interrupt blocked",
+    "vtd_irte_get: invalid IRTE SID",
 ];
 
 /// One fault QEMU traced.

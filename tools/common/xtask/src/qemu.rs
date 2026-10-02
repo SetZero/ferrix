@@ -126,62 +126,22 @@ pub(crate) fn test_boot_lines(
                     watched.log.display()
                 )));
             }
-            if let Some(problem) = entropy_problem(&watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = devmgr_problem(&watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = msi_problem(arch, &watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = cleaning_problem(arch, &watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = queue_problem(arch, &watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = config_problem(arch, &watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = iommu_problem(&watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = namespace_problem(&watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
             let own_model = std::env::var_os("FERRIX_X86_CPU").is_none();
-            if let Some(problem) = xstate_problem(arch, own_model, &watched.lines) {
-                return Err(Error::new(format!(
-                    "{arch}: {problem}.\n  Serial output is in {}",
-                    watched.log.display()
-                )));
-            }
-            if let Some(problem) = fault_problem(arch, &watched.lines) {
+            // In the order each is reported: the first that fails is said.
+            let problems = [
+                entropy_problem(&watched.lines),
+                devmgr_problem(&watched.lines),
+                msi_problem(arch, &watched.lines),
+                cleaning_problem(arch, &watched.lines),
+                remap_problem(arch, &watched.lines),
+                queue_problem(arch, &watched.lines),
+                config_problem(arch, &watched.lines),
+                iommu_problem(&watched.lines),
+                namespace_problem(&watched.lines),
+                xstate_problem(arch, own_model, &watched.lines),
+                fault_problem(arch, &watched.lines),
+            ];
+            if let Some(problem) = problems.into_iter().flatten().next() {
                 return Err(Error::new(format!(
                     "{arch}: {problem}.\n  Serial output is in {}",
                     watched.log.display()
@@ -364,6 +324,95 @@ fn queue_problem(arch: Arch, lines: &[String]) -> Option<String> {
         return Some(format!(
             "check R7 did not make exactly one invalidation fail: `{}`",
             line.trim()
+        ));
+    }
+    None
+}
+
+/// What every x86-64 boot must print of interrupt remapping
+/// (`docs/NVIDIA.md` §12.3, N0g): the unit's bring-up with `CFIS` read back
+/// clear, check R9, R1 to R3, `L.device.28`, R10, R5, the stray deliveries,
+/// and R8, each by the words that say it held.
+const REMAP_LINES: [(&str, &str); 9] = [
+    (
+        "remapping on (256 entries, xAPIC format), CFIS=0 read back",
+        "the VT-d unit never said it remaps with compatibility format blocked",
+    ),
+    (
+        "all the console's; 1 I/O APIC inputs converted",
+        "check R9 never said no vector was minted in compatibility format before remapping",
+    ),
+    (
+        "edu's forged messages refused",
+        "checks R1 to R3 never refused edu's forged messages",
+    ),
+    (
+        "is given no message route, so no vector",
+        "a requester no unit places was not shown to get no route",
+    ),
+    (
+        "the isolated-interrupts mark set on",
+        "check R10 never showed the isolated-interrupts mark",
+    ),
+    (
+        "delivered a looped-back byte on vector",
+        "check R5 never saw the console's line delivered through its entry",
+    ),
+    (
+        "  0 deliveries of the check vector 0xfc outside its window, 0 on the console's retired vector",
+        "the check vector or the console's retired vector was delivered, or never counted",
+    ),
+    (
+        "processors looked at their local APIC's mode before using its window; 1 put in x2APIC mode",
+        "check R8 never put a processor in x2APIC mode and saw it switched back",
+    ),
+    (
+        "byte received while it was masked read by the service after its conversion",
+        "the console's line was never serviced once after its conversion",
+    ),
+];
+
+/// What the kernel prints for each interrupt request a check makes its unit
+/// refuse, before the reason.
+const PROVOKED_INTERRUPT: &str = " is made to send an interrupt its unit refuses with reason ";
+
+/// Why an x86-64 boot did not show interrupt remapping whole, if it did not.
+///
+/// Every x86-64 machine this tool boots has a VT-d unit that remaps
+/// (`INTEL_IOMMU`) on the patched QEMU, an `edu` and a console on the I/O
+/// APIC, so every check of `docs/NVIDIA.md` §12.3 must have run and said it
+/// held, and the interrupt requests the checks made the unit refuse must be
+/// exactly R1's and R2's 0x25 and R3's 0x26: any other reason fails by name.
+///
+/// Verifies: L.iommu.50, L.iommu.54, `L.x86_64.129`, `L.x86_64.130`, `L.x86_64.131`
+fn remap_problem(arch: Arch, lines: &[String]) -> Option<String> {
+    if arch != Arch::X86_64 {
+        return None;
+    }
+    if let Some(line) = lines
+        .iter()
+        .find(|line| line.contains("remapping not enabled"))
+    {
+        return Some(format!(
+            "interrupt remapping was not enabled: `{}`",
+            line.trim()
+        ));
+    }
+    for (text, problem) in REMAP_LINES {
+        if !lines.iter().any(|line| line.contains(text)) {
+            return Some(problem.to_owned());
+        }
+    }
+    let mut reasons: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line.split(PROVOKED_INTERRUPT).nth(1))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .collect();
+    reasons.sort_unstable();
+    if reasons != ["0x25", "0x25", "0x26"] {
+        return Some(format!(
+            "the checks provoked interrupt faults with reasons {reasons:?}, where R1, R2 and R3 \
+             provoke 0x25, 0x25 and 0x26"
         ));
     }
     None
@@ -1789,7 +1838,8 @@ pub(crate) fn x86_cpu(accelerator: &str) -> String {
         return model;
     }
     let base = "qemu64,+pdpe1gb,+smep,+smap,+umip,+rdrand,+rdseed,+ssse3,+sse4.1,+sse4.2,+popcnt,\
-                +cx16,+movbe,+xsave,+xsaveopt,+avx,+avx2,+f16c,+fma,+bmi1,+bmi2,+abm,+pclmulqdq,+aes";
+                +cx16,+movbe,+xsave,+xsaveopt,+avx,+avx2,+f16c,+fma,+bmi1,+bmi2,+abm,+pclmulqdq,+aes,\
+                +x2apic";
     if accelerator == "tcg" {
         return base.to_owned();
     }
@@ -1886,15 +1936,29 @@ fn parse_qemu_version(text: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// The PC QEMU emulates: `q35`, with `FERRIX_X86_MACHINE` added as
-/// `FERRIX_ARM_MACHINE` is added to `virt` -- `hpet=off` for a PC without an
-/// HPET, whose clock is then the TSC measured against the PIT.
-pub(crate) fn x86_machine() -> String {
+/// The PC QEMU emulates under `accelerator`: `q35`, with KVM's interrupt
+/// controller split so that the I/O APIC is QEMU's (QEMU refuses
+/// `intremap=on` beside a whole in-kernel irqchip, `x86-iommu.c`), and with
+/// `FERRIX_X86_MACHINE` added as `FERRIX_ARM_MACHINE` is added to `virt` --
+/// `hpet=off` for a PC without an HPET, whose clock is then the TSC measured
+/// against the PIT.
+pub(crate) fn x86_machine(accelerator: &str) -> String {
+    let base = if accelerator == "kvm" {
+        "q35,kernel-irqchip=split"
+    } else {
+        "q35"
+    };
     match std::env::var("FERRIX_X86_MACHINE") {
-        Ok(extra) => format!("q35,{extra}"),
-        Err(_) => "q35".to_owned(),
+        Ok(extra) => format!("{base},{extra}"),
+        Err(_) => base.to_owned(),
     }
 }
+
+/// The VT-d unit every x86-64 machine this tool boots has: interrupt
+/// remapping on, as the kernel drives it (`docs/NVIDIA.md` §12.3, N0g), and
+/// extended interrupt mode off, since the kernel runs xAPIC and programs
+/// `IRTA.EIME` = 0 -- QEMU's `auto` would offer it under the split irqchip.
+pub(crate) const INTEL_IOMMU: &str = "intel-iommu,intremap=on,eim=off";
 
 /// Which CPU model the `virt` machine emulates for an Arm architecture.
 ///
@@ -1994,7 +2058,7 @@ fn qemu_command(
         Arch::X86_64 => {
             let _ = command.args([
                 "-machine",
-                &x86_machine(),
+                &x86_machine(&accelerator),
                 // SMEP and SMAP are the two features the kernel relies on to
                 // keep ring 0 out of user pages, so emulate a CPU that has them.
                 // RDRAND and RDSEED too, which the kernel seeds its random
@@ -2007,11 +2071,10 @@ fn qemu_command(
                 // to port 0xF4 exits QEMU with status 33.
                 "-device",
                 "isa-debug-exit,iobase=0xf4,iosize=0x04",
-                // A VT-d unit for stage 10's IOMMU domains. Interrupt
-                // remapping stays off: the kernel's MSI-X messages are
-                // compatibility format, and nothing drives remapping.
+                // A VT-d unit for stage 10's IOMMU domains, remapping
+                // interrupts (`INTEL_IOMMU`).
                 "-device",
-                "intel-iommu,intremap=off",
+                INTEL_IOMMU,
             ]);
             // The machine's own VGA, which `q35` adds unasked, is QEMU's
             // first console and the card is the second, so a window opens on
@@ -3029,9 +3092,10 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::{
-        Arch, SUCCESS_MARKER, UNCHECKED_MARKER, blocks_compatibility_format, cleaning_problem,
-        config_problem, devmgr_problem, entropy_problem, fault_problem, iommu_problem, msi_problem,
-        namespace_problem, parse_qemu_version, queue_problem, xstate_problem,
+        Arch, REMAP_LINES, SUCCESS_MARKER, UNCHECKED_MARKER, blocks_compatibility_format,
+        cleaning_problem, config_problem, devmgr_problem, entropy_problem, fault_problem,
+        iommu_problem, msi_problem, namespace_problem, parse_qemu_version, queue_problem,
+        remap_problem, xstate_problem,
     };
 
     /// Only the build `fetch-qemu-linux.sh` makes is taken for x86-64.
@@ -3189,6 +3253,45 @@ mod tests {
             None,
             "an SMMU snoops"
         );
+    }
+
+    #[test]
+    fn an_x86_64_boot_without_interrupt_remapping_whole_fails() {
+        let mut whole: Vec<String> = REMAP_LINES
+            .iter()
+            .map(|(text, _)| format!("    6.0 |   remap    {text}"))
+            .collect();
+        for reason in [
+            "0x25 (compatibility format blocked)",
+            "0x25 (compatibility format blocked)",
+            "0x26 (source ID check)",
+        ] {
+            whole.push(format!(
+                "  iommu    stream 0x200 is made to send an interrupt its unit refuses with reason {reason}, on purpose"
+            ));
+        }
+        assert_eq!(remap_problem(Arch::X86_64, &whole), None);
+        assert_eq!(remap_problem(Arch::AArch64, &[]), None, "no VT-d");
+        for missing in 0..whole.len() {
+            let mut cut = whole.clone();
+            let _ = cut.remove(missing);
+            assert!(
+                remap_problem(Arch::X86_64, &cut).is_some(),
+                "line {missing} missing"
+            );
+        }
+        let mut stray = whole.clone();
+        stray.push(
+            "  iommu    stream 0xff00 is made to send an interrupt its unit refuses with reason 0x22 (entry not present), on purpose"
+                .to_owned(),
+        );
+        assert!(
+            remap_problem(Arch::X86_64, &stray).is_some(),
+            "another reason"
+        );
+        let mut off = whole;
+        off.push("  iommu    vt-d unit 0xfed90000: remapping not enabled: x".to_owned());
+        assert!(remap_problem(Arch::X86_64, &off).is_some());
     }
 
     #[test]
