@@ -1740,6 +1740,37 @@ pub(crate) static STAGE10_DISTRIBUTOR: Explanation = Explanation {
           docs/certification/FINDINGS.md F-50",
 };
 
+/// For `check_devices` in `main.rs`, when the configuration window's or
+/// `device_aperture`'s check fails (`device::config_check`).
+pub(crate) static STAGE10_CONFIG: Explanation = Explanation {
+    code: "FX-1011",
+    title: "a driver's configuration window or device_aperture did not answer as specified",
+    meaning: "A driver reads its PCI function's configuration space through \
+              `device_config_read` and writes it through `device_config_write`, which makes a \
+              write only when every byte of it lies in a vendor-specific capability's body and \
+              refuses any other whole, under the node's one configuration lock. \
+              `device_aperture` reports each aperture's 64-bit address and length as minted. \
+              `DeviceNode::verify_config` reads the registers the kernel owns back at each \
+              accepted HELLO and each quiesce, and refuses a node whose registers were \
+              rewritten. `device::config_check` holds all of it on the published nodes \
+              (`docs/NVIDIA.md` §12.1, checks W1 to W7).",
+    causes: &[
+        "`device_aperture` cut an address or a length, or reported a BAR, offset or flag other \
+         than the minted aperture's.",
+        "`ferrix_pci::window::writable` let a kernel-owned byte through -- the header, MSI, \
+         MSI-X, PCI Express, ATS, device-dependent space or virtio's `pci_cfg_data` -- or \
+         refused a vendor capability's body.",
+        "`Writable::allows` tested fewer than all of a write's bytes.",
+        "A kernel write of the command register was made outside `ConfigWrites`, or the \
+         state `verify_config` reads back against was not updated with it.",
+        "`DeviceNode::verify_config` did not compare a register, or did not turn bus mastering \
+         off and refuse the node on a mismatch.",
+    ],
+    see: "src/kernel/src/device.rs ConfigWrites, config_write, verify_config; \
+          src/kernel/src/device/config_check.rs; src/lib/platform/pci/src/window.rs; \
+          docs/NVIDIA.md §12.1; docs/certification/SAFETY-MANUAL.md AoU-22",
+};
+
 /// For `check_path_calls` in `stages_check.rs`, when `syscall::check::run_paths` fails.
 pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
     code: "FX-0820",
@@ -2836,6 +2867,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &LOG_CONTROL,
     &DEVMGR_BY_INIT,
     &STAGE10_DISTRIBUTOR,
+    &STAGE10_CONFIG,
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,

@@ -1087,8 +1087,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         return Err(Refusal::Framebuffer);
     }
     // The driver reset the device before it sent HELLO, so what a dead one's
-    // pins kept from the allocator can go back (`object::pin`'s quarantine).
-    crate::object::pin::quarantine_release(&start.device);
+    // pins kept from the allocator can go back (`object::pin`'s quarantine),
+    // and the kernel's configuration is read back (`DeviceNode::verify_config`).
+    start.device.hello_accepted();
 
     let vmo = Vmo::new_anonymous(CARD_BYTES / PAGE_SIZE).map_err(|_| Refusal::Malformed)?;
     // The wire protocol has no refusal for memory; a malformed start is the

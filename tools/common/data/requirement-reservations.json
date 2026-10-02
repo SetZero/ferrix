@@ -26,13 +26,6 @@
       "purpose": "S4: Verdict::Trap (allocated by os-bd)"
     },
     {
-      "ids": ["L.device.24-26", "L.object.117"],
-      "owner": "nvidia",
-      "branch": "nvidia-n0d",
-      "date": "2026-10-02",
-      "purpose": "NVIDIA N0d (docs/NVIDIA.md §12.1): device_aperture's 64-bit apertures, the configuration window's refused writes and its allowlist, one configuration lock per node"
-    },
-    {
       "ids": ["L.object.118-120"],
       "owner": "nvidia",
       "branch": "nvidia-n0f",

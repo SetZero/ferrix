@@ -724,14 +724,15 @@ fn take_up<'s>(
         return Err(Refusal::LocationInUse);
     }
     // The driver reset the device before it sent HELLO, so what a dead one's
-    // pins kept from the allocator can go back (`object::pin`'s quarantine).
+    // pins kept from the allocator can go back (`object::pin`'s quarantine),
+    // and the kernel's configuration is read back (`DeviceNode::verify_config`).
     let node = CLAIMS
         .lock()
         .iter()
         .find(|claim| claim.id == start.id)
         .map(|claim| Arc::clone(&claim.device));
     if let Some(node) = node {
-        object::pin::quarantine_release(&node);
+        node.hello_accepted();
     }
     // Where a read's bytes will wait, before anything goes on the ring.
     disk.serve_from(fresh);

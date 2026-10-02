@@ -60,8 +60,9 @@ use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
-    self, CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo,
-    JOB_SPECULATION_DOMAIN, MAP_READ, MAP_WRITE, PortPacket, ProcessStatus, ReadActual,
+    self, APERTURE_INFO_BYTES, ApertureInfo, CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES,
+    DEVICE_INFO_BYTES, DeviceInfo, JOB_SPECULATION_DOMAIN, MAP_READ, MAP_WRITE, PortPacket,
+    ProcessStatus, ReadActual,
 };
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
@@ -72,7 +73,7 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::audit;
 use crate::claim::StillServed;
-use crate::device::DeviceNode;
+use crate::device::{ConfigRefusal, DeviceNode};
 use crate::fallible;
 use crate::hooks::{Full, Hooks};
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
@@ -458,7 +459,6 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         NativeCall::InterruptCreate => interrupt_create(process, handle(a[0]), a[1]),
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
-        NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
         NativeCall::BlockRingCreate
         | NativeCall::NetRingCreate
         | NativeCall::DisplayControlCreate
@@ -473,11 +473,15 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         NativeCall::AuditRead => audit_read(process, handle(a[0]), a[1], a[2], a[3], a[4]),
         NativeCall::ProcessBootstrap => process_bootstrap(process),
         NativeCall::ProcessStatus => process_status(process, handle(a[0]), a[1]),
-        NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
-        NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
-        NativeCall::DeviceClock => device_clock(process, handle(a[0]), a[1], a[2]),
-        NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1], false),
-        NativeCall::IoMappingMapCombining => io_mapping_map(process, handle(a[0]), a[1], true),
+        NativeCall::IoMappingCreate
+        | NativeCall::IoMappingMap
+        | NativeCall::IoMappingMapCombining
+        | NativeCall::DeviceInfo
+        | NativeCall::DeviceAperture
+        | NativeCall::DeviceConfigRead
+        | NativeCall::DeviceConfigWrite
+        | NativeCall::DeviceQuiesce
+        | NativeCall::DeviceClock => device_call(call, process, &a),
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortCreate => port_create(process),
@@ -1264,6 +1268,28 @@ fn job_call(call: NativeCall, caller: &dyn Host, a: &[u64; 6]) -> Result<usize, 
     }
 }
 
+/// The calls on a device node -- what it is, its apertures, its
+/// configuration space, its quiesce and its clock -- and on the I/O mappings
+/// made from one, which `dispatch` hands on as one.
+fn device_call(call: NativeCall, process: &Process, a: &[u64; 6]) -> Result<usize, Errno> {
+    let [first, second, third, fourth, ..] = *a;
+    let device = handle(first);
+    match call {
+        NativeCall::IoMappingCreate => io_mapping_create(process, device, second),
+        NativeCall::IoMappingMap => io_mapping_map(process, device, second, false),
+        NativeCall::IoMappingMapCombining => io_mapping_map(process, device, second, true),
+        NativeCall::DeviceInfo => device_info(process, device, second),
+        NativeCall::DeviceAperture => device_aperture(process, device, second, third),
+        NativeCall::DeviceConfigRead => device_config_read(process, device, second, third, fourth),
+        NativeCall::DeviceConfigWrite => {
+            device_config_write(process, device, second, third, fourth)
+        }
+        NativeCall::DeviceQuiesce => device_quiesce(process, device),
+        NativeCall::DeviceClock => device_clock(process, device, second, third),
+        _ => Err(Errno::ENOSYS),
+    }
+}
+
 /// `job_create`.
 fn job_create(process: &Process, parent: Handle, options: u64) -> Result<usize, Errno> {
     if options & !JOB_SPECULATION_DOMAIN != 0 {
@@ -1770,6 +1796,10 @@ fn process_status(process: &Process, target: Handle, out: u64) -> Result<usize, 
 }
 
 /// The device node a handle names, if it carries `needed`.
+///
+/// A node `DeviceNode::verify_config` refused answers `BAD_STATE` to every
+/// call that needs `MANAGE`, until reboot: its kernel-owned configuration
+/// was rewritten behind the kernel, so nothing that drives it is given.
 fn device_in(process: &Process, device: Handle, needed: Rights) -> Result<Arc<DeviceNode>, Errno> {
     let node = process.with_handles(|table| {
         let (object, rights) = table.get(device).map_err(table_error)?;
@@ -1781,6 +1811,9 @@ fn device_in(process: &Process, device: Handle, needed: Rights) -> Result<Arc<De
         }
         Ok(Arc::clone(node))
     })?;
+    if needed.contains(Rights::MANAGE) && node.is_refused() {
+        return Err(status::BAD_STATE);
+    }
     Ok(node)
 }
 
@@ -1878,6 +1911,80 @@ fn device_info(process: &Process, device: Handle, at: u64) -> Result<usize, Errn
     Ok(0)
 }
 
+/// `device_aperture`.
+///
+/// Any device handle will do, as for `device_info`. `INVALID_ARGS` for an
+/// index at or past the device's apertures.
+fn device_aperture(process: &Process, device: Handle, index: u64, at: u64) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::NONE)?;
+    let info = usize::try_from(index)
+        .ok()
+        .and_then(|index| node.aperture_info(index))
+        .ok_or(status::INVALID_ARGS)?;
+    uaccess::copy_to_user(process.space(), at, &aperture_bytes(&info)).map_err(fault)?;
+    Ok(0)
+}
+
+/// An `ApertureInfo` as its user buffer holds it: field by field, in the
+/// order declared.
+fn aperture_bytes(info: &ApertureInfo) -> [u8; APERTURE_INFO_BYTES] {
+    let mut bytes = [0; APERTURE_INFO_BYTES];
+    let mut at = 0;
+    let mut put = |source: &[u8]| {
+        if let Some(slot) = bytes.get_mut(at..at + source.len()) {
+            slot.copy_from_slice(source);
+        }
+        at += source.len();
+    };
+    put(&info.phys.to_ne_bytes());
+    put(&info.len.to_ne_bytes());
+    put(&[info.bar, info.flags]);
+    put(&info.reserved);
+    put(&info.offset.to_ne_bytes());
+    bytes
+}
+
+/// The status a refused configuration access travels as.
+fn config_status(why: ConfigRefusal) -> Errno {
+    match why {
+        ConfigRefusal::Arguments => status::INVALID_ARGS,
+        ConfigRefusal::NotPci => status::WRONG_TYPE,
+        ConfigRefusal::Unmapped => status::BAD_STATE,
+        ConfigRefusal::Denied => status::ACCESS_DENIED,
+    }
+}
+
+/// `device_config_read`. Needs `MANAGE`; the value goes to `out` as a `u32`
+/// rather than in the return register, where on a 32-bit machine a read of
+/// all ones would be taken for an error.
+fn device_config_read(
+    process: &Process,
+    device: Handle,
+    offset: u64,
+    width: u64,
+    out: u64,
+) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let value = node.config_read(offset, width).map_err(config_status)?;
+    uaccess::copy_to_user(process.space(), out, &value.to_ne_bytes()).map_err(fault)?;
+    Ok(0)
+}
+
+/// `device_config_write`. Needs `MANAGE`; a write any byte of which is not
+/// the driver's is `ACCESS_DENIED`, and nothing is written.
+fn device_config_write(
+    process: &Process,
+    device: Handle,
+    offset: u64,
+    width: u64,
+    value: u64,
+) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    node.config_write(offset, width, value)
+        .map_err(config_status)?;
+    Ok(0)
+}
+
 /// A `DeviceInfo` as its user buffer holds it: field by field, in the order
 /// declared, padded to `DEVICE_INFO_BYTES`.
 fn info_bytes(info: &DeviceInfo) -> [u8; DEVICE_INFO_BYTES] {
@@ -1952,6 +2059,11 @@ fn quiesce_while(node: &Arc<DeviceNode>, cancelled: &dyn Fn() -> bool) -> Result
         (server.wait_until_unserved)(node, cancelled).map_err(still_served)?;
     }
     node.disable_dma().map_err(|_| status::BAD_STATE)?;
+    // What the dead driver, or its device's firmware, may have rewritten
+    // through a BAR: a node whose kernel-owned registers read back other
+    // than minted is refused, and so is the quiesce, so that no driver is
+    // started on it again (SAFETY-MANUAL AoU-22).
+    node.verify_config().map_err(|_| status::BAD_STATE)?;
     for release in SERVERS.iter().filter_map(|server| server.release) {
         release(node);
     }

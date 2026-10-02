@@ -13,11 +13,12 @@ use alloc::vec::Vec;
 use core::fmt::{self, Write};
 use core::sync::atomic::Ordering;
 
+use ferrix_pci::ConfigSpace as _;
 use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE};
 
 use super::{
-    DeviceNode, FIRST_SHARED_INTERRUPT, Failure, LEGACY_CONFIG_BYTES, Location, MsiFunction,
-    Report, Reserved, Trigger, Vector,
+    ConfigWrites, DeviceNode, FIRST_SHARED_INTERRUPT, Failure, Location, MsiFunction, Report,
+    Reserved, Trigger, Vector,
 };
 use crate::mmio::Mmio;
 use crate::object::interrupt::Interrupt;
@@ -86,7 +87,7 @@ pub(super) fn check_vectors(
 
 /// QEMU's `edu` test device: MSI and no MSI-X, and a register that raises
 /// its interrupt on request (QEMU's `docs/specs/edu.rst`).
-const EDU: (u16, u16) = (0x1234, 0x11E8);
+pub(super) const EDU: (u16, u16) = (0x1234, 0x11E8);
 /// `edu`'s register that raises its interrupt with the bits written.
 const EDU_RAISE: u64 = 0x60;
 /// `edu`'s register that clears the bits written from its interrupt status.
@@ -152,7 +153,7 @@ fn check_msi(nodes: &[Arc<DeviceNode>], report: &mut Report) -> Result<(), Failu
     }
     // INTx off, so that a function masked by its enable bit raises nothing
     // by a pin either.
-    if node.msi.as_ref().and_then(MsiFunction::intx_off) != Some(true) {
+    if MsiFunction::intx_off(node) != Some(true) {
         return Err(fail("a minted MSI vector left INTx on"));
     }
     let unmasked = first.set_masked(false).map(|()| first.reads_masked());
@@ -359,13 +360,7 @@ pub(super) fn check_node(
 ///
 /// Verifies: L.device.9
 pub(super) fn check_dma_switch(nodes: &[Arc<DeviceNode>]) -> Result<(), Failure> {
-    let Some((node, config_phys)) = nodes.iter().find_map(|node| {
-        let phys = node
-            .pci
-            .as_ref()
-            .and_then(|function| function.config_phys)?;
-        Some((node, phys))
-    }) else {
+    let Some(node) = nodes.iter().find(|node| node.config_phys().is_some()) else {
         return Ok(());
     };
     let fail = |what| Failure {
@@ -373,16 +368,24 @@ pub(super) fn check_dma_switch(nodes: &[Arc<DeviceNode>]) -> Result<(), Failure>
         what,
     };
     let unmappable = fail("a function's configuration space could not be mapped to read it");
-    let config = vmap::map_device(config_phys, LEGACY_CONFIG_BYTES).map_err(|_| unmappable)?;
-    let registers = Mmio::at(config);
-    let at = u64::from(COMMAND);
-    let found = registers.read16(at);
+    // As found, and what the kernel's state says of it, to put both back
+    // under the configuration lock after.
+    let (found, state) = {
+        let config = node.config_writes().map_err(|_| unmappable)?;
+        let found = config.read16(ConfigWrites::FUNCTION, COMMAND);
+        (found, (config.state.memory, config.state.bus_master))
+    };
+    let command = || {
+        node.mapped_config()
+            .map(|config| config.read16(COMMAND))
+            .ok_or(unmappable)
+    };
     let was_on = node.dma_on.load(Ordering::Acquire);
 
     let switched = (|| {
         node.enable_dma()
             .map_err(|_| fail("a function's DMA could not be turned on"))?;
-        let on = registers.read16(at);
+        let on = command()?;
         if on & COMMAND_BUS_MASTER == 0 || on & COMMAND_MEMORY_SPACE == 0 {
             return Err(fail(
                 "DMA turned on left the function's bus mastering or decoding off",
@@ -390,7 +393,7 @@ pub(super) fn check_dma_switch(nodes: &[Arc<DeviceNode>]) -> Result<(), Failure>
         }
         node.disable_dma()
             .map_err(|_| fail("a function's DMA could not be turned off"))?;
-        let off = registers.read16(at);
+        let off = command()?;
         if off & COMMAND_BUS_MASTER != 0 {
             return Err(fail("DMA turned off left the function's bus mastering on"));
         }
@@ -402,9 +405,11 @@ pub(super) fn check_dma_switch(nodes: &[Arc<DeviceNode>]) -> Result<(), Failure>
         Ok(())
     })();
 
-    registers.write16(at, found);
+    if let Ok(mut config) = node.config_writes() {
+        config.write16(ConfigWrites::FUNCTION, COMMAND, found);
+        (config.state.memory, config.state.bus_master) = state;
+    }
     node.dma_on.store(was_on, Ordering::Release);
-    let _ = vmap::unmap_device(config);
     switched
 }
 

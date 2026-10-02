@@ -435,8 +435,9 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
     let core = net::core();
     let index = add_or_take_up(start, &accepted.hello)?;
     // The driver reset the device before it sent HELLO, so what a dead one's
-    // pins kept from the allocator can go back (`object::pin`'s quarantine).
-    crate::object::pin::quarantine_release(&start.device);
+    // pins kept from the allocator can go back (`object::pin`'s quarantine),
+    // and the kernel's configuration is read back (`DeviceNode::verify_config`).
+    start.device.hello_accepted();
     core.wake_on_transmit(index, &kernel_port);
     core.set_carrier(index, accepted.hello.interface.flags.carrier);
     let ready = {

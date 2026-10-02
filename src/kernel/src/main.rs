@@ -801,6 +801,45 @@ fn check_devices(view: &BootView<'_>) {
                 "stage 10 self-check failed: {problem}"
             ),
         }
+        check_config_window();
+    }
+}
+
+/// Stage 10's checks of a driver's configuration window and of
+/// `device_aperture` (`docs/NVIDIA.md` §12.1, W1 to W7).
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_config_window() {
+    let report = match device::config_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE10_CONFIG,
+            "stage 10 self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  config   {} apertures reported whole by device_aperture, {} above 4 GiB and longer \
+         than it; {} reads of {} functions answered as enumerated",
+        report.apertures, report.above_4_gib, report.reads, report.functions,
+    );
+    println!(
+        "  config   {} writes to kernel-owned bytes refused whole and unchanged, {} malformed \
+         accesses refused, {} driver-writable fields written and read back, {} rounds of bus \
+         mastering raced against a driver's writes",
+        report.refused, report.malformed, report.written, report.rounds,
+    );
+    if let Some(why) = report.skipped {
+        println!("  config   the vendor-capability writes not checked: {why}");
+    }
+    if let Some(why) = report.race_skipped {
+        println!("  config   the race not checked: {why}");
+    }
+    match report.breach {
+        Some(register) => println!(
+            "  config   a {register} rewritten behind the kernel was found and its node refused, \
+             then restored"
+        ),
+        None => println!("  config   the breach check not run: no PCI function"),
     }
 }
 

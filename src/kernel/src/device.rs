@@ -72,6 +72,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{GicInterrupt, Trigger as TreeTrigger};
 use ferrix_native_abi::types::{
+    APERTURE_BAR_64, APERTURE_NOT_BAR, APERTURE_PREFETCHABLE, APERTURE_WHOLE_PAGES, ApertureInfo,
     DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo,
     TREE_GS201_DWC3, TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
 };
@@ -80,15 +81,16 @@ use ferrix_pci::ConfigSpace as _;
 use ferrix_pci::bar::{Bar, Region};
 use ferrix_pci::capability::{Capability, MSIX_ENTRY_SIZE, MsiX};
 use ferrix_pci::header::{
-    COMMAND, COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_MEMORY_SPACE, Identity,
+    BAR0, COMMAND, COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_MEMORY_SPACE, Identity,
 };
-use ferrix_pci::msi::Msi;
+use ferrix_pci::msi::{self, Msi};
 use ferrix_pci::msix::{
     self, CAPABILITY_CONTROL, CONTROL_ENABLE, CONTROL_FUNCTION_MASK, ENTRY_ADDRESS_HIGH,
     ENTRY_ADDRESS_LOW, ENTRY_DATA, ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED,
 };
 use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
-use ferrix_sync::{IrqSpinLock, Once};
+use ferrix_pci::window::Writable;
+use ferrix_sync::{IrqSpinLock, IrqSpinLockGuard, Once};
 
 use crate::discovery::description::{self, Description};
 use crate::discovery::finder::{Context, Finder, OutOfMemory};
@@ -98,14 +100,11 @@ use crate::sync::SpinLock;
 use crate::{arch, iommu, irq, vmap};
 
 pub(crate) mod check;
+pub(crate) mod config_check;
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
 const FIRST_SHARED_INTERRUPT: u32 = 32;
-
-/// Bytes of a function's legacy configuration space, which holds every
-/// standard capability.
-const LEGACY_CONFIG_BYTES: u64 = 256;
 
 /// A range of device memory a driver may be given, and nothing else.
 ///
@@ -122,6 +121,27 @@ pub(crate) struct Aperture {
     len: u64,
     /// Whether reads have no side effects, so it may be mapped cacheable.
     cacheable: bool,
+    /// Where it came from: a BAR, by its slot and the aperture's first
+    /// byte's offset in it, and whether the BAR is 64 bits wide; or a device
+    /// tree window.
+    source: Source,
+}
+
+/// Where an [`Aperture`] came from, as `device_aperture` reports it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Source {
+    /// A device tree node's `reg` window.
+    Tree,
+    /// A PCI function's BAR.
+    Bar {
+        /// The BAR's slot.
+        slot: u8,
+        /// Bytes from the BAR's start to the aperture's first byte: not zero
+        /// when the MSI-X table's pages were cut out before it.
+        offset: u64,
+        /// Whether the BAR is 64 bits wide.
+        wide: bool,
+    },
 }
 
 impl Aperture {
@@ -155,6 +175,52 @@ impl Aperture {
     /// Whether this aperture and `start..end` share a byte.
     const fn overlaps(self, start: u64, end: u64) -> bool {
         self.phys < end && start < self.end()
+    }
+
+    /// The aperture as `device_aperture` writes it: the address and length
+    /// whole, the BAR it came from and where in it, and its flags.
+    pub(crate) fn info(self) -> ApertureInfo {
+        let (bar, offset, wide) = match self.source {
+            Source::Tree => (APERTURE_NOT_BAR, 0, false),
+            Source::Bar { slot, offset, wide } => (slot, offset, wide),
+        };
+        let mut flags = 0;
+        if self.cacheable {
+            flags |= APERTURE_PREFETCHABLE;
+        }
+        if self.whole_pages() {
+            flags |= APERTURE_WHOLE_PAGES;
+        }
+        if wide {
+            flags |= APERTURE_BAR_64;
+        }
+        ApertureInfo {
+            phys: self.phys,
+            len: self.len,
+            bar,
+            flags,
+            reserved: [0; 6],
+            offset,
+        }
+    }
+
+    /// The part of this aperture `len` bytes at `phys`, which the caller has
+    /// checked lies inside it: the same source, its offset moved with it.
+    const fn part(self, phys: u64, len: u64) -> Aperture {
+        let source = match self.source {
+            Source::Tree => Source::Tree,
+            Source::Bar { slot, offset, wide } => Source::Bar {
+                slot,
+                offset: offset + (phys - self.phys),
+                wide,
+            },
+        };
+        Aperture {
+            phys,
+            len,
+            cacheable: self.cacheable,
+            source,
+        }
     }
 }
 
@@ -254,8 +320,7 @@ impl Vector {
                 .and_then(|table| table.is_masked(entry)),
             Masking::Msi { node } => devices()
                 .get(node)
-                .and_then(|node| node.msi.as_ref())
-                .and_then(MsiFunction::is_masked),
+                .and_then(|node| node.msi.as_ref()?.is_masked(node)),
         }
     }
 
@@ -269,11 +334,15 @@ impl Vector {
                 .and_then(|node| node.msix.as_ref())
                 .ok_or("the vector's device is not published")?
                 .set_masked(entry, masked),
-            Masking::Msi { node } => devices()
-                .get(node)
-                .and_then(|node| node.msi.as_ref())
-                .ok_or("the vector's device is not published")?
-                .set_masked(masked),
+            Masking::Msi { node } => {
+                let node = devices()
+                    .get(node)
+                    .ok_or("the vector's device is not published")?;
+                node.msi
+                    .as_ref()
+                    .ok_or("the vector's device is not published")?
+                    .set_masked(node, masked)
+            }
         }
     }
 }
@@ -395,16 +464,15 @@ impl Reserved {
 /// raised while its driver had not acknowledged the last: a driver of such a
 /// function acknowledges before it drains its device's status, and services
 /// the device on claim (SAFETY-MANUAL AoU-19).
+///
+/// Every write goes through the node's configuration lock
+/// ([`DeviceNode::config_writes`]), which bus mastering's writes and a
+/// driver's take too.
 struct MsiFunction {
     /// The function's requester ID, which its message writes carry.
     requester: u32,
-    /// Physical address of the function's configuration space.
-    config_phys: u64,
     /// The capability, decoded.
     msi: Msi,
-    /// The function's legacy configuration space, mapped from the first mint
-    /// for good. Read by interrupt handlers, and `Once::get` takes no lock.
-    config: Once<Result<Mmio, &'static str>>,
     /// The vector minted, once one is.
     minted: IrqSpinLock<Option<u32>, arch::Irq>,
 }
@@ -413,7 +481,6 @@ impl fmt::Debug for MsiFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MsiFunction")
             .field("requester", &self.requester)
-            .field("config_phys", &self.config_phys)
             .field("msi", &self.msi)
             .finish_non_exhaustive()
     }
@@ -422,85 +489,71 @@ impl fmt::Debug for MsiFunction {
 impl MsiFunction {
     /// The MSI capability `seen` found: only for a function with no MSI-X
     /// capability to offer instead, on a machine that does not signal by
-    /// line.
+    /// line, whose configuration space the host window placed.
     fn of(address: Address, seen: &Seen<'_>, has_msix: bool) -> Option<Self> {
         if has_msix || seen.intx.is_some() {
             return None;
         }
+        let _placed = seen.config_phys?;
         Some(MsiFunction {
             requester: u32::from(address.requester_id()),
-            config_phys: seen.config_phys?,
             msi: seen.msi?,
-            config: Once::new(),
             minted: IrqSpinLock::new(None),
         })
     }
 
-    /// The configuration space, once the first mint mapped it.
-    fn mapped(&self) -> Option<MappedConfig> {
-        match self.config.get() {
-            Some(&Ok(config)) => Some(MappedConfig(config)),
-            _ => None,
-        }
-    }
-
-    /// Mask or unmask the vector. Takes no lock: an interrupt handler calls
-    /// it, and the bits it writes are the capability's, not the command
-    /// register's.
-    fn set_masked(&self, masked: bool) -> Result<(), &'static str> {
-        let mut config = self
-            .mapped()
+    /// Mask or unmask the vector, under `node`'s configuration lock. Maps
+    /// nothing, so an interrupt handler may call it: the first mint mapped
+    /// the space.
+    fn set_masked(&self, node: &DeviceNode, masked: bool) -> Result<(), &'static str> {
+        let mut config = node
+            .config_writes_mapped()
             .ok_or("the vector's MSI capability is not mapped")?;
         self.msi
-            .set_masked(&mut config, MappedConfig::FUNCTION, masked);
+            .set_masked(&mut config, ConfigWrites::FUNCTION, masked);
         Ok(())
     }
 
     /// Whether the vector reads back masked.
-    fn is_masked(&self) -> Option<bool> {
-        let config = self.mapped()?;
-        Some(self.msi.is_masked(&config, MappedConfig::FUNCTION))
+    fn is_masked(&self, node: &DeviceNode) -> Option<bool> {
+        let config = node.config_writes_mapped()?;
+        Some(self.msi.is_masked(&config, ConfigWrites::FUNCTION))
     }
 
     /// Whether the command register reads back with `INTx` off.
-    fn intx_off(&self) -> Option<bool> {
-        let config = self.mapped()?;
-        Some(config.read16(MappedConfig::FUNCTION, COMMAND) & COMMAND_INTERRUPT_DISABLE != 0)
+    fn intx_off(node: &DeviceNode) -> Option<bool> {
+        let config = node.mapped_config()?;
+        Some(config.read16(COMMAND) & COMMAND_INTERRUPT_DISABLE != 0)
     }
 
     /// The vector, minting it if nothing has.
     ///
-    /// The first mint maps configuration space, turns `INTx` off under
-    /// `command` -- the node's lock on its command register, which bus
-    /// mastering's writes take too -- and programs the message, masked
-    /// (`ferrix_pci::msi::Msi::program`). An architecture whose message
-    /// address a 32-bit capability cannot hold is refused before a vector is
-    /// allocated, since an allocated vector is never given back.
-    fn mint(&self, node: usize, command: &SpinLock<()>) -> Result<Vector, &'static str> {
+    /// The first mint maps configuration space, turns `INTx` off under the
+    /// node's configuration lock, and programs the message, masked
+    /// (`ferrix_pci::msi::Msi::program`), under it again. An architecture
+    /// whose message address a 32-bit capability cannot hold is refused
+    /// before a vector is allocated, since an allocated vector is never
+    /// given back.
+    fn mint(&self, node: &DeviceNode) -> Result<Vector, &'static str> {
         let vector = |number| Vector {
             number,
             trigger: Some(Trigger::Edge),
-            masking: Masking::Msi { node },
+            masking: Masking::Msi { node: node.index },
         };
         if let Some(doorbell) = arch::msi_doorbell()
             && !self.msi.reaches(doorbell)
         {
             return Err("the message's address is above what a 32-bit MSI capability holds");
         }
-        let mapped = (*self.config.call_once(|| {
-            vmap::map_device(self.config_phys, LEGACY_CONFIG_BYTES)
-                .map(Mmio::at)
-                .map_err(|_| "the function's configuration space could not be mapped")
-        }))?;
-        let mut config = MappedConfig(mapped);
         {
-            let _command = command.lock();
-            let value = config.read16(MappedConfig::FUNCTION, COMMAND);
+            let mut config = node.config_writes()?;
+            let value = config.read16(ConfigWrites::FUNCTION, COMMAND);
             config.write16(
-                MappedConfig::FUNCTION,
+                ConfigWrites::FUNCTION,
                 COMMAND,
                 value | COMMAND_INTERRUPT_DISABLE,
             );
+            config.state.intx_off = true;
         }
         let mut minted = self.minted.lock();
         if let Some(number) = *minted {
@@ -510,60 +563,196 @@ impl MsiFunction {
         if !self.msi.reaches(message.address) {
             return Err("the message's address is above what a 32-bit MSI capability holds");
         }
+        // Under `minted`, as the allocation is: the configuration lock is a
+        // leaf, taken inside it and nothing inside it.
+        let mut config = node.config_writes()?;
         self.msi.program(
             &mut config,
-            MappedConfig::FUNCTION,
+            ConfigWrites::FUNCTION,
             message.address,
             message.data as u16,
         );
+        config.state.msi = Some((message.address, message.data as u16));
+        drop(config);
         *minted = Some(message.number);
         Ok(vector(message.number))
     }
 }
 
-/// One function's legacy configuration space, mapped, as
-/// `ferrix_pci::ConfigSpace`: the function argument is the mapping's own,
-/// and every access is the one asked for.
+/// What the kernel has made a function's configuration space hold, and the
+/// refusals it has printed: everything under the node's configuration lock.
+///
+/// [`DeviceNode::verify_config`] reads the registers back against the first
+/// five, so each is updated in the same hold as the write that makes it so.
+#[derive(Debug)]
+struct ConfigState {
+    /// One bit per dword of the 4 KiB at which a driver's write has been
+    /// refused and the refusal printed, so each is printed once. 1,024 bits,
+    /// made with the node at stage 10.
+    refused: [u64; 16],
+    /// Whether memory decoding is on: as found, and on from the first time
+    /// bus mastering is.
+    memory: bool,
+    /// Whether bus mastering is on: as found, then as `enable_dma` and
+    /// `disable_dma` last wrote it.
+    bus_master: bool,
+    /// Whether `INTx` is off: as found, and on from an MSI mint.
+    intx_off: bool,
+    /// The MSI message programmed, address and data, once one is.
+    msi: Option<(u64, u16)>,
+    /// Whether MSI-X has been turned on with its function mask clear.
+    msix_on: bool,
+}
+
+impl ConfigState {
+    /// The state of a function whose command register read `command`.
+    const fn found(command: u16) -> Self {
+        ConfigState {
+            refused: [0; 16],
+            memory: command & COMMAND_MEMORY_SPACE != 0,
+            bus_master: command & COMMAND_BUS_MASTER != 0,
+            intx_off: command & COMMAND_INTERRUPT_DISABLE != 0,
+            msi: None,
+            msix_on: false,
+        }
+    }
+
+    /// Mark the dword holding `offset` refused, answering whether it was
+    /// not already.
+    fn first_refusal(&mut self, offset: u16) -> bool {
+        let dword = usize::from(offset / 4);
+        let bit = 1_u64 << (dword % 64);
+        self.refused.get_mut(dword / 64).is_some_and(|word| {
+            let first = *word & bit == 0;
+            *word |= bit;
+            first
+        })
+    }
+}
+
+/// One function's configuration space, mapped, for reading only: what a
+/// driver's `device_config_read` and the checks read through. A read outside
+/// the function's space, or not aligned to its width, answers all ones, as
+/// hardware answers for a register that is not there.
 #[derive(Clone, Copy)]
-struct MappedConfig(Mmio);
+struct MappedConfig {
+    /// The mapping.
+    registers: Mmio,
+    /// Bytes of it that are the function's: 4 KiB under ECAM, 256 under CAM.
+    bytes: u16,
+}
 
 impl MappedConfig {
-    /// The function a mapping stands for, which its accesses ignore.
+    /// `width` bytes at `offset`, widened.
+    fn read(self, offset: u16, width: u16) -> u32 {
+        let inside = offset.is_multiple_of(width.max(1))
+            && offset
+                .checked_add(width)
+                .is_some_and(|end| end <= self.bytes);
+        if !inside {
+            return match width {
+                1 => u32::from(u8::MAX),
+                2 => u32::from(u16::MAX),
+                _ => u32::MAX,
+            };
+        }
+        let at = u64::from(offset);
+        match width {
+            1 => u32::from(self.registers.read8(at)),
+            2 => u32::from(self.registers.read16(at)),
+            _ => self.registers.read32(at),
+        }
+    }
+
+    /// The 16-bit register at `offset`.
+    fn read16(self, offset: u16) -> u16 {
+        self.read(offset, 2) as u16
+    }
+
+    /// The 32-bit register at `offset`.
+    fn read32(self, offset: u16) -> u32 {
+        self.read(offset, 4)
+    }
+}
+
+/// A published node's configuration space with its configuration lock held:
+/// the one type that writes it after stage 10.
+///
+/// Made only by [`DeviceNode::config_writes`] and
+/// [`DeviceNode::config_writes_mapped`], which take the lock, so a write
+/// without the lock does not compile. It implements `ferrix_pci::ConfigSpace`
+/// for `ferrix_pci::msi`'s sequences, and holds the [`ConfigState`] those
+/// writes change. The lock is a leaf and masks interrupts: an MSI vector is
+/// masked from interrupt handlers. Nothing is mapped, allocated, waited for
+/// or locked while it is held (MEMORY-AND-TIMING §2.2f).
+struct ConfigWrites<'a> {
+    /// The function's space.
+    space: MappedConfig,
+    /// The lock, and what it guards.
+    state: IrqSpinLockGuard<'a, ConfigState, arch::Irq>,
+}
+
+impl ConfigWrites<'_> {
+    /// The function every access stands for, which the accessor ignores:
+    /// the mapping is one function's.
     const FUNCTION: Address = match Address::new(0, 0, 0, 0) {
         Some(address) => address,
         None => panic!("function 0:0.0 is in range"),
     };
+
+    /// Whether `width` bytes at `offset` are the function's and aligned.
+    fn inside(&self, offset: u16, width: u16) -> bool {
+        offset.is_multiple_of(width)
+            && offset
+                .checked_add(width)
+                .is_some_and(|end| end <= self.space.bytes)
+    }
+
+    /// Write `width` bytes, 1, 2 or 4, of `value` at `offset`; nothing for an
+    /// access outside the function or not aligned.
+    fn write(&mut self, offset: u16, width: u16, value: u32) {
+        if !self.inside(offset, width) {
+            return;
+        }
+        let at = u64::from(offset);
+        match width {
+            1 => self.space.registers.write8(at, value as u8),
+            2 => self.space.registers.write16(at, value as u16),
+            _ => self.space.registers.write32(at, value),
+        }
+    }
 }
 
-impl ferrix_pci::ConfigSpace for MappedConfig {
+impl ferrix_pci::ConfigSpace for ConfigWrites<'_> {
     fn read8(&self, _: Address, offset: u16) -> u8 {
-        self.0.read8(u64::from(offset))
+        self.space.read(offset, 1) as u8
     }
 
     fn read16(&self, _: Address, offset: u16) -> u16 {
-        self.0.read16(u64::from(offset))
+        self.space.read16(offset)
     }
 
     fn read32(&self, _: Address, offset: u16) -> u32 {
-        self.0.read32(u64::from(offset))
+        self.space.read32(offset)
     }
 
     fn write16(&mut self, _: Address, offset: u16, value: u16) {
-        self.0.write16(u64::from(offset), value);
+        self.write(offset, 2, u32::from(value));
     }
 
     fn write32(&mut self, _: Address, offset: u16, value: u32) {
-        self.0.write32(u64::from(offset), value);
+        self.write(offset, 4, value);
     }
 }
+
+/// An MSI-X message: its address and data.
+type Message = (u64, u32);
 
 /// A PCI function's MSI-X table, and the vectors minted from it.
 struct MsixTable {
     /// The function's requester ID, which its message writes carry and a
     /// GICv3's ITS translates them by.
     requester: u32,
-    /// Physical address of the function's configuration space.
-    config_phys: u64,
     /// Offset of the MSI-X capability in it.
     capability: u16,
     /// Physical address of the table's first entry.
@@ -573,15 +762,15 @@ struct MsixTable {
     /// The table, mapped with every entry masked and MSI-X on, from the first
     /// mint. Read by interrupt handlers, and `Once::get` takes no lock.
     table: Once<Result<Mmio, &'static str>>,
-    /// The vector each entry was minted with.
-    minted: IrqSpinLock<BTreeMap<u16, u32>, arch::Irq>,
+    /// The vector each entry was minted with, and the message, address and
+    /// data, programmed into it.
+    minted: IrqSpinLock<BTreeMap<u16, (u32, u64, u32)>, arch::Irq>,
 }
 
 impl fmt::Debug for MsixTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MsixTable")
             .field("requester", &self.requester)
-            .field("config_phys", &self.config_phys)
             .field("capability", &self.capability)
             .field("table_phys", &self.table_phys)
             .field("table_size", &self.table_size)
@@ -625,9 +814,10 @@ impl MsixTable {
     }
 
     /// Map the table, mask every entry, and turn MSI-X on with the function
-    /// mask clear. Once per table; every entry stays masked until its holder
-    /// unmasks it.
-    fn open(&self) -> Result<Mmio, &'static str> {
+    /// mask clear, through `node`'s mapping of its configuration space and
+    /// under its configuration lock. Once per table; every entry stays masked
+    /// until its holder unmasks it.
+    fn open(&self, node: &DeviceNode) -> Result<Mmio, &'static str> {
         let len = u64::from(self.table_size) * MSIX_ENTRY_SIZE;
         let table = vmap::map_device(self.table_phys, len)
             .map(Mmio::at)
@@ -636,33 +826,37 @@ impl MsixTable {
             let at = Self::control(entry);
             table.write32(at, table.read32(at) | VECTOR_CONTROL_MASKED);
         }
-
-        let config = vmap::map_device(self.config_phys, LEGACY_CONFIG_BYTES)
-            .map_err(|_| "the function's configuration space could not be mapped")?;
-        let registers = Mmio::at(config);
-        let at = u64::from(self.capability + CAPABILITY_CONTROL);
-        let control = registers.read16(at);
-        registers.write16(at, (control | CONTROL_ENABLE) & !CONTROL_FUNCTION_MASK);
-        let _ = vmap::unmap_device(config);
+        let mut config = node.config_writes()?;
+        let at = self.capability + CAPABILITY_CONTROL;
+        let control = config.read16(ConfigWrites::FUNCTION, at);
+        config.write16(
+            ConfigWrites::FUNCTION,
+            at,
+            (control | CONTROL_ENABLE) & !CONTROL_FUNCTION_MASK,
+        );
+        config.state.msix_on = true;
         Ok(table)
     }
 
     /// The vector for `entry`, minting it if nothing has.
-    fn mint(&self, node: usize, entry: u16) -> Result<Vector, &'static str> {
+    fn mint(&self, node: &DeviceNode, entry: u16) -> Result<Vector, &'static str> {
         let vector = |number| Vector {
             number,
             trigger: Some(Trigger::Edge),
-            masking: Masking::MsiX { node, entry },
+            masking: Masking::MsiX {
+                node: node.index,
+                entry,
+            },
         };
         if entry >= self.table_size {
             return Err("there is no such MSI-X entry");
         }
         // Mapped outside the lock: mapping and unmapping take the address
         // space's locks and may wait on other processors.
-        let table = (*self.table.call_once(|| self.open()))?;
+        let table = (*self.table.call_once(|| self.open(node)))?;
 
         let mut minted = self.minted.lock();
-        if let Some(&number) = minted.get(&entry) {
+        if let Some(&(number, ..)) = minted.get(&entry) {
             return Ok(vector(number));
         }
         // Room to record the vector before it is allocated: an MSI vector is
@@ -675,15 +869,39 @@ impl MsixTable {
         table.write32(at + ENTRY_ADDRESS_LOW, msi.address as u32);
         table.write32(at + ENTRY_ADDRESS_HIGH, (msi.address >> 32) as u32);
         table.write32(at + ENTRY_DATA, msi.data);
-        let _ = fallible::insert_held(&held, &mut minted, entry, msi.number);
+        let _ = fallible::insert_held(
+            &held,
+            &mut minted,
+            entry,
+            (msi.number, msi.address, msi.data),
+        );
         Ok(vector(msi.number))
+    }
+
+    /// The first minted entry whose message reads back other than minted:
+    /// the entry, and the address and data read and minted.
+    fn rewritten(&self) -> Option<(u16, Message, Message)> {
+        let Some(&Ok(table)) = self.table.get() else {
+            return None;
+        };
+        let minted = self.minted.lock();
+        minted.iter().find_map(|(&entry, &(_, address, data))| {
+            let at = u64::from(entry) * MSIX_ENTRY_SIZE;
+            let read = (
+                u64::from(table.read32(at + ENTRY_ADDRESS_LOW))
+                    | u64::from(table.read32(at + ENTRY_ADDRESS_HIGH)) << 32,
+                table.read32(at + ENTRY_DATA),
+            );
+            (read != (address, data)).then_some((entry, read, (address, data)))
+        })
     }
 }
 
 /// One of a virtio PCI transport's register blocks, as physical memory: the
 /// page-aligned start of the pages holding it, inside one of the function's
 /// BARs, the block's first byte within those pages, and its length. What a
-/// driver, which cannot walk configuration space, is told in START.
+/// driver is told in START, so that it need not walk configuration space
+/// through `device_config_read` to find them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RegisterBlock {
     /// Physical address of the first page.
@@ -766,10 +984,29 @@ pub(crate) struct Seen<'a> {
     pub(crate) intx: Option<GicInterrupt>,
     /// Its MSI capability, decoded, if it has one.
     pub(crate) msi: Option<Msi>,
+    /// What its configuration window starts from.
+    pub(crate) config: &'a ConfigFound,
+}
+
+/// What enumeration hands [`DeviceNode::pci`] for a function's
+/// configuration window.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ConfigFound {
+    /// Bytes of configuration space the function has: 4 KiB under ECAM, 256
+    /// under CAM.
+    pub(crate) bytes: u16,
+    /// Its command register, read after enumeration was done with it: what
+    /// [`DeviceNode::verify_config`] holds its bits against until the
+    /// kernel writes them.
+    pub(crate) command: u16,
+    /// The bytes its driver may write (`ferrix_pci::window`).
+    pub(crate) writable: Writable,
 }
 
 /// What enumeration read off a PCI function and kept, because whoever starts
-/// a driver on it needs it and a driver cannot read configuration space.
+/// a driver on it needs it: a driver reads configuration space only through
+/// `device_config_read`, which needs `MANAGE`, and whoever starts it holds
+/// the device with less.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PciFunction {
     /// The vendor identifier.
@@ -829,6 +1066,7 @@ impl Window {
             phys,
             len: window.length,
             cacheable: true,
+            source: Source::Tree,
         };
         (!reserved.covers(whole)).then_some(Window {
             phys,
@@ -872,6 +1110,10 @@ pub(crate) struct DeviceNode {
     dma_on: AtomicBool,
     /// Its index in [`devices`], once published.
     index: usize,
+    /// Set when [`DeviceNode::verify_config`] found a kernel-owned register
+    /// rewritten: from then on, until reboot, every call that needs `MANAGE`
+    /// on the node answers `BAD_STATE`.
+    refused: AtomicBool,
     /// Its memory, in BAR or `reg` order.
     apertures: Vec<Aperture>,
     /// A device tree node's interrupts, in firmware's order, or a PCI
@@ -882,11 +1124,28 @@ pub(crate) struct DeviceNode {
     msix: Option<MsixTable>,
     /// A PCI function's MSI capability, when it has no MSI-X table to offer.
     msi: Option<MsiFunction>,
-    /// Held across every read-modify-write of the function's command
-    /// register: bus mastering's ([`DeviceNode::enable_dma`],
-    /// [`DeviceNode::disable_dma`]) and an MSI mint's `INTx` off, which would
-    /// otherwise undo each other.
-    command: SpinLock<()>,
+    /// The node's one configuration lock: every write of a published PCI
+    /// function's configuration space, the kernel's and a driver's, is made
+    /// holding it, through the [`ConfigWrites`] it guards -- bus mastering's
+    /// ([`DeviceNode::enable_dma`], [`DeviceNode::disable_dma`]), an MSI
+    /// mint's `INTx` off and message, an MSI vector's mask, MSI-X's enable
+    /// and function mask, and `device_config_write`. With what those writes
+    /// made the registers hold, which [`DeviceNode::verify_config`] reads
+    /// them back against.
+    config: IrqSpinLock<ConfigState, arch::Irq>,
+    /// The function's configuration space, mapped once, at its first use,
+    /// for the life of the machine. Read by interrupt handlers, and
+    /// `Once::get` takes no lock.
+    config_map: Once<Result<Mmio, &'static str>>,
+    /// Bytes of configuration space the function has; zero for a node that
+    /// is not a PCI function.
+    config_bytes: u16,
+    /// The bytes a driver may write (`ferrix_pci::window`), computed at
+    /// stage 10.
+    writable: Writable,
+    /// Each memory BAR enumeration found assigned, by slot: what the BAR
+    /// registers must read back.
+    bars: [Option<MintedBar>; 6],
     /// The IOMMU domain its DMA goes through, made the first time it is asked
     /// for.
     domain: SpinLock<Option<Arc<iommu::Domain>>>,
@@ -917,11 +1176,16 @@ impl DeviceNode {
             pci: None,
             dma_on: AtomicBool::new(false),
             index: 0,
+            refused: AtomicBool::new(false),
             apertures: Vec::new(),
             vectors: Vec::new(),
             msix: None,
             msi: None,
-            command: SpinLock::new(()),
+            config: IrqSpinLock::new(ConfigState::found(0)),
+            config_map: Once::new(),
+            config_bytes: 0,
+            writable: Writable::NONE,
+            bars: [None; 6],
             domain: SpinLock::new(None),
             withheld: 0,
             interrupt_tables: Vec::new(),
@@ -954,6 +1218,7 @@ impl DeviceNode {
         reserved: &Reserved,
     ) -> Self {
         let mut node = DeviceNode::empty(Location::Pci(address));
+        node.window(seen);
         let identity = seen.identity;
         // With a line, the table stays withheld from the apertures below but
         // is never offered: nothing on the machine could take its messages.
@@ -993,42 +1258,82 @@ impl DeviceNode {
         }
         let table = msix.map(|(_, table)| table);
         for region in regions {
-            let Bar::Memory {
-                address: base,
-                prefetchable,
-                ..
-            } = region.bar
-            else {
-                continue;
-            };
-            if base == 0 {
-                continue;
-            }
-            for &(offset, len) in msix::withheld(region, table, PAGE_SIZE).as_slice() {
-                if let Some(start) = base.checked_add(offset) {
-                    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
-                    node.interrupt_tables.push((start, len));
-                }
-            }
-            for &(offset, len) in msix::mappable(region, table, PAGE_SIZE).as_slice() {
-                if let Some(start) = base.checked_add(offset) {
-                    node.mint(start, len, prefetchable, reserved);
-                }
-            }
+            node.mint_bar(region, table, reserved);
         }
         node.msix = seen
             .config_phys
-            .zip(offered)
-            .and_then(|(config_phys, found)| {
-                MsixTable::of(address, config_phys, found, regions, reserved)
-            });
+            .and(offered)
+            .and_then(|found| MsixTable::of(address, found, regions, reserved));
         node.msi = MsiFunction::of(address, seen, msix.is_some());
         node
     }
 
-    /// Add an aperture of `len` bytes at `phys`, unless it is empty, runs off
-    /// the address space, or overlaps reserved memory.
+    /// What the configuration window starts from, for a PCI function: the
+    /// command register as enumeration left it, the bytes of configuration
+    /// space it has, and the bytes its driver may write.
+    fn window(&mut self, seen: &Seen<'_>) {
+        self.config = IrqSpinLock::new(ConfigState::found(seen.config.command));
+        self.config_bytes = seen.config_phys.map_or(0, |_| seen.config.bytes);
+        self.writable = seen.config.writable;
+    }
+
+    /// Mint the apertures of one BAR of a function whose memory decoding is
+    /// on, if it is an assigned memory BAR: everything but the pages of
+    /// `table`'s MSI-X table and pending-bit array, which are recorded as
+    /// withheld instead; and record the BAR's address, for
+    /// [`DeviceNode::verify_config`].
+    fn mint_bar(&mut self, region: &Region, table: Option<&MsiX>, reserved: &Reserved) {
+        let Bar::Memory {
+            address: base,
+            prefetchable,
+            wide,
+        } = region.bar
+        else {
+            return;
+        };
+        if base == 0 {
+            return;
+        }
+        if let Some(slot) = self.bars.get_mut(usize::from(region.index)) {
+            *slot = Some(MintedBar {
+                address: base,
+                wide,
+            });
+        }
+        for &(offset, len) in msix::withheld(region, table, PAGE_SIZE).as_slice() {
+            if let Some(start) = base.checked_add(offset) {
+                // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
+                self.interrupt_tables.push((start, len));
+            }
+        }
+        for &(offset, len) in msix::mappable(region, table, PAGE_SIZE).as_slice() {
+            if let Some(start) = base.checked_add(offset) {
+                let source = Source::Bar {
+                    slot: region.index,
+                    offset,
+                    wide,
+                };
+                self.mint_from(start, len, prefetchable, source, reserved);
+            }
+        }
+    }
+
+    /// Add a device tree window of `len` bytes at `phys` as an aperture,
+    /// unless it is empty, runs off the address space, or overlaps reserved
+    /// memory.
     pub(crate) fn mint(&mut self, phys: u64, len: u64, cacheable: bool, reserved: &Reserved) {
+        self.mint_from(phys, len, cacheable, Source::Tree, reserved);
+    }
+
+    /// [`DeviceNode::mint`], for an aperture from `source`.
+    fn mint_from(
+        &mut self,
+        phys: u64,
+        len: u64,
+        cacheable: bool,
+        source: Source,
+        reserved: &Reserved,
+    ) {
         if phys == 0 || len == 0 || phys.checked_add(len).is_none() {
             return;
         }
@@ -1036,6 +1341,7 @@ impl DeviceNode {
             phys,
             len,
             cacheable,
+            source,
         };
         if reserved.covers(aperture) {
             self.withheld += 1;
@@ -1220,28 +1526,257 @@ impl DeviceNode {
     }
 
     /// Write the function's command register with bus mastering `on` or off,
-    /// keeping memory decoding on either way, through a mapping of its
-    /// configuration space held only for the write.
+    /// keeping memory decoding on either way, under the configuration lock.
     fn set_bus_master(&self, on: bool) -> Result<(), &'static str> {
-        let Some(config_phys) = self.pci.as_ref().and_then(|function| function.config_phys) else {
+        if self.config_phys().is_none() {
+            return Ok(());
+        }
+        let mut config = self.config_writes()?;
+        // A refused node never gets bus mastering back. Tested under the lock
+        // `refuse` sets the flag and turns bus mastering off under, so an
+        // `enable_dma` that passed `device_in` before the refusal cannot undo
+        // it, nor can a kernel caller after.
+        if on && self.refused.load(Ordering::Acquire) {
+            return Err("the node was refused: its kernel-owned configuration was rewritten");
+        }
+        let command = config.read16(ConfigWrites::FUNCTION, COMMAND);
+        let value = if on {
+            command | COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER
+        } else {
+            command & !COMMAND_BUS_MASTER
+        };
+        config.write16(ConfigWrites::FUNCTION, COMMAND, value);
+        config.state.bus_master = on;
+        config.state.memory |= on;
+        Ok(())
+    }
+
+    /// Physical address of the function's configuration space, for a PCI
+    /// function whose host window placed it.
+    fn config_phys(&self) -> Option<u64> {
+        self.pci.as_ref().and_then(|function| function.config_phys)
+    }
+
+    /// The function's configuration space, mapped at the first call and
+    /// kept: never under the configuration lock, since mapping takes the
+    /// address space's locks and may wait on other processors.
+    fn config_mapping(&self) -> Result<MappedConfig, &'static str> {
+        let config_phys = self
+            .config_phys()
+            .ok_or("the device has no configuration space")?;
+        let registers = (*self.config_map.call_once(|| {
+            vmap::map_device(config_phys, u64::from(self.config_bytes))
+                .map(Mmio::at)
+                .map_err(|_| "the function's configuration space could not be mapped")
+        }))?;
+        Ok(MappedConfig {
+            registers,
+            bytes: self.config_bytes,
+        })
+    }
+
+    /// The function's configuration space for reading, if it is mapped
+    /// already. Maps nothing.
+    fn mapped_config(&self) -> Option<MappedConfig> {
+        match self.config_map.get() {
+            Some(&Ok(registers)) => Some(MappedConfig {
+                registers,
+                bytes: self.config_bytes,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The function's configuration space with the configuration lock held,
+    /// mapping it first if nothing has: the only way to write it.
+    fn config_writes(&self) -> Result<ConfigWrites<'_>, &'static str> {
+        let space = self.config_mapping()?;
+        Ok(ConfigWrites {
+            space,
+            state: self.config.lock(),
+        })
+    }
+
+    /// [`DeviceNode::config_writes`] for a space that is mapped already, as
+    /// an interrupt handler needs: maps nothing, and `None` if nothing has.
+    fn config_writes_mapped(&self) -> Option<ConfigWrites<'_>> {
+        let space = self.mapped_config()?;
+        Some(ConfigWrites {
+            space,
+            state: self.config.lock(),
+        })
+    }
+
+    /// The device's aperture `index` as `device_aperture` writes it.
+    pub(crate) fn aperture_info(&self, index: usize) -> Option<ApertureInfo> {
+        self.apertures.get(index).map(|aperture| aperture.info())
+    }
+
+    /// Whether [`DeviceNode::verify_config`] has refused the node.
+    pub(crate) fn is_refused(&self) -> bool {
+        self.refused.load(Ordering::Acquire)
+    }
+
+    /// `width` bytes of the function's configuration space at `offset`, for
+    /// `device_config_read`: every byte is readable, the kernel's own
+    /// registers included, and an offset past a function with 256 bytes
+    /// reads all ones.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigRefusal::Arguments`] for a width other than 1, 2 or 4, or an
+    /// offset not a multiple of it or not below 4096;
+    /// [`ConfigRefusal::NotPci`] for a node with no configuration space;
+    /// [`ConfigRefusal::Unmapped`] when it could not be mapped.
+    pub(crate) fn config_read(&self, offset: u64, width: u64) -> Result<u32, ConfigRefusal> {
+        let (offset, width) = config_access(offset, width)?;
+        if self.config_phys().is_none() {
+            return Err(ConfigRefusal::NotPci);
+        }
+        let space = self.config_mapping().map_err(|_| ConfigRefusal::Unmapped)?;
+        Ok(space.read(offset, width))
+    }
+
+    /// Write the low `width` bytes of `value` at `offset`, for
+    /// `device_config_write`: only when every byte lies in the function's
+    /// driver-writable ranges (`ferrix_pci::window`), under the
+    /// configuration lock. Any other write is refused whole and changes
+    /// nothing. The first refusal at each dword is printed once the lock is
+    /// dropped, naming the register.
+    ///
+    /// # Errors
+    ///
+    /// As [`DeviceNode::config_read`], and [`ConfigRefusal::Denied`] for a
+    /// byte the driver may not write.
+    pub(crate) fn config_write(
+        &self,
+        offset: u64,
+        width: u64,
+        value: u64,
+    ) -> Result<(), ConfigRefusal> {
+        let (offset, width) = config_access(offset, width)?;
+        if self.config_phys().is_none() {
+            return Err(ConfigRefusal::NotPci);
+        }
+        let allowed = self.writable.allows(offset, width);
+        let mut config = self.config_writes().map_err(|_| ConfigRefusal::Unmapped)?;
+        if allowed {
+            config.write(offset, width, value as u32);
+            return Ok(());
+        }
+        let first = config.state.first_refusal(offset);
+        drop(config);
+        if first {
+            crate::println!(
+                "  config   {} refused a {width}-byte write at {offset:#x} ({})",
+                self.location,
+                self.writable.name(offset),
+            );
+        }
+        Err(ConfigRefusal::Denied)
+    }
+
+    /// Read back what the kernel made the function's configuration space
+    /// hold, and refuse the node if a kernel-owned register reads otherwise:
+    /// the command register's memory decoding, bus mastering and `INTx`
+    /// bits, every assigned memory BAR, the MSI capability's control,
+    /// address and data once a message is programmed, and MSI-X's control
+    /// and every minted entry's message once the table is open.
+    ///
+    /// Run at each accepted HELLO, beside `object::pin::quarantine_release`,
+    /// and at each quiesce. A driver, or its device's firmware, can rewrite
+    /// those registers through a mirror of configuration space in a BAR,
+    /// which the configuration window cannot refuse (SAFETY-MANUAL AoU-22);
+    /// this finds it before the next driver is given the device. On a
+    /// mismatch bus mastering goes off, the node is refused until reboot,
+    /// and one line names the register.
+    ///
+    /// # Errors
+    ///
+    /// The register that read back other than the kernel made it.
+    pub(crate) fn verify_config(&self) -> Result<(), Breach> {
+        let Some(breach) = self.breach() else {
             return Ok(());
         };
-        let config = vmap::map_device(config_phys, LEGACY_CONFIG_BYTES)
-            .map_err(|_| "the function's configuration space could not be mapped")?;
-        let registers = Mmio::at(config);
-        let at = u64::from(COMMAND);
-        {
-            let _command = self.command.lock();
-            let command = registers.read16(at);
-            let value = if on {
-                command | COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER
-            } else {
-                command & !COMMAND_BUS_MASTER
-            };
-            registers.write16(at, value);
+        self.refuse();
+        crate::println!(
+            "  device   {} refused: {} reads {:#x} where {:#x} was minted (a driver or its \
+             firmware rewrote a kernel-owned register)",
+            self.location,
+            breach.register,
+            breach.read,
+            breach.minted,
+        );
+        Err(breach)
+    }
+
+    /// Refuse the node and turn its bus mastering off, in one hold of the
+    /// configuration lock: [`DeviceNode::set_bus_master`] tests the flag
+    /// under the same lock, so no later `enable_dma` turns it on again.
+    fn refuse(&self) {
+        match self.config_writes() {
+            Ok(mut config) => {
+                self.refused.store(true, Ordering::Release);
+                let command = config.read16(ConfigWrites::FUNCTION, COMMAND);
+                config.write16(
+                    ConfigWrites::FUNCTION,
+                    COMMAND,
+                    command & !COMMAND_BUS_MASTER,
+                );
+                config.state.bus_master = false;
+            }
+            // Unmapped, so nothing was read back and nothing can be written:
+            // refused all the same.
+            Err(_) => self.refused.store(true, Ordering::Release),
         }
-        let _ = vmap::unmap_device(config);
-        Ok(())
+        self.dma_on.store(false, Ordering::Release);
+    }
+
+    /// What a core does once it has accepted a new driver's HELLO for the
+    /// node, which the driver sent after resetting the device: what the
+    /// kernel made the configuration space hold is read back first
+    /// ([`DeviceNode::verify_config`]), which refuses the node if a driver or
+    /// its firmware rewrote it, and then the frames a dead driver's pins kept
+    /// go back (`object::pin::quarantine_release`), whose device can no
+    /// longer reach them either way.
+    pub(crate) fn hello_accepted(&self) {
+        let _ = self.verify_config();
+        crate::object::pin::quarantine_release(self);
+    }
+
+    /// The first kernel-owned register that reads back other than the kernel
+    /// made it, if any: [`DeviceNode::verify_config`]'s comparison.
+    fn breach(&self) -> Option<Breach> {
+        let _placed = self.config_phys()?;
+        let breach = {
+            // Under the lock, so no kernel sequence is half written, and so
+            // the state read is the one the registers were last written to.
+            let config = self.config_writes().ok()?;
+            config_breach(&config, &self.bars, self.msi.as_ref().map(|msi| &msi.msi)).or_else(
+                || {
+                    let table = self.msix.as_ref()?;
+                    msix_control_breach(&config, table.capability)
+                },
+            )
+        };
+        breach.or_else(|| {
+            let (entry, read, minted) = self.msix.as_ref()?.rewritten()?;
+            let register = if read.0 == minted.0 {
+                Register::MsixData(entry)
+            } else {
+                Register::MsixAddress(entry)
+            };
+            let (read, minted) = if read.0 == minted.0 {
+                (u64::from(read.1), u64::from(minted.1))
+            } else {
+                (read.0, minted.0)
+            };
+            Some(Breach {
+                register,
+                read,
+                minted,
+            })
+        })
     }
 
     /// Every aperture the device has.
@@ -1299,11 +1834,7 @@ impl DeviceNode {
         self.apertures
             .iter()
             .find(|whole| whole.phys <= phys && end <= whole.end())
-            .map(|whole| Aperture {
-                phys,
-                len,
-                cacheable: whole.cacheable,
-            })
+            .map(|whole| whole.part(phys, len))
     }
 
     /// The device's vector at `index`, if it has one.
@@ -1324,8 +1855,8 @@ impl DeviceNode {
             return None;
         }
         match (&self.msix, &self.msi) {
-            (Some(table), _) => table.mint(self.index, u16::try_from(index).ok()?).ok(),
-            (None, Some(msi)) if index == 0 => msi.mint(self.index, &self.command).ok(),
+            (Some(table), _) => table.mint(self, u16::try_from(index).ok()?).ok(),
+            (None, Some(msi)) if index == 0 => msi.mint(self).ok(),
             _ => None,
         }
     }
@@ -1336,7 +1867,6 @@ impl MsixTable {
     /// assigned memory BAR, whole, and clear of memory the kernel owns.
     fn of(
         address: Address,
-        config_phys: u64,
         (capability, msix): &(Capability, MsiX),
         regions: &[Region],
         reserved: &Reserved,
@@ -1357,7 +1887,6 @@ impl MsixTable {
         }
         Some(MsixTable {
             requester: u32::from(address.requester_id()),
-            config_phys,
             capability: capability.offset,
             table_phys,
             table_size: msix.table_size,
@@ -1365,6 +1894,201 @@ impl MsixTable {
             minted: IrqSpinLock::new(BTreeMap::new()),
         })
     }
+}
+
+/// A memory BAR as enumeration found it assigned: what its register must
+/// read back.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct MintedBar {
+    /// The address, both halves for a 64-bit BAR.
+    address: u64,
+    /// Whether it is 64 bits wide, so the next slot is its upper half.
+    wide: bool,
+}
+
+/// Why a configuration access was refused.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ConfigRefusal {
+    /// A width other than 1, 2 or 4, or an offset not a multiple of it or
+    /// not below 4096.
+    Arguments,
+    /// The node is not a PCI function whose configuration space the host
+    /// window placed.
+    NotPci,
+    /// The function's configuration space could not be mapped.
+    Unmapped,
+    /// A byte the write would touch is not the driver's to write.
+    Denied,
+}
+
+/// `offset` and `width` as a configuration access takes them, if they are
+/// one.
+fn config_access(offset: u64, width: u64) -> Result<(u16, u16), ConfigRefusal> {
+    if !matches!(width, 1 | 2 | 4)
+        || !offset.is_multiple_of(width)
+        || offset >= u64::from(ferrix_pci::CONFIG_SPACE_SIZE)
+    {
+        return Err(ConfigRefusal::Arguments);
+    }
+    Ok((offset as u16, width as u16))
+}
+
+/// A kernel-owned register [`DeviceNode::verify_config`] can find rewritten.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Register {
+    /// The command register's decoding, bus mastering or `INTx` bits.
+    Command,
+    /// A memory BAR, by slot.
+    Bar(u8),
+    /// The MSI capability's message control.
+    MsiControl,
+    /// The MSI message's address.
+    MsiAddress,
+    /// The MSI message's data.
+    MsiData,
+    /// The MSI-X capability's message control.
+    MsixControl,
+    /// An MSI-X entry's address.
+    MsixAddress(u16),
+    /// An MSI-X entry's data.
+    MsixData(u16),
+}
+
+impl fmt::Display for Register {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Register::Command => f.write_str("COMMAND"),
+            Register::Bar(slot) => write!(f, "BAR{slot}"),
+            Register::MsiControl => f.write_str("MSI control"),
+            Register::MsiAddress => f.write_str("MSI address"),
+            Register::MsiData => f.write_str("MSI data"),
+            Register::MsixControl => f.write_str("MSI-X control"),
+            Register::MsixAddress(entry) => write!(f, "MSI-X entry {entry}'s address"),
+            Register::MsixData(entry) => write!(f, "MSI-X entry {entry}'s data"),
+        }
+    }
+}
+
+/// A kernel-owned register that read back other than the kernel made it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Breach {
+    /// Which.
+    pub(crate) register: Register,
+    /// What it read.
+    pub(crate) read: u64,
+    /// What the kernel made it.
+    pub(crate) minted: u64,
+}
+
+/// The command register's bits the kernel owns and checks.
+const COMMAND_CHECKED: u16 = COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER | COMMAND_INTERRUPT_DISABLE;
+
+/// The first of the command register, the BARs and the MSI capability that
+/// reads back other than `config`'s state says the kernel made it.
+fn config_breach(
+    config: &ConfigWrites<'_>,
+    bars: &[Option<MintedBar>; 6],
+    msi: Option<&Msi>,
+) -> Option<Breach> {
+    command_breach(config)
+        .or_else(|| bar_breach(config, bars))
+        .or_else(|| msi_breach(config, msi?))
+}
+
+/// The command register's decoding, bus-mastering and `INTx` bits, if they
+/// read other than the state says.
+fn command_breach(config: &ConfigWrites<'_>) -> Option<Breach> {
+    let state = &*config.state;
+    let command = config.read16(ConfigWrites::FUNCTION, COMMAND);
+    let mut want = 0;
+    for (on, bit) in [
+        (state.memory, COMMAND_MEMORY_SPACE),
+        (state.bus_master, COMMAND_BUS_MASTER),
+        (state.intx_off, COMMAND_INTERRUPT_DISABLE),
+    ] {
+        if on {
+            want |= bit;
+        }
+    }
+    (command & COMMAND_CHECKED != want).then_some(Breach {
+        register: Register::Command,
+        read: u64::from(command),
+        minted: u64::from((command & !COMMAND_CHECKED) | want),
+    })
+}
+
+/// The first assigned memory BAR that reads other than enumeration found it.
+fn bar_breach(config: &ConfigWrites<'_>, bars: &[Option<MintedBar>; 6]) -> Option<Breach> {
+    (0_u8..).zip(bars.iter()).find_map(|(slot, bar)| {
+        let bar = bar.as_ref()?;
+        let at = BAR0 + 4 * u16::from(slot);
+        let mut read = u64::from(config.read32(ConfigWrites::FUNCTION, at) & !0xF);
+        if bar.wide {
+            read |= u64::from(config.read32(ConfigWrites::FUNCTION, at + 4)) << 32;
+        }
+        (read != bar.address).then_some(Breach {
+            register: Register::Bar(slot),
+            read,
+            minted: bar.address,
+        })
+    })
+}
+
+/// The MSI capability's control, address or data, once a message is
+/// programmed, if one reads other than programmed.
+fn msi_breach(config: &ConfigWrites<'_>, msi: &Msi) -> Option<Breach> {
+    let f = ConfigWrites::FUNCTION;
+    let (address, data) = config.state.msi?;
+    let control = config.read16(f, msi.capability + msi::CONTROL);
+    let enabled = Msi::enabled(control);
+    let control_minted = if msi.maskable {
+        enabled
+    } else {
+        // Masked by its enable bit, which the mask therefore owns.
+        (enabled & !msi::CONTROL_ENABLE) | (control & msi::CONTROL_ENABLE)
+    };
+    if control != control_minted {
+        return Some(Breach {
+            register: Register::MsiControl,
+            read: u64::from(control),
+            minted: u64::from(control_minted),
+        });
+    }
+    let mut read = u64::from(config.read32(f, msi.capability + msi::ADDRESS_LOW));
+    let address = if msi.wide {
+        read |= u64::from(config.read32(f, msi.capability + msi::ADDRESS_HIGH)) << 32;
+        address
+    } else {
+        address & u64::from(u32::MAX)
+    };
+    if read != address {
+        return Some(Breach {
+            register: Register::MsiAddress,
+            read,
+            minted: address,
+        });
+    }
+    let read = config.read16(f, msi.data());
+    (read != data).then_some(Breach {
+        register: Register::MsiData,
+        read: u64::from(read),
+        minted: u64::from(data),
+    })
+}
+
+/// The MSI-X capability's control, if the kernel turned MSI-X on and it
+/// reads back off or function-masked.
+fn msix_control_breach(config: &ConfigWrites<'_>, capability: u16) -> Option<Breach> {
+    if !config.state.msix_on {
+        return None;
+    }
+    let control = config.read16(ConfigWrites::FUNCTION, capability + CAPABILITY_CONTROL);
+    let minted = (control | CONTROL_ENABLE) & !CONTROL_FUNCTION_MASK;
+    (control != minted).then_some(Breach {
+        register: Register::MsixControl,
+        read: u64::from(control),
+        minted: u64::from(minted),
+    })
 }
 
 /// How a line signals, from what the tree says. A PCI `INTx` line is level

@@ -150,6 +150,12 @@ pub(crate) fn test_boot_lines(
                     watched.log.display()
                 )));
             }
+            if let Some(problem) = config_problem(arch, &watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             if let Some(problem) = iommu_problem(&watched.lines) {
                 return Err(Error::new(format!(
                     "{arch}: {problem}.\n  Serial output is in {}",
@@ -323,6 +329,42 @@ fn cleaning_problem(arch: Arch, lines: &[String]) -> Option<String> {
         return None;
     }
     Some("the kernel never said it cleaned its VT-d table writes to memory".to_owned())
+}
+
+/// What stage 10's `config` line says when `device_aperture` reported
+/// `pci-testdev`'s 8 GiB BAR whole (`docs/NVIDIA.md` §12.1, check W1).
+const ABOVE_4_GIB: &str = " 1 above 4 GiB and longer than it";
+
+/// What the last `config` line says when the breach check (W7) found the
+/// command register it rewrote.
+const BREACH_FOUND: &str = "a COMMAND rewritten behind the kernel was found and its node refused";
+
+/// Why a boot did not run stage 10's configuration window checks whole, if
+/// it did not.
+///
+/// The kernel prints them on every boot that runs its checks. Every x86-64
+/// machine this tool boots carries `pci-testdev,membar=8G` (`attach_rng`), so
+/// there `device_aperture` must have reported one aperture above 4 GiB and
+/// longer than it; and on every machine the breach check must have found
+/// the command register it rewrote.
+///
+/// Verifies: L.device.24, L.device.25
+fn config_problem(arch: Arch, lines: &[String]) -> Option<String> {
+    let Some(apertures) = lines.iter().find(|line| {
+        line.contains("  config   ") && line.contains("reported whole by device_aperture")
+    }) else {
+        return Some("the kernel never printed its configuration window line".to_owned());
+    };
+    if arch == Arch::X86_64 && !apertures.contains(ABOVE_4_GIB) {
+        return Some(format!(
+            "device_aperture did not report pci-testdev's BAR above 4 GiB whole: `{}`",
+            apertures.trim()
+        ));
+    }
+    if !lines.iter().any(|line| line.contains(BREACH_FOUND)) {
+        return Some("the configuration breach check did not find what it rewrote".to_owned());
+    }
+    None
 }
 
 /// What stage 10's IOMMU discovery prints after the number of PCI functions
@@ -2031,7 +2073,8 @@ fn attach_firmware(command: &mut Command, arch: Arch, firmware: &Firmware) -> Re
 /// scope, and stage 10's out-of-domain fault then proves that a function
 /// below a bridge gets a translated domain. A second root port holds QEMU's
 /// `edu` device, which has MSI and no MSI-X, for stage 10's MSI check
-/// (`device::check::check_msi`).
+/// (`device::check::check_msi`), and the root bus a `pci-testdev` with an
+/// 8 GiB BAR for `device_aperture`'s (`device::config_check`).
 fn attach_rng(command: &mut Command, arch: Arch) {
     let rng = match arch {
         Arch::Armv7a => "virtio-rng-pci,disable-legacy=on",
@@ -2046,6 +2089,11 @@ fn attach_rng(command: &mut Command, arch: Arch) {
             "pcie-root-port,id=ferrix.port1,chassis=2,slot=2",
             "-device",
             "edu,bus=ferrix.port1",
+            // A 64-bit prefetchable BAR of 8 GiB, which firmware can only
+            // place above 4 GiB: what `device_aperture` must report whole
+            // (`docs/NVIDIA.md` §12.1, check W1).
+            "-device",
+            "pci-testdev,membar=8G",
         ]);
     }
     let _ = command.args(["-device", rng]);
@@ -2885,9 +2933,9 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::{
-        Arch, SUCCESS_MARKER, UNCHECKED_MARKER, cleaning_problem, devmgr_problem, entropy_problem,
-        fault_problem, iommu_problem, msi_problem, namespace_problem, parse_qemu_version,
-        xstate_problem,
+        Arch, SUCCESS_MARKER, UNCHECKED_MARKER, cleaning_problem, config_problem, devmgr_problem,
+        entropy_problem, fault_problem, iommu_problem, msi_problem, namespace_problem,
+        parse_qemu_version, xstate_problem,
     };
 
     /// A secret goes in any case and every time, and nothing else does.
@@ -3053,6 +3101,36 @@ mod tests {
         assert!(msi_problem(Arch::X86_64, &lines(&["FERRIX-BOOT-OK"])).is_some());
         let arm = devices("0 MSI capabilities (0 vectors minted, 0 deliveries)");
         assert_eq!(msi_problem(Arch::AArch64, &arm), None, "no edu on Arm");
+    }
+
+    #[test]
+    fn a_boot_without_its_configuration_window_checks_fails() {
+        let config = |above: &str| {
+            lines(&[
+                &format!(
+                    "  config   23 apertures reported whole by device_aperture, {above} above 4 GiB and longer than it; 120 reads of 14 functions answered as enumerated"
+                ),
+                "  config   a COMMAND rewritten behind the kernel was found and its node refused, then restored",
+            ])
+        };
+        assert_eq!(config_problem(Arch::X86_64, &config("1")), None);
+        assert!(
+            config_problem(Arch::X86_64, &config("0")).is_some(),
+            "W1 unexercised"
+        );
+        assert_eq!(
+            config_problem(Arch::AArch64, &config("0")),
+            None,
+            "no testdev on Arm"
+        );
+        assert!(config_problem(Arch::AArch64, &lines(&["FERRIX-BOOT-OK"])).is_some());
+        let unbreached = lines(&[
+            "  config   4 apertures reported whole by device_aperture, 0 above 4 GiB and longer than it; 9 reads of 2 functions answered as enumerated",
+        ]);
+        assert!(
+            config_problem(Arch::Armv7a, &unbreached).is_some(),
+            "W7 not run"
+        );
     }
 
     #[test]

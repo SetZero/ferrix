@@ -1342,4 +1342,31 @@ package FerrixObjectRequirements {
                 "user::space::AddressSpace::leave_domain");
         }
     }
+
+    package DeviceConfiguration {
+        doc /* A published PCI node's configuration space, written by the kernel
+             * and, through device_config_write, by its driver: one lock per
+             * node, as a type (docs/NVIDIA.md section 12.1). */
+
+        requirement <'L.object.117'> oneConfigurationLockPerNode : ItemLowLevel {
+            attribute :>> statement = "Every write to a published node's PCI
+                configuration space, by the kernel or by a driver, shall be made
+                holding the node's one configuration lock, through the one type
+                that holds it; enumeration's writers run at stage 10, before any
+                node is published.";
+            attribute :>> criterion = "A ConfigWrites is made only by taking the
+                lock, MappedConfig has no write, and bus mastering, an MSI mint and
+                mask, MSI-X's enable and a driver's write go through ConfigWrites.
+                Bus mastering switched on and off on one processor while another
+                makes a driver's configuration writes to the same function, 1,000
+                rounds, reads back as dma_on says every time (the second config
+                line).";
+            attribute :>> parent = ("H.DMA.5", "H.IRQ.2");
+            attribute :>> unit = ("device::DeviceNode::config_writes",
+                "device::DeviceNode::config_writes_mapped", "device::DeviceNode::set_bus_master",
+                "device::DeviceNode::config_mapping", "device::ConfigWrites::write",
+                "device::ConfigWrites::inside", "device::MsiFunction::mint",
+                "device::MsiFunction::set_masked", "device::MsixTable::open");
+        }
+    }
 }

@@ -344,7 +344,7 @@ package FerrixDeviceRequirements {
             attribute :>> statement = "A PCI function with an MSI capability and no
                 MSI-X table shall be offered one vector, minted once with INTx off --
                 written under the node's command-register lock, which bus mastering's
-                writes take too -- and the message masked, none past the one
+                writes take too (L.object.117) -- and the message masked, none past the one
                 message, and no vector allocated for a 32-bit capability the
                 architecture's message address is above.";
             attribute :>> criterion = "On x86-64 test-boot requires the devices
@@ -356,7 +356,7 @@ package FerrixDeviceRequirements {
                 the INTx write skipped, the boot fails.";
             attribute :>> parent = ("H.IRQ.1", "H.IRQ.2", "H.IRQ.3");
             attribute :>> unit = ("device::MsiFunction::mint",
-                "device::MsiFunction::of", "device::MsiFunction::mapped",
+                "device::MsiFunction::of", "device::DeviceNode::mapped_config",
                 "device::MsiFunction::intx_off", "device::DeviceNode::vector",
                 "device::DeviceNode::vector_count", "device::DeviceNode::set_bus_master");
         }
@@ -377,6 +377,80 @@ package FerrixDeviceRequirements {
             attribute :>> parent = ("H.IRQ.2", "H.IRQ.3");
             attribute :>> unit = ("device::MsiFunction::set_masked",
                 "device::MsiFunction::is_masked", "device::MsiFunction::mint");
+        }
+        requirement <'L.device.24'> aperturesReportedWhole : ItemLowLevel {
+            attribute :>> statement = "device_aperture shall report each of a
+                device's apertures with the address, length, BAR, offset in that BAR
+                and flags it was minted with, whole however far past 4 GiB, and
+                refuse an index past them with INVALID_ARGS; DeviceInfo shall keep
+                its 96 bytes.";
+            attribute :>> criterion = "Every aperture of every published node is
+                answered as minted, the index past the last INVALID_ARGS, and on
+                x86-64 pci-testdev's 8 GiB 64-bit BAR above 4 GiB is answered whole
+                (the first config line's 1 above 4 GiB, which xtask requires). With
+                the length cut to 32 bits the boot fails.";
+            attribute :>> parent = "H.DMA.5";
+            attribute :>> unit = ("syscall::native::device_aperture",
+                "syscall::native::aperture_bytes", "device::Aperture::info",
+                "device::Aperture::part", "device::DeviceNode::aperture_info",
+                "device::DeviceNode::mint_from", "device::DeviceNode::mint",
+                "device::DeviceNode::mint_bar");
+        }
+        requirement <'L.device.25'> configurationWindow : ItemLowLevel {
+            attribute :>> statement = "A driver's configuration write touching any
+                byte outside its function's writable ranges shall be refused whole
+                with ACCESS_DENIED and change nothing, and a malformed access shall
+                be INVALID_ARGS; reads of the function's configuration space shall
+                be answered; and a node whose kernel-owned registers read back other
+                than the kernel made them, at an accepted HELLO or a quiesce, shall
+                have its bus mastering turned off and be refused in one hold of its
+                configuration lock, every call needing MANAGE on it answering
+                BAD_STATE, and its bus mastering never turned on again.";
+            attribute :>> criterion = "Header reads answer what enumeration read,
+                and the MSI, MSI-X and extended reads are answered; writes to the
+                command register, a BAR, the MSI and MSI-X capabilities, Device
+                Control, an uncovered byte and ATS where present are refused and
+                read back unchanged; a write spanning a kernel-owned and a writable
+                byte is refused; malformed accesses are INVALID_ARGS; a command
+                register rewritten behind the kernel is found, bus mastering reads
+                off, the node answers BAD_STATE, the line names COMMAND, and an
+                enable_dma after it is refused with bus mastering still off (the
+                config lines). With the allowlist widened, the whole-range test
+                reduced to one byte, verify_config not comparing, or the refused
+                node's enable_dma let through, the boot fails.";
+            attribute :>> parent = ("H.DMA.5", "H.DMA.3", "H.DEV.4");
+            attribute :>> unit = ("device::DeviceNode::config_read",
+                "device::DeviceNode::config_write", "device::config_access",
+                "device::ConfigState::first_refusal", "device::MappedConfig::read",
+                "device::DeviceNode::verify_config", "device::DeviceNode::breach",
+                "device::DeviceNode::hello_accepted", "device::DeviceNode::refuse",
+                "device::config_breach",
+                "device::command_breach", "device::bar_breach", "device::msi_breach",
+                "device::msix_control_breach", "device::MsixTable::rewritten",
+                "device::Register::fmt",
+                "syscall::native::device_config_read", "syscall::native::device_config_write",
+                "syscall::native::config_status", "syscall::native::device_in");
+        }
+        requirement <'L.device.26'> writableRangesAllowlisted : ItemLowLevel {
+            attribute :>> statement = "A function's driver-writable configuration
+                bytes shall be the bodies of its vendor-specific capabilities, a
+                standard one past its three-byte header and a VSEC past its eight,
+                cut at the end of their space, less virtio's pci_cfg_data, computed
+                at stage 10 from both capability lists; a list that loops, holds a
+                capability starting inside a vendor body, or holds more capabilities
+                or vendor bodies than the walk records, shall leave the function
+                nothing writable.";
+            attribute :>> criterion = "ferrix_pci::window's host tests: the header,
+                MSI, power management, PCI Express, MSI-X, ATS, AER and uncovered
+                bytes are refused and vendor bodies writable; pci_cfg_data is
+                refused and virtio's bar, offset and length writable; a body past
+                its space is cut; overlapping and looping lists, 65 VSECs and an
+                extended list past 304 capabilities leave nothing writable. With the extended list skipped the VSEC test fails. At
+                boot virtio-rng's offset field is written and read back and its
+                pci_cfg_data refused (the second config line).";
+            attribute :>> parent = ("H.DMA.5", "H.DMA.3");
+            attribute :>> unit = ("discovery::pci::check_host", "discovery::pci::for_the_window",
+                "device::DeviceNode::pci", "device::DeviceNode::window");
         }
         requirement <'L.discovery.1'> oneDescriptionAnsweredOnce : ItemLowLevel {
             attribute :>> statement = "description::of shall read a machine by its

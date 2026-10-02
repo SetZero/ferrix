@@ -63,11 +63,12 @@ use ferrix_pci::msi::Msi;
 use ferrix_pci::topology::Bridge;
 use ferrix_pci::virtio::{self as virtio_pci, SharedMemory, TYPE_ENTROPY, TYPE_GPU, Transport};
 use ferrix_pci::walk::{Function, Walk};
+use ferrix_pci::window;
 use ferrix_pci::{Address, ConfigSpace, PciError};
 
 mod virtio;
 
-use crate::device::{self, DeviceNode, Reserved, Seen};
+use crate::device::{self, ConfigFound, DeviceNode, Reserved, Seen};
 use crate::discovery::description::{self, Description};
 use crate::discovery::fdt;
 use crate::discovery::finder::{Context, Failed, Finder};
@@ -306,6 +307,13 @@ impl Space {
     }
 }
 
+/// Enumeration's writes -- BAR sizing (`ferrix_pci::bar`), ATS left off
+/// ([`keep_ats_off`]) and the virtio entropy check -- go through this, the
+/// walk's own mapping, at stage 10 and before any node is published. They
+/// are outside `device::ConfigWrites` and its lock, which every write of a
+/// *published* node's configuration space takes (`L.object.117`): nothing
+/// else can reach a function's space while they run, since no driver, and
+/// no node to hand one, exists yet.
 impl ConfigSpace for Space {
     fn read8(&self, function: Address, offset: u16) -> u8 {
         self.register(function, offset, 1)
@@ -701,6 +709,7 @@ fn check_host(
             .ok()
             .flatten()
             .map(|capability| Msi::read(&space, function.address, capability));
+        let config = for_the_window(&space, &function, host.window.layout().function_bytes());
         // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
         nodes.push(DeviceNode::pci(
             function.address,
@@ -713,6 +722,7 @@ fn check_host(
                 msi,
                 host_visible: host_visible.as_ref(),
                 intx,
+                config: &config,
             },
             &regions,
             msix.as_ref(),
@@ -721,6 +731,18 @@ fn check_host(
         ));
     }
     Ok(())
+}
+
+/// What `function`'s configuration window starts from: its `bytes` of
+/// configuration space, the bytes of them its driver may write
+/// (`ferrix_pci::window`), and its command register as enumeration leaves it,
+/// which the kernel's writes to it start from.
+fn for_the_window(space: &Space, function: &Function, bytes: u16) -> ConfigFound {
+    ConfigFound {
+        bytes,
+        command: space.read16(function.address, COMMAND),
+        writable: window::writable(space, function.address, function.identity.vendor),
+    }
 }
 
 /// What examining one function yields: its sized BARs, its MSI-X capability

@@ -768,6 +768,13 @@ fn take_requests(channel: &Channel<Kernel>, inbox: &mut Inbox) {
 /// Quiesce `device`: a core that has not let go yet answers `TIMED_OUT` and
 /// is asked again; a live driver's `BAD_STATE` cannot happen for a dead one.
 /// Answers whether it is quiesced.
+///
+/// `BAD_STATE` for a dead driver's device is the kernel refusing the node:
+/// the quiesce read the registers the kernel owns back, found one rewritten
+/// -- by the driver through a configuration mirror in a BAR, or by the
+/// device's firmware -- and turned its bus mastering off for good
+/// (`docs/NVIDIA.md` §12.1, SAFETY-MANUAL AoU-22). Not quiesced, so no driver
+/// is started on it again; the kernel's line names the register.
 fn quiesce(device: &Device<Kernel>) -> bool {
     for _ in 0..8 {
         match device.quiesce() {
