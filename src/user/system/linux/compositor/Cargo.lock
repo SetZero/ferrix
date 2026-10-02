@@ -418,6 +418,10 @@ name = "compositor-xkb"
 version = "0.1.0"
 
 [[package]]
+name = "compositor-xmoveresize"
+version = "0.1.0"
+
+[[package]]
 name = "core_maths"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

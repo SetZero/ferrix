@@ -299,7 +299,12 @@ pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
 /// first -- unmapped, given `WM_TRANSIENT_FOR` and its own size back, and
 /// mapped again with `xdotool` -- which the compositor must float as a
 /// dialog at that size; `hyprctl clients` again, and each window's size as
-/// X has it; the compositor's `closewindow` on xev, which must end it; and
+/// X has it; a drag of the floating dialog by its own request, between
+/// [`XWINDOW_DRAG`] and [`XWINDOW_DRAGGED`]: xtask presses on it and holds,
+/// `/bin/xmoveresize` sends `_NET_WM_MOVERESIZE` as Steam's login window
+/// does, xtask moves the pointer and lets go, and the dialog is listed again
+/// and closed, for its xev's count of presses and releases; the
+/// compositor's `closewindow` on xev, which must end it; and
 /// `xfontsel` with its field menu held open through XTEST, between
 /// [`XWINDOW_MENU`] and [`XWINDOW_MENU_OPEN`], at each of which xtask looks
 /// at the screen.
@@ -380,6 +385,27 @@ for name in "Event Tester" "Xev Dialog"; do
     size=$(xwininfo -name "$name" | sed -n 's/^ *Width: \([0-9]*\)$/\1/p;s/^ *Height: \([0-9]*\)$/\1/p' | tr '\n' ' ')
     echo "xwindow: X size of $name: $size"
 done
+# A drag by the dialog's own title bar, as Steam's login window asks for one:
+# xtask presses on the dialog and holds the button, xmoveresize hands the
+# press to the window manager with _NET_WM_MOVERESIZE, and xtask moves the
+# pointer and lets go. The dialog must have followed, and its client must
+# have had the release.
+echo "xwindow: drag"
+sleep 3
+/bin/xmoveresize $dialog 2>&1 | sed 's/^/xwindow: drag: /'
+echo "xwindow: drag asked"
+sleep 4
+echo "xwindow: dragged"
+/bin/hyprctl clients | sed 's/^/xwindow: clients: /'
+# xev writes its report when it exits, so the dialog is closed to count.
+/bin/hyprctl dispatch closewindow 'title:^Xev Dialog$' > /dev/null
+waited=0
+while xwininfo -name "Xev Dialog" > /dev/null 2>&1 && [ $waited -lt 10 ]; do
+    sleep 1
+    waited=$((waited + 1))
+done
+echo "xwindow: dialog presses: $(grep -c ButtonPress /tmp/xev-dialog.txt)"
+echo "xwindow: dialog releases: $(grep -c ButtonRelease /tmp/xev-dialog.txt)"
 # The compositor closes xev, which xev hears as WM_DELETE_WINDOW.
 /bin/hyprctl dispatch closewindow 'title:^Event Tester$' | sed 's/^/xwindow: close: /'
 waited=0
@@ -444,6 +470,148 @@ pub(crate) const XWINDOW_INPUT: &str = "xwindow: input";
 pub(crate) const XWINDOW_MENU: &str = "xwindow: menu";
 /// See [`XWINDOW_MENU`].
 pub(crate) const XWINDOW_MENU_OPEN: &str = "xwindow: menu open";
+
+/// The line [`XWINDOW_SCRIPT`] says before it asks for the dialog to be
+/// dragged, the one after, and the one once the drag is over.
+const XWINDOW_DRAG: &str = "xwindow: drag";
+/// See [`XWINDOW_DRAG`].
+const XWINDOW_DRAG_ASKED: &str = "xwindow: drag asked";
+/// See [`XWINDOW_DRAG`].
+const XWINDOW_DRAGGED: &str = "xwindow: dragged";
+
+/// How far [`drive_drag`] moves the pointer once the dialog asked to be
+/// dragged.
+const DRAG_BY: (i64, i64) = (120, 80);
+
+/// Where `p` is on a screen `across` wide, as QEMU's tablet has it.
+fn tablet(at: i64, across: usize) -> i32 {
+    let across = i64::try_from(across.max(1)).unwrap_or(1);
+    i32::try_from(at * 0x7FFF / across).unwrap_or(0)
+}
+
+/// A window's `at` or `size` from `hyprctl clients`, `x,y`.
+fn pair(text: &str) -> Option<(i64, i64)> {
+    let (x, y) = text.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+/// The dialog's `at` and `size` in the last listing among `lines`.
+fn dialog_place(lines: &[String]) -> Option<((i64, i64), (i64, i64))> {
+    let windows = listed_windows(lines);
+    let (_, fields) = windows
+        .iter()
+        .rev()
+        .find(|(title, _)| title == XEV_DIALOG)?;
+    let field = |key: &str| {
+        fields
+            .iter()
+            .find(|(name, _)| name == key)
+            .and_then(|(_, value)| pair(value))
+    };
+    Some((field("at")?, field("size")?))
+}
+
+/// Drag the floating dialog by its own request, as a hand on Steam's title
+/// bar would (`XWINDOW_SCRIPT`'s drag): at [`XWINDOW_DRAG`], press the left
+/// button in the dialog's middle and hold it; once the script has sent
+/// `_NET_WM_MOVERESIZE` ([`XWINDOW_DRAG_ASKED`]), move the pointer by
+/// [`DRAG_BY`] in steps, and let go. `size` is the screen's.
+///
+/// # Errors
+///
+/// A QMP command that fails.
+pub(crate) fn drive_drag(
+    qmp: &mut crate::display::Qmp,
+    watching: &mut qemu::Watching<'_>,
+    size: (usize, usize),
+) -> Result<()> {
+    use crate::compositor::{absolute, button_event};
+    use std::time::{Duration, Instant};
+
+    let pause = |millis| std::thread::sleep(Duration::from_millis(millis));
+    let said = |marker: &'static str| {
+        move |lines: &[String]| {
+            lines
+                .iter()
+                .any(|line| line.trim_end().ends_with(marker) || line.contains(XWINDOW_END))
+        }
+    };
+    if !watching.read_more(Instant::now() + Duration::from_secs(90), said(XWINDOW_DRAG))? {
+        return Ok(());
+    }
+    let Some(((x, y), (width, height))) = dialog_place(watching.after()) else {
+        println!("  the dialog was not listed before its drag; nothing was pressed");
+        return Ok(());
+    };
+    let (x, y) = (x + width / 2, y + height / 2);
+    let to = |qmp: &mut crate::display::Qmp, (x, y): (i64, i64)| {
+        qmp.input_send_event(&[
+            absolute("x", tablet(x, size.0)),
+            absolute("y", tablet(y, size.1)),
+        ])
+    };
+    to(qmp, (x, y))?;
+    pause(300);
+    qmp.input_send_event(&[button_event("left", true)])?;
+    let asked = watching.read_more(
+        Instant::now() + Duration::from_secs(30),
+        said(XWINDOW_DRAG_ASKED),
+    );
+    if asked.is_ok() {
+        pause(300);
+        for step in 1..=8 {
+            to(qmp, (x + DRAG_BY.0 * step / 8, y + DRAG_BY.1 * step / 8))?;
+            pause(50);
+        }
+        pause(300);
+    }
+    // Let go even when the script never asked, or the button stays down.
+    qmp.input_send_event(&[button_event("left", false)])?;
+    asked.map(|_| ())
+}
+
+/// Whether the dialog followed the pointer by its own request, and its
+/// client had the release that ended the drag: its place in the listing
+/// after [`XWINDOW_DRAGGED`] is its place before plus [`DRAG_BY`], give or
+/// take the tablet's rounding.
+pub(crate) fn judge_drag(arch: Arch, lines: &[String]) -> Result<()> {
+    let fail = |why: String| {
+        Err(Error::new(format!(
+            "{arch}: {why}; the `xwindow:` lines say more"
+        )))
+    };
+    let Some(split) = lines
+        .iter()
+        .position(|line| line.trim_end().ends_with(XWINDOW_DRAGGED))
+    else {
+        return fail("the script never dragged the dialog".to_owned());
+    };
+    let (before, after) = lines.split_at(split);
+    let (Some((from, _)), Some((to, _))) = (dialog_place(before), dialog_place(after)) else {
+        return fail("the dialog is not listed both before and after the drag".to_owned());
+    };
+    let moved = (to.0 - from.0, to.1 - from.1);
+    if (moved.0 - DRAG_BY.0).abs() > 2 || (moved.1 - DRAG_BY.1).abs() > 2 {
+        return fail(format!(
+            "the dialog moved by {moved:?} from {from:?}, where the pointer dragged it by \
+             {DRAG_BY:?}"
+        ));
+    }
+    let released = lines.iter().find_map(|line| {
+        let (_, count) = line.split_once("xwindow: dialog releases: ")?;
+        count.trim().parse::<u32>().ok()
+    });
+    if released.unwrap_or(0) == 0 {
+        return fail(format!(
+            "the dialog's client never had the release that ended its drag ({released:?})"
+        ));
+    }
+    println!(
+        "  {arch}: the floating dialog asked for its own drag and followed the pointer by \
+         {moved:?}, and its client had the release"
+    );
+    Ok(())
+}
 
 /// The line it says when `xwininfo` waits for a window to be picked.
 const XWINDOW_PICK: &str = "xwindow: pick";
@@ -1288,6 +1456,50 @@ KeyRelease event, serial 13, synthetic NO, window 0x200001,
             judge_windows(Arch::X86_64, &tiled_dialog, screen).is_err(),
             "the dialog must float"
         );
+    }
+
+    #[test]
+    fn the_dialog_must_follow_its_own_drag() {
+        let listing = |at: &str| {
+            [
+                "Window 2 -> Xev Dialog:".to_owned(),
+                format!("\tat: {at}"),
+                "\tsize: 178,178".to_owned(),
+                "\tfloating: 1".to_owned(),
+            ]
+            .map(|line| format!("xwindow: clients: {line}"))
+        };
+        let lines = |after: &str, releases: u32| {
+            let mut lines: Vec<String> = listing("423,295").to_vec();
+            lines.push("xwindow: drag".to_owned());
+            lines.push("xwindow: drag asked".to_owned());
+            lines.push("xwindow: dragged".to_owned());
+            lines.extend(listing(after));
+            lines.push(format!("xwindow: dialog releases: {releases}"));
+            lines
+        };
+        assert_eq!(
+            dialog_place(&lines("543,375", 1)),
+            Some(((543, 375), (178, 178)))
+        );
+        assert!(judge_drag(Arch::X86_64, &lines("543,375", 1)).is_ok());
+        assert!(
+            judge_drag(Arch::X86_64, &lines("544,374", 1)).is_ok(),
+            "the tablet rounds"
+        );
+        assert!(
+            judge_drag(Arch::X86_64, &lines("423,295", 1)).is_err(),
+            "it never moved"
+        );
+        assert!(
+            judge_drag(Arch::X86_64, &lines("543,375", 0)).is_err(),
+            "the client must have had the release"
+        );
+        let undragged: Vec<String> = lines("543,375", 1)
+            .into_iter()
+            .filter(|line| !line.ends_with("dragged"))
+            .collect();
+        assert!(judge_drag(Arch::X86_64, &undragged).is_err());
     }
 
     #[test]

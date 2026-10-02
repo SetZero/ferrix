@@ -417,6 +417,30 @@ fn xwindow_args(args: &Args) -> Result<Args> {
     Ok(args)
 }
 
+/// What `test-xwindow`'s image carries besides the programs: yserver's
+/// start, the script, and what hands a press on the dialog to the window
+/// manager, as Steam's login window does -- no X client in the volume sends
+/// `_NET_WM_MOVERESIZE`.
+fn xwindow_ports(arch: Arch) -> Result<Vec<crate::ports::File>> {
+    let mut ports = crate::yserver::desktop_files(&[]);
+    ports.push(crate::ports::File {
+        path: crate::yserver::XWINDOW_PATH.to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(crate::yserver::XWINDOW_SCRIPT.as_bytes().to_vec()),
+    });
+    let xmoveresize = super::build(arch, "compositor-xmoveresize", "xmoveresize")?;
+    ports.push(crate::ports::File {
+        path: "bin/xmoveresize".to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(
+            std::fs::read(&xmoveresize).map_err(|error| {
+                Error::new(format!("reading {}: {error}", xmoveresize.display()))
+            })?,
+        ),
+    });
+    Ok(ports)
+}
+
 /// `cargo xtask test-xwindow`: yserver as a client of the compositor, from
 /// the volume `tools/common/fetch/fetch-yserver.sh` makes, and `xdpyinfo` and
 /// `xev` against it (docs/YSERVER.md, Y2 to Y4): the root window must be
@@ -444,12 +468,7 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
         Error::new("test-xwindow needs ~/.local/share/ferrix/busybox/x86_64/bin/busybox.static")
     })?;
     let programs = Programs::build(arch)?;
-    let mut ports = crate::yserver::desktop_files(&[]);
-    ports.push(crate::ports::File {
-        path: crate::yserver::XWINDOW_PATH.to_owned(),
-        mode: 0o644,
-        content: crate::ports::Content::Bytes(crate::yserver::XWINDOW_SCRIPT.as_bytes().to_vec()),
-    });
+    let ports = xwindow_ports(arch)?;
     let carried = Carried {
         busybox: Some(PathBuf::from(busybox)),
         ports,
@@ -504,6 +523,7 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
         }
         if let Some((at, size)) = found {
             crate::yserver::drive_xev(&mut qmp, watching, at, size)?;
+            crate::yserver::drive_drag(&mut qmp, watching, size)?;
         }
         menu = crate::yserver::watch_menu(&mut qmp, watching, &dump)?;
         let ended = watching.read_more(
@@ -531,6 +551,7 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
     crate::yserver::judge_xev(arch, &said, screen.as_ref(), &dump)?;
     crate::yserver::judge_xev_input(arch, &said)?;
     crate::yserver::judge_windows(arch, &said, screen.as_ref())?;
+    crate::yserver::judge_drag(arch, &said)?;
     crate::yserver::judge_menu(arch, &said, (menu.0.as_ref(), menu.1.as_ref()))?;
     crate::yserver::judge_clipboard(arch, &said)
 }

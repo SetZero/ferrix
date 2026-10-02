@@ -16,7 +16,7 @@ members = [
     "fuzzel", "hypridle", "hyprix", "hyprlang", "hyprlock", "image", "ipc", "layout",
     "lock", "lswt", "pattern", "plug", "protocol", "reboot", "regex", "render",
     "server", "shm", "shot", "socket", "term", "text", "tone", "toolkit", "vdagent", "virgl",
-    "vkbd", "waybar", "wire", "xkb",
+    "vkbd", "waybar", "wire", "xkb", "xmoveresize",
 ]
 
 [workspace.package]
