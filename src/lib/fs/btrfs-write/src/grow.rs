@@ -128,36 +128,45 @@ impl<D: WriteDevice> WriteVolume<D> {
             .saturating_add(chunks - chunks % CHUNK_ALIGN)
     }
 
+    /// Bytes of tree nodes the volume can still take: free in its metadata
+    /// groups, and what new metadata chunks may be made of, in every copy.
+    pub(crate) fn meta_room(&self) -> u64 {
+        let chunks = self.unallocated() / self.copies(Kind::Metadata);
+        self.space
+            .free_bytes(Kind::Metadata)
+            .saturating_add(chunks - chunks % CHUNK_ALIGN)
+    }
+
     /// Where a chunk of `kind` would go, as large as the device allows up to
     /// [`Self::chunk_size`], changing nothing. A data chunk is kept out of
     /// [`Self::tree_headroom`]. [`Error::NoSpace`] if there is no room.
     pub(crate) fn place_chunk(&self, kind: Kind) -> Result<Chunk> {
         let profile = self.profile_for(kind);
         let copies = self.copies(kind);
-        let mut holes = self.device_holes();
+        let holes = self.device_holes();
         let mut size = self.chunk_size(kind);
         if kind == Kind::Data {
             let spare = self.unallocated().saturating_sub(self.tree_headroom());
             size = size.min(spare / copies);
             size -= size % CHUNK_ALIGN;
         }
-        let mut stripes = Vec::new();
-        while stripes.len() < copies as usize {
-            let largest = holes
-                .iter()
-                .map(|(_, len)| len - len % CHUNK_ALIGN)
-                .max()
-                .unwrap_or(0);
-            size = size.min(largest);
+        // Every copy needs a stripe of the same size: sized to the largest
+        // hole, the first took the room the second needed, and a DUP chunk
+        // could not be made on a device with room for one. So the size
+        // starts at what the holes hold for each copy and halves until all
+        // the copies fit.
+        size = size.min(self.unallocated() / copies);
+        size -= size % CHUNK_ALIGN;
+        let stripes = loop {
             if size == 0 {
                 return Err(Error::NoSpace);
             }
-            let (at, _) = holes
-                .first_prefix(size, size, CHUNK_ALIGN, 0)
-                .ok_or(Error::NoSpace)?;
-            let _ = holes.remove(at, size);
-            stripes.push(at);
-        }
+            if let Some(stripes) = place_stripes(&holes, size, copies) {
+                break stripes;
+            }
+            size /= 2;
+            size -= size % CHUNK_ALIGN;
+        };
         Ok(Chunk {
             logical: self.chunks.next_logical().next_multiple_of(CHUNK_ALIGN),
             length: size,
@@ -262,4 +271,17 @@ impl<D: WriteDevice> WriteVolume<D> {
         }
         Ok(out)
     }
+}
+
+/// Where `copies` stripes of `size` bytes go in `holes`, each at the first
+/// aligned place left; `None` if they do not all fit.
+pub(crate) fn place_stripes(holes: &RangeSet, size: u64, copies: u64) -> Option<Vec<u64>> {
+    let mut holes = holes.clone();
+    let mut stripes = Vec::new();
+    while (stripes.len() as u64) < copies {
+        let (at, _) = holes.first_prefix(size, size, CHUNK_ALIGN, 0)?;
+        let _ = holes.remove(at, size);
+        stripes.push(at);
+    }
+    Some(stripes)
 }

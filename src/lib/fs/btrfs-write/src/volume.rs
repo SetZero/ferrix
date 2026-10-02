@@ -57,6 +57,44 @@ const CLEAN_NODES: usize = 4096;
 /// each topping the reserve up again.
 const EDIT_RESERVE: u64 = 64;
 
+/// Nodes of metadata only an operation that frees space may use: Linux's
+/// global block reserve. Without it a volume whose trees filled could not
+/// even delete a file to make room, since a deletion copies nodes too.
+const GLOBAL_RESERVE: u64 = 4 * EDIT_RESERVE;
+
+/// What an operation must find room for in the trees before its first edit;
+/// see [`WriteVolume::admit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Need {
+    /// The most new tree nodes the operation's edits can take.
+    pub(crate) nodes: u64,
+    /// Whether it frees space, and so may use [`GLOBAL_RESERVE`].
+    pub(crate) freeing: bool,
+}
+
+impl Need {
+    /// One edit, or an operation of a few: a name made or moved, an inode
+    /// item written.
+    pub(crate) const EDIT: Need = Need {
+        nodes: EDIT_RESERVE,
+        freeing: false,
+    };
+    /// An operation that frees space: an unlink, an eviction, a truncation.
+    pub(crate) const FREEING: Need = Need {
+        nodes: EDIT_RESERVE,
+        freeing: true,
+    };
+
+    /// Writing `len` bytes of file data: an extent item and its checksums
+    /// for each mebibyte, which a node per mebibyte covers many times over.
+    pub(crate) const fn data(len: u64) -> Need {
+        Need {
+            nodes: EDIT_RESERVE.saturating_add(len.div_ceil(1024 * 1024)),
+            freeing: false,
+        }
+    }
+}
+
 /// A btrfs volume opened for writing.
 ///
 /// Edits go into an open transaction held in memory; [`WriteVolume::commit`]
@@ -97,6 +135,13 @@ pub struct WriteVolume<D> {
     /// Edits that have succeeded, so an operation can tell whether it failed
     /// before changing anything.
     pub(crate) edits: u64,
+    /// How deep in operations and edits the running one is: only the
+    /// outermost is admitted, see [`WriteVolume::admit`].
+    pub(crate) depth: u32,
+    /// Whether operations are admitted against the room in the trees: not
+    /// while the volume is being opened, whose log replay and orphan cleanup
+    /// must run on a volume however full.
+    pub(crate) admitting: bool,
 }
 
 impl<D: WriteDevice> WriteVolume<D> {
@@ -198,9 +243,31 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// topped up. A volume without room for that answers [`Error::NoSpace`]
     /// before the edit has changed anything, which aborts nothing.
     pub(crate) fn guarded<T>(&mut self, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.guarded_with(Some(Need::EDIT), edit)
+    }
+
+    /// [`WriteVolume::guarded`], admitted against `need` when it is the
+    /// outermost; `None` for the commit, which the room every admission
+    /// left for it pays for.
+    pub(crate) fn guarded_with<T>(
+        &mut self,
+        need: Option<Need>,
+        edit: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
         self.check_writable()?;
-        self.ensure_space(EDIT_RESERVE)?;
+        if let Some(need) = need {
+            self.admit(need)?;
+        }
+        // A chunk the reserve cannot have is not this edit's failure: the
+        // admission measured the room, and a group too fragmented to grow
+        // still has what it measured.
+        match self.ensure_space(EDIT_RESERVE) {
+            Ok(()) | Err(Error::NoSpace) => {}
+            Err(error) => return Err(error),
+        }
+        self.depth = self.depth.saturating_add(1);
         let result = edit(self);
+        self.depth = self.depth.saturating_sub(1);
         match result {
             Ok(_) => self.edits = self.edits.wrapping_add(1),
             // An answer about the key, given before anything changed: the
@@ -215,15 +282,61 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// aborted if it fails after any of them succeeded: a half-made name, or
     /// half-written file, is not something to commit.
     pub(crate) fn operation<T>(&mut self, op: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.operation_with(Need::EDIT, op)
+    }
+
+    /// [`WriteVolume::operation`], admitted against `need` when it is the
+    /// outermost.
+    pub(crate) fn operation_with<T>(
+        &mut self,
+        need: Need,
+        op: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
         self.check_writable()?;
+        self.admit(need)?;
         let before = self.edits;
+        self.depth = self.depth.saturating_add(1);
         let result = op(self);
+        self.depth = self.depth.saturating_sub(1);
         if let Err(error) = result
             && self.edits != before
         {
             self.abort_with(error);
         }
         result
+    }
+
+    /// Refuse an operation the trees have no room for, before it changes
+    /// anything: [`Error::NoSpace`], which aborts nothing.
+    ///
+    /// The room is what the metadata groups have free and what new metadata
+    /// chunks could still be made of. An operation needs its own worst case,
+    /// the commit's (see [`WriteVolume::commit_reserve`]) and, unless it
+    /// frees space, [`GLOBAL_RESERVE`] besides. Running out half-way through
+    /// an edit is what used to abort a transaction on full trees; Linux
+    /// reserves metadata for each transaction handle the same way. Only the
+    /// outermost operation is measured: what it calls is in its own need.
+    pub(crate) fn admit(&self, need: Need) -> Result<()> {
+        if !self.admitting || self.depth > 0 {
+            return Ok(());
+        }
+        let mut nodes = need.nodes.saturating_add(self.commit_reserve());
+        if !need.freeing {
+            nodes = nodes.saturating_add(GLOBAL_RESERVE);
+        }
+        let want = nodes.saturating_mul(u64::from(self.geometry.nodesize));
+        if self.meta_room() < want {
+            return Err(Error::NoSpace);
+        }
+        Ok(())
+    }
+
+    /// The most new nodes committing the running transaction can take: the
+    /// extent and free-space items of every node it changed, which a node
+    /// holds hundreds of, so one for each sixteen, and the paths and roots
+    /// besides.
+    pub(crate) fn commit_reserve(&self) -> u64 {
+        (self.dirty.len() as u64 / 16).saturating_add(2 * EDIT_RESERVE)
     }
 
     /// Make sure metadata and system block groups have room for `nodes` new
@@ -264,7 +377,11 @@ impl<D: WriteDevice> WriteVolume<D> {
     pub fn alloc_data(&mut self, want: u64, min: u64) -> Result<(u64, u64)> {
         let sector = u64::from(self.geometry.sectorsize);
         self.check_writable()?;
-        self.ensure_space(EDIT_RESERVE)?;
+        self.admit(Need::EDIT)?;
+        match self.ensure_space(EDIT_RESERVE) {
+            Ok(()) | Err(Error::NoSpace) => {}
+            Err(error) => return Err(error),
+        }
         let found = match self.space.alloc_data(want, min, sector) {
             Err(Error::NoSpace) => {
                 self.grow(Kind::Data)?;

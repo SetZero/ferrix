@@ -582,6 +582,11 @@ fn a_full_volume_answers_enospc_and_stays_usable() {
     let keep = make_file(&root, b"keep", &[5u8; 10_000]);
     fs.sync().unwrap();
     let room = fs.statfs().blocks_available * 4096;
+    assert_eq!(
+        room,
+        volume_room(&disk),
+        "statfs is the volume's room exactly"
+    );
     let big = root.create(b"big", NewNode::Regular, 0o644).unwrap();
     let piece = vec![9u8; 100_000];
     let mut offset = 0u64;
@@ -596,9 +601,9 @@ fn a_full_volume_answers_enospc_and_stays_usable() {
         );
     };
     assert_eq!(error, Errno::ENOSPC);
-    assert!(
-        offset + 4 * 1024 * 1024 >= room,
-        "stopped at {offset} bytes of the {room} statfs offered"
+    assert_eq!(
+        offset, room,
+        "a write stopped short of the room statfs offered"
     );
     assert_eq!(fs.statfs().blocks_available, 0);
     // Everything `write` took is kept.
@@ -606,11 +611,19 @@ fn a_full_volume_answers_enospc_and_stays_usable() {
     assert_eq!(big.metadata().size, offset);
     assert!(read_all(&big).iter().all(|&byte| byte == 9));
     assert_eq!(read_all(&keep), vec![5u8; 10_000]);
+    assert_eq!(volume_room(&disk), 0);
+    // Deleted, the room comes back at the commit: a write straight after
+    // the unlink commits for it rather than answer ENOSPC.
     root.unlink(b"big").unwrap();
     drop(big);
-    fs.sync().unwrap();
-    assert!(fs.statfs().blocks_available * 4096 + 4 * 1024 * 1024 >= room);
     drop(make_file(&root, b"again", &[3u8; 1 << 20]));
+    fs.sync().unwrap();
+    assert_eq!(
+        fs.statfs().blocks_available * 4096,
+        volume_room(&disk),
+        "statfs is the volume's room exactly"
+    );
+    assert_eq!(volume_room(&disk), room - (1 << 20));
     fs.sync().unwrap();
     drop((keep, root, fs));
     let fs = mount(&disk);
@@ -619,15 +632,27 @@ fn a_full_volume_answers_enospc_and_stays_usable() {
     assert!(fs.root().lookup(b"big").is_err());
 }
 
-/// A disk whose writes can be made to fail.
+/// What the volume on `disk` can take, as a fresh open of its last commit
+/// measures it.
+fn volume_room(disk: &Disk) -> u64 {
+    ferrix_btrfs_write::WriteVolume::open(disk.clone())
+        .unwrap()
+        .data_room()
+}
+
+/// A disk whose writes, and then reads, can be made to fail.
 #[derive(Clone, Debug)]
 struct Failing {
     disk: Disk,
     fail: Arc<std::sync::atomic::AtomicBool>,
+    fail_reads: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Device for Failing {
     fn read_at(&mut self, physical: u64, buf: &mut [u8], kind: ReadKind) -> Result<(), BtrfsError> {
+        if self.fail_reads.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(BtrfsError::DeviceRead { physical });
+        }
         self.disk.read_at(physical, buf, kind)
     }
 }
@@ -652,6 +677,7 @@ fn an_aborted_transaction_leaves_the_mount_read_only_at_its_last_commit() {
     let device = Failing {
         disk: disk.clone(),
         fail: Arc::clone(&fail),
+        fail_reads: Arc::default(),
     };
     let fs = RwBtrfs::mount(
         device,
@@ -677,6 +703,9 @@ fn an_aborted_transaction_leaves_the_mount_read_only_at_its_last_commit() {
         "the aborted transaction is gone"
     );
     assert_eq!(lost.write_at(0, b"more", false).err(), Some(Errno::EROFS));
+    // A truncation is refused before it cuts what the cache holds.
+    assert_eq!(kept.set_len(0).err(), Some(Errno::EROFS));
+    assert_eq!(read_all(&kept), vec![1u8; 50_000]);
     assert_eq!(
         root.create(b"new", NewNode::Regular, 0o644).err(),
         Some(Errno::EROFS)
@@ -697,4 +726,138 @@ fn an_aborted_transaction_leaves_the_mount_read_only_at_its_last_commit() {
     let fs = mount(&disk);
     assert!(fs.root().lookup(b"kept").is_ok());
     assert!(fs.root().lookup(b"lost").is_err());
+}
+
+#[test]
+fn an_aborted_volume_whose_last_commit_cannot_be_read_says_so_once() {
+    let disk = Disk::new(BLANK);
+    let (fail, fail_reads) = (Arc::default(), Arc::default());
+    let device = Failing {
+        disk,
+        fail: Arc::clone(&fail),
+        fail_reads: Arc::clone(&fail_reads),
+    };
+    let fs = RwBtrfs::mount(
+        device,
+        0x0800_0012,
+        storage(),
+        Arc::new(Fixed),
+        &SpinParker,
+        notice,
+    )
+    .unwrap();
+    let root = fs.root();
+    drop(make_file(&root, b"lost", &[2u8; 50_000]));
+    let said = |what: &str| {
+        NOTICES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|line| line.contains(what))
+            .count()
+    };
+    fail.store(true, std::sync::atomic::Ordering::Relaxed);
+    fail_reads.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(fs.sync(), Err(Errno::EIO));
+    for _ in 0..3 {
+        assert_eq!(root.lookup(b"lost").err(), Some(Errno::EIO));
+    }
+    assert_eq!(
+        said("cannot be read again"),
+        1,
+        "said once, not at every use"
+    );
+}
+
+#[test]
+fn creates_on_full_trees_answer_enospc_and_the_mount_stays_writable() {
+    // 22,738 creates on this fixture used to end in an aborted transaction
+    // and a read-only mount, losing everything since the last commit.
+    let disk = Disk::new(BLANK);
+    let fs = mount(&disk);
+    let root = fs.root();
+    let name = |n: u32| std::format!("f{n:0>200}");
+    let mut made = 0u32;
+    let error = loop {
+        match root.create(name(made).as_bytes(), NewNode::Regular, 0o644) {
+            Ok(_) => made += 1,
+            Err(error) => break error,
+        }
+        assert!(made < 200_000, "the trees never filled");
+    };
+    assert_eq!(error, Errno::ENOSPC, "a create on full trees");
+    assert_eq!(
+        root.create(b"one-more", NewNode::Regular, 0o644).err(),
+        Some(Errno::ENOSPC),
+        "the mount stays writable"
+    );
+    fs.sync().expect("the commit's room was kept back");
+    for n in 0..64 {
+        root.unlink(name(n).as_bytes())
+            .expect("a deletion on full trees");
+    }
+    fs.sync().unwrap();
+    drop(
+        root.create(b"again", NewNode::Regular, 0o644)
+            .expect("room a deletion made"),
+    );
+    fs.sync().unwrap();
+    drop((root, fs));
+    let fs = mount(&disk);
+    assert!(fs.root().lookup(b"again").is_ok());
+    assert!(fs.root().lookup(name(made - 1).as_bytes()).is_ok());
+    assert!(fs.root().lookup(name(0).as_bytes()).is_err());
+}
+
+#[test]
+fn a_writeback_the_volume_has_no_room_for_keeps_its_pages() {
+    // Pages a shared mapping wrote took no room at the write, so the
+    // writeback is where the volume turns out full: the file that does not
+    // fit keeps its pages dirty, the rest is committed, the mount stays
+    // writable, and once room is made the pages reach the disk.
+    let disk = Disk::new(BLANK);
+    let fs = RwBtrfs::mount(
+        disk.clone(),
+        0x0800_0013,
+        Arc::new(MappedStorage(HeapStorage::new(1 << 30))),
+        Arc::new(Fixed),
+        &SpinParker,
+        notice,
+    )
+    .unwrap();
+    let root = fs.root();
+    let room = fs.statfs().blocks_available * 4096;
+    let filler = make_file(
+        &root,
+        b"filler",
+        &vec![1u8; usize::try_from(room - (1 << 20)).unwrap()],
+    );
+    let mapped_len = 4u64 << 20;
+    let file = make_file(&root, b"mapped", b"");
+    file.set_len(mapped_len).unwrap();
+    let mapped = file.mapping().unwrap().downcast::<Mapped>().unwrap();
+    for page in 0..mapped_len / 4096 {
+        mapped.write(page * 4096, &[7u8; 4096]);
+    }
+    drop(mapped);
+    assert_eq!(
+        fs.sync(),
+        Err(Errno::ENOSPC),
+        "the mapped file does not fit"
+    );
+    assert_eq!(volume_room(&disk), 0, "what fit was committed");
+    drop(
+        root.create(b"writable", NewNode::Regular, 0o644)
+            .expect("the mount stays writable"),
+    );
+    drop(filler);
+    root.unlink(b"filler").unwrap();
+    fs.sync().expect("room for the kept pages");
+    drop((file, root, fs));
+    let fs = mount(&disk);
+    let file = fs.root().lookup(b"mapped").unwrap();
+    assert_eq!(
+        read_all(&file),
+        vec![7u8; usize::try_from(mapped_len).unwrap()]
+    );
 }

@@ -152,7 +152,7 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// delayed refs run, no block group items, no free-space tree, no root
     /// items. What it costs is that the log must be replayed after a crash.
     pub fn commit_log(&mut self) -> Result<()> {
-        self.guarded(|volume| {
+        self.guarded_with(None, |volume| {
             if !volume.has_log() {
                 return Ok(());
             }

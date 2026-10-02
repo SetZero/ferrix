@@ -38,6 +38,7 @@ use ferrix_btrfs::tree::{BtrfsKey, HEADER_SIZE, ITEM_SIZE};
 
 use crate::bytes::{put, put_key, put_u8, put_u16, put_u32, put_u64};
 use crate::extent::Backref;
+use crate::volume::Need;
 use crate::{Error, Result, WriteDevice, WriteVolume};
 
 /// The tree every file lives in: the top-level subvolume, the only one this
@@ -1073,7 +1074,7 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// Remove the name `name` from `dir`, returning the inode it named, which
     /// becomes an orphan if that was its last name.
     pub fn unlink(&mut self, dir: u64, name: &[u8], now: Timespec) -> Result<u64> {
-        self.operation(|volume| volume.unlink_inner(dir, name, now))
+        self.operation_with(Need::FREEING, |volume| volume.unlink_inner(dir, name, now))
     }
 
     /// Move `old` in `old_dir` to `new` in `new_dir`, replacing `new`.
@@ -1090,7 +1091,7 @@ impl<D: WriteDevice> WriteVolume<D> {
 
     /// Delete an orphan inode nothing holds open any more.
     pub fn evict(&mut self, ino: u64) -> Result<()> {
-        self.operation(|volume| volume.evict_inner(ino))
+        self.operation_with(Need::FREEING, |volume| volume.evict_inner(ino))
     }
 
     /// Store `target` as symlink `ino`'s contents.
@@ -1100,18 +1101,22 @@ impl<D: WriteDevice> WriteVolume<D> {
 
     /// Remove `[start, end)` from file `ino`'s extents.
     pub fn drop_extents(&mut self, ino: u64, start: u64, end: u64) -> Result<()> {
-        self.operation(|volume| volume.drop_extents_inner(ino, start, end))
+        self.operation_with(Need::FREEING, |volume| {
+            volume.drop_extents_inner(ino, start, end)
+        })
     }
 
     /// Write `data` into file `ino` at the sector-aligned `offset`, making it
     /// at least `size` bytes long.
     pub fn write_file(&mut self, ino: u64, offset: u64, data: &[u8], size: u64) -> Result<()> {
-        self.operation(|volume| volume.write_file_inner(ino, offset, data, size))
+        self.operation_with(Need::data(data.len() as u64), |volume| {
+            volume.write_file_inner(ino, offset, data, size)
+        })
     }
 
     /// Cut file `ino` to `size` bytes.
     pub fn truncate(&mut self, ino: u64, size: u64) -> Result<()> {
-        self.operation(|volume| volume.truncate_inner(ino, size))
+        self.operation_with(Need::FREEING, |volume| volume.truncate_inner(ino, size))
     }
 }
 

@@ -30,6 +30,7 @@ use crate::ranges::RangeSet;
 use crate::space::Kind;
 
 mod fsops;
+mod full;
 mod inodes;
 mod log;
 mod powerfail;

@@ -85,7 +85,7 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// old superblock still names the old trees — and the transaction is
     /// aborted; [`WriteVolume::abort`] rereads the committed state.
     pub fn commit(&mut self) -> Result<()> {
-        self.guarded(|volume| {
+        self.guarded_with(None, |volume| {
             if !volume.is_dirty() && !volume.chunks_changed && !volume.has_log() {
                 return Ok(());
             }

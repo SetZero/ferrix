@@ -69,6 +69,7 @@ impl<D: WriteDevice> WriteVolume<D> {
         for ino in volume.orphans()? {
             volume.evict(ino)?;
         }
+        volume.admitting = true;
         Ok(volume)
     }
 
@@ -111,6 +112,8 @@ impl<D: WriteDevice> WriteVolume<D> {
             aborted: false,
             abort_cause: None,
             read_only: false,
+            depth: 0,
+            admitting: false,
             edits: 0,
         };
         let _ = volume.roots.insert(
@@ -185,7 +188,14 @@ impl<D: WriteDevice> WriteVolume<D> {
             abort_cause,
             read_only: _,
             edits,
+            depth,
+            admitting: _,
         } = WriteVolume::open_committed(Borrowed(&mut self.device))?;
+        // A log the reload replayed, whose replay itself failed: the
+        // volume stays as it was, aborted.
+        if aborted {
+            return Err(abort_cause.unwrap_or(Error::Aborted));
+        }
         self.geometry = geometry;
         self.chunks = chunks;
         self.superblock = superblock;
@@ -203,6 +213,7 @@ impl<D: WriteDevice> WriteVolume<D> {
         self.abort_cause = abort_cause;
         self.read_only = true;
         self.edits = edits;
+        self.depth = depth;
         Ok(())
     }
 

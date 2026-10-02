@@ -56,6 +56,15 @@
 //! volume that is full after all answers `ENOSPC` with the pages kept dirty,
 //! rather than half-writing a file into the transaction.
 //!
+//! Room a deletion frees comes back only once the commit is down. So a sync
+//! whose writeback ran out goes once more when its commit made room, and a
+//! write that finds too little after an unlink, a rename or a truncation
+//! commits and measures again before it answers `ENOSPC`.
+//!
+//! The trees are measured the same way, by the write path: an operation is
+//! refused with `ENOSPC` before its first edit unless the trees have room
+//! for its worst case and for the commit (`WriteVolume::admit`).
+//!
 //! # After an aborted transaction
 //!
 //! An edit that fails half-way -- a disk error, a volume that contradicts
@@ -140,6 +149,13 @@ struct Shared<D> {
     /// Set once the volume was reloaded read-only after an aborted
     /// transaction.
     read_only: SpinLock<bool>,
+    /// Set when something may have freed data since the last commit -- an
+    /// unlink, a rename over a file, a truncation, an eviction -- whose room
+    /// comes back only at the commit.
+    freed: SpinLock<bool>,
+    /// Set once reloading an aborted volume failed: it stays aborted, every
+    /// answer `EIO`, and is not reread at every use.
+    unreadable: SpinLock<bool>,
     /// Where the mount says that it went read-only, and why.
     notice: fn(fmt::Arguments<'_>),
 }
@@ -199,6 +215,8 @@ impl<D: WriteHandle> RwBtrfs<D> {
             reserved: SpinLock::new(0),
             room: SpinLock::new(room),
             read_only: SpinLock::new(false),
+            freed: SpinLock::new(false),
+            unreadable: SpinLock::new(false),
             notice,
         });
         // The open may have evicted orphans left by a crash; commit that
@@ -223,7 +241,9 @@ impl<D: WriteHandle> Shared<D> {
     /// an aborted transaction".
     fn lock(&self) -> SleepLockGuard<'_, WriteVolume<D>> {
         let mut volume = self.volume.lock();
-        if let Some(cause) = volume.aborted() {
+        if let Some(cause) = volume.aborted()
+            && !*self.unreadable.lock()
+        {
             match volume.reload_read_only() {
                 Ok(()) => {
                     *self.read_only.lock() = true;
@@ -232,11 +252,14 @@ impl<D: WriteHandle> Shared<D> {
                          at the last commit"
                     ));
                 }
-                // Left aborted: every answer stays EIO.
-                Err(error) => (self.notice)(format_args!(
-                    "a transaction was aborted ({cause}), and the last commit \
-                     cannot be read again ({error})"
-                )),
+                // Left aborted: every answer stays EIO, said once.
+                Err(error) => {
+                    *self.unreadable.lock() = true;
+                    (self.notice)(format_args!(
+                        "a transaction was aborted ({cause}), and the last commit \
+                         cannot be read again ({error}); every answer is EIO"
+                    ));
+                }
             }
             self.note_room(&volume);
         }
@@ -296,6 +319,9 @@ impl<D: WriteHandle> Shared<D> {
             return Ok(());
         }
         let queued = core::mem::take(&mut *self.evictable.lock());
+        if !queued.is_empty() {
+            *self.freed.lock() = true;
+        }
         for ino in queued {
             // An inode that gained a name again is no orphan; the write path
             // says so by refusing to evict it.
@@ -338,19 +364,30 @@ impl<D: WriteHandle> Shared<D> {
         }
         // Files deleted since go first, so the commit frees their room.
         self.evict_queued(&mut volume)?;
+        // What a deletion freed is free only once the commit is down, after
+        // the writeback that wanted it; so a writeback that ran out, when
+        // that commit made room, goes once more.
         let mut full = false;
-        for node in &live {
-            match node.write_back(&mut volume) {
-                Ok(()) => {}
-                Err(Errno::ENOSPC) => full = true,
-                Err(error) => return Err(error),
+        for pass in 0..2 {
+            full = false;
+            for node in &live {
+                match node.write_back(&mut volume) {
+                    Ok(()) => {}
+                    Err(Errno::ENOSPC) => full = true,
+                    Err(error) => return Err(error),
+                }
+            }
+            let before = volume.data_room();
+            *self.pending.lock() = 0;
+            *self.structural.lock() = false;
+            let committed = volume.commit().map_err(errno);
+            self.note_room(&volume);
+            committed?;
+            *self.freed.lock() = false;
+            if !full || pass == 1 || volume.data_room() <= before {
+                break;
             }
         }
-        *self.pending.lock() = 0;
-        *self.structural.lock() = false;
-        let committed = volume.commit().map_err(errno);
-        self.note_room(&volume);
-        committed?;
         if full { Err(Errno::ENOSPC) } else { Ok(()) }
     }
 
@@ -578,7 +615,20 @@ impl<D: WriteHandle> Node<D> {
                 .filter(|page| !dirty.contains(page))
                 .collect()
         };
-        let took = self.shared.reserve(clean.len() as u64);
+        let mut took = self.shared.reserve(clean.len() as u64);
+        // Short of room, with data deleted since the last commit: that room
+        // comes back at the commit, so commit and measure again, rather than
+        // answer ENOSPC to the write after an `rm`.
+        if took < clean.len() as u64 && core::mem::take(&mut *self.shared.freed.lock()) {
+            match self.shared.sync_all() {
+                Ok(()) | Err(Errno::ENOSPC) => {}
+                Err(error) => {
+                    self.shared.release(took);
+                    return Err(error);
+                }
+            }
+            took = took.saturating_add(self.shared.reserve(clean.len() as u64 - took));
+        }
         let Some(&short) = clean.get(usize::try_from(took).unwrap_or(usize::MAX)) else {
             return Ok((data, took));
         };
@@ -856,6 +906,11 @@ impl<D: WriteHandle> Inode for Node<D> {
         if self.kind != FileType::Regular {
             return Err(Errno::EINVAL);
         }
+        // Before the cache is cut: a read-only mount keeps what it holds.
+        if *self.shared.read_only.lock() {
+            return Err(Errno::EROFS);
+        }
+        *self.shared.freed.lock() = true;
         let pages = self.pages()?;
         // Cut the cache first, so a page past the new end cannot be written
         // back over what the truncation removed.
@@ -959,6 +1014,8 @@ impl<D: WriteHandle> Inode for Node<D> {
         self.require_dir()?;
         self.shared.commit_if_heavy()?;
         self.shared.shape_changed();
+        // A file the rename replaces may be freed.
+        *self.shared.freed.lock() = true;
         let parent = new_parent
             .clone()
             .into_any()
@@ -1078,6 +1135,7 @@ impl<D: WriteHandle> Node<D> {
         self.require_dir()?;
         self.shared.commit_if_heavy()?;
         self.shared.shape_changed();
+        *self.shared.freed.lock() = true;
         let (dir, now) = (self.ino, self.shared.now());
         let gone = self.shared.with(|volume| {
             let (ino, kind) = volume.lookup(dir, name)?.ok_or(WriteError::NotFound)?;

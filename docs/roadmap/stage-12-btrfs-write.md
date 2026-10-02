@@ -46,8 +46,13 @@ checked by host `btrfs check`. What it writes:
   against what the volume can still take -- free space in data block groups,
   and unallocated device space less a headroom kept for the trees -- so a
   write past it answers `ENOSPC` at the `write`, as Linux's btrfs reserves
-  data space, and `statfs` answers the same room. Running out finds no room
-  before an edit changes anything, which aborts nothing. A transaction that
+  data space, and `statfs` answers the same room. The trees are measured
+  too: an operation is admitted only if the metadata groups and the device
+  have room for its worst case and the commit's, plus a global reserve only
+  a deletion may use, as Linux reserves metadata per transaction; so a
+  volume whose trees are full refuses a create with `ENOSPC` and still
+  deletes. Running out finds no room before an edit changes anything, which
+  aborts nothing. A DUP chunk is sized so both copies find a stripe. A transaction that
   aborts all the same (a disk error) is thrown away, the last commit
   reloaded, and the mount goes read-only with a console line saying why, as
   on Linux. Until 2026-10-02 a `dd` into a nearly full /data latched the
