@@ -862,6 +862,29 @@ certification consultant. `os-ipc/prof` and `os-ipc/prof2` are timing builds
 (spans printed at the shell's exit). They exist to find costs and must never
 land. The per-span figures they gave are the ones in §9.1 and the list above.
 
+**Step 1 (2026-10-02), branch `ipc-step1`.** The six commits are on it, on
+`main` at 039fd5963 and the reservation of L.object.128-132 (6991fdd67).
+The two owed checks are `object::write_read_check`, stage 9's `wrread` line,
+which makes every call through each architecture's own entry from a thread
+of a check's process:
+- item 4: a 5-byte message held in the slot and a 7-byte one queued come
+  back as their bytes then zeros, and six failing calls leave registers 2
+  to 4 as sent. The control fills `Small::of`'s tail with `0xA5`.
+- item 3: a thread blocked in the call is woken by a message, its peer's
+  close and its process's kill, each within 10 s. The control removes the
+  close's wake from `Endpoint::drop`, and the waiter stays blocked past the
+  bound.
+- A signal ends no native wait (`must_leave`), so 0x1013's documentation no
+  longer says it ends this one.
+
+The rows are L.object.128-132. Five functions the commits pushed over the
+complexity floor are split, and `native::answer`'s one new arm is recorded.
+`ipc-bench` carries the `domain-call` run from 5658e7c0c, on `main`'s
+`Job::create_speculation_domain`. Measured on that head, KVM, one
+processor, back to back at a load of 7 to 13, p50 (mitigations on, then
+off): `call` 6.5 us and 2.8 us, and `domain-call` 3.0 us both ways. The
+branch goes to the certification consultant before it lands.
+
 ### 9.5 Within 1.5 times seL4: the plan (2026-10-01, os-86)
 
 The customer asked for a plan to bring §9.1's round trip within 1.5 times
