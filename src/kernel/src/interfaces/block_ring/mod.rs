@@ -1456,20 +1456,17 @@ impl RingDisk {
         let Some(queue) = self.done.get(slot) else {
             return;
         };
-        // Not interruptible by signals, as a disk read on Linux is not; the
-        // ring's end, or the patience, is what ends it.
+        // Not interruptible by signals, nor by the caller's process being
+        // killed, as a disk wait on Linux is not (`TASK_UNINTERRUPTIBLE`); the
+        // ring's end, or the patience, is what ends it. The caller is a user
+        // thread as often as not, but the I/O is the filesystem's: a commit or
+        // a node read for a writable mount, done for every process using it.
+        // Ending the wait when the caller was killed answered `EIO` for a
+        // request the disk was still serving, the write path took that for a
+        // failed disk, and the mount's transaction was aborted for everyone
+        // (2026-10-02, `/data` after Steam was killed mid-extract).
         let deadline = timer::now_nanos().saturating_add(READ_PATIENCE_NANOS);
-        // The reader is whoever reads through the registered disk, a user
-        // thread inside a read as often as not, so its process being
-        // terminated ends the wait too: a killed process lets go of what it
-        // holds only once its last thread is out of the kernel.
-        let process = crate::syscall::process::current();
-        let terminated = || {
-            process
-                .as_ref()
-                .is_some_and(|process| process.is_terminated())
-        };
-        let _ = queue.wait_until_deadline(|| self.finished(ids) || terminated(), deadline);
+        let _ = queue.wait_until_deadline(|| self.finished(ids), deadline);
         sched::trip::reader_running(queue);
     }
 
