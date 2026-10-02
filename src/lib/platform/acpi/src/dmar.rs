@@ -212,6 +212,26 @@ impl<'a> Drhd<'a> {
     pub const fn device_scopes(&self) -> DeviceScopes<'a> {
         DeviceScopes { rest: self.scopes }
     }
+
+    /// The source ID the I/O APIC whose MADT identifier is `id` sends its
+    /// interrupt requests to this unit with, if one of the unit's scopes
+    /// names it: the [`SCOPE_IOAPIC`] scope whose enumeration ID is `id`,
+    /// matched by that ID and never by the scopes' order.
+    ///
+    /// Only a one-hop path is followed, which names the I/O APIC's own bus,
+    /// device and function: every platform this has been read against
+    /// (QEMU's `q35` puts it on the pseudo-bus 0xFF, device 0, function 0)
+    /// gives one. A longer path, through bridges, answers `None`, as no
+    /// scope does.
+    #[must_use]
+    pub fn ioapic_source(&self, id: u8) -> Option<u16> {
+        self.device_scopes()
+            .find(|scope| scope.kind == SCOPE_IOAPIC && scope.enumeration_id == id)
+            .and_then(|scope| scope.endpoint())
+            .map(|(bus, device, function)| {
+                u16::from(bus) << 8 | u16::from(device & 0x1F) << 3 | u16::from(function & 0x7)
+            })
+    }
 }
 
 /// A reserved memory region some device must keep reaching.

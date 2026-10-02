@@ -24,6 +24,7 @@
 use crate::{Encoding, Level, MapFlags, PhysAddr, VirtAddr};
 
 pub mod queue;
+pub mod remap;
 
 #[cfg(test)]
 mod tests;

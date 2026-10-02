@@ -2148,6 +2148,49 @@ fn q35s_dmar_names_one_unit_and_the_devices_behind_it() {
     );
 }
 
+/// Verifies: `L.x86_64.130`
+#[test]
+fn an_io_apic_s_source_id_is_matched_by_its_madt_id() {
+    let bytes = dmar_q35();
+    let table = parse_dmar(&bytes);
+    let Some(dmar::Structure::Drhd(unit)) = table.structures().next() else {
+        panic!("q35's DMAR starts with its unit");
+    };
+    assert_eq!(
+        unit.ioapic_source(0),
+        Some(0xFF00),
+        "the pseudo-bus 0xFF, 00.0"
+    );
+    assert_eq!(unit.ioapic_source(1), None, "no scope names I/O APIC 1");
+
+    // Two I/O APICs listed out of order, and an endpoint between them
+    // whose enumeration ID is 2 but which is not an I/O APIC.
+    let mut body = vec![0, 0];
+    body.extend_from_slice(&le16(0));
+    body.extend_from_slice(&0xFED9_1000_u64.to_le_bytes());
+    body.extend(scope(dmar::SCOPE_IOAPIC, 9, 0xF0, &[0x1F, 0]));
+    body.extend(scope(dmar::SCOPE_PCI_ENDPOINT, 2, 0, &[4, 0]));
+    body.extend(scope(dmar::SCOPE_IOAPIC, 2, 0x00, &[0x1E, 7]));
+    body.extend(scope(dmar::SCOPE_IOAPIC, 5, 0x00, &[0x1C, 0, 0, 0]));
+    let bytes = TableBuilder::new(dmar::DMAR_SIGNATURE)
+        .raw(&[38, dmar::FLAG_INTR_REMAP])
+        .raw(&[0; 10])
+        .raw(&structure(dmar::STRUCTURE_DRHD, &body))
+        .build();
+    let table = parse_dmar(&bytes);
+    let Some(dmar::Structure::Drhd(unit)) = table.structures().next() else {
+        panic!("a unit");
+    };
+    assert_eq!(
+        unit.ioapic_source(2),
+        Some(0x00F7),
+        "by ID, not the first listed"
+    );
+    assert_eq!(unit.ioapic_source(9), Some(0xF0F8));
+    assert_eq!(unit.ioapic_source(5), None, "a path through a bridge");
+    assert_eq!(unit.ioapic_source(4), None);
+}
+
 #[test]
 fn an_rmrr_carries_its_range_and_devices() {
     let mut body = vec![0, 0];

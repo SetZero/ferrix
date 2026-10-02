@@ -137,6 +137,12 @@ pub const QUIESCED: Event = Event::new(Class::Device, 1);
 /// detail the faulting page's number, split in two words.
 pub const DMA_FAULT: Event = Event::new(Class::Device, 2);
 
+/// An interrupt request a VT-d unit refused to remap for a device (fault
+/// reasons 0x20 to 0x26), recorded as [`DMA_FAULT`] is: the target is the
+/// requester, the detail the fault reason and the interrupt index the
+/// request named.
+pub const INTERRUPT_FAULT: Event = Event::new(Class::Device, 3);
+
 /// A job's limit set through its handle (`job_set_limit`): the target is
 /// the resource, the detail the job's id, split in two words, and the
 /// limit, saturated.
@@ -206,7 +212,7 @@ pub mod power {
 }
 
 /// Every event this crate names, with its name.
-pub const NAMED: [(Event, &str); 25] = [
+pub const NAMED: [(Event, &str); 26] = [
     (START, "START"),
     (CONFIG, "CONFIG"),
     (BOOTED, "BOOTED"),
@@ -229,6 +235,7 @@ pub const NAMED: [(Event, &str); 25] = [
     (OOM_KILLED, "OOM_KILLED"),
     (QUIESCED, "QUIESCED"),
     (DMA_FAULT, "DMA_FAULT"),
+    (INTERRUPT_FAULT, "INTERRUPT_FAULT"),
     (LIMIT_SET, "LIMIT_SET"),
     (CGROUP_LIMIT, "CGROUP_LIMIT"),
     (DEVICE_LIMIT_SET, "DEVICE_LIMIT_SET"),
