@@ -147,6 +147,16 @@ fn above(segment: u16, bus: u8, bridges: &[Bridge]) -> Above {
 /// bridge arrives as the bridge's alias, and two such functions would share
 /// a domain. A bus two bridges claim, and a loop of bus numbers that does
 /// not end in 256 steps, are not its own.
+///
+/// # Its premise
+///
+/// A bus no bridge has behind it is taken for a root bus. That holds for
+/// the functions a bridge-following walk found -- the walk reaches a bus
+/// only through the bridge whose secondary it is, so every bus it scanned
+/// but a root bus has its bridge in `bridges` -- and for nothing else: on a
+/// bus inside a bridge's range that no bridge explains, this answers `true`.
+/// So it is never the whole answer for a function below a named bridge;
+/// [`claims`] asks [`behind`] as well, which calls such a bus aliased.
 #[must_use]
 pub fn own_to_root(function: Address, bridges: &[Bridge]) -> bool {
     let mut bus = function.bus();
@@ -160,9 +170,40 @@ pub fn own_to_root(function: Address, bridges: &[Bridge]) -> bool {
     false
 }
 
+/// Whether an IOMMU description's scope naming `named` -- a sub-hierarchy
+/// (the bridge and everything below it) if `hierarchy`, an endpoint
+/// otherwise -- puts `function` behind its unit under `function`'s own
+/// requester ID.
+///
+/// [`Behind::No`] when the scope does not reach `function`: it is not
+/// `named`, nor, for a sub-hierarchy, below it. [`Behind::Own`] only when
+/// it does, and every bridge from `function` up to its root bus forwards
+/// requester IDs unchanged: for a function below `named`, every bridge up to
+/// `named` and `named` itself ([`behind`] says [`Behind::Own`]), and every
+/// bridge above `named` as well ([`own_to_root`]). Anything else the scope
+/// reaches is [`Behind::Aliased`] -- never given a domain, since a second
+/// function behind the same aliasing bridge would share it. In particular,
+/// [`behind`]'s `Aliased` is never turned into `Own` here, whatever
+/// [`own_to_root`]'s root-bus premise says of the same bus.
+#[must_use]
+pub fn claims(hierarchy: bool, named: Address, function: Address, bridges: &[Bridge]) -> Behind {
+    let below = if hierarchy && named != function {
+        behind(function, named, bridges)
+    } else {
+        Behind::No
+    };
+    if named != function && below == Behind::No {
+        Behind::No
+    } else if below == Behind::Aliased || !own_to_root(function, bridges) {
+        Behind::Aliased
+    } else {
+        Behind::Own
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Behind, Bridge, behind, follow_path, own_to_root};
+    use super::{Behind, Bridge, behind, claims, follow_path, own_to_root};
     use crate::Address;
 
     fn at(bus: u8, device: u8, function: u8) -> Address {
@@ -312,6 +353,105 @@ mod tests {
         // bus 2 is inside 0:2.0's range, but its own bridge is withheld.
         let bridges = [machine()[0]];
         assert_eq!(behind(at(2, 0, 0), at(0, 2, 0), &bridges), Behind::Aliased);
+    }
+
+    /// An endpoint scope whose path runs through a PCIe-to-PCI bridge
+    /// reaches the function it names, and claims it aliased, never as its
+    /// own: the bridge puts its own requester ID on what it forwards.
+    ///
+    /// Verifies: L.iommu.45
+    #[test]
+    fn claims_a_two_hop_endpoint_through_a_pcie_to_pci_bridge_as_aliased() {
+        let bridges = machine();
+        // 0:2.0 (root port) -> 1:0.0 (PCIe-to-PCI, type 7) -> 2:3.0.
+        let named = follow_path(0, 0, [(2, 0), (0, 0), (3, 0)], &bridges).unwrap();
+        assert_eq!(named, at(2, 3, 0));
+        assert_eq!(claims(false, named, named, &bridges), Behind::Aliased);
+        // A sub-hierarchy over the PCIe-to-PCI bridge, or over the port
+        // above it, reaches the same function aliased too.
+        assert_eq!(claims(true, at(1, 0, 0), named, &bridges), Behind::Aliased);
+        assert_eq!(claims(true, at(0, 2, 0), named, &bridges), Behind::Aliased);
+        // The bridge itself is reached through the port alone, as its own.
+        assert_eq!(
+            claims(true, at(0, 2, 0), at(1, 0, 0), &bridges),
+            Behind::Own
+        );
+    }
+
+    /// A sub-hierarchy scope over a bus inside the named bridge's range that
+    /// no bridge explains claims what is on it aliased -- where
+    /// `own_to_root`, taking that bus for a root bus, would say its own.
+    ///
+    /// Verifies: L.iommu.45
+    #[test]
+    fn claims_a_function_on_a_bus_no_bridge_explains_as_aliased() {
+        // The port's range is buses 1-2, but bus 2's bridge is withheld.
+        let bridges = [machine()[0]];
+        assert!(own_to_root(at(2, 0, 0), &bridges));
+        assert_eq!(behind(at(2, 0, 0), at(0, 2, 0), &bridges), Behind::Aliased);
+        assert_eq!(
+            claims(true, at(0, 2, 0), at(2, 0, 0), &bridges),
+            Behind::Aliased
+        );
+    }
+
+    /// What a scope reaches through PCIe ports alone it claims as the
+    /// function's own; what it does not reach it does not claim.
+    ///
+    /// Verifies: L.iommu.45
+    #[test]
+    fn claims_through_pcie_ports_as_own_and_nothing_outside_the_scope() {
+        let bridges = machine();
+        // A sub-hierarchy over a root port, below a switch.
+        assert_eq!(
+            claims(true, at(0, 2, 1), at(5, 0, 0), &bridges),
+            Behind::Own
+        );
+        assert_eq!(
+            claims(true, at(3, 0, 0), at(5, 0, 0), &bridges),
+            Behind::Own
+        );
+        // An endpoint on the root bus, and one named by a path through ports.
+        assert_eq!(
+            claims(false, at(0, 3, 0), at(0, 3, 0), &bridges),
+            Behind::Own
+        );
+        let switched = follow_path(0, 0, [(2, 1), (0, 0), (1, 0), (0, 0)], &bridges).unwrap();
+        assert_eq!(claims(false, switched, switched, &bridges), Behind::Own);
+        // Not reached: another endpoint, a function outside the range, and
+        // an endpoint scope never reaching below what it names.
+        assert_eq!(
+            claims(false, at(0, 3, 0), at(0, 4, 0), &bridges),
+            Behind::No
+        );
+        assert_eq!(claims(true, at(0, 2, 0), at(3, 0, 0), &bridges), Behind::No);
+        assert_eq!(
+            claims(false, at(0, 2, 1), at(5, 0, 0), &bridges),
+            Behind::No
+        );
+    }
+
+    /// A function on a bus two bridges claim, reached by a sub-hierarchy
+    /// scope, is aliased, never its own.
+    ///
+    /// Verifies: L.iommu.45
+    #[test]
+    fn claims_a_function_on_a_bus_two_bridges_claim_as_aliased() {
+        let mut bridges = machine().to_vec();
+        bridges.push(Bridge {
+            address: at(0, 7, 0),
+            secondary: 3,
+            subordinate: 5,
+            forwards_requester: true,
+        });
+        assert_eq!(
+            claims(true, at(0, 2, 1), at(3, 0, 0), &bridges),
+            Behind::Aliased
+        );
+        assert_eq!(
+            claims(false, at(3, 0, 0), at(3, 0, 0), &bridges),
+            Behind::Aliased
+        );
     }
 
     /// Verifies: L.iommu.45

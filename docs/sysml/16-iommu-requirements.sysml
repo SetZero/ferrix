@@ -570,14 +570,21 @@ package FerrixIommuRequirements {
                 requester only if every bridge from it up to its root bus is a PCIe
                 port (root, upstream or downstream): behind a PCIe-to-PCI or
                 conventional bridge, on a bus two bridges claim, or under a loop of
-                bus numbers, it is aliased, never its own.";
+                bus numbers, it is aliased, never its own. The decision every
+                placement asks (claims) shall answer aliased wherever the walk
+                below a named bridge does.";
             attribute :>> criterion = "Host tests: a path is followed through each
                 bridge's secondary bus; a function behind a root port or a switch is
                 its own requester; one named by a path through a PCIe-to-PCI bridge,
                 on a bus two bridges claim, on a bus no bridge explains below a named
                 bridge, or under a loop of bus numbers is not; only Express port
                 types 4, 5 and 6 forward a requester ID; a scope path with an odd
-                byte is not whole.";
+                byte is not whole. ferrix_pci::topology::claims, which iommu::claims
+                answers with, claims a two-hop endpoint through a PCIe-to-PCI bridge,
+                a function on a bus no bridge explains below a named bridge and one on
+                a bus two bridges claim as aliased, what PCIe ports alone reach as
+                its own, and nothing outside the scope; with claims answering own
+                whenever the scope reaches the function, three of those tests fail.";
             attribute :>> parent = "H.DMA.1";
             attribute :>> unit = ("discovery::pci::learn_bridges", "iommu::claims");
         }

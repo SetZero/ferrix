@@ -259,27 +259,22 @@ fn place_dmar(
 
 /// Whether a scope naming `named` -- a sub-hierarchy if `hierarchy`, an
 /// endpoint otherwise -- puts `function` behind its unit as `function`'s own
-/// requester ID: `function` is `named` or, for a sub-hierarchy, below it,
-/// and every bridge from `function` up to its root bus forwards requester
-/// IDs unchanged (`topology::own_to_root`). [`topology::Behind::Aliased`]
-/// for a function the scope reaches whose DMA arrives under a bridge's
-/// alias: never given a domain, since a second function behind the same
+/// requester ID. [`topology::Behind::Aliased`] for a function the scope
+/// reaches whose DMA arrives under a bridge's alias, or on a bus no bridge
+/// explains: never given a domain, since a second function behind the same
 /// bridge would share it.
+///
+/// The decision is [`topology::claims`], kept in `ferrix_pci` beside the
+/// walks it composes so its host tests (L.iommu.45) run it as this does;
+/// every placement asks it here, so none can answer `Own` where
+/// [`topology::behind`] says aliased.
 fn claims(
     hierarchy: bool,
     named: Address,
     function: Address,
     bridges: &[Bridge],
 ) -> topology::Behind {
-    let reached = named == function
-        || (hierarchy && topology::behind(function, named, bridges) != topology::Behind::No);
-    if !reached {
-        topology::Behind::No
-    } else if topology::own_to_root(function, bridges) {
-        topology::Behind::Own
-    } else {
-        topology::Behind::Aliased
-    }
+    topology::claims(hierarchy, named, function, bridges)
 }
 
 /// The bridges PCI enumeration found, every host's, for following DMAR
@@ -1163,12 +1158,12 @@ pub(crate) fn domain_for(function: Address) -> Domain {
 fn vtd_unit_for(programmed: &'static Programmed, function: Address) -> Option<&'static vtd::Unit> {
     let bridges = BRIDGES.lock();
     // A single-hop endpoint on a bus behind an aliasing bridge is refused
-    // as a longer path through one is (`claims`).
+    // as a longer path through one is: the same `claims` decides.
     let named = programmed
         .behind
         .iter()
         .find(|(address, _)| *address == function)
-        .filter(|_| topology::own_to_root(function, &bridges))
+        .filter(|_| claims(false, function, function, &bridges) == topology::Behind::Own)
         .map(|&(_, index)| index);
     let index = named.or_else(|| {
         programmed
