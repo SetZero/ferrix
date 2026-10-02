@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "78ee72136576aacf12b2ba6234cc98e7f0f87910dfc7e25a1829d45cd03bca8f",
+  "digest": "33033f1fd912975701998f2a67ec17553bda98fadd4558b7e6e3438fdadadd53",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -14079,7 +14079,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 7,
-          "doc": "The entry path on every architecture, the dispatch table, and the ~150-call surface rustc needs. src/lib/proto/linux-abi holds the numbers for x86-64, AArch64 and the ARM EABI table, the errnos, and the repr(C) layouts (statx, dirent64, sigaction, ...).\n\nsrc/kernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Memory, files and paths, processes and threads, futex, signals, time, identity and credentials, terminals, sockets, epoll, eventfd, timerfd and signalfd; enough for somebody else's busybox (cargo xtask test-shell), a Rust program's threads (test-threads) and rustc compiling hello.rs (test-rustc). The boot test puts every number in 0..=600 through dispatch. Still ENOSYS, each named at its arm: swap, modules, System V IPC, acct, vhangup and rseq.",
+          "doc": "The entry path on every architecture, the dispatch table, and the ~150-call surface rustc needs. src/lib/proto/linux-abi holds the numbers for x86-64, AArch64 and the ARM EABI table, the errnos, and the repr(C) layouts (statx, dirent64, sigaction, ...).\n\nsrc/kernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Memory, files and paths, processes and threads, futex, signals, time, identity and credentials, terminals, sockets, epoll, eventfd, timerfd and signalfd; enough for somebody else's busybox (cargo xtask test-shell), a Rust program's threads (test-threads) and rustc compiling hello.rs (test-rustc). The boot test puts every number in 0..=600 through dispatch. Still ENOSYS, each named at its arm: swap, modules, System V message queues, acct, vhangup and rseq. System V semaphores (syscall/sem.rs) and shared memory (syscall/shm.rs) are answered, per IPC namespace.",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
             "line": 234
@@ -14093,7 +14093,7 @@
               "multiplicity": "1..*",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 251
+                "line": 253
               }
             },
             {
@@ -14104,7 +14104,7 @@
               "doc": "The assembly trampoline; then Rust. Stage 6's, and it fills a SyscallArgs from the trap frame and applies the Outcome that comes back, so no register convention reaches the dispatch layer and no ABI knowledge reaches the vector. Both types are the core's (src/kernel/src/trap.rs), and the trap path calls trap::system_call, which answers through the SyscallEntry main.rs registered: the core names no dispatcher above it (F-09).",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 252
+                "line": 254
               }
             },
             {
@@ -14115,7 +14115,7 @@
               "doc": "One function, the certified item's (syscall/mod.rs): the native range to the native ABI, and a Linux number decoded by arch::decode_syscall, clamp first, then handed to the Personality the Linux personality implements (syscall/linux.rs, in the load ring), which routes it through its modules; main.rs composes the two at compile time, so a call pays one indirect call, the core's. Returns Outcome::Return for a value, or Outcome::Enter for the calls that resume on a frame which was constructed rather than returned into -- execve, and a clone child. Self-checked in the boot test on all three architectures.",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 262
+                "line": 264
               }
             },
             {
@@ -14127,7 +14127,7 @@
               "doc": "The filter runs on entry, before dispatch.",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 275
+                "line": 277
               }
             }
           ]
@@ -14142,7 +14142,7 @@
           "doc": "src/kernel/src/syscall/signal.rs keeps each disposition, the blocked mask and the alternate stack, split between thread and process as Linux splits them; deliver.rs delivers on every return to user mode, onto each architecture's own Linux frame, and rt_sigreturn unwinds it. Stop and continue, SIGPIPE, SIGALRM, and a user-mode fault as SIGSEGV, SIGILL, SIGBUS, SIGFPE or SIGTRAP, which is what rustc's stack-overflow guard needs. An interrupted call restarts or is EINTR as Linux's arch_do_signal_or_restart decides. No vDSO, so a handler needs SA_RESTORER, and only ITIMER_REAL arms.",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
-            "line": 281
+            "line": 283
           },
           "children": [
             {
@@ -14151,7 +14151,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 293
+                "line": 295
               }
             },
             {
@@ -14160,7 +14160,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 294
+                "line": 296
               }
             }
           ]
@@ -14172,10 +14172,10 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 15,
-          "doc": "Pipes, ttys and job control: what an interactive shell needs. Pipes and FIFOs are stage 8's (src/kernel/src/fs/pipe.rs), the console a terminal with a line discipline since stage 7 (fs/terminal.rs) and pseudo-terminals stage 18's (fs/pty.rs), and every call job control is made of has been answered since stage 7; zinc uses them. System V IPC is ENOSYS.",
+          "doc": "Pipes, ttys and job control: what an interactive shell needs. Pipes and FIFOs are stage 8's (src/kernel/src/fs/pipe.rs), the console a terminal with a line discipline since stage 7 (fs/terminal.rs) and pseudo-terminals stage 18's (fs/pty.rs), and every call job control is made of has been answered since stage 7; zinc uses them. System V semaphores and shared memory are answered (syscall/sem.rs, syscall/shm.rs, for Steam); its message queues are ENOSYS.",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
-            "line": 297
+            "line": 299
           }
         },
         {
@@ -14188,7 +14188,7 @@
           "doc": "Syscall numbers from 0x1000. Handle-table operations, channel send/receive with handle passing, port wait, interrupt bind, VMO create/map, job create/kill. What devmgr and drivers speak; a process may use both ABIs.\n\nsrc/kernel/src/syscall/native.rs, branched to before any Linux table is asked, with the numbers in src/lib/proto/native-abi/src/nr.rs and typed wrappers in src/lib/proto/native. Beyond that first list: waits on one object or asynchronously through a port, VMO pins for a device's DMA, a job's quota set and read, process create and start, device info and quiesce, and the calls that make a block or net ring and a display, input or render control channel. Left: an EXECUTE right on a VMO handle, sub-page apertures, and the process calls beyond create and start, 0x1032..=0x1037 held for them.\n\nThe item answers every call on the core's objects in a match the compiler holds exhaustive. The six about a subsystem above it -- the five control-channel creates and job_for_cgroup -- are a table the subsystems register handlers into from main.rs's register_load, and the boot stops (FX-0006) if one has none. A native process is made and started through the Processes the Linux personality lends (syscall/launch.rs), which devmgr starts through too, and a quiesce waits out the Servers the rings and cards register. native.rs names nothing above the item (F-07).",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
-            "line": 311
+            "line": 315
           },
           "children": [
             {
@@ -14199,7 +14199,7 @@
               "value": "\"0x1000\"",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 339
+                "line": 343
               }
             },
             {
@@ -14208,7 +14208,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 340
+                "line": 344
               }
             },
             {
@@ -14217,7 +14217,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 341
+                "line": 345
               }
             },
             {
@@ -14226,7 +14226,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 342
+                "line": 346
               }
             },
             {
@@ -14235,7 +14235,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 343
+                "line": 347
               }
             },
             {
@@ -14244,7 +14244,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 344
+                "line": 348
               }
             },
             {
@@ -14253,7 +14253,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 345
+                "line": 349
               }
             },
             {
@@ -14262,7 +14262,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 346
+                "line": 350
               }
             },
             {
@@ -14271,7 +14271,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 347
+                "line": 351
               }
             },
             {
@@ -14280,7 +14280,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 348
+                "line": 352
               }
             },
             {
@@ -14289,7 +14289,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 349
+                "line": 353
               }
             },
             {
@@ -14298,7 +14298,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 350
+                "line": 354
               }
             },
             {
@@ -14307,7 +14307,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 351
+                "line": 355
               }
             },
             {
@@ -14316,7 +14316,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 352
+                "line": 356
               }
             },
             {
@@ -14325,7 +14325,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 353
+                "line": 357
               }
             },
             {
@@ -14334,7 +14334,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 354
+                "line": 358
               }
             },
             {
@@ -14343,7 +14343,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 355
+                "line": 359
               }
             },
             {
@@ -14352,7 +14352,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 356
+                "line": 360
               }
             },
             {
@@ -14361,7 +14361,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 357
+                "line": 361
               }
             },
             {
@@ -14370,7 +14370,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 358
+                "line": 362
               }
             },
             {
@@ -14379,7 +14379,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 359
+                "line": 363
               }
             },
             {
@@ -14388,7 +14388,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 360
+                "line": 364
               }
             },
             {
@@ -14397,7 +14397,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 361
+                "line": 365
               }
             },
             {
@@ -14406,7 +14406,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 362
+                "line": 366
               }
             },
             {
@@ -14415,7 +14415,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 363
+                "line": 367
               }
             },
             {
@@ -14424,7 +14424,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 364
+                "line": 368
               }
             },
             {
@@ -14433,7 +14433,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 365
+                "line": 369
               }
             },
             {
@@ -14442,7 +14442,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 366
+                "line": 370
               }
             },
             {
@@ -14451,7 +14451,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 367
+                "line": 371
               }
             },
             {
@@ -14460,7 +14460,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 368
+                "line": 372
               }
             },
             {
@@ -14469,7 +14469,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 369
+                "line": 373
               }
             },
             {
@@ -14478,7 +14478,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 370
+                "line": 374
               }
             },
             {
@@ -14487,7 +14487,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 371
+                "line": 375
               }
             },
             {
@@ -14496,7 +14496,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 372
+                "line": 376
               }
             },
             {
@@ -14505,7 +14505,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 373
+                "line": 377
               }
             },
             {
@@ -14514,7 +14514,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 374
+                "line": 378
               }
             },
             {
@@ -14523,7 +14523,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/06-objects.sysml",
-                "line": 375
+                "line": 379
               }
             }
           ]
