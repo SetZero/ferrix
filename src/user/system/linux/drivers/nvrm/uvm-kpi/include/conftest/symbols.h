@@ -1,0 +1,10 @@
+/* uvm-kpi: what Ferrix's Linux-compatible layer provides (see ferrix_kpi.h). */
+#define NV_IS_EXPORT_SYMBOL_PRESENT_timer_delete_sync 1
+#define NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_map_sg_attrs 0
+#define NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_dma_ops 0
+#define NV_IS_EXPORT_SYMBOL_GPL_set_memory_encrypted 0
+#define NV_IS_EXPORT_SYMBOL_GPL_set_memory_decrypted 0
+#define NV_IS_EXPORT_SYMBOL_PRESENT_int_active_memcg 0
+#define NV_IS_EXPORT_SYMBOL_PRESENT_migrate_vma_setup 0
+#define NV_IS_EXPORT_SYMBOL_PRESENT___iowrite64_lo_hi 0
+#define NV_IS_EXPORT_SYMBOL_PRESENT_make_device_exclusive 0

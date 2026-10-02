@@ -826,6 +826,38 @@ and took the recommended answer for D2, D3 and D5.
     reserved on `main`, for C3-K's landing to release;
   * C3-K's code, QEMU only, follows C0a and goes to the consultant before
     it lands.
+* **2026-10-02 — C0a: UVM runs its own tests on `uvm-kpi`.** On branch
+  `nvidia-cuda-c0`, in `src/user/system/linux/drivers/nvrm/uvm-kpi/`
+  (5.6k lines of C, all Ferrix's):
+  * **The header set.** It has 127 empty `<linux/…>`, `<asm/…>` and
+    `<generated/…>` names over four headers (`include/kpi/`), conftest answers, and a 67-line
+    `nv-linux.h` of its own, because UVM uses only seven names from
+    NVIDIA's 1,852-line one.
+  * **The runtime.** It has futex locks (including `downgrade_write`),
+    wait queues, kthreads, one timer and work thread, a page pool on a
+    memfd that `vmap` re-maps, and its own red-black tree, sorted map,
+    heapsort and bitmaps.
+  * **`uvm_common.c`** is written anew from its MIT header, so the
+    GPL-2.0-or-later original is never linked.
+  * **The build.** NVIDIA's unmodified UVM sources from the fetched tree
+    (`NVSRC`) build with no errors: 126 files, the tests included. The 76
+    `nvUvmInterface` calls go to a generated stand-in for RM with no GPU.
+    The result links into `uvm-selftest` with nothing undefined: 1.19 MB
+    of text, 9.8 MB with debug information.
+  * **The run** on the host: `uvm-selftest` loads UVM as the module
+    loader would, opens its device and calls `UVM_INITIALIZE` as a client
+    would. It then passes all 15 of UVM's GPU-free tests through
+    `UVM_RUN_TEST`'s ioctl path: RNG, range tree, lock, perf utils,
+    kvmalloc, perf events, `nv_kthread_q`, red-black tree directed and
+    random (100k iterations), CPU chunk API, range allocator, range
+    groups, thread context sanity and perf, and CPU chunk sizes.
+  * **Two shim bugs** were found by those tests and fixed: `krealloc` to
+    size 0, and an inode without a mapping.
+  * **Not done.** The run under Ferrix (a static build booted with
+    `xtask test-shell --init`) is not done: the host had 5.8 GB free when
+    C0a's build finished, under the 6 GB stop line, so no Ferrix image was
+    built. Linking into `nvrm` waits for N1b; `uvm-selftest` stands in for
+    it.
 
 ## 11. CUDA (N5)
 

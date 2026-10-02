@@ -143,6 +143,7 @@ directory:
 | `src/user/system/linux/zinc/` | The zsh-compatible shell. |
 | `src/user/system/linux/media/` | The resampler and the playback through `/dev/snd` that the sound server and the `badapple` app share (`docs/MEDIA.md`), and the PulseAudio-protocol server and its client (`docs/AUDIO.md`, U2). ferrix-90's since 2026-09-27. Bad Apple!!'s player and its video format are the `badapple` app since 2026-10-01. |
 | `src/user/system/linux/ferrousli/` | The C library written in Rust, its dynamic linker, and the toolkit programs are ported against it with (`tools/ports/`), with the libraries they link; the ported programs themselves are apps. |
+| `src/user/system/linux/drivers/nvrm/` | NVIDIA's driver host (`docs/NVIDIA.md`). So far only `uvm-kpi/`: the Linux-compatible headers and runtime, in C, that NVIDIA's `nvidia-uvm` is built against from a fetched tree, and `uvm-selftest`, which runs UVM's own tests on it with no GPU (§11.3, C0a). It is C and a Makefile, not a cargo workspace, and xtask does not build it yet. |
 
 ## `src/user/apps/`
 
