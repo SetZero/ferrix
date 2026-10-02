@@ -20,10 +20,11 @@ use ferrix_virtio::blk::{
     STATUS_IOERR, STATUS_OK, STATUS_UNSUPP,
 };
 use ferrix_virtio::pci::{
-    CONFIG_GENERATION, CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS,
-    DRIVER_FEATURE, DRIVER_FEATURE_SELECT, FEATURE_VERSION_1, NO_VECTOR, NUM_QUEUES, QUEUE_DESC,
-    QUEUE_DEVICE, QUEUE_DRIVER, QUEUE_ENABLE, QUEUE_MSIX_VECTOR, QUEUE_NOTIFY_OFF, QUEUE_SELECT,
-    QUEUE_SIZE, STATUS_DEVICE_NEEDS_RESET, STATUS_DRIVER_OK, STATUS_FAILED, STATUS_FEATURES_OK,
+    CONFIG_GENERATION, CONFIG_MSIX_VECTOR, CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT,
+    DEVICE_STATUS, DRIVER_FEATURE, DRIVER_FEATURE_SELECT, FEATURE_VERSION_1, NO_VECTOR, NUM_QUEUES,
+    QUEUE_DESC, QUEUE_DEVICE, QUEUE_DRIVER, QUEUE_ENABLE, QUEUE_MSIX_VECTOR, QUEUE_NOTIFY_OFF,
+    QUEUE_SELECT, QUEUE_SIZE, STATUS_DEVICE_NEEDS_RESET, STATUS_DRIVER_OK, STATUS_FAILED,
+    STATUS_FEATURES_OK,
 };
 use ferrix_virtio::{Descriptor, Layout, QueueMemory, SplitQueueDevice};
 
@@ -397,7 +398,12 @@ pub(super) struct Device {
     queue: QueueRegisters,
     /// `queue_notify_off`.
     pub(super) notify_off: u16,
-    isr: u8,
+    /// ISR bits the next acknowledgement answers.
+    pub(super) isr: u8,
+    /// The MSI-X vector configuration changes are raised on.
+    pub(super) config_vector: u16,
+    /// How many times the driver read `device_status`.
+    pub(super) status_reads: Cell<u32>,
     ring: Option<SplitQueueDevice<RingView>>,
     taken: Vec<u16>,
     /// Doorbells rung.
@@ -449,6 +455,8 @@ impl Device {
             queue: QueueRegisters::default(),
             notify_off: 3,
             isr: 0,
+            config_vector: NO_VECTOR,
+            status_reads: Cell::new(0),
             ring: None,
             taken: Vec::new(),
             notifications: 0,
@@ -500,6 +508,7 @@ impl Device {
         self.ring = None;
         self.taken.clear();
         self.isr = 0;
+        self.config_vector = NO_VECTOR;
     }
 
     /// Read a register.
@@ -512,7 +521,11 @@ impl Device {
                 _ => 0,
             },
             NUM_QUEUES => 1,
-            DEVICE_STATUS => u32::from(self.status()),
+            DEVICE_STATUS => {
+                self.status_reads.set(self.status_reads.get() + 1);
+                u32::from(self.status())
+            }
+            CONFIG_MSIX_VECTOR => u32::from(self.config_vector),
             CONFIG_GENERATION => {
                 if self.misbehave.churn_config {
                     self.generation.set(self.generation.get().wrapping_add(1));
@@ -561,6 +574,13 @@ impl Device {
                 };
             }
             QUEUE_ENABLE => self.enable(value),
+            CONFIG_MSIX_VECTOR => {
+                self.config_vector = if self.misbehave.drop_vector {
+                    NO_VECTOR
+                } else {
+                    value as u16
+                };
+            }
             _ => self.set_address(offset, value, features_ok),
         }
     }

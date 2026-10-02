@@ -294,6 +294,9 @@ fn a_used_index_that_jumps_is_broken() {
     broken(rig, fault, &[1]);
 }
 
+/// A device that needs a reset says so with a configuration change, which
+/// under MSI-X shares the request queue's vector: an interrupt that brings
+/// no completion. This one brings none, so the status is read.
 #[test]
 fn a_device_that_needs_a_reset_is_broken() {
     let mut rig = Setup::new().build();
@@ -353,4 +356,93 @@ fn completions_taken_before_a_fault_are_delivered_first() {
         }
     );
     broken(rig, DeviceError::Protocol(BlkError::BadStatus(9)), &[2]);
+}
+
+/// An interrupt that brings completions does not read the status, so a
+/// reset announced with one is seen at the next interrupt that brings none,
+/// with the completions it came with delivered first -- or at once, when a
+/// driver that has waited asks [`crate::Driver::check_needs_reset`].
+#[test]
+fn a_device_that_needs_a_reset_is_failed_at_its_next_quiet_interrupt() {
+    let mut rig = Setup::new().build();
+    assert_eq!(
+        rig.device.borrow().config_vector,
+        1,
+        "configuration changes share the request queue's vector"
+    );
+    let _ = rig.submit(1, Op::Read, 0, 8, 0).unwrap();
+    let _ = rig.submit(2, Op::Read, 8, 8, 0).unwrap();
+    rig.device.borrow_mut().misbehave.needs_reset = true;
+    assert_eq!(rig.device.borrow_mut().run(), 2);
+    let reads = rig.device.borrow().status_reads.get();
+    let mut out = [Completion {
+        id: 0,
+        status: Status::Ok,
+        bytes: 0,
+    }; 4];
+    let drained = rig.driver.on_interrupt(&mut out).expect("completions");
+    assert_eq!(drained.completions, 2);
+    assert!(!drained.config_changed);
+    assert_eq!(
+        rig.device.borrow().status_reads.get(),
+        reads,
+        "status not read"
+    );
+    assert_eq!(
+        rig.driver.on_interrupt(&mut out),
+        Err(DeviceError::NeedsReset)
+    );
+    rig.device.borrow_mut().misbehave.needs_reset = false;
+    broken(rig, DeviceError::NeedsReset, &[]);
+
+    let mut rig = Setup::new().build();
+    let _ = rig.submit(3, Op::Read, 0, 8, 0).unwrap();
+    assert_eq!(rig.driver.check_needs_reset(), Ok(()));
+    rig.device.borrow_mut().misbehave.needs_reset = true;
+    assert_eq!(rig.driver.check_needs_reset(), Err(DeviceError::NeedsReset));
+    rig.device.borrow_mut().misbehave.needs_reset = false;
+    broken(rig, DeviceError::NeedsReset, &[3]);
+}
+
+/// Interrupts that bring completions read no register but the queue's own
+/// memory, except every [`crate::CONFIG_LOOK_EVERY`]th; one that brings
+/// none, or whose ISR says the configuration changed, reads the status and
+/// says the configuration may have changed.
+#[test]
+fn only_a_quiet_or_a_periodic_interrupt_reads_the_device_status() {
+    let mut rig = Setup::new().build();
+    let before = rig.device.borrow().status_reads.get();
+    let mut looked = 0;
+    let mut out = [Completion {
+        id: 0,
+        status: Status::Ok,
+        bytes: 0,
+    }; 4];
+    for id in 0..u64::from(crate::CONFIG_LOOK_EVERY) * 2 {
+        let _ = rig.submit(id, Op::Read, 0, 8, 0).unwrap();
+        assert_eq!(rig.device.borrow_mut().run(), 1);
+        let drained = rig.driver.on_interrupt(&mut out).expect("a completion");
+        assert_eq!(drained.completions, 1);
+        if drained.config_changed {
+            looked += 1;
+        }
+    }
+    assert_eq!(looked, 2, "every CONFIG_LOOK_EVERYth interrupt looks");
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 2);
+    let drained = rig
+        .driver
+        .on_interrupt(&mut out)
+        .expect("a quiet interrupt");
+    assert!(
+        drained.config_changed,
+        "a quiet interrupt may be a configuration change"
+    );
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 3);
+    let _ = rig.submit(1000, Op::Read, 0, 8, 0).unwrap();
+    assert_eq!(rig.device.borrow_mut().run(), 1);
+    rig.device.borrow_mut().isr |= crate::ISR_CONFIG;
+    let drained = rig.driver.on_interrupt(&mut out).expect("a completion");
+    assert!(drained.config_changed);
+    assert_eq!(rig.device.borrow().status_reads.get() - before, 4);
+    rig.assert_clean();
 }

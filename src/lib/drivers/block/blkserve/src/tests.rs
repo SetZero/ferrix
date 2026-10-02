@@ -109,6 +109,14 @@ impl Disk for FakeDisk {
             more: !self.done.is_empty(),
         })
     }
+
+    fn busy(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    fn check(&mut self) -> Result<(), DeviceError> {
+        self.broken.map_or(Ok(()), Err)
+    }
 }
 
 fn device() -> Device {
@@ -291,6 +299,30 @@ fn a_broken_device_stops_the_loop() {
     let mut out = none();
     assert_eq!(
         serve.on_interrupt(&mut out),
+        Err(Fault::Device(DeviceError::NeedsReset))
+    );
+}
+
+/// A device holding requests is watched; one that then says it needs a
+/// reset, asked after a quiet wait, stops the loop as an interrupt would.
+#[test]
+fn a_device_gone_quiet_is_asked_and_its_reset_stops_the_loop() {
+    let mut storage = [Slot::EMPTY; 8];
+    let (mut serve, mut kernel, _) = pair(FakeDisk::new(4), &mut storage);
+    assert!(!serve.device_busy(), "nothing in flight: no watch");
+    kernel.submit(Submission::read(1, 0, 1, 0)).unwrap();
+    let _ = kernel.publish();
+    let _ = serve.on_bell().unwrap();
+    assert!(serve.device_busy());
+    assert_eq!(serve.on_watch(), Ok(()));
+    serve.disk.broken = Some(DeviceError::NeedsReset);
+    assert_eq!(
+        serve.on_watch(),
+        Err(Fault::Device(DeviceError::NeedsReset))
+    );
+    assert_eq!(serve.fault(), Some(Fault::Device(DeviceError::NeedsReset)));
+    assert_eq!(
+        serve.before_sleep(),
         Err(Fault::Device(DeviceError::NeedsReset))
     );
 }

@@ -139,6 +139,14 @@ impl Disk for VirtioBlk {
     fn drain(&mut self, out: &mut [Completion]) -> Result<Drained, DeviceError> {
         self.logic.on_interrupt(out)
     }
+
+    fn busy(&self) -> bool {
+        self.logic.requests_in_flight() > 0
+    }
+
+    fn check(&mut self) -> Result<(), DeviceError> {
+        self.logic.check_needs_reset()
+    }
 }
 
 impl block::Device for VirtioBlk {

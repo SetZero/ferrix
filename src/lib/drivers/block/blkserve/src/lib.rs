@@ -76,6 +76,22 @@ pub trait Disk {
     ///
     /// [`DeviceError`] once the device broke the protocol.
     fn drain(&mut self, out: &mut [Completion]) -> Result<Drained, DeviceError>;
+
+    /// Whether the device holds requests whose completion is waited for;
+    /// see [`Serve::device_busy`].
+    fn busy(&self) -> bool {
+        false
+    }
+
+    /// Ask the device whether it needs a reset, whatever the last interrupt
+    /// looked like; see [`Driver::check_needs_reset`].
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceError`] once the device broke the protocol or needs a reset.
+    fn check(&mut self) -> Result<(), DeviceError> {
+        Ok(())
+    }
 }
 
 impl<T, R, A, D, S> Disk for Driver<T, R, A, D, S>
@@ -92,6 +108,14 @@ where
 
     fn drain(&mut self, out: &mut [Completion]) -> Result<Drained, DeviceError> {
         Driver::on_interrupt(self, out)
+    }
+
+    fn busy(&self) -> bool {
+        Driver::requests_in_flight(self) > 0
+    }
+
+    fn check(&mut self) -> Result<(), DeviceError> {
+        Driver::check_needs_reset(self)
     }
 }
 
@@ -345,6 +369,30 @@ impl<M: RingMemory, K: Disk, const PENDING: usize> Serve<M, K, PENDING> {
         }
         let wait = self.ring.prepare_to_sleep().map_err(Fault::Ring);
         self.fail(wait)
+    }
+
+    /// Whether the device holds requests the ring waits for: a glue that
+    /// sleeps then wakes after a while all the same and calls
+    /// [`Serve::on_watch`], so a device that went quiet is not waited for
+    /// for good.
+    #[must_use]
+    pub fn device_busy(&self) -> bool {
+        self.disk.busy()
+    }
+
+    /// The glue waited for the device a while, with requests in flight, and
+    /// heard nothing: ask it whether it needs a reset. An interrupt that
+    /// brought completions does not ask (`Driver::on_interrupt`), so a reset
+    /// announced in one would otherwise leave the ring's requests waiting
+    /// for good.
+    ///
+    /// # Errors
+    ///
+    /// The [`Fault`] that stops the loop.
+    pub fn on_watch(&mut self) -> Result<(), Fault> {
+        self.checked()?;
+        let checked = self.disk.check().map_err(Fault::Device);
+        self.fail(checked)
     }
 
     /// Take the loop apart, for the glue to shut the device down and finish

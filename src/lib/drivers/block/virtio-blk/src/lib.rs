@@ -97,8 +97,18 @@ pub const REQUEST_QUEUE: u16 = 0;
 /// §4.1.4.5).
 pub const ISR_QUEUE: u8 = 1;
 
-/// ISR status bit: the device configuration changed.
+/// ISR status bit: the device configuration changed: a new capacity, or a
+/// device that needs a reset (virtio 1.2 §2.1.2).
 pub const ISR_CONFIG: u8 = 2;
+
+/// How many interrupts may bring completions before
+/// [`Driver::on_interrupt`] reads the device status anyway: a reset
+/// announced together with completions is seen within this many.
+pub const CONFIG_LOOK_EVERY: u32 = 64;
+
+/// How long a driver with requests in flight waits for an interrupt before
+/// it asks [`Driver::check_needs_reset`].
+pub const WATCH_NANOS: u64 = 100_000_000;
 
 /// What the status byte holds until the device writes it: no status virtio
 /// defines, so a device that completes a chain without writing one is caught.
@@ -219,7 +229,9 @@ pub enum Accepted {
 pub struct Drained {
     /// Completions written to the start of the caller's slice.
     pub completions: usize,
-    /// The device says its configuration changed; see
+    /// The device's configuration may have changed: the ISR said so, or
+    /// the interrupt brought no completion, as a configuration change's
+    /// under MSI-X does not, or it was the [`CONFIG_LOOK_EVERY`]th; see
     /// [`Driver::refresh_config`].
     pub config_changed: bool,
     /// The device has completed more than the slice had room for.
@@ -742,6 +754,8 @@ pub struct Driver<T, R, A, D, S> {
     fault: Option<DeviceError>,
     /// Requests accepted and not yet completed.
     requests: u16,
+    /// Interrupts taken, for [`CONFIG_LOOK_EVERY`].
+    interrupts: u32,
 }
 
 impl<T, R, A, D, S> fmt::Debug for Driver<T, R, A, D, S> {
@@ -826,9 +840,20 @@ where
                 asked,
                 kept: active.vector,
             }),
-            Ok(active) => pci::driver_ok(&mut transport)
-                .map(|()| active)
-                .map_err(InitError::Transport),
+            Ok(active) => {
+                // Configuration changes on the request queue's vector, so
+                // that under MSI-X a device that needs a reset raises an
+                // interrupt that brings no completion, which is when
+                // [`Driver::on_interrupt`] reads the status. A device with
+                // no room for it keeps none, and the reset is then seen at
+                // the [`CONFIG_LOOK_EVERY`]th interrupt or the watch.
+                if active.vector != pci::NO_VECTOR {
+                    let _kept = pci::set_config_vector(&mut transport, active.vector);
+                }
+                pci::driver_ok(&mut transport)
+                    .map(|()| active)
+                    .map_err(InitError::Transport)
+            }
             Err(error) => Err(InitError::Transport(error)),
         };
 
@@ -868,6 +893,7 @@ where
             config_attempts: options.config_attempts,
             fault: None,
             requests: 0,
+            interrupts: 0,
         })
     }
 
@@ -979,12 +1005,26 @@ where
     /// A [`DeviceError`] once the device breaks the protocol. Completions
     /// taken before the fault in the same call are returned first, and the
     /// fault on the next call, so none is lost.
+    ///
+    /// [`Drained::config_changed`] says the configuration may have changed,
+    /// and only then is the device status read for `DEVICE_NEEDS_RESET`,
+    /// which a device announces with a configuration change (virtio 1.2
+    /// §2.1.2): the ISR's [`ISR_CONFIG`] says so, or -- under MSI-X, which
+    /// has no ISR byte and raises configuration changes on the request
+    /// queue's vector -- the interrupt brought no completion, or it is the
+    /// [`CONFIG_LOOK_EVERY`]th. The read leaves the guest, and under KVM
+    /// waits for QEMU's lock, which QEMU's main thread holds while it shows
+    /// a frame.
     pub fn on_interrupt(&mut self, out: &mut [Completion]) -> Result<Drained, DeviceError> {
         let isr = self.transport.acknowledge_interrupt();
         if let Some(fault) = self.fault {
             return Err(fault);
         }
-        if self.transport.read8(DEVICE_STATUS) & STATUS_DEVICE_NEEDS_RESET != 0 {
+        self.interrupts = self.interrupts.wrapping_add(1);
+        let look = isr & ISR_CONFIG != 0
+            || !self.queue.has_used()
+            || self.interrupts.is_multiple_of(CONFIG_LOOK_EVERY);
+        if look && self.transport.read8(DEVICE_STATUS) & STATUS_DEVICE_NEEDS_RESET != 0 {
             self.break_down(DeviceError::NeedsReset);
             return Err(DeviceError::NeedsReset);
         }
@@ -1018,9 +1058,29 @@ where
         }
         Ok(Drained {
             completions: emitted,
-            config_changed: isr & ISR_CONFIG != 0,
+            config_changed: look,
             more: self.fault.is_none() && self.queue.has_used(),
         })
+    }
+
+    /// Read the device status for `DEVICE_NEEDS_RESET` now, whatever the
+    /// last interrupt looked like: for a driver that has waited
+    /// [`WATCH_NANOS`] with requests in flight and heard nothing, in case
+    /// the configuration change that announced a reset came together with a
+    /// completion and [`Driver::on_interrupt`] did not look.
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceError::NeedsReset`], or the fault the driver already has.
+    pub fn check_needs_reset(&mut self) -> Result<(), DeviceError> {
+        if let Some(fault) = self.fault {
+            return Err(fault);
+        }
+        if self.transport.read8(DEVICE_STATUS) & STATUS_DEVICE_NEEDS_RESET != 0 {
+            self.break_down(DeviceError::NeedsReset);
+            return Err(DeviceError::NeedsReset);
+        }
+        Ok(())
     }
 
     /// Read the configuration again, after [`Drained::config_changed`], and

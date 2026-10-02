@@ -54,6 +54,12 @@ const ENTRIES: u32 = 64;
 /// Bytes of the ring VMO.
 const RING_BYTES: usize = PAGE;
 
+/// How long the loop sleeps while the device holds requests before it asks
+/// the device whether it needs a reset (`Serve::on_watch`): an interrupt
+/// that brings completions does not ask, so a reset announced in one could
+/// otherwise leave the ring's requests waiting for good.
+const WATCH_NANOS: u64 = 100_000_000;
+
 /// Port keys, beside the kernel's `BELL_SUBMIT`.
 const KEY_INTERRUPT: u64 = 3;
 const KEY_CONTROL: u64 = 4;
@@ -250,6 +256,18 @@ fn ring_bell(kernel_port: &Port<Kernel>, bell: Option<Doorbell>) {
     }
 }
 
+/// How long to sleep: for good with nothing in the device, and otherwise
+/// [`WATCH_NANOS`].
+fn watch(busy: bool) -> Deadline {
+    if !busy {
+        return Deadline::Never;
+    }
+    match ferrix_rt::linux::monotonic_nanos() {
+        Ok(now) => Deadline::At(now.saturating_add(WATCH_NANOS)),
+        Err(_) => Deadline::Never,
+    }
+}
+
 /// The loop: consume, serve, sleep, until STOP or a fault.
 fn serve_until<D: Device>(
     serve: &mut Serve<Ring, D, { ENTRIES as usize }>,
@@ -275,7 +293,14 @@ fn serve_until<D: Device>(
             }
             Wait::Sleep => {}
         }
-        let packet = port.wait(Deadline::Never).map_err(|_| Step::Events)?;
+        let packet = match port.wait(watch(serve.device_busy())) {
+            Ok(packet) => packet,
+            Err(Error::TimedOut) => {
+                serve.on_watch().map_err(faulted)?;
+                continue;
+            }
+            Err(_) => return Err(Step::Events),
+        };
         match (packet.kind, packet.key) {
             (PACKET_USER, BELL_SUBMIT) => {
                 ring_bell(kernel_port, serve.on_bell().map_err(faulted)?);
