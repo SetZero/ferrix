@@ -675,7 +675,7 @@ unit tests.
 | N3b | nvidia-drm subset as `renderD129`; hyprix `zwp_linux_dmabuf_v1` and syncobj; NVIDIA's own WSI and EGL | 16 |
 | N3c | hyprix composites on the 3060 | 8 |
 | N4 | Chrome `--enable-gpu` on the 3060; GLX for yserver (D4); a Steam game on the 3060 | 20 |
-| N5 | CUDA: NVIDIA's `nvidia-uvm` rebuilt in `nvrm` against a Linux-compatible header set, fault windows in the kernel for managed memory, the CUDA samples (§11.5: C0–C4) | 52 |
+| N5 | CUDA: NVIDIA's `nvidia-uvm` rebuilt in `nvrm` against a Linux-compatible header set, fault windows in the kernel for managed memory, the CUDA samples (§11.5: C0–C4) | 49 |
 | N6 | Scan-out on the 3060's own outputs through NVKMS | 15 |
 
 Each milestone's total, and what it shows:
@@ -782,9 +782,10 @@ and took the recommended answer for D2, D3 and D5.
    feasibility pass and design from a separate session. This design keeps
    the forwarding core and `nvrm`'s request bridge able to serve
    `/dev/nvidia-uvm` (raw ioctl numbers, its dynamic major, its own
-   mmap and fault paths) without a second mechanism. §11 is that design:
-   52 points, with five questions of its own, D-C1 to D-C5 (§11.8),
-   still open.
+   mmap and fault paths) without a second mechanism. §11 is that design,
+   49 points. Its own five decisions, D-C1 to D-C5, were answered the same
+   day (§11.8): managed memory as small as possible, NVIDIA's own UVM,
+   beside graphics after N1, no profilers, NVIDIA's samples.
 9. **D8 — the platform changes inside the item** (N0a–d, f) go one by one
    through the certification consultant, each as its own commit with its
    tests and negative controls.
@@ -1005,11 +1006,11 @@ The scratch build was deleted after counting. The import lists are kept in
 | Its own system memory | `alloc_pages` for CPU chunks, page tables and push buffers; `dma_map_page` for the GPU | Pages of `nvrm`'s pool VMOs, pinned into the card's domain with `vmo_pin` as RM's are (§4.3). `uvm_cpu_chunk_allocation_sizes=4K` means no chunk needs physically contiguous memory, at the cost of 4 KiB GPU mappings of system memory |
 | Kernel mappings | `vmap`, `kmap`, `page_address` | The pool is mapped in `nvrm`'s own space, so these are table lookups |
 | Locks, threads, work queues, time | — | Shared with RM's `ferrix-nvos` (§4.2) |
-| The semaphore pool | `vm_insert_page` of its pages at `mmap` | A window of pool pages, mapped when the client calls `mmap` (K1 below). §4.4's VMO-range reply would also do |
+| The semaphore pool | `vm_insert_page` of its pages at `mmap` | A window of pool pages, inserted when the client calls `mmap` (K1 below). §4.4's VMO-range reply would also do |
 | **Managed memory: a CPU fault** | the vma's `->fault` services the page: allocate, copy back from the GPU, then `vm_insert_page` with read or read-write access | **K1**: the kernel forwards the fault to `nvrm`, which runs UVM's own handler and inserts the pages; the faulting thread then retries |
 | **Managed memory: migration to the GPU** | `unmap_mapping_range` on the va_space's `address_space`, keyed by `offset == address`, in every process that maps the file | **K1**: `window_revoke`, a shootdown of every mapping of that window |
-| `munmap`, a split, `mremap` | `->open` and `->close` on the vma, which split or destroy UVM's range | **K2**: an `UNMAPPED(window, offset, len)` message, queued in order before `munmap` returns. `mremap` of a window is refused |
-| `fork` | `VM_DONTCOPY` on managed ranges, `VM_WIPEONFORK` on the semaphore pool | **K2**: windows are not inherited, and the child sees a hole. `MADV_DOFORK` is refused. `MADV_DONTFORK` is honoured for device mappings, which it is not today |
+| `munmap`, a split, `mremap` | `->close` on the vma destroys UVM's range; this is how `cudaFree` frees managed memory, because `UVM_FREE` refuses managed ranges (`uvm_free`). `->open` splits it | K1: a whole-window `munmap` drops the window object, and its drop sends `UNMAPPED(window)` to `nvrm`. A partial `munmap`, `mprotect` or `mremap` of a window is refused with `EINVAL` |
+| `fork` | `VM_DONTCOPY` on managed ranges, `VM_WIPEONFORK` on the semaphore pool | Nothing new: a window is inherited like every shared device mapping today, and the child's faults are served like the parent's (Linux's `MADV_DOFORK` behaviour). `MADV_DONTFORK` stays accepted and ignored |
 | Process identity, `current->mm` | `va_space_mm` holds the mm for HMM and ATS | Off (`uvm_enable_va_space_mm=0`). Faults on managed memory need no client mm, because the CPU side is the window |
 | Pinning client pages | the tools' `pin_user_pages_remote` | Not needed: the tools are refused. `cudaHostRegister` goes through RM's `os_lock_user_pages` and `request_pin` (§4.3) |
 | HMM, `mmu_notifier`, `migrate_vma`, ATS | pageable memory on the GPU | Off; the ioctls answer "not supported" |
@@ -1028,22 +1029,25 @@ on a ring-3 disk driver.
 
 Neither covers managed memory, and the CPU fault is the part that has to
 be in the kernel: no process is running while a client's thread faults.
-K1 adds a new kind of region and three native calls:
+The customer chose on 2026-10-02 to build it "as small as possible"
+(D-C1), so K1 is cut to what one managed-memory sample needs. It adds one
+kind of region and three native calls:
 
-* **The window.** A mapping of `/dev/nvidia-uvm` that `nvrm` answers with
-  "window" becomes a region backed by a `FaultWindow` object. The object
-  holds:
-  * a sparse table from page offset to a frame and an access level;
+* **The window.** Each `mmap` of `/dev/nvidia-uvm` that `nvrm` answers
+  with "window" becomes one region backed by its own `FaultWindow` object,
+  the way a render node's `mmap` becomes a `Window` today
+  (`interfaces/render/node.rs`). The object holds:
+  * a sparse table from page offset to a frame and an access level, read
+    or read-write;
   * the list of address spaces that map it, as a VMO's mapper list does
     (`user/vmo.rs`);
   * `nvrm`'s port.
-* **A fault on a page the table lacks**, or a write to a page that is
+* **A user fault on a page the table lacks**, or a write to a page that is
   read-only, goes to `nvrm` as `FAULT(window, offset, access)`. It is sent
   from the `Filler` position: before the space's lock is taken, and with
   interrupts on. The faulting thread waits for the reply, and `SIGKILL`
   can interrupt the wait. If the reply is an error, the thread gets
-  `SIGBUS`. A kernel copy (`uaccess`) that reaches such a page waits the
-  same way, and gets `EFAULT` in place of `SIGBUS`.
+  `SIGBUS`.
 * **`window_insert(window, [(offset, pool_vmo, pool_offset, access)])`**,
   batched, is `vm_insert_page`. The kernel checks that each pool page is
   committed and pinned to `nvrm`. It then takes a hold on the page that
@@ -1053,9 +1057,31 @@ K1 adds a new kind of region and three native calls:
   clears the entries, removes the PTEs from every mapper with one batched
   shootdown, using the existing `forget_*` and `flush_tlb_pages` protocol
   (`user/space.rs`), and then drops the holds.
+* **The end of a window.** A window is unmapped whole or not at all.
+  When its last mapping goes, the object is dropped, as a render
+  `Window`'s keeper is (`drop_unnamed`), and the drop queues
+  `UNMAPPED(window)` on `nvrm`'s port before `munmap` returns. A later
+  `mmap` at the same address arrives behind it on the same port, so UVM
+  has destroyed the old range first. This is how `cudaFree` of managed
+  memory works: UVM frees a managed range only when its mapping goes.
 * **If `nvrm` dies**, every window is revoked and marked dead, and later
   faults get `SIGBUS`. The pages were `nvrm`'s pins, so they go to the
   quarantine (§4.3, N0f).
+
+**What was cut from the first draft, and what each cut costs:**
+
+| Cut | Instead | Cost |
+|---|---|---|
+| Kernel copies (`uaccess`) waiting on a window fault | A kernel copy that reaches a page the window lacks fails with `EFAULT` | A system call given managed memory the CPU has not touched since the GPU last had it fails: for example a `write` of a result buffer straight after the kernel that filled it. Programs that read the data first, as the samples do, see nothing. It also removes the deadlock RC2 described |
+| A separate unmap notice for any range (`UNMAPPED(window, offset, len)`) | Partial `munmap`, `mprotect` and `mremap` of a window are refused with `EINVAL`; the drop notice above covers a whole `munmap` | A program that unmaps part of a managed allocation, or makes it read-only, gets an error. CUDA's own allocator maps and unmaps whole allocations. C1's trace shows whether libcuda ever does otherwise |
+| Not inheriting windows on `fork` (`VM_DONTCOPY`) | Windows are inherited like every shared device mapping | A child forked after `cuInit` (`system`, `popen`) shares the managed memory until it `exec`s or exits, and UVM's range stays alive that long. CUDA does not support using it in the child either way |
+| `MADV_DONTFORK` honoured, `MADV_DOFORK` refused | `madvise` unchanged | None for CUDA: with windows inherited, the hint changes nothing that matters to it |
+| `VM_WIPEONFORK` for the semaphore pool | Inherited too | A child sees the parent's semaphore values; it cannot use them without a CUDA context |
+
+So the first draft's second kernel piece, K2 (the unmap notice, the fork
+rule and `madvise`), is gone. Everything left lives in the window object,
+in `core`, and in the native calls, in `item`. Each cut can be undone later without
+changing K1's interface.
 
 The same object also answers two things §4.4 and §8 left open:
 
@@ -1085,11 +1111,11 @@ The same object also answers two things §4.4 and §8 left open:
 | C0b | The samples: `cuda-samples` built on nazuna with the installed CUDA 12.9 `nvcc` (`/usr/local/cuda-12.9`, not on `PATH`) for `sm_86`, in a data volume beside the userspace; `test-cuda` in `xtask`, with the card guard of §6 | 2 |
 | C1 | `deviceQuery`: `/dev/nvidia-uvm` and `/dev/nvidia-uvm-tools` nodes with their dynamic major in `/proc/devices`; UVM loaded in `nvrm`, its GPU registered through `nv_uvm_interface.c`; the C1 ioctls; the logged trace of every UVM call | 6 |
 | C2 | `vectorAdd`, `bandwidthTest` (pinned and pageable), `simpleStreams`: VA-space and channel registration, external ranges, the semaphore pool window, replayable and non-replayable fault interrupts, UVM's CE channels | 10 |
-| C3-K | K1 and K2 in the kernel (`core` ring, consultant review): fault windows, insert, revoke, fault forwarding with a killable wait, `nvrm`'s death, `UNMAPPED` notices, not inheriting windows on fork, `MADV_DONTFORK`; boot checks under QEMU with a test server, no GPU | 10 |
-| C3-U | Managed memory in `nvrm`: the vma shim (`open`/`close`/split from `UNMAPPED`), CPU faults through UVM's own handler, GPU fault migration, prefetch and advice; `UnifiedMemoryStreams`, `UnifiedMemoryPerf`, and `cudaMallocManaged` with the CPU and the GPU touching the same pages in turn | 8 |
+| C3-K | K1 in the kernel (`core` ring, consultant review): fault windows, insert, revoke, fault forwarding from user faults with a killable wait, the drop notice, refused splits, `nvrm`'s death; boot checks under QEMU with a test server, no GPU | 7 |
+| C3-U | Managed memory in `nvrm`: the vma shim (`close` from `UNMAPPED`, no splits), CPU faults through UVM's own handler, GPU fault migration, prefetch and advice; `UnifiedMemoryStreams`, `UnifiedMemoryPerf`, and `cudaMallocManaged` with the CPU and the GPU touching the same pages in turn | 8 |
 | C4 | Samples suite: `0_Introduction`, `1_Utilities` and `6_Performance` of `cuda-samples` minus IPC, multi-GPU, graphics interop and MPS; fix what they find | 8 |
 
-**N5 is 52 points**: C0 10, C1 6, C2 10, C3 18, C4 8.
+**N5 is 49 points**: C0 10, C1 6, C2 10, C3 15, C4 8.
 
 **What comes first.** CUDA needs N0 and N1. From N2 it needs the RM
 half: mapping contexts, events and `poll`, fd identity, and client pins.
@@ -1098,8 +1124,8 @@ graphics once N1 is done:
 
 * **to `deviceQuery`**: N0 15 + N1 32 + RM half of N2 about 8 + C0 10 +
   C1 6 = **71 points**;
-* **to managed memory**: + C2 10 + C3 18 = **99 points**;
-* **to the samples suite**: + C4 8 = **107 points**.
+* **to managed memory**: + C2 10 + C3 15 = **96 points**;
+* **to the samples suite**: + C4 8 = **104 points**.
 
 C0a and C3-K need no card and can start now. C0a is all ring 3, and C3-K
 is checked under QEMU.
@@ -1109,18 +1135,19 @@ is checked under QEMU.
 * **RC1: libcuda's unwritten expectations.** These include:
   * internal managed memory at context creation, which would move C3
     forward;
-  * `mremap` of a UVM mapping;
+  * `mremap`, a partial `munmap` or `mprotect` of a UVM mapping, which
+    K1 refuses;
   * `/proc/self/maps` naming `/dev/nvidia-uvm` for its mappings;
   * `MAP_SHARED_VALIDATE`, which Ferrix refuses with `EINVAL`.
   
   C1's trace finds them. The host's 3090 could show the same sequence in
   a minute, but it is off limits.
-* **RC2: deadlocks through client memory.** An ioctl whose argument lies
-  in managed memory makes `nvrm`'s `request_copy_in` fault into `nvrm`
-  itself. UVM's own rule covers its ioctls, because it copies the
-  parameters before it takes a lock. RM's nested copies are not covered.
-  So window faults are served by dedicated `nvrm` threads, never by the
-  thread that is copying.
+* **RC2: client memory in kernel copies.** Since kernel copies do not
+  wait on window faults (§11.4), an ioctl or system call whose buffer
+  lies in managed memory the CPU has not touched fails with `EFAULT`. That
+  also rules out the deadlock in which `nvrm`'s own `request_copy_in`
+  faults into `nvrm`. If a program needs it, the wait can be added for
+  system calls, with window faults served by dedicated `nvrm` threads.
 * **RC3: pinned volume.** Every managed page on the CPU side is pinned,
   since Ferrix has no swap and UVM DMA-maps every chunk. A managed
   working set larger than `nvrm`'s pin budget (N0f) fails to allocate
@@ -1149,10 +1176,10 @@ NVIDIA code stays out of the item, as in §6:
 What enters the item is generic:
 
 * **K1, in the `core` ring** (`user/space.rs`, `user/vmo.rs`, the fault
-  path in `trap.rs`). Its native calls are in `item`.
-* **K2, in `core` and `load`** (`syscall/memory.rs` for `madvise`).
+  path in `trap.rs`). Its native calls are in `item`. Nothing changes in
+  `fork`, `madvise` or `uaccess`.
 
-Neither names NVIDIA. K1 is the mechanism any GPU driver with shared
+It does not name NVIDIA. K1 is the mechanism any GPU driver with shared
 virtual memory needs: AMD's KFD SVM, Intel's SVM, and RM's revocation. It
 is also the core of a later `userfaultfd`.
 
@@ -1169,29 +1196,24 @@ The consultant reviews C3-K before it lands, like N0.
 
 ### 11.8 Decisions for the customer
 
-All five are open; they go to the customer with this design.
+All five were answered on 2026-10-02:
 
-* **D-C1: managed memory.**
-  * Recommended: C3, with K1 and K2 in the kernel.
-  * Alternative: stop at C2. Then `cudaMallocManaged` fails, everything
-    else works, and nothing in `core` changes.
-* **D-C2: how UVM is hosted.**
-  * Recommended: NVIDIA's UVM unmodified, rebuilt against Ferrix's
-    `uvm-kpi` header set.
-  * Alternative: a UVM of Ferrix's own that answers only the C1 and C2
-    ioctls. It is smaller at first, but it would have to reproduce how
-    UVM owns the GPU page tables, with no tests to check it against.
-* **D-C3: order.**
-  * Recommended: the CUDA track beside graphics after N1, and C0a and
-    C3-K started now, since they need no card.
-  * Alternative: CUDA after N2.
-* **D-C4: profilers.** Recommended: `/dev/nvidia-uvm-tools` exists and
-  refuses, so Nsight and CUPTI do not work. Alternative: port the tools
-  interface later, about 3k lines plus `pin_user_pages_remote`.
-* **D-C5: the samples' source.** Recommended: NVIDIA's `cuda-samples`
-  (BSD-3) fetched at a pinned tag, and built on nazuna with its installed
-  CUDA 12.9. CUDA's runtime is linked statically into each sample, so
-  nothing from the toolkit is committed.
+* **D-C1 — managed memory: build it, as small as possible.** C3 is in,
+  with the kernel's fault windows cut to the minimum of §11.4: no waiting
+  kernel copies, no partial unmaps, nothing new in `fork` or `madvise`.
+  Not stopping at C2.
+* **D-C2 — NVIDIA's own UVM**, unmodified, rebuilt against Ferrix's
+  `uvm-kpi` header set. Not a UVM of Ferrix's own.
+* **D-C3 — order: beside graphics after N1.** C0a starts now, and so does
+  C3-K's design, which goes to the certification consultant before any
+  `core` code is written. Neither uses the card.
+* **D-C4 — profilers: `/dev/nvidia-uvm-tools` exists and refuses.**
+  Nsight and CUPTI do not work. Porting the tools interface (about 3k lines
+  plus `pin_user_pages_remote`) is not planned.
+* **D-C5 — the samples are NVIDIA's `cuda-samples`** (BSD-3), fetched at
+  a pinned tag and built on nazuna with its installed CUDA 12.9. CUDA's
+  runtime is linked statically into each sample, so nothing from the
+  toolkit is committed.
 
 ---
 
