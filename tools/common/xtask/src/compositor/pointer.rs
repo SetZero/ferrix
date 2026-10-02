@@ -71,10 +71,11 @@ pub(super) const SWEEP: (u32, Duration) = (400, Duration::from_millis(3));
 /// The most frames one of the compositor's frame reports may count.
 ///
 /// A report is printed by the first frame a second or more after the last,
-/// so at sixty frames a second it counts sixty or so however long the quiet
-/// before it was. Three hundred reports a second drawn one for one count
-/// three hundred.
-const MOST_FRAMES: u32 = 75;
+/// so it counts the screen's rate or a little over however long the quiet
+/// before it was: QEMU's VNC screen says 75 Hz in its EDID, which hyprix
+/// paces by, and a report a little over a second long counted 76. Three
+/// hundred reports a second drawn one for one count three hundred.
+const MOST_FRAMES: u32 = 100;
 
 /// Where the pointer is at `step` of the sweep, in QMP's 0..0x7FFF.
 ///
