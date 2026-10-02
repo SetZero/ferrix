@@ -12,6 +12,10 @@ the renderer trait and the GPU renderer's shaders, and gates that judge a
 GPU's picture; `zwp_linux_dmabuf` too, once it lands after Path A. It depends on the dynamic linking stage,
 whichever userspace is taken.
 
+The customer decided on 2026-10-02 to use NVIDIA's own driver and
+userspace, first on nazuna's RTX 3060 through libvirt. `docs/NVIDIA.md` is
+the feasibility pass and the design, and puts N0–N4 at 111 points.
+
 **Exit:** the stage 19 exit on real hardware, drawn by the card.
 
 ---

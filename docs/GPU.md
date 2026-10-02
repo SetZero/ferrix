@@ -895,6 +895,10 @@ on, recorded here so that it can be overruled by name.
 
 ## 4. Path B: an NVIDIA card under Ferrix itself
 
+The customer chose this path on 2026-10-02, with NVIDIA's own driver and
+userspace. Its feasibility pass and design are `docs/NVIDIA.md`, which
+supersedes the sketch below.
+
 For the day Ferrix runs on bare metal with an NVIDIA card in it. Not sized:
 well over a hundred points, most of them unknowns, and it accelerates nothing
 that runs today -- the one real board in this tree, the DK1, has no NVIDIA

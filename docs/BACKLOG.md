@@ -768,6 +768,15 @@ neither.
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
 
+* **2026-10-02 (customer)** **GPU support is NVIDIA's own driver.**
+  NVIDIA's open-gpu-kernel-modules are ported so that their OS-agnostic core
+  (RM, NVKMS, GSP boot for Ampere) runs as a Ferrix driver. NVIDIA's
+  unmodified userspace (`libnvidia-*`, the Vulkan and GL ICD, later CUDA)
+  talks to `/dev/nvidia*` as on Linux. Not nouveau and not NVK. The
+  hardware is nazuna's RTX 3060, through libvirt, and only while the
+  customer's domains sharing it are shut off. The order follows yserver's:
+  a feasibility pass and a written design (`docs/NVIDIA.md`, on branch
+  `nvidia`), then the customer's decisions (§9 there), then small landings.
 * **2026-10-02 (customer)** **Build System V shared memory for Steam's web
   helper's MIT-SHM.** Asked by the session making Steam smooth: the web
   helper's Chromium presents its software-composited frames to yserver with
@@ -1076,6 +1085,11 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
 
 ## Waiting on the customer
 
+* The NVIDIA design (`docs/NVIDIA.md` §9, branch `nvidia`, 2026-10-02):
+  D1–D9. These are where the core runs, fetched versus vendored sources,
+  the pinned release, GL for X clients, the presentation order, a monitor
+  on the 3060, CUDA, the platform changes inside the item, and when agents
+  may use the card. N0–N4 come to 111 points.
 * The Steam-performance session's pushes (2026-10-02): local `main` on
   nazuna is ahead of `origin` by the night's landings (`docs/STEAM.md` §8),
   and yserver's `steam-perf` branch is not on the fork. Both are the
