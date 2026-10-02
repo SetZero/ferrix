@@ -35,8 +35,11 @@ So this gate asserts four things.
      the tree does not reach fails). An item or core crate's shipping
      dependencies -- `[dependencies]` and `[build-dependencies]`, target-
      specific ones included, never `[dev-dependencies]` -- must be crates of
-     its own ring or below, or in `crates.infrastructure_allowlist`, whose
-     own dependencies are held to the same rule; each allowlist entry must
+     its own ring or below, or in `crates.infrastructure_allowlist`. An
+     allowlisted crate's own dependencies are held to the same rule only
+     once an item crate depends on it -- the walk starts at the item crates
+     -- so one no item crate uses may gain a load dependency unremarked.
+     Each allowlist entry must
      still be named by a core or item kernel file, which is its reason. And
      a kernel file that names a classified crate (`ferrix_btrfs::..`) is an
      edge to that crate's ring, under the same rules as rule 2. The
@@ -675,7 +678,8 @@ def report(manifest: dict, ring_of: dict[str, str], modules, edges: list[Edge]) 
 #     unclassified kernel file does: nobody has said what it is;
 #   * that an item or core crate depends only on its own ring and the rings
 #     below, or on an allowlisted infrastructure crate, whose own dependencies
-#     are held to the same rule ([`crate_dependency_problems`]);
+#     are held to the same rule once an item crate depends on it, and not
+#     before ([`crate_dependency_problems`]);
 #   * that a kernel file naming a crate is held to `dependency_rules` like a
 #     kernel file naming a module ([`find_edges`]).
 

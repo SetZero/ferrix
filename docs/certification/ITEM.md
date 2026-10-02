@@ -207,19 +207,27 @@ can be item without the VFS coming with it. **The interface between btrfs and
 the VFS is therefore the two crates' public API**: `Volume` and `WriteVolume`
 and the types they take and return, called from the load, and `Device` and
 `WriteDevice`, implemented by the load. Nothing in the item names the VFS. What
-the item vouches for at that interface is what the crates do with the bytes a
-`Device` returns -- a corrupt or hostile volume gives an error, never a panic:
-every field is read through a checked slice access and every length is checked
-arithmetic, in crates that are `#![forbid(unsafe_code)]` and deny indexing and
-panics (`ferrix-btrfs`'s *Totality*) -- and what a `WriteVolume` writes back. What it does not vouch for is that the
+the item is to vouch for at that interface is what the crates do with the bytes
+a `Device` returns, and what a `WriteVolume` writes back. **The target, not yet
+the fact, is that a corrupt or hostile volume gives an error and never stops
+the machine.** What holds today is that every field is read through a checked
+slice access, in crates that are `#![forbid(unsafe_code)]` and deny indexing
+and explicit panics (`ferrix-btrfs`'s *Totality*). What does not: the 185
+baselined allocations that cannot report failure (below) can take their sizes
+from the disk and exhaust the heap, which stops the machine (FX-0008); and the
+release profile has no overflow checks and the workspace no arithmetic lint,
+so "every length is checked arithmetic" rests on care rather than on a gate.
+Both are F-56, the crates' missing evidence (`FINDINGS.md`). What it does not vouch for is that the
 load calls it correctly: the VFS's locking, its caching of what btrfs returned,
 and the Linux calls that reach it.
 
 The boundary gate holds the crates at their manifests: an item crate may
 depend only on item and core crates or on an allowlisted piece of `no_std`
 infrastructure the core already links (`crates.infrastructure_allowlist`:
-`ferrix-fallible` and `ferrix-sync`, each with its reason, and each held to
-the same rule in turn). `ferrix-btrfs-write` on `ferrix-btrfs` passes; a load
+`ferrix-fallible` and `ferrix-sync`, each with its reason; an allowlisted
+crate's own dependencies are held to the same rule only once an item crate
+depends on it, so while none does -- the case on 2026-10-02 -- `ferrix-sync`
+gaining a load dependency would pass unremarked). `ferrix-btrfs-write` on `ferrix-btrfs` passes; a load
 crate as a dependency fails, which a negative control showed when the rule was
 written. A kernel file naming one of the crates is an edge to the `item` ring
 like a `crate::` path, so the core cannot name btrfs. The item-scoped gates --
@@ -234,7 +242,7 @@ exemption.
 Two open points are for the assessor rather than settled here. The two
 allowlisted crates are linked by the core today without being classified at
 all, which this change makes visible rather than causes; classifying them
-`core` is the natural next step. And the traceability and coverage evidence,
+`core` is the natural next step (F-56; `docs/BACKLOG.md`). And the traceability and coverage evidence,
 which is measured on the kernel image, does not yet reach the crates, whose
 tests run on the host.
 
