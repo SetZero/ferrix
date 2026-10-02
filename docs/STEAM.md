@@ -421,3 +421,12 @@ and the pin moves, which needs the customer's word. Until then the desktop's
 yserver has the 9,000 wake-ups a second. And Windows under WHPX gives the
 guest one processor (QEMU 11.1's MMIO emulator, BACKLOG), on which a browser,
 an X server and a compositor share one core.
+
+**Later the same day, the desktop as a whole.** hyprix said no clock for
+`wp_presentation` and stamped presentations with the wall clock, so
+Chrome's BeginFrames jittered; it says `CLOCK_MONOTONIC` now and stamps a
+frame with its refresh on the pace's grid (297e40931). And it flushes what
+the GPU drew from a thread of its own instead of waiting 5 to 15 ms for the
+host to show each frame (cd6cab079): its frames take 2.5 ms where they took
+6 to 7. Steam's store still scrolls at 59–60 frames a second with the
+flush off the loop, and a click shows in 0 to 80 ms.
