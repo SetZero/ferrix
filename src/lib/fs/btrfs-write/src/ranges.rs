@@ -145,6 +145,51 @@ impl RangeSet {
             .fold(true, |ok, (start, len)| self.insert(start, len) && ok)
     }
 
+    /// Add `[start, start + len)` whether or not some of it is already in
+    /// the set: a union, for sets built from ranges that may repeat.
+    pub fn add(&mut self, start: u64, len: u64) {
+        let Some(mut end) = start.checked_add(len) else {
+            return;
+        };
+        if len == 0 {
+            return;
+        }
+        let mut first = start;
+        let touching: alloc::vec::Vec<(u64, u64)> = self
+            .map
+            .range(..=end)
+            .rev()
+            .take_while(|&(_, &run_end)| run_end >= start)
+            .map(|(&run_start, &run_end)| (run_start, run_end))
+            .collect();
+        for (run_start, run_end) in touching {
+            first = first.min(run_start);
+            end = end.max(run_end);
+            let _ = self.map.remove(&run_start);
+        }
+        let _ = self.map.insert(first, end);
+    }
+
+    /// Take every byte `other` also holds out of this set, and return them.
+    pub fn extract(&mut self, other: &RangeSet) -> RangeSet {
+        let mut taken = RangeSet::new();
+        for (start, len) in other.iter() {
+            let end = start.saturating_add(len);
+            let first = self.run_containing(start).map_or(start, |(run, _)| run);
+            for (&run_start, &run_end) in self.map.range(first..end) {
+                let from = run_start.max(start);
+                let to = run_end.min(end);
+                if from < to {
+                    let _ = taken.insert(from, to - from);
+                }
+            }
+        }
+        for (start, len) in taken.iter() {
+            let _ = self.remove(start, len);
+        }
+        taken
+    }
+
     /// The lowest address at or after `from` where `len` bytes aligned to
     /// `align` fit inside one run and, when `boundary` is non-zero, do not
     /// cross a multiple of it. Falls back to the lowest such address before

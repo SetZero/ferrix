@@ -235,12 +235,15 @@ impl<D: WriteDevice> WriteVolume<D> {
 
     /// A block group for every chunk, with its usage and free space.
     fn load_block_groups(&mut self) -> Result<()> {
-        let chunks: Vec<(u64, u64, u64)> = self
+        let chunks: Vec<(u64, u64, u64, RangeSet)> = self
             .chunks
             .iter()
-            .map(|chunk| (chunk.logical, chunk.length, chunk.type_bits))
+            .map(|chunk| {
+                let stripes = chunk.superblock_stripes();
+                (chunk.logical, chunk.length, chunk.type_bits, stripes)
+            })
             .collect();
-        for (start, length, type_bits) in chunks {
+        for (start, length, type_bits, superblocks) in chunks {
             let key = BtrfsKey::new(start, BLOCK_GROUP_ITEM_KEY, length);
             let item = self
                 .get(EXTENT_TREE_OBJECTID, &key)?
@@ -251,18 +254,13 @@ impl<D: WriteDevice> WriteVolume<D> {
             if flags != type_bits || used > length {
                 return Err(bad);
             }
+            // The free-space tree lists the superblock stripes as free, so
+            // they are taken out here, as Linux's `add_new_free_space` skips
+            // what `exclude_super_stripes` excluded.
             let (free, bitmaps) = self.load_free_space(start, length)?;
-            self.space.insert(BlockGroup {
-                start,
-                length,
-                flags,
-                used,
-                item_dirty: false,
-                free: free.clone(),
-                pinned: RangeSet::new(),
-                on_disk: free,
-                bitmaps,
-            })?;
+            let mut group = BlockGroup::new(start, length, flags, used, free, superblocks);
+            group.bitmaps = bitmaps;
+            self.space.insert(group)?;
         }
         Ok(())
     }

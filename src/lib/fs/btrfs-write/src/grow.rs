@@ -124,19 +124,19 @@ impl<D: WriteDevice> WriteVolume<D> {
                 })
                 .collect(),
         };
+        // The free-space item below covers the whole chunk, as Linux's
+        // `add_block_group_free_space` writes it, but a stripe placed over
+        // the 64 MiB or 256 GiB superblock must still not be allocated there.
         let mut free = RangeSet::new();
         let _ = free.insert(chunk.logical, chunk.length);
-        self.space.insert(BlockGroup {
-            start: chunk.logical,
-            length: chunk.length,
-            flags: chunk.type_bits,
-            used: 0,
-            item_dirty: false,
-            free: free.clone(),
-            pinned: RangeSet::new(),
-            on_disk: free,
-            bitmaps: false,
-        })?;
+        self.space.insert(BlockGroup::new(
+            chunk.logical,
+            chunk.length,
+            chunk.type_bits,
+            0,
+            free,
+            chunk.superblock_stripes(),
+        ))?;
         self.chunks.insert(chunk.clone())?;
         self.chunks_changed = true;
         self.record_chunk(&chunk)

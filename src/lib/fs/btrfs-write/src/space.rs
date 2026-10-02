@@ -11,8 +11,12 @@
 //!   tree before the new superblock is down. It returns to `free` only after
 //!   the commit ([`Space::unpin`]);
 //! * `on_disk` — what the free-space tree says is free. The commit makes the
-//!   tree say `free ∪ pinned`, because once the new superblock is down the
-//!   pinned space is free on disk, and writes the difference.
+//!   tree say `free ∪ pinned ∪ reserved`, because once the new superblock is
+//!   down the pinned space is free on disk, and writes the difference;
+//! * `reserved` — the free part of the group's superblock stripes. Linux
+//!   lists them free in the free-space tree and keeps them out of its
+//!   in-memory free space (`exclude_super_stripes`, `add_new_free_space`),
+//!   so they are never in `free`, but are written back as free.
 //!
 //! Space allocated in the current transaction is also remembered, because
 //! freeing it again before the commit is different: nothing committed ever
@@ -91,6 +95,11 @@ pub struct BlockGroup {
     pub pinned: RangeSet,
     /// What the free-space tree records.
     pub on_disk: RangeSet,
+    /// Where superblock copies lie in the group: never allocatable.
+    pub excluded: RangeSet,
+    /// The part of `excluded` nothing uses, which the free-space tree lists
+    /// as free.
+    pub reserved: RangeSet,
     /// Whether the free-space tree holds this group as bitmaps.
     pub bitmaps: bool,
 }
@@ -113,7 +122,44 @@ impl BlockGroup {
     pub fn committed_free(&self) -> RangeSet {
         let mut all = self.free.clone();
         let _ = all.absorb(&self.pinned);
+        let _ = all.absorb(&self.reserved);
         all
+    }
+
+    /// A group whose free-space tree lists `on_disk` as free, held as
+    /// extents: all of it allocatable but the superblock stripes in
+    /// `excluded`.
+    #[must_use]
+    pub fn new(
+        start: u64,
+        length: u64,
+        flags: u64,
+        used: u64,
+        on_disk: RangeSet,
+        excluded: RangeSet,
+    ) -> Self {
+        let mut free = on_disk.clone();
+        let reserved = free.extract(&excluded);
+        BlockGroup {
+            start,
+            length,
+            flags,
+            used,
+            item_dirty: false,
+            free,
+            pinned: RangeSet::new(),
+            on_disk,
+            excluded,
+            reserved,
+            bitmaps: false,
+        }
+    }
+
+    /// Make `ranges`, which nothing uses any more, free again, except that
+    /// the part in a superblock stripe goes back to `reserved`.
+    fn give_back(&mut self, mut ranges: RangeSet) -> bool {
+        let reserved = ranges.extract(&self.excluded);
+        self.reserved.absorb(&reserved) & self.free.absorb(&ranges)
     }
 }
 
@@ -244,6 +290,15 @@ impl Space {
                 "logged extent is not in a group of its kind",
             ));
         }
+        // A log written before superblock stripes were kept out of
+        // allocation may name an extent in one. It is in use all the same.
+        let group = self.group_of_mut(at)?;
+        let mut wanted = RangeSet::new();
+        let _ = wanted.insert(at, len);
+        let stripes = group.reserved.extract(&wanted);
+        if !group.free.absorb(&stripes) {
+            return Err(Error::Inconsistent("superblock stripe was also free"));
+        }
         self.take(kind, at, len)
     }
 
@@ -252,13 +307,18 @@ impl Space {
     pub fn release(&mut self, at: u64, len: u64) -> Result<()> {
         if self.allocated.remove(at, len) {
             let group = self.group_of_mut(at)?;
-            if group.free.insert(at, len) {
+            let mut released = RangeSet::new();
+            let _ = released.insert(at, len);
+            if group.give_back(released) {
                 return Ok(());
             }
             return Err(Error::Inconsistent("released space that was already free"));
         }
         let group = self.group_of_mut(at)?;
-        if group.free.overlaps(at, len) || !group.pinned.insert(at, len) {
+        if group.free.overlaps(at, len)
+            || group.reserved.overlaps(at, len)
+            || !group.pinned.insert(at, len)
+        {
             return Err(Error::Inconsistent("freed space that was already free"));
         }
         Ok(())
@@ -281,10 +341,10 @@ impl Space {
     /// the next transaction yet.
     pub fn unpin(&mut self) -> Result<()> {
         for group in self.groups.values_mut() {
-            if !group.free.absorb(&group.pinned) {
+            let pinned = core::mem::take(&mut group.pinned);
+            if !group.give_back(pinned) {
                 return Err(Error::Inconsistent("pinned space was also free"));
             }
-            group.pinned.clear();
         }
         self.allocated.clear();
         Ok(())

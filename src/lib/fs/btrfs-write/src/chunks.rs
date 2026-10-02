@@ -14,7 +14,10 @@ use ferrix_btrfs::chunk::{
     BLOCK_GROUP_DUP, BLOCK_GROUP_PROFILE_MASK, BLOCK_GROUP_TYPE_MASK, ChunkItem, Stripe,
 };
 
+use ferrix_btrfs::superblock::{PRIMARY_OFFSET, SUPERBLOCK_OFFSETS};
+
 use crate::bytes::{put, put_u16, put_u32, put_u64};
+use crate::ranges::RangeSet;
 use crate::{Error, Result, Unsupported};
 
 /// One chunk: a logical range and the physical places it is stored.
@@ -58,6 +61,38 @@ impl Chunk {
     /// The type bits alone: data, metadata or system.
     pub(crate) fn kind(&self) -> u64 {
         self.type_bits & BLOCK_GROUP_TYPE_MASK
+    }
+
+    /// The logical ranges of this chunk that a superblock copy lies in, which
+    /// are never to be allocated: Linux's `exclude_super_stripes`.
+    ///
+    /// Each superblock offset is mapped back through every stripe holding
+    /// it, as `btrfs_rmap_block` does, and excluded for a whole
+    /// [`STRIPE_LEN`] from there, clipped to the chunk. A chunk starting
+    /// below the primary superblock also loses everything up to it. The
+    /// free-space tree still lists these ranges as free — Linux never takes
+    /// them out of it — so only the allocator may not hand them out: a tree
+    /// block placed there is overwritten by the next commit's superblocks.
+    pub(crate) fn superblock_stripes(&self) -> RangeSet {
+        let mut out = RangeSet::new();
+        if self.logical < PRIMARY_OFFSET {
+            out.add(self.logical, PRIMARY_OFFSET.min(self.end()) - self.logical);
+        }
+        for &offset in &SUPERBLOCK_OFFSETS {
+            for stripe in &self.stripes {
+                let Some(within) = offset
+                    .checked_sub(stripe.offset)
+                    .filter(|&within| within < self.length)
+                else {
+                    continue;
+                };
+                // SINGLE and DUP stripes are whole copies, so the offset
+                // into the stripe is the offset into the chunk.
+                let at = self.logical.saturating_add(within);
+                out.add(at, STRIPE_LEN.min(self.end() - at));
+            }
+        }
+        out
     }
 
     /// The `CHUNK_ITEM` payload for this chunk, as the kernel writes one for

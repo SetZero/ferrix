@@ -23,9 +23,11 @@ use ferrix_btrfs::tree::BtrfsKey;
 use ferrix_btrfs::volume::{Device, ReadKind, Volume};
 
 use super::*;
+use crate::chunks::STRIPE_LEN;
 use crate::extent::{Backref, EXTENT_ITEM_KEY, ExtentRecord, METADATA_ITEM_KEY};
 use crate::node::Body;
 use crate::ranges::RangeSet;
+use crate::space::Kind;
 
 mod fsops;
 mod inodes;
@@ -337,7 +339,7 @@ fn check_extent_tree(
 }
 
 /// Each block group's usage, and its free space as the complement of its
-/// extents; and the superblock's total.
+/// extents less its superblock stripes; and the superblock's total.
 fn check_groups(volume: &WriteVolume<MemDevice>, extents: &BTreeMap<u64, u64>) {
     let mut used_total = 0;
     for group in volume.space.groups() {
@@ -352,9 +354,18 @@ fn check_groups(volume: &WriteVolume<MemDevice>, extents: &BTreeMap<u64, u64>) {
             used += len;
         }
         assert_eq!(group.used, used, "usage of block group {:#x}", group.start);
+        // The superblock stripes nothing uses are free on disk but never
+        // allocatable.
+        let mut allocatable = free.clone();
+        let reserved = allocatable.extract(&group.excluded);
         assert_eq!(
-            group.free, free,
+            group.free, allocatable,
             "free space of block group {:#x}",
+            group.start
+        );
+        assert_eq!(
+            group.reserved, reserved,
+            "superblock stripes of block group {:#x}",
             group.start
         );
         used_total += used;
@@ -508,6 +519,139 @@ fn deleting_everything_added_shrinks_the_tree_back() {
     check(&volume.device);
     assert_eq!(volume.root(tree).unwrap().level, 0);
     assert_eq!(items(&mut volume, tree), before);
+}
+
+/// Where the first superblock mirror, at 64 MiB on the device, lies in
+/// [`BLANK`]: 27 MiB into the DUP metadata chunk at logical 29 MiB, whose
+/// first stripe starts at 37 MiB. `mkfs.btrfs` lays out every larger volume
+/// the same way, and on one of them a writer that allocated here lost an fs
+/// tree leaf to the next commit's superblock.
+const MIRROR_IN_METADATA: u64 = 58_720_256;
+
+/// Every copy of every block reachable from the committed trees, compared:
+/// a node that a superblock write landed on differs from its other copy.
+fn assert_copies_agree(volume: &mut WriteVolume<MemDevice>) -> BTreeMap<u64, Block> {
+    let mut blocks = BTreeMap::new();
+    let trees: Vec<TreeId> = volume.roots.keys().copied().collect();
+    for tree in &trees {
+        walk_tree(volume, *tree, &mut blocks);
+    }
+    let size = volume.nodesize() as usize;
+    for &at in blocks.keys() {
+        let copies = volume.chunks.copies(at, size as u64).unwrap();
+        let mut first = vec![0u8; size];
+        let mut other = vec![0u8; size];
+        for (index, &physical) in copies.iter().enumerate() {
+            let buf = if index == 0 { &mut first } else { &mut other };
+            volume
+                .device
+                .read_at(physical, buf, ReadKind::Metadata)
+                .unwrap();
+            if index > 0 {
+                assert!(first == other, "copy {index} of block {at:#x} differs");
+            }
+        }
+    }
+    blocks
+}
+
+/// [`BLANK`] after enough small commits to carry the metadata allocator past
+/// [`MIRROR_IN_METADATA`] — each commit copies its paths to blocks further
+/// on — with every block's copies compared after each.
+pub(crate) fn past_the_mirror() -> MemDevice {
+    let mut volume = WriteVolume::open(MemDevice::new(BLANK)).unwrap();
+    let stripe = STRIPE_LEN;
+    let group = volume.space.group_of(MIRROR_IN_METADATA).unwrap();
+    assert!(group.reserved.contains(MIRROR_IN_METADATA, stripe));
+    assert!(!group.free.overlaps(MIRROR_IN_METADATA, stripe));
+    let mut past = false;
+    let mut added = 0;
+    for i in 0..5000 {
+        added = i + 1;
+        volume
+            .insert(
+                FS_TREE_OBJECTID,
+                BtrfsKey::new(100_000 + i, 250, 0),
+                vec![3; 200],
+            )
+            .unwrap();
+        volume.commit().unwrap();
+        let blocks = assert_copies_agree(&mut volume);
+        assert!(
+            !blocks
+                .keys()
+                .any(|&at| at + u64::from(volume.nodesize()) > MIRROR_IN_METADATA
+                    && at < MIRROR_IN_METADATA + stripe),
+            "a tree block was allocated over the superblock mirror"
+        );
+        if blocks.keys().any(|&at| at > MIRROR_IN_METADATA + stripe) {
+            past = true;
+            break;
+        }
+    }
+    assert!(past, "the allocator reached the mirror");
+    // The scratch items go again, so host `btrfs check` finds no item
+    // without an inode.
+    for i in 0..added {
+        volume
+            .delete(FS_TREE_OBJECTID, &BtrfsKey::new(100_000 + i, 250, 0))
+            .unwrap();
+    }
+    volume.commit().unwrap();
+    let _ = assert_copies_agree(&mut volume);
+    volume.into_device()
+}
+
+#[test]
+fn no_tree_block_is_allocated_over_a_superblock_mirror() {
+    let device = past_the_mirror();
+    check(&device);
+    // The free-space tree still lists the mirror's stripe as free, as Linux
+    // writes it.
+    let volume = WriteVolume::open_committed(device).unwrap();
+    let group = volume.space.group_of(MIRROR_IN_METADATA).unwrap();
+    assert!(group.on_disk.contains(MIRROR_IN_METADATA, STRIPE_LEN));
+}
+
+/// [`POPULATED`] grown by data chunks until one has its stripe over the
+/// superblock mirror at 64 MiB, committed. Returns the device and that
+/// chunk's logical address of the mirror.
+pub(crate) fn grown_over_the_mirror() -> (MemDevice, u64) {
+    let mirror = ferrix_btrfs::superblock::SUPERBLOCK_OFFSETS[1];
+    let mut volume = WriteVolume::open(MemDevice::new(POPULATED)).unwrap();
+    let covering = |volume: &WriteVolume<MemDevice>| {
+        volume.chunks.iter().find_map(|chunk| {
+            let stripe = chunk.stripes.first()?;
+            let within = mirror.checked_sub(stripe.offset)?;
+            (within < chunk.length).then_some(chunk.logical + within)
+        })
+    };
+    while covering(&volume).is_none() {
+        volume.allocate_chunk(Kind::Data).unwrap();
+    }
+    let logical = covering(&volume).unwrap();
+    let group = volume.space.group_of(logical).unwrap();
+    assert!(group.reserved.contains(logical, STRIPE_LEN));
+    assert!(!group.free.overlaps(logical, STRIPE_LEN));
+    assert!(group.on_disk.contains(logical, STRIPE_LEN));
+    volume.commit().unwrap();
+    (volume.into_device(), logical)
+}
+
+#[test]
+fn a_new_chunk_over_a_superblock_mirror_keeps_the_mirror_out_of_allocation() {
+    let (device, logical) = grown_over_the_mirror();
+    check(&device);
+    let mut volume = WriteVolume::open(device).unwrap();
+    let group = volume.space.group_of(logical).unwrap();
+    assert!(group.reserved.contains(logical, STRIPE_LEN));
+    // Every byte of data space, handed out: none of it over the mirror.
+    while let Ok((at, len)) = volume.space.alloc_data(1 << 20, 4096, 4096) {
+        assert!(
+            at + len <= logical || at >= logical + STRIPE_LEN,
+            "data allocated over the superblock mirror at {at:#x}"
+        );
+    }
 }
 
 #[test]

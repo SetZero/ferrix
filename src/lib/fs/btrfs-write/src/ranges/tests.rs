@@ -49,3 +49,39 @@ fn first_prefix_takes_what_the_run_has() {
         Some((65536, 1 << 20))
     );
 }
+
+#[test]
+fn add_unions_overlapping_and_touching_runs() {
+    let mut set = RangeSet::new();
+    set.add(10, 10);
+    set.add(40, 10);
+    set.add(15, 10);
+    assert_eq!(
+        set.iter().collect::<alloc::vec::Vec<_>>(),
+        [(10, 15), (40, 10)]
+    );
+    set.add(25, 15);
+    assert_eq!(set.iter().collect::<alloc::vec::Vec<_>>(), [(10, 40)]);
+    set.add(12, 3);
+    assert_eq!(set.total(), 40, "a range already held changes nothing");
+}
+
+#[test]
+fn extract_takes_exactly_the_shared_bytes() {
+    let mut set = RangeSet::new();
+    assert!(set.insert(0, 100));
+    assert!(set.insert(200, 100));
+    let mut other = RangeSet::new();
+    assert!(other.insert(90, 120));
+    assert!(other.insert(500, 10));
+    let taken = set.extract(&other);
+    assert_eq!(
+        taken.iter().collect::<alloc::vec::Vec<_>>(),
+        [(90, 10), (200, 10)]
+    );
+    assert_eq!(
+        set.iter().collect::<alloc::vec::Vec<_>>(),
+        [(0, 90), (210, 90)]
+    );
+    assert!(set.extract(&other).is_empty(), "nothing shared is left");
+}

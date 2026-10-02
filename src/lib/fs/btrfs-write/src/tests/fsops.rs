@@ -435,5 +435,7 @@ pub(crate) fn images() -> Vec<(&'static str, MemDevice)> {
         ("orphan", orphaned.into_device()),
         ("compressed", edit_compressed().0),
         ("churn-files", churn_populated()),
+        ("past-the-mirror", super::past_the_mirror()),
+        ("grown-over-the-mirror", super::grown_over_the_mirror().0),
     ]
 }
