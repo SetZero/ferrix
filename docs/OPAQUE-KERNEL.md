@@ -2474,6 +2474,14 @@ consultant with the logs of every case and control in part 6, and of the
 
 ### 9.8 Steps 2 and 3: the designs (draft for the consultant)
 
+**Reviewed (2026-10-02): OK IF.** 2d is OK to build; 2a, 2b, 2c, 2e, 2f and
+3a are OK IF, with eight conditions; 3b is OK IF its write skip is dropped.
+Question 5 was real and is filed as F-60, whose fix lands on its own before
+2f. The conditions, the answers to the questions and what each changed are
+at the end of this section, under *The consultant's review (2026-10-02) and
+what changed*. Each piece below carries its change in an *After the
+review* paragraph.
+
 Nothing here is built. These are the designs of §9.5's steps 2 and 3, which
 go to the certification consultant before any code, as step 4's did. They
 are written against branch `ipc-step1` (read at b030f107d, while it is being
@@ -2618,6 +2626,16 @@ the borrow holds nothing.
   two. Control: `switch_chosen` writes the record after `switch_to` instead
   of before, which leaves a window the handler sees.
 
+**After the review (condition 1).** The record is written at every write of
+the run queue's `current`, and there are three: the boot processor's
+adoption of its boot context as a task in `sched::init`, each processor's
+idle-task installation, and `switch_chosen`. A write of `current` anywhere
+else is refused in review, and the invariant's row names the three. The
+stage-5 check covers the boot write too: its control leaves the boot
+adoption's record unset, and the first comparison on the boot processor
+fails. The closure form and a borrow held across a block inside it are
+accepted (question 1).
+
 **Points:** 4 to 6. **Saving:** *guess* 0.1 to 0.25 us a round trip, from
 about eight calls a side, each one lock, one interrupt save and two locked
 `Arc` operations.
@@ -2716,9 +2734,40 @@ and an enable on the wrong processor stops it. New:
   path leaves the count raised, which FX-0503 then catches at the check's
   next block.
 
-**Points:** 6 to 9. **Saving:** *guess* 0.3 to 0.6 us a round trip: about
-14 `PreemptSpinLock`s a side (§9.5), each losing four locked operations and,
-on x86-64, four interrupt saves and restores.
+**After the review (condition 2).** The plain count is sound only if every
+context that can touch it addresses the right record and cannot be split
+by another context that also touches it. So the code carries three
+arguments, each with a check where one can be made:
+- *x86-64, every entry vector.* The `xadd` addresses `GS:offset`, so every
+  path that can reach a `PreemptSpinLock` must run with the kernel's GS
+  base, or take none. The entries that can arrive with the user's GS base
+  live are named one by one: the NMI, `#MC` and `#DB` through the paranoid
+  entry, which decides `swapgs` by reading `GS_BASE`, and an NMI that lands
+  in the `SYSCALL` stub before its `swapgs`. For each, the design states
+  either that it has switched to the kernel's base before any Rust runs, or
+  that the handler takes no `PreemptSpinLock`. Where it is the second, a
+  debug assertion in `preempt_disable_at` checks that `GS_BASE` is the
+  record's own address. A boot check sends an NMI to a processor spinning in
+  the stub's window and requires the count unchanged.
+- *Arm, every exception that can take a lock is masked.* On AArch64 that is
+  IRQ, and also SError and the pseudo-NMI where the kernel uses them: the
+  sequence masks `DAIF`'s A and I bits, or the code argues that neither
+  handler takes a lock. On ARMv7-A it is IRQ and FIQ: `cpsid if`, or an
+  argument that the FIQ handler takes no lock.
+- *ARMv7-A, a remote read may tear.* The packed `u64` is two words there. A
+  read from another processor (a report, `flush_tlb_everywhere`'s test of
+  another record) may see one half old and one new, and every such reader
+  must give an answer that tolerates it: a report prints both halves as
+  read, and no decision is taken from another processor's word.
+
+The `xadd` sequences may join the asm allowlist under these arguments
+(question 2). The saving is claimed on x86-64 only until 2b is measured on
+Arm (advisory).
+
+**Points:** 7 to 10 after the review (6 to 9 in the draft). **Saving:**
+*guess* 0.3 to 0.6 us a round trip: about 14 `PreemptSpinLock`s a side (§9.5),
+each losing four locked operations and, on x86-64, four interrupt saves and
+restores.
 
 **Documents.** SPECULATION.md: none. MEMORY-AND-TIMING: §2.2's masked spans
 shrink: taking and letting go of a lock no longer masks interrupts on
@@ -2893,9 +2942,64 @@ two processors:
     Control: `arm_probe` posts nothing, and a check that reads the bit
     beside `PROBE_TASK` fails.
 
-**Points:** 9 to 13: the word and `notify` (2), the posters (3 to 4), the
-way out on three architectures (1 to 2), eleven cases and controls with the
-hook and the `loom` model (3 to 5).
+**After the review (conditions 3 and 4).**
+
+*Termination's `END` is the core's* (condition 3, question 4). The core
+stores `terminated` in `object::process::Exit::record`; it posts `END` there
+too, on every task of the process, after the store. The core's `Process` has
+no list of its tasks today, so the personality's `tasks` list (`Weak<Task>`
+per task, already used for every wake) moves down into the core's
+`Process`, and the personality's `wake_other_tasks` reads it from there. The
+list's push already reports failure (F-23), and the move changes nothing
+there. `launch` and `start_thread` keep their re-check after the push, now
+for `END` posted by the core. The personality keeps the rest as the stated
+interface: `execve`'s `END` (`end_other_threads`), `STOP` and `SIGNAL`.
+
+*The bit table is checked, not only argued* (condition 4). In check mode
+(`ferrix.checks`) the way out calls the personality's `needs_attention`
+even when the word is clear, and stops the machine with a new FX code if
+that answers true: the word said nothing was pending, and something was.
+That check runs across the five boots, `test-shell`, `test-threads`,
+`test-vfs` and `test-init`. Its control removes one poster (`enter_stop`'s
+post to the other tasks) and must fire the FX code in `test-threads`.
+
+*The walk: every input `needs_attention` reads, every writer of each, and
+the bit each posts.* A writer that can only make the answer false (a clear,
+a block) posts nothing; one that can make it true posts.
+
+| Input read | Writer | Can make it true? | Posts |
+|---|---|---|---|
+| `Exit::terminated` (`is_terminated`, in `must_leave`) | `Exit::record`, from the personality's `Process::end` (every route: `exit_group`, a kill, a last thread's `exit`) | yes | `END`, by the core, every task |
+| `Process::exec_thread` (in `must_leave`) | `end_other_threads`, its compare-exchange | yes, for every thread but the caller | `END`, every task but the caller's |
+| | `end_other_threads`, its clearing store | no: the other threads have left | none |
+| `Process::stopped` (`is_stopped`) | `enter_stop` | yes | `STOP`, every task, the caller's by `post_own` |
+| | `leave_stop` | no | none |
+| `Signals::shared.pending` (deliverable) | `Process::post`, through `post_signal` (kill, `tell_parent`, timers, a broken pipe to the process) | yes | `SIGNAL`, every task whose thread does not block it |
+| | `cancel`, `take_next`, `reset_for_exec` | no | none |
+| `ThreadSignals::private.pending` (deliverable) | `ThreadSignals::post`, through `post_signal_to` (`tkill`, `tgkill`), and `force` (a fault) | yes | `SIGNAL`, that thread's task (`post_own` for a fault on itself) |
+| | `discard`, `cancel`, `take_next` | no | none |
+| `ThreadSignals::blocked` (deliverable) | `rt_sigprocmask`, `leave_handler` (`rt_sigreturn`), `suspend_with`, `restore_saved_mask`, `force`'s unblock | yes, by unblocking | `SIGNAL`, own task |
+| | a handler's mask added at delivery (`act`) | no | none |
+| | `hand_on_newly_blocked`, which hands a process signal to another thread | yes, for the thread it hands to | `SIGNAL`, through `hand_on` |
+| `ThreadSignals::saved_mask` | `suspend_with` (`rt_sigsuspend`, `ppoll`, `pselect6`, `epoll_pwait`) | yes | `SIGNAL`, own task |
+| | `restore_saved_mask`, a handler frame that takes it | no | none |
+| `ThreadSignals::restart` | `mark_restart` (`syscall/linux.rs`) | yes | `SIGNAL`, own task |
+| | `take_restart` | no | none |
+
+The walk is made again on the code when 2c is built, and every writer it
+finds that this table misses is a defect of the design, not of the code.
+The check-mode FX code is the walk's backstop: a writer missed here makes a
+case answer true with the word clear. A process-directed signal keeps
+today's behaviour, every thread that does not block it (question 3).
+`TRACE` stays reserved, and `FILTERED` waits on seccomp S3's install lock
+(advisories). The wake row's check and step 4's case 14 share one hook
+static, which records which check armed it; the boot check after stage 9
+verifies that every check's mark is clear (question 14).
+
+**Points:** 11 to 15 after the review, for the core's `END`, the task list's
+move, the check mode and the walk; in the draft 9 to 13: the word and `notify`
+(2), the posters (3 to 4), the way out on three architectures (1 to 2), eleven
+cases and controls with the hook and the `loom` model (3 to 5).
 
 **Saving:** *guess* 0.1 to 0.2 us a round trip: per direction two `Arc`
 clones, two `PreemptSpinLock`s and a `current()` on the way out, now one
@@ -3002,9 +3106,25 @@ invariant makes equal.
   the wake instead of before; the waiter stays blocked past the bound.
 - 2c's case 1 covers the kill.
 
-**Points:** 3 to 5. **Saving:** *guess* 0.05 to 0.15 us a round trip: per
-direction one inbox lock and two or three calls through the personality,
-each with a `current()`.
+**After the review (condition 5).** The argument above misses one window:
+the waiter is listed on the wait queue but has not yet stored `BLOCKED`.
+The writer's wake, under the wait queue's lock, drains it and reads its
+state; if the state still reads runnable, the wake does nothing, which is
+right only if the waiter's later look sees the word. The waiter stores
+`BLOCKED`, then its `SeqCst` fence, then reads the word. The writer stores
+the word, then reads the waiter's state in the wake. That is a store then a
+load on each side, so the writer and the closer gain a `SeqCst` fence
+between the word's store and the wake's read of the state, paired with the
+wait's fence: of the two fences one comes first, and the side whose fence
+comes second sees the other's store. The fence is the same pairing step 1
+already uses for a kill (`wake_other_tasks`). The case is added to the
+`loom` model of 2c's case 9 (writer, closer and waiter, with the listing,
+the state, the word and both fences), with a control that exists only in the
+model and drops the writer's fence, which must find the lost wake.
+
+**Points:** 4 to 6 after the review (3 to 5 in the draft). **Saving:** *guess*
+0.05 to 0.15 us a round trip: per direction one inbox lock and two or three
+calls through the personality, each with a `current()`.
 
 **Documents.** SPECULATION.md: none. MEMORY-AND-TIMING: none. FINDINGS: none.
 Security Target: none; the change is inside the channel's module.
@@ -3118,8 +3238,34 @@ is serialising on x86-64 in any case. The consultant is asked to confirm
 - The way-out flags: 2c's cases with a resched pending and a move pending.
   Control: `take_resched`'s load reads the wrong processor's flag.
 
-**Points:** 4 to 6. **Saving:** *guess* 0.05 to 0.15 us a round trip: about
-six locked operations and two 128-bit divisions a direction.
+**After the review (condition 6, F-60, question 6).** F-60's fix lands on
+its own before 2f, under its four conditions (FINDINGS.md, F-60). With it,
+`LAST_DOMAIN`'s ordering no longer carries the leave's argument, and the
+stores here may be plain. The consultant names the two places a full barrier
+in the switch was in fact relied on: F-60's installing side, which the fix
+replaces, and `regroup_current`'s `MOVES` against `RUNNING_SEEN`. Every
+remote reader of a word the switch writes, and the ordering it relies on:
+
+| Word the switch writes | Remote reader | Ordering it relies on |
+|---|---|---|
+| `IDLE` | `wake_idle_processors`, `machine_is_quiet` | the set side's fence before the idle loop's look, and the waker's fence after its enqueue; the clear needs none, since a stale bit costs one interrupt. Unchanged |
+| `LAST_ROOT` | `forget_root` (compare-exchange) | none: this processor stores only the root it installs, never the forgotten one (above) |
+| `LAST_DOMAIN` | `forget_root` (store), `leaving_domain` (load) | after F-60's fix, none for the leave: each processor checks itself at the grace-period answer. `forget_root`'s as for `LAST_ROOT` |
+| `RUNNING` | `current_id` from another processor (reports, the failure policy) | none: a whole word, a hint |
+| `RUNNING_GROUP` | a charge made by the running task; reports | written and read by the processor itself with interrupts masked; a remote read is a report |
+| `RUNNING_SEEN` against `MOVES` | `note_moved` increments `MOVES`, then each processor's way out compares | a store-buffer pattern: a move stores the process's new job, then `MOVES`; the way out stores `RUNNING_SEEN`, then reads the job. With the swap made a load and a compare, the way out keeps a `SeqCst` fence between seeing a changed `MOVES` and reading the job, paired with a `SeqCst` increment of `MOVES` after the job's store. The fence runs only when the counts differ, so the common way out stays a load |
+| the space's `CpuMask` | a shootdown's sender | the locked join before the root write and leave after it, unchanged |
+| per-processor counters (`REFILLS_IN_DOMAIN`, `BARRIER_DECISIONS`, `SWITCH_BARRIERS`) | the domain check, reports | none: a whole word, read after the switches it counts, through the check's own synchronisation |
+
+The 64-bit weight arithmetic is accepted with its host test at depths 1 to
+8, and the weight setters' assertion that every entity weight is below
+2^32 becomes a requirement row of its own (question 7). Rows added: *L.sched:*
+the regroup word's fence pair; *L.object (quota):* every entity weight a job
+or task can be given is below 2^32.
+
+**Points:** 5 to 7 after the review (4 to 6 in the draft), F-60's fix not
+counted. **Saving:** *guess* 0.05 to 0.15 us a round trip: about six locked
+operations and two 128-bit divisions a direction.
 
 **Documents.** SPECULATION.md §3: no row changes; the *program → program*
 row's implementation note says the decision is made from per-processor
@@ -3243,6 +3389,34 @@ state, and Arm has no fast path in step 4 to pay for it (question 9).
    then makes a Linux `read` that blocks keeps its registers across the
    `read`. Control: `vectors_dead` not lowered at the call's return.
 
+**After the review (condition 7, question 10).**
+- *The format.* The area is the standard (non-compacted) form, written by
+  `XSAVE64` and read by `XRSTOR64`, never `XSAVEC` or `XSAVES`. The
+  requested-feature bitmap of both the save and the reset is `XCR0`'s
+  enabled set, x87, SSE and AVX on the reference configuration (`0x7`).
+  The reset area's header has `XSTATE_BV` zero and `XCOMP_BV` zero, and its
+  legacy region's `MXCSR` field holds the task's `MXCSR`. Intel's SDM,
+  Vol. 1 §13.8.1 (*Standard Form of XRSTOR*), is what makes the reset keep
+  it: with `RFBM[1]` or `RFBM[2]` set, `XRSTOR` loads `MXCSR` from memory
+  whatever `XSTATE_BV` says, and initialises each component whose
+  `XSTATE_BV` bit is clear. The x87 component's initial state has the
+  control word `0x037F`, which is why `fldcw` follows when the task's
+  differs.
+- *Every reader of a saved area.* A task's `UserState` gets one accessor for
+  its vector state, and an `unsaved` state answers through it as the
+  initial state with the task's own `MXCSR` and control word. On `main` the
+  switch is the only reader of a saved area: a signal frame is built from
+  the live registers at the way out (`UserState::capture`), after the reset,
+  and there is no core dump of vector state and no register report that
+  reads another task's area. Any such reader added later goes through the
+  accessor; a signal frame built later, a core dump and a register report
+  are named in the accessor's documentation, and a host test checks that an
+  `unsaved` state reads as the initial one.
+- *The Security Target.* The customer chose (2026-10-02) to widen FDP_RIP.2
+  to "the register state a program is given at every switch", which covers
+  both the full restore and the reset. ADV_ARC describes the mechanism. The
+  contract is x86-64 only (question 9).
+
 **Points:** 6 to 9: the stub and the ABI text (1), the mark and the two
 switch paths (2 to 3), the PKRU rule written and asserted (1), three cases
 and controls (2 to 4).
@@ -3278,50 +3452,55 @@ every switch, and `restore_user_state` writes both: about 0.14 us a switch
   selector reads null, its recorded base stands and no `rdmsr` is made. If
   it is not null, the base is the descriptor's, and the restore reloads the
   selector, which loads it. `GS` likewise.
-- Each processor keeps, in `PerCpu`, the `FS` and `GS` bases it last wrote.
-  These fields replace the `LEFT` lock of §9.4 item 5: they are written only
-  by their processor with interrupts masked, and read only by it. The
-  restore writes a base only when the incoming task's differs from the
-  field.
+- The restore writes both bases at every switch to a task with user state,
+  as now. (The draft kept, in `PerCpu`, the bases each processor last
+  wrote, and skipped a write equal to it. The review found that skip leaks
+  across programs on both vendors, so it is dropped; see *After the
+  review*.)
 
-**The one discrepancy, and where the skip is allowed.** On processors where
-loading a null selector into `FS` clears the base (Intel), a program can
-clear its own base with no call, and no selector read shows it. Then:
-- the program gets its recorded base back at its next switch-in, as on
-  Linux; that is its own value, not another program's;
-- the per-processor field may say a base is loaded that the program
-  cleared. So the skip is allowed only where a null selector load keeps the
-  base. A boot probe decides it, as Linux's `X86_BUG_NULL_SEG` probe does:
-  write a base, load a null `FS`, read the base back. Where the base is
-  cleared, the restore writes `FS_BASE` at every switch to a task with a null
-  `FS`. The field still saves the `rdmsr`s. Zen 5 keeps the base, so nazuna
-  skips.
+**The one discrepancy.** On processors where loading a null selector into
+`FS` clears the base (Intel), a program can clear its own base with no call,
+and no selector read shows it. The program then gets its recorded base back
+at its next switch-in, as on Linux; that is its own value, not another
+program's. That is Linux's rule, on the read side only (question 11).
 
 FSGSBASE stays off (§9.6).
 
 **Rows.**
 - *L.x86_64 (changed):* a task's FS and GS bases are its record's, written by
   `arch_prctl` and loaded by the switch; the switch reads no base MSR.
-- *L.x86_64:* the switch skips writing a base equal to the one this processor
-  last wrote only where the boot probe found that a null selector load keeps
-  the base.
+- *L.x86_64:* the switch writes the incoming task's FS and GS bases at every
+  switch to a task with user state.
 
 **Checks and controls.** Stage 9, x86-64:
 - Two programs with different `FS` bases trade one processor 10,000 times,
   each checking its own `%fs:0`. Control: the restore skips every write;
   the second program reads the first's.
 - A program that loads `FS` with its TLS selector, then a null one, then is
-  switched out and back: it reads the base Linux would give it. Control: the
-  probe's answer inverted; on a processor that clears, the second program
-  reads zero where it set a base.
+  switched out and back: it reads the base Linux would give it.
+- The review's case (condition 8): one program loads `USER_DS` into `FS`,
+  then a null selector, and is switched out; a second program, whose
+  recorded base equals the one the processor last wrote, is switched in and
+  reads its own `%fs:0`. Control: the write skip restored, after which the
+  second program runs on whatever base the first left.
 
-**Points:** 3 to 4. **Saving:** *guess* 0.15 to 0.25 us a round trip, from
-the span: the two `rdmsr`s a switch go, and the writes go where both tasks'
-bases match (two programs of one image without randomised TLS).
+**After the review (condition 8, question 12).** The write skip leaks
+across programs on both vendors. A program that loads `USER_DS` into `FS`
+and then a null selector leaves the base as the descriptor's (zero) or
+keeps whatever was there, depending on the vendor, and no selector read
+shows which. A per-processor record of "the base last written" then names a
+base that is no longer loaded, and the next program whose recorded base
+equals it would run on the first program's choice. So the read skip stays
+(no `rdmsr`, the base is the task's record) and the write skip goes. With it
+go the per-processor fields and the boot probe, and §9.4 item 5's segment
+skip does not come back in any form.
+
+**Points:** 2 to 3. **Saving:** *guess* 0.07 to 0.14 us a round trip, from
+the span: the two `rdmsr`s a switch go; the writes stay.
 
 **Documents.** SPECULATION.md: none. MEMORY-AND-TIMING: none. FINDINGS: none.
-Security Target: none; ADV_ARC's register-isolation text names the
-per-processor fields.
+Security Target: FDP_RIP.2 as widened for 3a covers the bases too: a program
+is given its own at every switch.
 
 #### The parallel split and the landing order
 
@@ -3337,7 +3516,7 @@ side by side if the files they touch do not meet. What each piece touches:
 | 2e | `object/channel.rs`, `syscall/native.rs` |
 | 2f | `sched/mod.rs` (`set_idle`, `choose_next`'s clones, `take_resched`, `regroup_current`), `sched/queue.rs`, `arch/speculation.rs`, `object/quota.rs` |
 | 3a | `arch/x86_64/switch.rs`, `sched/mod.rs` (`switch_user_state`), `arch/x86_64/syscall.rs` (the entry mark), the native runtime, `ferrix_native_abi`'s documentation |
-| 3b | `arch/x86_64/switch.rs`, `arch/x86_64/syscall.rs` (`arch_prctl`), `smp.rs` (`PerCpu`), `arch/x86_64/cpu.rs` (the probe) |
+| 3b | `arch/x86_64/switch.rs`, `arch/x86_64/syscall.rs` (`arch_prctl`) |
 
 `sched/mod.rs` and `smp.rs` are where the pieces meet, so one session owns
 them:
@@ -3368,8 +3547,7 @@ The order on `main`:
 3. 2c (B): the largest; conditions 4 and 6 and the wake row's hook.
 4. 2a (A).
 5. 2e (B).
-6. 2f (A), with question 5's fix as a separate landing before it if the
-   consultant takes it.
+6. F-60's fix, on its own, then 2f (A).
 7. 3a (A), then 3b (A). If B is free first, B takes 3b after 3a lands.
 
 Step 4 may start once 2b, 2c and 2a are in (§9.7 part 5). 3a must be in
@@ -3381,26 +3559,31 @@ its correctness.
 | Piece | Points | Saving a round trip | Risk |
 |---|---|---|---|
 | 2a `current()` by borrow | 4–6 | *guess* 0.1–0.25 us | medium: the lifetime argument, many callers |
-| 2b lighter lock | 6–9 | *guess* 0.3–0.6 us | medium-high: the kernel's one lock type, per-ISA code, FX-0503 |
-| 2c pending-work word | 9–13 | *guess* 0.1–0.2 us | high: every poster in the personality, signal semantics |
+| 2b lighter lock | 7–10 | *guess* 0.3–0.6 us | medium-high: the kernel's one lock type, per-ISA code, FX-0503 |
+| 2c pending-work word | 11–15 | *guess* 0.1–0.2 us | high: every poster in the personality, signal semantics |
 | 2d decode once | 1–2 | *guess* 10–30 ns | low |
-| 2e channel state word | 3–5 | *guess* 0.05–0.15 us | medium: the wake order moves to the wait queue's lock |
-| 2f switch writes | 4–6 | *guess* 0.05–0.15 us | medium: fences removed, the speculation words |
+| 2e channel state word | 4–6 | *guess* 0.05–0.15 us | medium: the wake order moves to the wait queue's lock |
+| F-60's fix, on its own before 2f | 3–5 | none | medium: the leave's ordering, a hook |
+| 2f switch writes | 5–7 | *guess* 0.05–0.15 us | medium: fences removed, the speculation words |
 | 3a vector contract | 6–9 | 0.15–0.2 us, from the 0.12 us span | medium-high: an ABI change, residual information |
-| 3b FS and GS | 3–4 | 0.15–0.25 us, from the 0.14 us span | medium: vendor behaviour of null selectors |
+| 3b FS and GS (write skip dropped) | 2–3 | 0.07–0.14 us, from the 0.14 us span | low-medium: vendor behaviour of null selectors, read side only |
 | this design and its revision | 4–6 | | |
-| **total** | **40–60** | **about 0.9–1.9 us** | |
+| **total** | **47–69** | **about 0.8–1.7 us** | |
 
 §9.5 gave steps 2 and 3 37 to 57 points, of which 10 to 13 were PCIDs, now
 deferred. The consultant's conditions (one control per bit, the wake row's
-hook, the reset's cases) add about as much as the PCIDs took away. The
-savings' sum would take the round trip from about 3.0 us to between 1.1
-and 2.1 us, against §9.5's guess of 0.9 to 1.3 us after step 3. The gap is
-mostly PCIDs, which nazuna cannot have, and the address-space switch, which
-§9.6 measured at 130 ns a direction on both kernels. The timing build's
-ablations measure each piece once it is built, before step 4 counts on it.
+hook, the reset's cases) add about as much as the PCIDs took away, and the
+review's conditions and F-60's fix add 7 to 9 more (the draft's total was 40
+to 60). With 3b's write skip dropped, the savings' sum would take the round
+trip from about 3.0 us to between 1.3 and 2.2 us, against §9.5's guess of 0.9
+to 1.3 us after step 3. The gap is mostly PCIDs, which nazuna cannot have, and
+the address-space switch, which §9.6 measured at 130 ns a direction on both
+kernels. The timing build's ablations measure each piece once it is built,
+before step 4 counts on it.
 
 #### Questions for the consultant
+
+Answered on 2026-10-02; the answers are in the review below.
 
 1. *2a:* is the closure form (`with_current`, whose reference cannot leave
    it) the right shape for the lifetime argument, or is a `!Send` guard type
@@ -3450,3 +3633,107 @@ ablations measure each piece once it is built, before step 4 counts on it.
     as T13's control does. Are condition 11's rules (a static set only by
     stage 9, cleared before init, a boot check with its own control) enough
     here too, and may step 4's case 14 reuse the same hook?
+
+#### The consultant's review (2026-10-02) and what changed
+
+The verdict on e809d98f8 was **OK IF**: 2d OK to build; 2a, 2b, 2c, 2e, 2f
+and 3a OK IF, with the conditions below; 3b OK IF its write skip is dropped.
+It was made by a consultant subagent of the session running this plan, with
+the seat empty, as the customer allowed (§9.5's decision 4), and is
+recorded in the consultant's ledger.
+
+**F-60, question 5 found real.** `leave_speculation_domain`'s `Release`
+store of `OUT` is not ordered before `leaving_domain`'s loads of each
+processor's `LAST_DOMAIN`: a store-buffer pattern against the installing
+processor's read of the space's domain and its record of it. It is open on
+x86-64, on ARMv7-A and in the Rust model, and closed on AArch64, where a
+`STLR` is ordered before a later `LDAR`. It is pre-existing since bf9efba95,
+filed in FINDINGS.md as F-60, and its fix, the local check at each
+processor's grace-period answer, lands on its own before 2f. The fix's
+conditions:
+- (a) concurrent leaves of different domains are each seen: the published
+  domains are a small set, or leaves are serialised under a sleeping lock,
+  not one global word;
+- (b) the publish is `SeqCst`-ordered before the grace period's generation
+  increment and its interrupt, and `answer_grace` reads it after the
+  generation;
+- (c) a stage-9 case, through a hook under §9.7 condition 11's rules, makes
+  another processor record the domain between the scan and the grace period,
+  with a control that removes the local check;
+- (d) L.object.116's text names the mechanism.
+
+**The conditions, and what each changed.**
+1. **2a: every write of `current`.** The processor record is written at
+   every write of the queue's `current`: the boot adoption, the idle
+   installation and `switch_chosen`. The stage-5 control covers the boot
+   write. *2a's After the review.*
+2. **2b: every context that touches the count.** On x86-64, for each entry
+   vector, every path that can touch the count runs with the kernel's GS
+   base or takes no `PreemptSpinLock`: the NMI, `#MC` and `#DB` through the
+   paranoid entry, and an NMI in the `SYSCALL` stub before its `swapgs`. On
+   Arm every exception that can take a lock is masked (ARMv7-A's FIQ with
+   `cpsid if`, or an argument that it takes none; AArch64's SError and
+   pseudo-NMI). On ARMv7-A, remote reads of the packed `u64` tolerate
+   tearing. *2b's After the review.*
+3. **2c: termination's `END` is the core's.** The core posts `END` where it
+   stores `terminated` (`object::process::Exit::record`), which moves the
+   task list into the core's `Process`. The personality keeps `execve`'s
+   `END`, `STOP` and `SIGNAL` as the stated interface. *2c's After the
+   review.*
+4. **2c: the bit table checked.** In check mode the way out evaluates
+   `needs_attention` with the word clear too, and stops the machine with a
+   new FX code if it answers true, across the five boots, `test-shell`,
+   `test-threads`, `test-vfs` and `test-init`; its control removes one
+   poster. The walk of every input, writer and bit is written. *2c's After
+   the review, the table.*
+5. **2e: the listed-but-not-blocked window.** The writer and the closer gain
+   a `SeqCst` fence between the word's store and the wake's read of the
+   state, paired with the wait's; the case joins the `loom` model with a
+   model-only control that drops the writer's fence. *2e's After the
+   review.*
+6. **2f: every remote reader of a switch word.** A table of each, with the
+   ordering it relies on; regroup's `MOVES`/`RUNNING_SEEN` store-buffer
+   pattern keeps a fence pair, taken only when the counts differ. *2f's
+   After the review.*
+7. **3a: the format and every reader.** The standard `XSAVE` form, the
+   requested-feature set `XCR0` (x87, SSE, AVX), SDM Vol. 1 §13.8.1 for
+   `MXCSR` loaded with an empty header; every reader of a saved area treats
+   `unsaved` as the initial state with the task's own `MXCSR` and control
+   word, through one accessor. *3a's After the review.*
+8. **3b: the write skip leaks.** `USER_DS` then a null `FS` keeps or clears
+   the base by vendor, and no selector read shows it, so a per-processor
+   "last written" record can name a base no longer loaded. The read skip
+   stays and the write skip goes, with a check and a control that restores
+   the skip. *3b's After the review.*
+
+**The answers to the questions.**
+1. The closure form is right, and a borrow held across a block inside it is
+   accepted.
+2. Yes to the `xadd` sequences in the asm allowlist, under condition 2.
+3. Keep today's behaviour: every thread that does not block the signal.
+4. The interface suffices for `STOP`, `SIGNAL` and `execve`'s `END`;
+   termination's `END` is the core's (condition 3).
+5. Real: F-60, fixed on its own before 2f.
+6. The two places a full barrier was relied on are F-60's installing side
+   and regroup's `MOVES`/`RUNNING_SEEN` (condition 6).
+7. Yes, with the host test at depths 1 to 8; the weight setters' assertion
+   that every entity weight is below 2^32 becomes a requirement row.
+8. In step 4's next revision.
+9. x86-64 only.
+10. The customer chose (2026-10-02) to widen FDP_RIP.2 to "the register
+    state a program is given at every switch", covering the restore and the
+    reset, with ADV_ARC describing the mechanism.
+11. Linux's rule, on the read side only.
+12. The segment skip does not come back.
+13. Each piece on its own review, in the proposed order, with F-60's fix
+    before 2f.
+14. One shared hook static, if it records which check armed it and the boot
+    check verifies that every one is clear.
+
+**Advisories.** 2b is measured on Arm before a saving is claimed there.
+`TRACE` stays reserved. `FILTERED` waits on seccomp S3's install lock.
+
+**What is left before code.** The requirement ids for each piece's rows,
+reserved before the rows are written. Then each piece is built in the order
+above and comes back to the consultant with the logs of its cases and
+controls, F-60's fix first among 2f's.
