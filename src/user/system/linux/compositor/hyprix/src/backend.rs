@@ -11,6 +11,13 @@ pub trait Backend: core::fmt::Debug {
     /// The size of the screen in pixels.
     fn size(&self) -> (u32, u32);
 
+    /// How often the screen refreshes, in millihertz: what `wl_output.mode`
+    /// says, what clients' presentation times are spaced by, and what the
+    /// compositor paces its frames to. 60 Hz for a screen with no mode.
+    fn refresh_mhz(&self) -> i32 {
+        60_000
+    }
+
     /// Bytes of an `XRGB8888` buffer of that size, to draw into.
     fn buffer(&mut self) -> &mut [u8];
 
@@ -484,6 +491,23 @@ impl Drm {
 impl Backend for Drm {
     fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// The running mode's: its pixel clock over its total pixels, which is
+    /// exact where `vrefresh` is rounded (59.94 Hz is 60 there), or
+    /// `vrefresh` for a mode without timings.
+    fn refresh_mhz(&self) -> i32 {
+        let mode = &self.plan.mode;
+        let total = u64::from(mode.htotal) * u64::from(mode.vtotal);
+        let mhz = if total > 0 && mode.clock > 0 {
+            u64::from(mode.clock) * 1_000_000 / total
+        } else {
+            u64::from(mode.vrefresh) * 1000
+        };
+        match i32::try_from(mhz) {
+            Ok(0) | Err(_) => 60_000,
+            Ok(mhz) => mhz,
+        }
     }
 
     fn buffer(&mut self) -> &mut [u8] {

@@ -810,7 +810,7 @@ impl<'r> Compositor<'r> {
     /// What `hyprctl` is answered from: the layout, the connections and
     /// what the compositor says about itself, as they are now.
     fn snapshot(&self) -> compositor_ipc::Snapshot {
-        crate::control::snapshot(
+        let mut snapshot = crate::control::snapshot(
             &self.state,
             &self.slots,
             &self.sources,
@@ -826,7 +826,19 @@ impl<'r> Compositor<'r> {
                 self.lock.is_some(),
                 self.fixed.started.elapsed().as_secs(),
             ),
-        )
+        );
+        // The layout knows its monitors' sizes and not their modes: each
+        // one's refresh is its screen's.
+        for monitor in &mut snapshot.monitors {
+            if let Some(screen) = self
+                .screens
+                .iter()
+                .find(|screen| screen.name == monitor.name)
+            {
+                monitor.refresh = f64::from(screen.output().refresh) / 1000.0;
+            }
+        }
+        snapshot
     }
 
     /// What the plugins asked for.
@@ -2786,6 +2798,7 @@ impl Screen {
             height: i32::try_from(height).unwrap_or(0),
             scale,
             transform: self.transform.value().cast_signed(),
+            refresh: self.backend.refresh_mhz(),
             name: self.name.clone(),
             // Aquamarine's, which is what a client reads: the description,
             // and the connector in brackets after it.
@@ -2794,7 +2807,6 @@ impl Screen {
             } else {
                 format!("{} ({})", self.description, self.name)
             },
-            ..compositor_server::Output::default()
         }
     }
 }
