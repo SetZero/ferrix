@@ -124,6 +124,35 @@ impl Compositor<'_> {
             drawn_with: &drawn_with,
             popups,
         };
+        // Every surface that goes into the frame is owed two things: a
+        // `wl_callback.done` for the `wl_surface.frame` it asked for, and a
+        // `wp_presentation_feedback.presented` if it asked for one. A client
+        // that waits on the first before drawing again -- which every
+        // toolkit does -- draws once and stops without it. Told at the
+        // frame's start, as wlroots tells them at the output's frame, and
+        // not after the drawing: what each committed is latched now, and a
+        // client that paces itself by these -- Chrome's BeginFrames on
+        // Wayland -- has the drawing's time too for its next frame, which at
+        // 120 Hz's 8.3 ms it needs.
+        frames_done(
+            &mut self.slots,
+            &self.sources,
+            &self.placed_layers,
+            popups,
+            self.lock.as_ref(),
+            now,
+            self.tally.drawn.saturating_add(1),
+            refresh_ns(&self.screens),
+            self.pace.drawn(),
+        );
+        // And sent now, not when the pass ends: queued, they would wait for
+        // the drawing below, 2-3 ms of a 120 Hz frame's 8.3 that the client
+        // then does not have. A connection that cannot take them is marked
+        // gone, and the pass's cleanup drops it as it would have after the
+        // wait.
+        for slot in &mut self.slots {
+            let _ = slot.flush();
+        }
         // A frame a monitor: each screen draws the workspace it shows,
         // with the windows' rectangles moved into its own pixels.
         for which in 0..self.screens.len() {
@@ -152,22 +181,6 @@ impl Compositor<'_> {
         if self.animations.busy(u64::from(now)) {
             self.settling = true;
         }
-        // Every surface that went into the frame is owed two things: a
-        // `wl_callback.done` for the `wl_surface.frame` it asked for,
-        // and a `wp_presentation_feedback.presented` if it asked for
-        // one. A client that waits on the first before drawing again --
-        // which every toolkit does -- draws once and stops without it.
-        frames_done(
-            &mut self.slots,
-            &self.sources,
-            &self.placed_layers,
-            popups,
-            self.lock.as_ref(),
-            now,
-            self.tally.drawn,
-            refresh_ns(&self.screens),
-            self.pace.drawn(),
-        );
         // And only now each screen's flip, which waits for the host to show
         // the frame: on QEMU's GL display that is the window's next repaint,
         // on VNC a read of the whole screen back. Clients told their frame
