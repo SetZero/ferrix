@@ -47,7 +47,7 @@
       "purpose": "OPAQUE-KERNEL.md §9.8 steps 2b and 2a (the consultant's OK IF of 2026-10-02): the preemption count without a locked operation, FX-0503 at the switch and at an unmatched enable, may_block, try_lock and try_lock_manually leaving the count as found; the running task by borrow, and current() without the run queue's lock"
     },
     {
-      "ids": ["L.x86_64.140-141", "L.sched.30-37", "L.syscall.20-27"],
+      "ids": ["L.sched.30-37", "L.syscall.20-27"],
       "owner": "step2b",
       "branch": "step2b",
       "date": "2026-10-02",

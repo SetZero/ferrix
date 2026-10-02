@@ -78,6 +78,14 @@ mispredicted path reads slot zero.
 | `src/lib/fs/vfs/src/fd.rs` | descriptor slot | the same |
 | `syscall/uaccess.rs` `user_address` | a user address, before the software table walk that follows it into the direct map | `arch::nospec_below`, to the top of the user half |
 
+Where each table is asked: a native number goes to the native table alone,
+by a range compare that comes before any Linux decode -- in the dispatcher
+(`syscall/mod.rs` `dispatch_with`) and, on x86-64, already at the `SYSCALL`
+entry (`arch/x86_64/syscall.rs` `early`), which decodes a Linux number once
+for the two calls it answers itself. A native number therefore never
+indexes the Linux table, and a Linux number reaches each table only behind
+that table's clamp (L.x86_64.140, the `decode` line).
+
 The kernel's clamp is a line of assembly per architecture
 (`arch/<arch>/speculation.rs`): `cmp`/`sbb` on x86-64, `cmp`/`csel`/`csdb` on
 AArch64, `cmp`/`movhs`/`csdb` on ARMv7-A. It has to be assembly: written in

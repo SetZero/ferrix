@@ -1029,6 +1029,21 @@ package FerrixX8664Requirements {
             attribute :>> parent = "H.TRAP.16";
             attribute :>> unit = "arch::x86_64::syscall_rollback_value";
         }
+        requirement <'L.x86_64.140'> theEntrySortsANumberOnce : ItemLowLevel {
+            attribute :>> statement = "ferrix_syscall_entry shall test a number
+                against the native range before any Linux table, pass a native
+                number on to the dispatcher without decoding it against x86-64's
+                table, and answer arch_prctl and rt_sigreturn from one decode of a
+                Linux number behind its clamp.";
+            attribute :>> criterion = "Every number of the native range, 0x1000 +
+                158 (arch_prctl's low bits) among them, sorts as native, the numbers
+                either side as Linux numbers the table does not hold, and 158 and 15
+                as arch_prctl and rt_sigreturn (the `decode` line); with the native
+                test removed the line fails.";
+            attribute :>> parent = ("H.TRAP.3", "H.TRAP.12");
+            attribute :>> unit = ("arch::x86_64::syscall::early",
+                "arch::x86_64::syscall::ferrix_syscall_entry");
+        }
     }
 
     package CompatEntry {

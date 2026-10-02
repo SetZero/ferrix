@@ -78,9 +78,9 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `arch/x86_64/trap.rs` | `core` | 22 | - | - | 22 | 51, 54-67, 70, 72, 77-81 |
-| `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 412, 623, 626-627, 629, 636 |
+| `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 412, 655, 658-659, 661, 668 |
 | `arch/x86_64/switch.rs` | `core` | 3 | - | - | 3 | 202, 482, 491 |
-| `arch/x86_64/mod.rs` | `core` | 2 | - | - | 2 | 1316-1317 |
+| `arch/x86_64/mod.rs` | `core` | 2 | - | - | 2 | 1317-1318 |
 | `arch/x86_64/signal/compat.rs` | `core` | 1 | - | - | 1 | 336 |
 
 ---

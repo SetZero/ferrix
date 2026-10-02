@@ -140,6 +140,7 @@ pub(crate) use trap::{
 pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
     paranoid::check::run()?;
     syscall::check::run()?;
+    syscall::check::run_decode()?;
     gdt::check::run()?;
     trap::check::run()
 }

@@ -191,3 +191,51 @@ pub(crate) fn drive_native_words(number: usize, args: [u64; 6]) -> (isize, [u64;
     <super::super::Irq as IrqControl>::restore(saved);
     (frame.rax as i64 as isize, [frame.rsi, frame.rdx, frame.r10])
 }
+
+/// Sort the numbers `SYSCALL`'s entry can be given the way it sorts them
+/// before the dispatcher, and show that the native range is tested first.
+///
+/// The native number whose low bits are `arch_prctl`'s Linux number
+/// (`0x1000 + 158`) is the one a Linux decode of the low bits would answer as
+/// `arch_prctl`. Every number of the native range must sort as native, so
+/// never reach the Linux table, and `arch_prctl` and `rt_sigreturn` must each
+/// come from the one decode of their own number. The answer a program gets
+/// for a native gap is the same either way, because the table's clamp sends a
+/// number past its end to `None`; what the native test saves is the decode,
+/// and this is what shows the test is there.
+///
+/// # Errors
+///
+/// A native number decoded against the Linux table, or one of the entry's two
+/// calls not decoded as itself.
+/// Verifies: `L.x86_64.140`
+pub(crate) fn run_decode() -> Result<(), &'static str> {
+    use ferrix_linux_abi::nr::{Syscall, x86_64};
+    use ferrix_native_abi::nr::{FIRST, LAST};
+
+    use super::{Early, early};
+
+    if early(FIRST + x86_64::ARCH_PRCTL) != Early::Native {
+        return Err(
+            "a native number with arch_prctl's low bits was decoded against the Linux table",
+        );
+    }
+    if (FIRST..=LAST).any(|number| early(number) != Early::Native) {
+        return Err("a number of the native range was decoded against the Linux table");
+    }
+    if early(x86_64::ARCH_PRCTL) != Early::Linux(Some(Syscall::ArchPrctl)) {
+        return Err("arch_prctl's number does not decode as arch_prctl at the entry");
+    }
+    if early(x86_64::RT_SIGRETURN) != Early::Linux(Some(Syscall::RtSigreturn)) {
+        return Err("rt_sigreturn's number does not decode as rt_sigreturn at the entry");
+    }
+    if early(LAST + 1) != Early::Linux(None) || early(FIRST - 1) != Early::Linux(None) {
+        return Err("a number either side of the native range is not a Linux number");
+    }
+    println!(
+        "  decode   the native range ({FIRST:#x}..={LAST:#x}, {:#x} with arch_prctl's low bits \
+         among it) skips the Linux table; arch_prctl and rt_sigreturn from one decode",
+        FIRST + x86_64::ARCH_PRCTL
+    );
+    Ok(())
+}

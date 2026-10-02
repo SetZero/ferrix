@@ -15,13 +15,13 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 122 | 71 | 51 |
-| Low (`L.*`) | 770 | 499 | 271 |
+| Low (`L.*`) | 771 | 500 | 271 |
 
-1517 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1518 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1517 |
+| Named by a low-level requirement | 1518 |
 | Accessors, covered by the requirement they serve | 824 |
 | Check code in a product file | 55 |
 | Named by none | 883 |
@@ -953,6 +953,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.x86_64.71` | enter_compat_after_execve shall start an i386 image that a 64-bit program execve'd through SYSCALL, in compatibility mode. | A 64-bit program execve's the i386 hello program, which exits 42. | H.TRAP.8 | `arch::x86_64::syscall::enter_compat_after_execve` | *baselined* | — | — | — |
 | `L.x86_64.124` | ferrix_syscall_entry and system_call shall ask the registered filter about a call before arch_prctl, sigreturn and rt_sigreturn are answered and before the dispatcher is, with the number's low 32 bits, the instruction after the call, and the token of the entry: x86-64's for SYSCALL and i386's for int $0x80, whatever the image; and shall apply the filter's errno as the dispatcher's answer. | A test-only filter is shown arch_prctl and rt_sigreturn through SYSCALL and sigreturn and rt_sigreturn through int $0x80 once each, before their answers, and its value comes back; a filter about x86-64 alone does not judge an int $0x80 call. | H.TRAP.16 | `arch::x86_64::audit_arch`, `arch::x86_64::syscall::answer_here` | `src/kernel/src/syscall/seccomp_check.rs::run` | not built | not built | not built |
 | `L.x86_64.125` | syscall_rollback_value shall give the value for RAX that makes the frame of a call that did not run read as it did at the call: the number. | The value for number 0x2222 is 0x2222 (the `seccomp` line's rollback check); the handler of a trapped call reads it from a real frame in a later landing. | H.TRAP.16 | `arch::x86_64::syscall_rollback_value` | `src/kernel/src/syscall/seccomp_check.rs::run` | not built | not built | not built |
+| `L.x86_64.140` | ferrix_syscall_entry shall test a number against the native range before any Linux table, pass a native number on to the dispatcher without decoding it against x86-64's table, and answer arch_prctl and rt_sigreturn from one decode of a Linux number behind its clamp. | Every number of the native range, 0x1000 + 158 (arch_prctl's low bits) among them, sorts as native, the numbers either side as Linux numbers the table does not hold, and 158 and 15 as arch_prctl and rt_sigreturn (the `decode` line); with the native test removed the line fails. | H.TRAP.3, H.TRAP.12 | `arch::x86_64::syscall::early`, `arch::x86_64::syscall::ferrix_syscall_entry` | `src/kernel/src/arch/x86_64/syscall/check.rs::run_decode` | not reached | not built | not built |
 
 ### CompatEntry
 
@@ -1486,6 +1487,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/arch/x86_64/paranoid/check.rs::run_with_window_breakpoints` | kernel | L.x86_64.53 |
 | `src/kernel/src/arch/x86_64/speculation/check.rs::vector_leak_decisions` | kernel | L.x86_64.123 |
 | `src/kernel/src/arch/x86_64/syscall/check.rs::run` | kernel | L.x86_64.62 |
+| `src/kernel/src/arch/x86_64/syscall/check.rs::run_decode` | kernel | L.x86_64.140 |
 | `src/kernel/src/arch/x86_64/trap/check.rs::check_compat` | kernel | L.x86_64.2, L.x86_64.54, L.x86_64.72, H.TRAP.8 |
 | `src/kernel/src/arch/x86_64/trap/check.rs::check_forged_frames` | kernel | L.x86_64.48 |
 | `src/kernel/src/arch/x86_64/trap/check.rs::check_signals_and_fork` | kernel | L.x86_64.15, L.x86_64.47, L.x86_64.64, L.x86_64.73 |

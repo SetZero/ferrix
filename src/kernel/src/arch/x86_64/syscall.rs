@@ -501,7 +501,13 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     let outcome = match crate::trap::filter_system_call(&args) {
         Some(outcome) => outcome,
         None => {
-            if answer_here(frame, &args) {
+            // A native number goes straight on to the dispatcher, which sends
+            // it to the native ABI by the same range test; only a Linux
+            // number is decoded here, once, for the two calls this entry
+            // answers itself.
+            if let Early::Linux(Some(call)) = early(args.number)
+                && answer_here(frame, &args, call)
+            {
                 return;
             }
             // Open while the call is served: a call may block, and one that spins
@@ -543,10 +549,36 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     }
 }
 
-/// The two calls this entry answers itself, before the dispatcher: `true` when
-/// the call was answered and the frame holds the result. `rt_sigreturn` does not
-/// come back.
-fn answer_here(frame: &mut SyscallFrame, args: &crate::trap::SyscallArgs) -> bool {
+/// What the entry makes of a number before the dispatcher sees it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Early {
+    /// A number in the native range, which no Linux table is asked about.
+    Native,
+    /// A Linux number, decoded once against x86-64's table behind its clamp:
+    /// `None` for a number the table does not hold.
+    Linux(Option<ferrix_linux_abi::nr::Syscall>),
+}
+
+/// Sort a number from `SYSCALL`'s entry: the native range first, by a
+/// compare, so that a native number is never decoded against the Linux table
+/// (whose clamp would send it to `None` anyway, at the cost of a decode); a
+/// Linux number is decoded once, and [`answer_here`] matches that one answer
+/// against both of its calls.
+pub(super) fn early(number: usize) -> Early {
+    if ferrix_native_abi::nr::is_native(number) {
+        return Early::Native;
+    }
+    Early::Linux(super::decode_syscall(number))
+}
+
+/// The two calls this entry answers itself, before the dispatcher, given the
+/// call [`early`] decoded: `true` when the call was answered and the frame
+/// holds the result. `rt_sigreturn` does not come back.
+fn answer_here(
+    frame: &mut SyscallFrame,
+    args: &crate::trap::SyscallArgs,
+    call: ferrix_linux_abi::nr::Syscall,
+) -> bool {
     // One call is answered before dispatch, because it is a fact about this
     // processor rather than about the process: `arch_prctl(ARCH_SET_FS)` writes
     // an MSR. It exists on no other architecture -- AArch64 writes `TPIDR_EL0`
@@ -554,7 +586,7 @@ fn answer_here(frame: &mut SyscallFrame, args: &crate::trap::SyscallArgs) -> boo
     // architecture-neutral dispatch table to say about it. The value survives a
     // switch to another task because the scheduler saves `FS_BASE` with the
     // rest of the program's user state.
-    if let Some(ferrix_linux_abi::nr::Syscall::ArchPrctl) = super::decode_syscall(args.number) {
+    if call == ferrix_linux_abi::nr::Syscall::ArchPrctl {
         frame.rax = arch_prctl(args.args[0], args.args[1]) as u64;
         return true;
     }
@@ -562,7 +594,7 @@ fn answer_here(frame: &mut SyscallFrame, args: &crate::trap::SyscallArgs) -> boo
     // `rt_sigreturn` puts back every register a signal interrupted, `RCX` and
     // `R11` among them, which `SYSRET` cannot load: it leaves through the trap
     // stub's `IRETQ` instead, and never returns here. See `super::signal`.
-    if let Some(ferrix_linux_abi::nr::Syscall::RtSigreturn) = super::decode_syscall(args.number) {
+    if call == ferrix_linux_abi::nr::Syscall::RtSigreturn {
         let mut context = super::signal::UserContext::from_syscall(frame);
         super::enable_interrupts();
         if let Some(path) = crate::trap::return_path() {
