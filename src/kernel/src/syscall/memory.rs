@@ -35,7 +35,7 @@ use ferrix_vma::VmaFlags;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
 use crate::user::space::{
-    Advice, Declined, Destination, FileMapping, FilePlace, MMAP_MIN_ADDR, SpaceError,
+    Advice, Declined, Destination, FileMapping, FilePlace, MMAP_MIN_ADDR, SpaceError, WindowPages,
 };
 use crate::user::vmo::Vmo;
 
@@ -325,10 +325,17 @@ fn map_window(
         return Err(Errno::EINVAL);
     }
     let start = phys.checked_add(offset).ok_or(Errno::EINVAL)?;
+    // The memory type is held over the whole blob, whatever part of it is
+    // mapped: one claim per blob however many mappings (`user::memory_type`).
+    let pages = WindowPages {
+        physical: start,
+        whole: phys,
+        whole_len: bytes.next_multiple_of(PAGE_SIZE),
+    };
     let at = place(process, addr, len, flags)?;
     let mapped = process
         .space()
-        .map_window(at, len, start, vma, cached, window)
+        .map_window(at, len, pages, vma, cached, window)
         .map_err(refused)?;
     Ok(usize_of(mapped))
 }

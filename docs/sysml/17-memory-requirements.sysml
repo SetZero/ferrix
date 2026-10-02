@@ -1732,16 +1732,22 @@ package FerrixMemoryRequirements {
                 OtherMemoryType -- ALREADY_BOUND from io_mapping_map and
                 io_mapping_map_combining, EINVAL from mmap of a render node's blob
                 -- and a mapping's hold shall end only once no region of any
-                address space maps it, after its unmap's shootdown has returned.";
+                address space maps it, after its unmap's shootdown has returned.
+                Holds shall be counted in one claim per distinct range and type, an
+                I/O mapping's range being its whole aperture and a window's its
+                whole blob, so that no number of mappings adds a claim.";
             attribute :>> criterion = "On x86-64, AArch64 and ARMv7-A, with a
                 prefetchable aperture mapped write-combining, io_mapping_map of it is
                 ALREADY_BOUND and a cached window over it is OtherMemoryType; with
                 it mapped as a cached window, and then uncached, after the
                 write-combining mapping is unmapped, io_mapping_map_combining is
                 ALREADY_BOUND; with every mapping of it unmapped it maps
-                write-combining again; with the type comparison dropped from
-                memory_type::hold, stage 9 fails naming the uncached mapping made
-                beside the write-combining one.";
+                write-combining again; mapping the cached window again, whole and
+                one page of it, leaves the number of claims unchanged; with the
+                type comparison dropped from memory_type::hold, stage 9 fails
+                naming the uncached mapping made beside the write-combining one,
+                and with every hold given a claim of its own it fails naming the
+                claim the window's second mapping made.";
             attribute :>> parent = ("H.MEM.1", "H.DMA.5");
             attribute :>> unit = ("user::memory_type::hold",
                 "user::memory_type::MemoryType::of",
@@ -1749,7 +1755,8 @@ package FerrixMemoryRequirements {
                 "user::space::AddressSpace::map_device",
                 "user::space::AddressSpace::map_window",
                 "user::space::AddressSpace::give_back",
-                "user::memory_type::Hold::drop");
+                "user::memory_type::Hold::drop", "user::memory_type::release",
+                "user::memory_type::claims", "user::space::WindowPages::all");
         }
         requirement <'L.user.107'> aCopyThroughADevicePageIsRefused : ItemLowLevel {
             attribute :>> statement = "with_page and with_present_page shall refuse

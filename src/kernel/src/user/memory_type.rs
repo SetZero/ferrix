@@ -21,13 +21,34 @@
 //! (`AddressSpace::give_back`), so no processor can still hold a translation
 //! of the old type when a mapping of the new one is allowed.
 //!
-//! The kernel's own mappings are not here: its direct map covers RAM runs
-//! only, so it holds no alias of a device page, and the framebuffer it maps
-//! itself is not an aperture a driver is given.
+//! The kernel's own mappings are not here, and need not be, because none of
+//! them is of a page a user mapping can reach. Its direct map covers RAM runs
+//! only (`mm::direct_map_ram`), and no aperture or window is RAM. The boot
+//! framebuffer, which it maps write-combining itself, is in
+//! `device::Reserved` with the interrupt controllers, timers and firmware's
+//! own memory it maps, and an aperture overlapping anything reserved is
+//! withheld rather than minted (`device.rs`). A PCI function's MSI-X table
+//! and pending-bit pages, which the kernel maps to mint vectors, are cut out
+//! of the function's apertures (`msix::withheld`). Configuration space is
+//! not a BAR and is never an aperture.
+//!
+//! # A residual: cache lines across a type change
+//!
+//! The hold orders translations -- it goes only after the unmap's
+//! shootdown -- but not caches. After the last region mapping a window
+//! cached is gone, dirty write-back lines of its device pages may still be
+//! in a processor's cache, and may be written back after a later
+//! write-combining or uncached mapping of the same pages has written them
+//! (SDM Vol. 3A 11.11.9 and 11.12.4 ask for a flush on a type change). No
+//! two types are ever mapped at once, so this is no simultaneous alias and
+//! has no machine-wide effect: the worst is stale data written over the
+//! device's own memory, the memory of the device whose driver and clients
+//! made both mappings. It is recorded, not flushed (VULNERABILITY-ANALYSIS
+//! T.DMA, MEMORY-AND-TIMING 2.2f); flushing a cached range as its hold is
+//! released would close it.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::fallible;
 use crate::sync::SpinLock;
@@ -67,37 +88,67 @@ pub(crate) enum Refused {
     NoMemory,
 }
 
-/// One live hold: `start..end` mapped as `kind`.
+/// One range held as one type, by `count` live mappings.
 #[derive(Clone, Copy, Debug)]
 struct Claim {
-    serial: u64,
+    start: u64,
+    end: u64,
+    kind: MemoryType,
+    /// The [`Hold`]s alive for it: never zero while the entry is here.
+    count: u64,
+}
+
+/// Every range held. A leaf lock: taken under an address space's lock by a
+/// mapping, and on its own when a hold drops; nothing is taken inside it.
+///
+/// One entry per distinct range and type, counted, never one per mapping:
+/// mapping the same range again, from any number of processes, raises a
+/// count and adds nothing. The ranges are not the program's choice: an
+/// I/O mapping holds its whole aperture, and a render node's window holds
+/// its whole blob, whatever part of it the `mmap` asked for
+/// (`AddressSpace::map_window`'s `whole`). Live blobs are disjoint whole
+/// pages of the device's host-visible window, and a blob stays placed
+/// while anything maps it. So the entries are at most the whole-page
+/// apertures stage 10 found plus the pages of the host-visible windows:
+/// fixed by the hardware, not raised by any number of mappings.
+static CLAIMS: SpinLock<Vec<Claim>> = SpinLock::new(Vec::new());
+
+/// A mapping's share in its range's [`Claim`]: given back when the last
+/// region holding it goes.
+#[derive(Debug)]
+pub(crate) struct Hold {
     start: u64,
     end: u64,
     kind: MemoryType,
 }
 
-/// Every live hold. A leaf lock: taken under an address space's lock by a
-/// mapping, and on its own when a hold drops; nothing is taken inside it.
-/// Holds no more entries than there are live device mappings.
-static CLAIMS: SpinLock<Vec<Claim>> = SpinLock::new(Vec::new());
-
-/// The next hold's serial: what its drop finds its entry by.
-static NEXT: AtomicU64 = AtomicU64::new(1);
-
-/// A mapping's claim on the memory type of its physical range: given back
-/// when the last region holding it goes.
-#[derive(Debug)]
-pub(crate) struct Hold {
-    serial: u64,
-}
-
 impl Drop for Hold {
     fn drop(&mut self) {
-        let mut claims = CLAIMS.lock();
-        if let Some(at) = claims.iter().position(|claim| claim.serial == self.serial) {
+        release(self.start, self.end, self.kind);
+    }
+}
+
+/// Lower the count of the claim on `start..end` as `kind`, and remove it at
+/// zero.
+fn release(start: u64, end: u64, kind: MemoryType) {
+    let mut claims = CLAIMS.lock();
+    let found = claims
+        .iter()
+        .position(|claim| claim.start == start && claim.end == end && claim.kind == kind);
+    if let Some(at) = found
+        && let Some(claim) = claims.get_mut(at)
+    {
+        claim.count = claim.count.saturating_sub(1);
+        if claim.count == 0 {
             let _ = claims.swap_remove(at);
         }
     }
+}
+
+/// How many claims are recorded: what stage 9's check compares across
+/// mappings of one range (L.user.109).
+pub(crate) fn claims() -> usize {
+    CLAIMS.lock().len()
 }
 
 /// Hold `physical..physical + len` as `kind`, unless a page of it is held as
@@ -111,29 +162,38 @@ impl Drop for Hold {
 /// range, and [`Refused::NoMemory`].
 pub(crate) fn hold(physical: u64, len: u64, kind: MemoryType) -> Result<Arc<Hold>, Refused> {
     let end = physical.checked_add(len).ok_or(Refused::OtherType)?;
-    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-    // Made before the entry: dropping it on any refusal below removes
-    // nothing, and once the entry is in, its drop is what removes it.
-    let held = fallible::try_arc(Hold { serial }).map_err(|_| Refused::NoMemory)?;
     let mut claims = CLAIMS.lock();
     let other = claims
         .iter()
         .any(|claim| claim.kind != kind && claim.start < end && physical < claim.end);
-    let recorded = if other {
-        Err(Refused::OtherType)
-    } else {
-        fallible::try_push(
+    let same = claims
+        .iter()
+        .position(|claim| claim.start == physical && claim.end == end && claim.kind == kind);
+    let recorded = match (other, same.and_then(|at| claims.get_mut(at))) {
+        (true, _) => Err(Refused::OtherType),
+        (false, Some(claim)) => {
+            claim.count = claim.count.saturating_add(1);
+            Ok(())
+        }
+        (false, None) => fallible::try_push(
             &mut claims,
             Claim {
-                serial,
                 start: physical,
                 end,
                 kind,
+                count: 1,
             },
         )
-        .map_err(|_| Refused::NoMemory)
+        .map_err(|_| Refused::NoMemory),
     };
-    // Unlocked before `held` can drop: its drop takes this lock.
     drop(claims);
-    recorded.map(|()| held)
+    recorded?;
+    // Counted above, so made after. If there is no memory for it, the value
+    // is dropped (`fallible::try_arc`), and its drop lowers the count again.
+    fallible::try_arc(Hold {
+        start: physical,
+        end,
+        kind,
+    })
+    .map_err(|_| Refused::NoMemory)
 }

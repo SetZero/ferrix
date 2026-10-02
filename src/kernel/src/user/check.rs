@@ -26,7 +26,7 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::mm;
 use crate::sync::SpinLock;
-use crate::user::space::{Access, AddressSpace, FilePlace, SpaceError};
+use crate::user::space::{Access, AddressSpace, FilePlace, SpaceError, WindowPages};
 use crate::user::vmo::{Vmo, VmoError};
 
 /// What the checks measured, for the boot log.
@@ -488,7 +488,7 @@ fn check_the_kernel_image_is_no_device_memory() -> Result<(), &'static str> {
     match space.map_window(
         FilePlace::Anywhere(None),
         2 * PAGE_SIZE,
-        image.saturating_sub(PAGE_SIZE),
+        WindowPages::all(image.saturating_sub(PAGE_SIZE), 2 * PAGE_SIZE),
         VmaFlags::READ,
         true,
         keeper,
@@ -525,7 +525,7 @@ fn check_a_device_range_that_wraps_is_refused() -> Result<(), &'static str> {
         match space.map_window(
             FilePlace::Anywhere(None),
             len,
-            physical,
+            WindowPages::all(physical, len),
             VmaFlags::READ,
             false,
             keeper,

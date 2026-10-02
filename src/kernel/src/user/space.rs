@@ -2456,6 +2456,30 @@ fn hold_type(
     })
 }
 
+/// The pages of a window [`AddressSpace::map_window`] maps: from
+/// `physical`, inside the window `whole..whole + whole_len` -- a render
+/// node's whole blob -- over which its memory type is held.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WindowPages {
+    /// The first page mapped.
+    pub(crate) physical: u64,
+    /// The window's first page.
+    pub(crate) whole: u64,
+    /// The window's length, whole pages.
+    pub(crate) whole_len: u64,
+}
+
+impl WindowPages {
+    /// `len` bytes from `physical`, a window of their own.
+    pub(crate) const fn all(physical: u64, len: u64) -> WindowPages {
+        WindowPages {
+            physical,
+            whole: physical,
+            whole_len: len,
+        }
+    }
+}
+
 /// What a window's region keeps under its id: its keeper, and its memory
 /// type's hold.
 #[derive(Debug)]
@@ -2574,22 +2598,38 @@ impl AddressSpace {
     /// mappings' own, until no region names it: until then nothing can hand
     /// the window's pages to anyone else. A `fork` child keeps it too. Kept
     /// with it is the range's memory type, cached if `cached` and device
-    /// memory otherwise, as [`AddressSpace::map_device`] holds its own.
+    /// memory otherwise, as [`AddressSpace::map_device`] holds its own. The
+    /// type is held over the whole window `pages` names, not only the part
+    /// mapped, so mapping parts of one window adds no claim
+    /// ([`memory_type`]'s bound).
     ///
     /// # Errors
     ///
-    /// As [`AddressSpace::map_device`].
+    /// As [`AddressSpace::map_device`], and [`SpaceError::BadRange`] for
+    /// pages outside their window.
     pub(crate) fn map_window(
         &self,
         place: FilePlace,
         len: u64,
-        physical: u64,
+        pages: WindowPages,
         flags: VmaFlags,
         cached: bool,
         keeper: Arc<dyn Any + Send + Sync>,
     ) -> Result<u64, SpaceError> {
+        let physical = pages.physical;
         check_device_range(physical, len, flags, 0)?;
-        let held = hold_type(physical, len, MemoryType::of(cached, false))?;
+        check_device_range(pages.whole, pages.whole_len, flags, 0)?;
+        let inside = physical >= pages.whole
+            && physical.checked_add(len).is_some_and(|end| {
+                pages
+                    .whole
+                    .checked_add(pages.whole_len)
+                    .is_some_and(|whole_end| end <= whole_end)
+            });
+        if !inside {
+            return Err(SpaceError::BadRange);
+        }
+        let held = hold_type(pages.whole, pages.whole_len, MemoryType::of(cached, false))?;
         let keeper: Arc<dyn Any + Send + Sync> =
             fallible::try_arc(WindowKept { keeper, held }).map_err(|_| SpaceError::OutOfMemory)?;
         let mut inner = self.inner.lock();

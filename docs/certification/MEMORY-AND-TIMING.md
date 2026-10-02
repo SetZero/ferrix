@@ -588,17 +588,34 @@ same way once per function.
 
 ### 2.2f Device memory types (`user::memory_type::CLAIMS`)
 
-A spin lock over one entry per live user mapping of device memory -- an
-I/O mapping or a render node's window -- recording its physical range and
-its memory type (device, write-combining or cached), so that no page is
-mapped with two (L.user.109). It is a leaf: taken under an address space's
-lock by `map_device` and `map_window`, and on its own when a mapping's
-hold drops after its unmap's shootdown; nothing is taken under it. A
-mapping's hold is one pass over the entries, comparing two bounds each,
-and one fallible push (`fallible::try_push`, `NO_MEMORY` to the caller); a
-drop is one pass and a `swap_remove`. The entries are at most the live
-device mappings, which on the machines Ferrix boots is a handful per
-driver; there is no wait under it.
+A spin lock over the physical ranges user mappings of device memory hold,
+each with its memory type (device, write-combining or cached) and a count
+of the mappings holding it, so that no page is mapped with two types
+(L.user.109). It is a leaf: taken under an address space's lock by
+`map_device` and `map_window`, and on its own when a mapping's hold drops
+after its unmap's shootdown; nothing is taken under it.
+
+**The bound, which ring 3 cannot raise.** There is one entry per distinct
+range and type, counted, never one per mapping, and the range is not the
+program's to choose: an I/O mapping holds its whole aperture, and a
+render node's window holds its whole blob whatever part of it an `mmap`
+asked for. Live blobs are disjoint whole pages of the device's
+host-visible window and stay placed while anything maps them. So the
+entries are at most the whole-page apertures stage 10 minted plus the
+pages of the host-visible windows -- fixed by the machine's hardware. Any
+number of processes mapping any number of times raise counts, not
+entries. A hold is one pass over the entries comparing two bounds each,
+and at most one fallible push (`fallible::try_push`, `NO_MEMORY` to the
+caller); a drop is one pass and, at a count of zero, a `swap_remove`.
+There is no wait under it. Stage 9 checks that mapping a window again,
+whole or one page of it, adds no entry.
+
+**A residual.** The hold orders translations, not caches: after the last
+cached mapping of device pages goes, dirty lines may be written back
+after a later write-combining or uncached mapping wrote those pages. No
+two types are mapped at once, so the effect is stale data over the
+device's own memory, not a machine-wide one (VULNERABILITY-ANALYSIS
+T.DMA path 7). A flush when a cached hold is released would close it.
 
 ### 2.3 What is missing, per standard
 

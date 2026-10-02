@@ -20,7 +20,9 @@ use ferrix_vma::VmaFlags;
 
 use crate::mm;
 use crate::smp;
-use crate::user::space::{Access, AddressSpace, Destination, FileMapping, FilePlace, SpaceError};
+use crate::user::space::{
+    Access, AddressSpace, Destination, FileMapping, FilePlace, SpaceError, WindowPages,
+};
 use crate::user::vmo::{Vmo, VmoError};
 use crate::vmap::{self, VmapError};
 
@@ -173,7 +175,7 @@ fn window_over(space: &AddressSpace, physical: u64) -> Result<u32, &'static str>
         space.map_window(
             place,
             opaque(len),
-            physical,
+            WindowPages::all(physical, opaque(len)),
             flags,
             true,
             Arc::clone(&keeper),

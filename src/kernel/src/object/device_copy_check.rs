@@ -29,7 +29,7 @@ use crate::device;
 use crate::mm;
 use crate::object::check::{SCRATCH, Side, device_handle, reg};
 use crate::syscall::{fd, file, pipe};
-use crate::user::space::{Access, FilePlace, SpaceError};
+use crate::user::space::{Access, FilePlace, SpaceError, WindowPages};
 
 /// Where `pipe2` puts the two descriptors: the scratch region's second page,
 /// which the object checks' staging leaves alone.
@@ -165,7 +165,7 @@ fn map_window(side: &Side, physical: u64) -> Result<u64, &'static str> {
         .map_window(
             FilePlace::Anywhere(None),
             PAGE_SIZE,
-            physical,
+            WindowPages::all(physical, PAGE_SIZE),
             VmaFlags::READ_WRITE,
             true,
             keeper,

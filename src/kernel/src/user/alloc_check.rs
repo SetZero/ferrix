@@ -28,7 +28,9 @@ use ferrix_vma::VmaFlags;
 use crate::fallible::{self, AllocError};
 use crate::mm;
 use crate::sched::TaskId;
-use crate::user::space::{Access, AddressSpace, Destination, FileMapping, FilePlace, SpaceError};
+use crate::user::space::{
+    Access, AddressSpace, Destination, FileMapping, FilePlace, SpaceError, WindowPages,
+};
 use crate::user::vmo::{Vmo, VmoError};
 use crate::vmap::{self, VmapError};
 
@@ -225,7 +227,7 @@ fn fork_every_kind_of_region(frame: u64) -> Result<(), Refusal> {
         parent.map_window(
             FilePlace::Anywhere(None),
             P,
-            frame * PAGE_SIZE,
+            WindowPages::all(frame * PAGE_SIZE, P),
             VmaFlags::READ_WRITE,
             true,
             keeper,

@@ -45,7 +45,8 @@ use crate::syscall::check::spinner;
 use crate::syscall::image;
 use crate::syscall::process::{self, Process};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
-use crate::user::space::{Access, Destination, FileMapping, FilePlace, SpaceError};
+use crate::user::memory_type;
+use crate::user::space::{Access, Destination, FileMapping, FilePlace, SpaceError, WindowPages};
 use crate::user::vmo::Vmo;
 use ferrix_elf::Class;
 
@@ -2603,7 +2604,9 @@ fn check_write_combining(counter: &mut Counter) -> Result<(), &'static str> {
 /// as a cached window, as a render node's `mmap` would, is refused; with it
 /// mapped cached or uncached, write-combining is refused; and once nothing
 /// maps it, write-combining is allowed again. The window is never touched,
-/// so no cached access reaches the device.
+/// so no cached access reaches the device. Mapping the window again, whole
+/// or one page of it, adds no claim: the claims are counted per range and
+/// type, and a window's range is the whole window.
 ///
 /// Verifies: L.user.109
 fn one_memory_type_per_page(
@@ -2615,17 +2618,22 @@ fn one_memory_type_per_page(
     counter: &mut Counter,
 ) -> Result<(), &'static str> {
     let space = side.process.space();
-    let window = || {
+    let window_of = |part: u64| {
         let keeper: Arc<dyn Any + Send + Sync> = Arc::new(());
         space.map_window(
             FilePlace::Anywhere(None),
-            len,
-            phys,
+            part,
+            WindowPages {
+                physical: phys,
+                whole: phys,
+                whole_len: len,
+            },
             VmaFlags::READ_WRITE,
             true,
             keeper,
         )
     };
+    let window = || window_of(len);
     let unmap = |at: u64| {
         space
             .unmap(at, len)
@@ -2643,6 +2651,16 @@ fn one_memory_type_per_page(
     }
     unmap(at)?;
     let cached = window().map_err(|_| "a window over an unmapped aperture was refused")?;
+    let claims = memory_type::claims();
+    let again = window().map_err(|_| "a window was refused beside one of its own type")?;
+    let page = window_of(PAGE_SIZE).map_err(|_| "a window's first page was refused")?;
+    if memory_type::claims() != claims {
+        return Err("mapping a window again, or a page of it, made another claim");
+    }
+    unmap(again)?;
+    space
+        .unmap(page, PAGE_SIZE)
+        .map_err(|_| "a window's page could not be unmapped")?;
     refused(
         side.call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0]),
         status::ALREADY_BOUND,
