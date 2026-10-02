@@ -52,7 +52,10 @@ checked by host `btrfs check`. What it writes:
   a deletion may use, as Linux reserves metadata per transaction; so a
   volume whose trees are full refuses a create with `ENOSPC` and still
   deletes. Running out finds no room before an edit changes anything, which
-  aborts nothing. A DUP chunk is sized so both copies find a stripe. A transaction that
+  aborts nothing. A DUP chunk is sized so both copies find a stripe. What
+  is not measured yet: the log replay and orphan cleanup a mount runs, which
+  on a full volume can still abort and fail the mount, and the reservation's
+  sizes are estimates (docs/BACKLOG.md). A transaction that
   aborts all the same (a disk error) is thrown away, the last commit
   reloaded, and the mount goes read-only with a console line saying why, as
   on Linux. Until 2026-10-02 a `dd` into a nearly full /data latched the
