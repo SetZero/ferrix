@@ -138,6 +138,12 @@ pub(crate) fn test_boot_lines(
                     watched.log.display()
                 )));
             }
+            if let Some(problem) = msi_problem(arch, &watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             if let Some(problem) = iommu_problem(&watched.lines) {
                 return Err(Error::new(format!(
                     "{arch}: {problem}.\n  Serial output is in {}",
@@ -256,6 +262,34 @@ fn entropy_problem(lines: &[String]) -> Option<String> {
     if !count_before(line, BY_MSIX).is_some_and(|count| count > 0) {
         return Some(format!(
             "no entropy request completed by MSI-X: `{}`",
+            line.trim()
+        ));
+    }
+    None
+}
+
+/// What stage 10's devices line says when the MSI check minted `edu`'s one
+/// vector and saw both of its unmasked deliveries.
+const MSI_DELIVERED: &str = "MSI capabilities (1 vectors minted, 2 deliveries)";
+
+/// Why an x86-64 boot did not run stage 10's MSI check whole, if it did not.
+///
+/// `device::check::check_msi` passes on a machine without QEMU's `edu`, and
+/// does nothing when `edu`'s vector cannot be minted; every x86-64 machine
+/// this tool boots has `edu` behind a root port (`attach_rng`), so here the
+/// check must have minted its vector and seen both deliveries.
+///
+/// Verifies: L.device.22
+fn msi_problem(arch: Arch, lines: &[String]) -> Option<String> {
+    if arch != Arch::X86_64 {
+        return None;
+    }
+    let Some(line) = lines.iter().find(|line| line.contains("  devices  ")) else {
+        return Some("the kernel never printed its devices line".to_owned());
+    };
+    if !line.contains(MSI_DELIVERED) {
+        return Some(format!(
+            "the MSI check did not mint edu's vector and see both deliveries: `{}`",
             line.trim()
         ));
     }
@@ -2823,7 +2857,7 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 mod tests {
     use super::{
         Arch, SUCCESS_MARKER, UNCHECKED_MARKER, devmgr_problem, entropy_problem, fault_problem,
-        iommu_problem, namespace_problem, parse_qemu_version, xstate_problem,
+        iommu_problem, msi_problem, namespace_problem, parse_qemu_version, xstate_problem,
     };
 
     /// A secret goes in any case and every time, and nothing else does.
@@ -2951,6 +2985,29 @@ mod tests {
             entropy_problem(&old).is_some(),
             "a kernel that does not say"
         );
+    }
+
+    #[test]
+    fn an_x86_64_boot_without_both_msi_deliveries_fails() {
+        let devices = |msi: &str| {
+            lines(&[&format!(
+                "  devices  12 nodes (0 from the device tree), 6 MSI-X tables (1 vectors minted), {msi}, 59 refusals as specified; 12 published"
+            )])
+        };
+        let whole = devices("2 MSI capabilities (1 vectors minted, 2 deliveries)");
+        assert_eq!(msi_problem(Arch::X86_64, &whole), None);
+        for unexercised in [
+            "1 MSI capabilities (0 vectors minted, 0 deliveries)",
+            "2 MSI capabilities (1 vectors minted, 1 deliveries)",
+        ] {
+            assert!(
+                msi_problem(Arch::X86_64, &devices(unexercised)).is_some(),
+                "{unexercised}"
+            );
+        }
+        assert!(msi_problem(Arch::X86_64, &lines(&["FERRIX-BOOT-OK"])).is_some());
+        let arm = devices("0 MSI capabilities (0 vectors minted, 0 deliveries)");
+        assert_eq!(msi_problem(Arch::AArch64, &arm), None, "no edu on Arm");
     }
 
     #[test]

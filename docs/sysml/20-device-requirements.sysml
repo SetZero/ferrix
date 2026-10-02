@@ -342,19 +342,41 @@ package FerrixDeviceRequirements {
         }
         requirement <'L.device.22'> msiMintedMaskedAndDelivered : ItemLowLevel {
             attribute :>> statement = "A PCI function with an MSI capability and no
-                MSI-X table shall be offered one vector, minted once with INTx off
-                and the message masked, masked and unmasked by its mask bit or,
-                without one, its enable bit, and none past the one message.";
-            attribute :>> criterion = "On x86-64, QEMU's edu device's vector 0
-                minted twice is one vector with no handler on its number, vector 1
-                is refused, it reads masked as minted and as told, and edu's raised
-                interrupt arrives twice unmasked and not while masked.";
+                MSI-X table shall be offered one vector, minted once with INTx off --
+                written under the node's command-register lock, which bus mastering's
+                writes take too -- and the message masked, none past the one
+                message, and no vector allocated for a 32-bit capability the
+                architecture's message address is above.";
+            attribute :>> criterion = "On x86-64 test-boot requires the devices
+                line's 1 vectors minted and 2 deliveries: QEMU's edu device's vector
+                0 minted twice is one vector with no handler on its number, vector 1
+                is refused, it reads masked as minted and as told, the command
+                register reads INTx off, and edu's raised interrupt arrives twice
+                unmasked and not while masked. Without edu on the machine, or with
+                the INTx write skipped, the boot fails.";
             attribute :>> parent = ("H.IRQ.1", "H.IRQ.2", "H.IRQ.3");
             attribute :>> unit = ("device::MsiFunction::mint",
-                "device::MsiFunction::set_masked", "device::MsiFunction::is_masked",
-                "device::MsiFunction::mapped", "device::MsiFunction::of",
-                "device::DeviceNode::vector",
-                "device::DeviceNode::vector_count");
+                "device::MsiFunction::of", "device::MsiFunction::mapped",
+                "device::MsiFunction::intx_off", "device::DeviceNode::vector",
+                "device::DeviceNode::vector_count", "device::DeviceNode::set_bus_master");
+        }
+        requirement <'L.device.23'> msiRegistersByLayout : ItemLowLevel {
+            attribute :>> statement = "An MSI message shall be programmed with MSI
+                off while its registers are written, at the offsets its
+                capability's address width puts them, and left masked: by its mask
+                bit, with MSI on, where the function can mask its vector, and by MSI
+                Enable otherwise; masking, unmasking and reading back use the same
+                bit.";
+            attribute :>> criterion = "Host tests: a maskable 32-bit capability is
+                programmed with its data at +8, its mask bit set and MSI on, and is
+                masked and unmasked by the mask bit with Enable untouched; a
+                non-maskable 64-bit one gets both address halves, its data at +0xC
+                and MSI off, and is masked and unmasked by Enable; one message is
+                enabled whatever the function could use. With the two paths swapped
+                the tests fail.";
+            attribute :>> parent = ("H.IRQ.2", "H.IRQ.3");
+            attribute :>> unit = ("device::MsiFunction::set_masked",
+                "device::MsiFunction::is_masked", "device::MsiFunction::mint");
         }
         requirement <'L.discovery.1'> oneDescriptionAnsweredOnce : ItemLowLevel {
             attribute :>> statement = "description::of shall read a machine by its

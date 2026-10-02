@@ -16,8 +16,8 @@ use core::sync::atomic::Ordering;
 use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE};
 
 use super::{
-    DeviceNode, FIRST_SHARED_INTERRUPT, Failure, LEGACY_CONFIG_BYTES, Location, Report, Reserved,
-    Trigger, Vector,
+    DeviceNode, FIRST_SHARED_INTERRUPT, Failure, LEGACY_CONFIG_BYTES, Location, MsiFunction,
+    Report, Reserved, Trigger, Vector,
 };
 use crate::mmio::Mmio;
 use crate::object::interrupt::Interrupt;
@@ -149,6 +149,11 @@ fn check_msi(nodes: &[Arc<DeviceNode>], report: &mut Report) -> Result<(), Failu
     }
     if first.reads_masked() != Some(true) {
         return Err(fail("a minted MSI vector was not masked"));
+    }
+    // INTx off, so that a function masked by its enable bit raises nothing
+    // by a pin either.
+    if node.msi.as_ref().and_then(MsiFunction::intx_off) != Some(true) {
+        return Err(fail("a minted MSI vector left INTx on"));
     }
     let unmasked = first.set_masked(false).map(|()| first.reads_masked());
     let masked = first.set_masked(true).map(|()| first.reads_masked());

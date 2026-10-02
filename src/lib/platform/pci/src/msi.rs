@@ -96,6 +96,76 @@ impl Msi {
     pub const fn enabled(control: u16) -> u16 {
         (control & !CONTROL_MULTIPLE_ENABLE) | CONTROL_ENABLE
     }
+
+    /// Program the one message, `data` written to `address`, and leave it
+    /// masked. MSI is off while the registers are written, so no half-written
+    /// message is ever sent. A function that can mask its vector gets its
+    /// mask bit set and MSI enabled; one that cannot is masked by MSI staying
+    /// off, until [`Msi::set_masked`] unmasks it.
+    ///
+    /// The caller has checked [`Msi::reaches`] for `address`: a 32-bit
+    /// capability is written only its low half.
+    pub fn program<C: ConfigSpace + ?Sized>(
+        &self,
+        space: &mut C,
+        function: Address,
+        address: u64,
+        data: u16,
+    ) {
+        let control_at = self.capability + CONTROL;
+        let control = space.read16(function, control_at);
+        space.write16(function, control_at, control & !CONTROL_ENABLE);
+        space.write32(function, self.capability + ADDRESS_LOW, address as u32);
+        if self.wide {
+            space.write32(
+                function,
+                self.capability + ADDRESS_HIGH,
+                (address >> 32) as u32,
+            );
+        }
+        space.write16(function, self.data(), data);
+        if let Some(at) = self.mask() {
+            let bits = space.read32(function, at);
+            space.write32(function, at, bits | 1);
+            space.write16(function, control_at, Self::enabled(control));
+        }
+    }
+
+    /// Mask or unmask the message: by its mask bit where the function has
+    /// one, by MSI Enable where it has not. The other mask bits are vectors
+    /// never enabled, and are kept as they are.
+    pub fn set_masked<C: ConfigSpace + ?Sized>(
+        &self,
+        space: &mut C,
+        function: Address,
+        masked: bool,
+    ) {
+        match self.mask() {
+            Some(at) => {
+                let bits = space.read32(function, at);
+                space.write32(function, at, if masked { bits | 1 } else { bits & !1 });
+            }
+            None => {
+                let at = self.capability + CONTROL;
+                let control = space.read16(function, at);
+                let control = if masked {
+                    control & !CONTROL_ENABLE
+                } else {
+                    Self::enabled(control)
+                };
+                space.write16(function, at, control);
+            }
+        }
+    }
+
+    /// Whether the message reads back masked, by the same bit
+    /// [`Msi::set_masked`] writes.
+    pub fn is_masked<C: ConfigSpace + ?Sized>(&self, space: &C, function: Address) -> bool {
+        match self.mask() {
+            Some(at) => space.read32(function, at) & 1 != 0,
+            None => space.read16(function, self.capability + CONTROL) & CONTROL_ENABLE == 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -104,7 +174,7 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use super::{CONTROL_ENABLE, CONTROL_MULTIPLE_ENABLE, Msi};
+    use super::{ADDRESS_HIGH, ADDRESS_LOW, CONTROL, CONTROL_ENABLE, CONTROL_MULTIPLE_ENABLE, Msi};
     use crate::capability::{Capability, ID_MSI};
     use crate::{Address, ConfigSpace};
 
@@ -131,11 +201,20 @@ mod tests {
         }
     }
 
+    const CAPABILITY: u16 = 0x68;
+
+    fn function() -> Address {
+        Address::new(0, 0, 5, 0).unwrap()
+    }
+
     fn decode(control: u16) -> Msi {
-        let function = Address::new(0, 0, 5, 0).unwrap();
-        let space = Space([(0x6A, control)].into_iter().collect());
+        decode_in(&Space([(0x6A, control)].into_iter().collect()))
+    }
+
+    fn decode_in(space: &Space) -> Msi {
+        let function = function();
         Msi::read(
-            &space,
+            space,
             function,
             Capability {
                 function,
@@ -145,6 +224,7 @@ mod tests {
         )
     }
 
+    /// Verifies: L.device.23
     #[test]
     fn a_64_bit_capability_without_masking_is_nvidia_s_layout() {
         // GA106's: 64-bit, one message, not maskable (`docs/NVIDIA.md`).
@@ -154,6 +234,7 @@ mod tests {
         assert!(msi.reaches(0xFEE0_0000) && msi.reaches(1 << 40));
     }
 
+    /// Verifies: L.device.23
     #[test]
     fn the_data_and_mask_registers_move_with_the_address_width() {
         let narrow = decode(0x0100);
@@ -163,6 +244,7 @@ mod tests {
         assert_eq!((wide.data(), wide.mask()), (0x74, Some(0x78)));
     }
 
+    /// Verifies: L.device.23
     #[test]
     fn multiple_message_capable_is_a_power_of_two_never_past_32() {
         assert_eq!(decode(0x3 << 1).capable, 8);
@@ -171,6 +253,64 @@ mod tests {
         assert_eq!(decode(0x7 << 1).capable, 32);
     }
 
+    /// A 32-bit capability that masks its vector: programmed with its mask
+    /// bit set and MSI on, the data where a 32-bit layout puts it, nothing
+    /// written above the address's low half, and masked and unmasked by the
+    /// mask bit with Enable left on.
+    ///
+    /// Verifies: L.device.23
+    #[test]
+    fn a_maskable_32_bit_message_is_masked_by_its_mask_bit() {
+        let mut space = Space([(0x6A, 0x0100 | 0x2 << 1)].into_iter().collect());
+        let msi = decode_in(&space);
+        msi.program(&mut space, function(), 0xFEE0_1000, 0x41);
+        assert_eq!(
+            space.read32(function(), CAPABILITY + ADDRESS_LOW),
+            0xFEE0_1000
+        );
+        assert_eq!(space.read16(function(), 0x70), 0x41, "data at +8");
+        assert_eq!(space.read32(function(), 0x74) & 1, 1, "masked by the bit");
+        let control = space.read16(function(), CAPABILITY + CONTROL);
+        assert_eq!(control & CONTROL_ENABLE, CONTROL_ENABLE, "MSI on");
+        assert_eq!(control & CONTROL_MULTIPLE_ENABLE, 0, "one message");
+        assert!(msi.is_masked(&space, function()));
+        msi.set_masked(&mut space, function(), false);
+        assert!(!msi.is_masked(&space, function()));
+        assert_eq!(space.read32(function(), 0x74) & 1, 0);
+        msi.set_masked(&mut space, function(), true);
+        assert!(msi.is_masked(&space, function()));
+        let control = space.read16(function(), CAPABILITY + CONTROL);
+        assert_eq!(control & CONTROL_ENABLE, CONTROL_ENABLE, "Enable untouched");
+    }
+
+    /// A 64-bit capability that cannot mask its vector, NVIDIA's and edu's:
+    /// programmed with both halves of the address and MSI left off, which is
+    /// its mask, and masked and unmasked by Enable.
+    ///
+    /// Verifies: L.device.23
+    #[test]
+    fn a_non_maskable_64_bit_message_is_masked_by_enable() {
+        let mut space = Space([(0x6A, 0x0080 | CONTROL_ENABLE)].into_iter().collect());
+        let msi = decode_in(&space);
+        msi.program(&mut space, function(), 0x1_2345_6000, 0x42);
+        assert_eq!(
+            space.read32(function(), CAPABILITY + ADDRESS_LOW),
+            0x2345_6000
+        );
+        assert_eq!(space.read32(function(), CAPABILITY + ADDRESS_HIGH), 1);
+        assert_eq!(space.read16(function(), 0x74), 0x42, "data at +0xC");
+        assert!(msi.is_masked(&space, function()), "left off");
+        msi.set_masked(&mut space, function(), false);
+        assert!(!msi.is_masked(&space, function()));
+        assert_eq!(
+            space.read16(function(), CAPABILITY + CONTROL) & CONTROL_ENABLE,
+            CONTROL_ENABLE
+        );
+        msi.set_masked(&mut space, function(), true);
+        assert!(msi.is_masked(&space, function()));
+    }
+
+    /// Verifies: L.device.23
     #[test]
     fn enabling_asks_for_one_message_and_keeps_the_other_bits() {
         let control = 0x0180 | 0x3 << 1 | 0x2 << 4;

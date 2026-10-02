@@ -76,12 +76,13 @@ use ferrix_native_abi::types::{
     TREE_GS201_DWC3, TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
 };
 use ferrix_pci::Address;
+use ferrix_pci::ConfigSpace as _;
 use ferrix_pci::bar::{Bar, Region};
 use ferrix_pci::capability::{Capability, MSIX_ENTRY_SIZE, MsiX};
 use ferrix_pci::header::{
     COMMAND, COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_MEMORY_SPACE, Identity,
 };
-use ferrix_pci::msi::{self, Msi};
+use ferrix_pci::msi::Msi;
 use ferrix_pci::msix::{
     self, CAPABILITY_CONTROL, CONTROL_ENABLE, CONTROL_FUNCTION_MASK, ENTRY_ADDRESS_HIGH,
     ENTRY_ADDRESS_LOW, ENTRY_DATA, ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED,
@@ -386,10 +387,14 @@ impl Reserved {
 /// the command register, so a function whose MSI is masked by its enable bit
 /// cannot fall back to a pin nothing listens on, and leaves the message
 /// masked. A function that can mask its vector is masked by its mask bit; one
-/// that cannot is masked by turning MSI off, which drops what it would have
-/// raised meanwhile. That is safe only for what [`Vector::coalesces`] masks:
-/// a vector already pending, whose driver services the device anyway, and the
-/// mask a holder's drop leaves.
+/// that cannot is masked by turning MSI off, which drops -- rather than
+/// defers, as MSI-X's pending bit would -- what it raises meanwhile. The
+/// registers are `ferrix_pci::msi`'s to choose. `object::interrupt` masks a
+/// coalescing vector only past `STORM_BOUND` unacknowledged deliveries,
+/// before a claim, and at a holder's drop, so what is dropped is a message
+/// raised while its driver had not acknowledged the last: a driver of such a
+/// function acknowledges before it drains its device's status, and services
+/// the device on claim (SAFETY-MANUAL AoU-19).
 struct MsiFunction {
     /// The function's requester ID, which its message writes carry.
     requester: u32,
@@ -432,101 +437,123 @@ impl MsiFunction {
     }
 
     /// The configuration space, once the first mint mapped it.
-    fn mapped(&self) -> Option<Mmio> {
+    fn mapped(&self) -> Option<MappedConfig> {
         match self.config.get() {
-            Some(&Ok(config)) => Some(config),
+            Some(&Ok(config)) => Some(MappedConfig(config)),
             _ => None,
         }
     }
 
-    /// Mask or unmask the vector. Takes no lock.
+    /// Mask or unmask the vector. Takes no lock: an interrupt handler calls
+    /// it, and the bits it writes are the capability's, not the command
+    /// register's.
     fn set_masked(&self, masked: bool) -> Result<(), &'static str> {
-        let config = self
+        let mut config = self
             .mapped()
             .ok_or("the vector's MSI capability is not mapped")?;
-        match self.msi.mask() {
-            Some(at) => {
-                // Bit 0 is the one message; the other bits are vectors this
-                // never enables, kept as they are.
-                let value = config.read32(u64::from(at));
-                config.write32(u64::from(at), if masked { value | 1 } else { value & !1 });
-            }
-            None => {
-                let at = u64::from(self.msi.capability + msi::CONTROL);
-                let control = config.read16(at);
-                config.write16(
-                    at,
-                    if masked {
-                        control & !msi::CONTROL_ENABLE
-                    } else {
-                        Msi::enabled(control)
-                    },
-                );
-            }
-        }
+        self.msi
+            .set_masked(&mut config, MappedConfig::FUNCTION, masked);
         Ok(())
     }
 
     /// Whether the vector reads back masked.
     fn is_masked(&self) -> Option<bool> {
         let config = self.mapped()?;
-        Some(match self.msi.mask() {
-            Some(at) => config.read32(u64::from(at)) & 1 != 0,
-            None => {
-                config.read16(u64::from(self.msi.capability + msi::CONTROL)) & msi::CONTROL_ENABLE
-                    == 0
-            }
-        })
+        Some(self.msi.is_masked(&config, MappedConfig::FUNCTION))
+    }
+
+    /// Whether the command register reads back with `INTx` off.
+    fn intx_off(&self) -> Option<bool> {
+        let config = self.mapped()?;
+        Some(config.read16(MappedConfig::FUNCTION, COMMAND) & COMMAND_INTERRUPT_DISABLE != 0)
     }
 
     /// The vector, minting it if nothing has.
     ///
-    /// The first mint maps configuration space, turns `INTx` off, programs
-    /// the message with the vector masked, and enables one message --
-    /// masked by its enable bit where there is no mask bit, which means
-    /// leaving MSI off until the holder unmasks it.
-    fn mint(&self, node: usize) -> Result<Vector, &'static str> {
+    /// The first mint maps configuration space, turns `INTx` off under
+    /// `command` -- the node's lock on its command register, which bus
+    /// mastering's writes take too -- and programs the message, masked
+    /// (`ferrix_pci::msi::Msi::program`). An architecture whose message
+    /// address a 32-bit capability cannot hold is refused before a vector is
+    /// allocated, since an allocated vector is never given back.
+    fn mint(&self, node: usize, command: &SpinLock<()>) -> Result<Vector, &'static str> {
         let vector = |number| Vector {
             number,
             trigger: Some(Trigger::Edge),
             masking: Masking::Msi { node },
         };
-        let config = (*self.config.call_once(|| {
+        if let Some(doorbell) = arch::msi_doorbell()
+            && !self.msi.reaches(doorbell)
+        {
+            return Err("the message's address is above what a 32-bit MSI capability holds");
+        }
+        let mapped = (*self.config.call_once(|| {
             vmap::map_device(self.config_phys, LEGACY_CONFIG_BYTES)
                 .map(Mmio::at)
                 .map_err(|_| "the function's configuration space could not be mapped")
         }))?;
+        let mut config = MappedConfig(mapped);
+        {
+            let _command = command.lock();
+            let value = config.read16(MappedConfig::FUNCTION, COMMAND);
+            config.write16(
+                MappedConfig::FUNCTION,
+                COMMAND,
+                value | COMMAND_INTERRUPT_DISABLE,
+            );
+        }
         let mut minted = self.minted.lock();
         if let Some(number) = *minted {
             return Ok(vector(number));
         }
-        let control_at = u64::from(self.msi.capability + msi::CONTROL);
-        let control = config.read16(control_at);
-        // Off while it is programmed, so that no half-written message is
-        // ever sent.
-        config.write16(control_at, control & !msi::CONTROL_ENABLE);
-        let command = config.read16(u64::from(COMMAND));
-        config.write16(u64::from(COMMAND), command | COMMAND_INTERRUPT_DISABLE);
         let message = arch::msi_allocate(self.requester)?;
         if !self.msi.reaches(message.address) {
             return Err("the message's address is above what a 32-bit MSI capability holds");
         }
-        let base = u64::from(self.msi.capability);
-        config.write32(base + u64::from(msi::ADDRESS_LOW), message.address as u32);
-        if self.msi.wide {
-            config.write32(
-                base + u64::from(msi::ADDRESS_HIGH),
-                (message.address >> 32) as u32,
-            );
-        }
-        config.write16(u64::from(self.msi.data()), message.data as u16);
-        if let Some(at) = self.msi.mask() {
-            let value = config.read32(u64::from(at));
-            config.write32(u64::from(at), value | 1);
-            config.write16(control_at, Msi::enabled(control));
-        }
+        self.msi.program(
+            &mut config,
+            MappedConfig::FUNCTION,
+            message.address,
+            message.data as u16,
+        );
         *minted = Some(message.number);
         Ok(vector(message.number))
+    }
+}
+
+/// One function's legacy configuration space, mapped, as
+/// `ferrix_pci::ConfigSpace`: the function argument is the mapping's own,
+/// and every access is the one asked for.
+#[derive(Clone, Copy)]
+struct MappedConfig(Mmio);
+
+impl MappedConfig {
+    /// The function a mapping stands for, which its accesses ignore.
+    const FUNCTION: Address = match Address::new(0, 0, 0, 0) {
+        Some(address) => address,
+        None => panic!("function 0:0.0 is in range"),
+    };
+}
+
+impl ferrix_pci::ConfigSpace for MappedConfig {
+    fn read8(&self, _: Address, offset: u16) -> u8 {
+        self.0.read8(u64::from(offset))
+    }
+
+    fn read16(&self, _: Address, offset: u16) -> u16 {
+        self.0.read16(u64::from(offset))
+    }
+
+    fn read32(&self, _: Address, offset: u16) -> u32 {
+        self.0.read32(u64::from(offset))
+    }
+
+    fn write16(&mut self, _: Address, offset: u16, value: u16) {
+        self.0.write16(u64::from(offset), value);
+    }
+
+    fn write32(&mut self, _: Address, offset: u16, value: u32) {
+        self.0.write32(u64::from(offset), value);
     }
 }
 
@@ -855,6 +882,11 @@ pub(crate) struct DeviceNode {
     msix: Option<MsixTable>,
     /// A PCI function's MSI capability, when it has no MSI-X table to offer.
     msi: Option<MsiFunction>,
+    /// Held across every read-modify-write of the function's command
+    /// register: bus mastering's ([`DeviceNode::enable_dma`],
+    /// [`DeviceNode::disable_dma`]) and an MSI mint's `INTx` off, which would
+    /// otherwise undo each other.
+    command: SpinLock<()>,
     /// The IOMMU domain its DMA goes through, made the first time it is asked
     /// for.
     domain: SpinLock<Option<Arc<iommu::Domain>>>,
@@ -889,6 +921,7 @@ impl DeviceNode {
             vectors: Vec::new(),
             msix: None,
             msi: None,
+            command: SpinLock::new(()),
             domain: SpinLock::new(None),
             withheld: 0,
             interrupt_tables: Vec::new(),
@@ -1197,13 +1230,16 @@ impl DeviceNode {
             .map_err(|_| "the function's configuration space could not be mapped")?;
         let registers = Mmio::at(config);
         let at = u64::from(COMMAND);
-        let command = registers.read16(at);
-        let value = if on {
-            command | COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER
-        } else {
-            command & !COMMAND_BUS_MASTER
-        };
-        registers.write16(at, value);
+        {
+            let _command = self.command.lock();
+            let command = registers.read16(at);
+            let value = if on {
+                command | COMMAND_MEMORY_SPACE | COMMAND_BUS_MASTER
+            } else {
+                command & !COMMAND_BUS_MASTER
+            };
+            registers.write16(at, value);
+        }
         let _ = vmap::unmap_device(config);
         Ok(())
     }
@@ -1289,7 +1325,7 @@ impl DeviceNode {
         }
         match (&self.msix, &self.msi) {
             (Some(table), _) => table.mint(self.index, u16::try_from(index).ok()?).ok(),
-            (None, Some(msi)) if index == 0 => msi.mint(self.index).ok(),
+            (None, Some(msi)) if index == 0 => msi.mint(self.index, &self.command).ok(),
             _ => None,
         }
     }
