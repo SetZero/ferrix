@@ -640,6 +640,13 @@ impl<'r> Compositor<'r> {
         // is what `wl_keyboard.key` and `wl_pointer.motion` carry.
         let now = u32::try_from(self.fixed.started.elapsed().as_millis()).unwrap_or(u32::MAX);
         changed |= self.take_input(now, &placements);
+        // What the input made for the clients goes now: queued, a click
+        // would wait for the clients served below and for a frame's drawing
+        // before the window under it heard of it. A connection that cannot
+        // take it is marked gone, and dropped below as after the wait.
+        for slot in &mut self.slots {
+            let _ = slot.flush();
+        }
 
         // What the screen protocols asked for this pass, drained below: a
         // client's own borrow holds the screens and the layout, and each of
