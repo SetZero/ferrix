@@ -1417,14 +1417,16 @@ package FerrixObjectRequirements {
                 and when it stops being dumpable: a set-id execve, a change of
                 credentials, or PR_SET_DUMPABLE; and every processor whose last space
                 was in the domain shall issue the barrier before the leave returns.
-                The leave shall find them two ways: a scan that asks each processor
-                whose last domain is the leaver's, and a local check by which each
-                processor, answering the leave's grace period with interrupts
-                masked, compares its own last domain with the domains being left
-                and issues the barrier itself on a match. Each domain being left
-                shall be published in a set of its own slot, sequentially consistent
-                and before the scan and before the grace period's generation is
-                advanced, and the answering processor shall read the generation
+                In hardened builds the leave shall find them two ways, and wait for
+                a grace period: a scan that asks each processor whose last domain is
+                the leaver's, and a local check by which each processor, answering
+                the leave's grace period with interrupts masked, compares its own
+                last domain with the domains being left and issues the barrier
+                itself on a match. A build with the mitigations off has no barrier,
+                and its leave waits for no grace period. Each domain being left
+                shall be published in a slot of its own in a set, sequentially
+                consistent and before the scan and before the grace period's
+                generation is advanced, and the answering processor shall read the generation
                 before the set, so that one that records the domain after the scan
                 has passed it is still found (F-60).";
             attribute :>> criterion = "A member moved out of its job, one whose
