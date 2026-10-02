@@ -39,6 +39,12 @@
 //! parent recorded for the child — Linux's "parent transid verify failed" —
 //! and the filesystem id. Any of those failing means the pointer led somewhere
 //! other than the block it was written for.
+//!
+//! A node in a mirrored chunk — DUP metadata on a single device — has more
+//! than one copy, and one failing any of those checks is read from the next,
+//! as Linux's `btrfs_read_extent_buffer` tries each mirror in turn. Only when
+//! every copy fails is the read an error, the first copy's. Nothing is
+//! written back: repairing the bad copy is a writer's job, not a reader's.
 
 use core::ops::ControlFlow;
 
@@ -312,7 +318,26 @@ impl<S: ChunkStorage> Volume<S> {
         buf: &mut [u8],
         kind: ReadKind,
     ) -> Result<(), BtrfsError> {
-        let (_devid, physical) = self.chunks.map(logical)?;
+        self.read_copy(device, logical, buf, kind, 0)
+    }
+
+    /// How many copies of `logical` there are to read: Linux's
+    /// `btrfs_num_copies`. One for a SINGLE chunk, two for DUP.
+    #[must_use]
+    pub fn copies(&self, logical: u64) -> usize {
+        self.chunks.copies(logical)
+    }
+
+    /// As [`Volume::read_logical`], from copy `copy` of a mirrored chunk.
+    pub fn read_copy<D: Device>(
+        &self,
+        device: &mut D,
+        logical: u64,
+        buf: &mut [u8],
+        kind: ReadKind,
+        copy: usize,
+    ) -> Result<(), BtrfsError> {
+        let (_devid, physical) = self.chunks.map_copy(logical, copy)?;
         let span = self.chunks.contiguous_len(logical).unwrap_or(0);
         if span < buf.len() as u64 {
             return Err(BtrfsError::NotMapped(logical.saturating_add(span)));
@@ -340,8 +365,7 @@ impl<S: ChunkStorage> Volume<S> {
         while at.level > 0 {
             let found = node.len();
             let block = node.get_mut(..size).ok_or_else(|| truncated(size, found))?;
-            self.read_node(device, at, block)?;
-            let parent = Node::parse(block, at.bytenr)?;
+            let parent = self.read_node(device, at, block)?;
             let slot = parent.search_slot(key).unwrap_or(0);
             if let Some(sibling) = slot.checked_add(1).and_then(|s| parent.key(s)) {
                 next = Some(sibling);
@@ -360,9 +384,7 @@ impl<S: ChunkStorage> Volume<S> {
         }
         let found = node.len();
         let block = node.get_mut(..size).ok_or_else(|| truncated(size, found))?;
-        self.read_node(device, at, block)?;
-        let block: &'b [u8] = block;
-        let leaf = Node::parse(block, at.bytenr)?;
+        let leaf = self.read_node(device, at, block)?;
         let (Ok(slot) | Err(slot)) = leaf.search(key);
         Ok(Leaf {
             node: leaf,
@@ -426,14 +448,36 @@ impl<S: ChunkStorage> Volume<S> {
         Ok(at_or_before(&previous, &before))
     }
 
-    /// Read the node at `at` into `block` and check what its parent promised.
-    fn read_node<D: Device>(
+    /// Read the node at `at` into `block`, from the first copy that passes
+    /// every check, and check what its parent promised.
+    fn read_node<'b, D: Device>(
+        &self,
+        device: &mut D,
+        at: TreeRoot,
+        block: &'b mut [u8],
+    ) -> Result<Node<'b>, BtrfsError> {
+        let mut first = None;
+        for copy in 0..self.copies(at.bytenr).max(1) {
+            match self.read_node_copy(device, at, block, copy) {
+                Ok(header) => return Ok(Node::reparsed(block, header)),
+                Err(error) => {
+                    let _ = first.get_or_insert(error);
+                }
+            }
+        }
+        Err(first.unwrap_or(BtrfsError::NotMapped(at.bytenr)))
+    }
+
+    /// Read copy `copy` of the node at `at` into `block` and check it,
+    /// returning its header.
+    fn read_node_copy<D: Device>(
         &self,
         device: &mut D,
         at: TreeRoot,
         block: &mut [u8],
-    ) -> Result<(), BtrfsError> {
-        self.read_logical(device, at.bytenr, block, ReadKind::Metadata)?;
+        copy: usize,
+    ) -> Result<NodeHeader, BtrfsError> {
+        self.read_copy(device, at.bytenr, block, ReadKind::Metadata, copy)?;
         let header = NodeHeader::parse(block)?;
         if header.level != at.level
             || header.generation != at.generation
@@ -441,7 +485,7 @@ impl<S: ChunkStorage> Volume<S> {
         {
             return Err(BtrfsError::BadTree { logical: at.bytenr });
         }
-        Ok(())
+        Ok(*Node::parse(block, at.bytenr)?.header())
     }
 
     /// Add every `CHUNK_ITEM` in the chunk tree to the map.

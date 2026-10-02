@@ -39,6 +39,13 @@ chunks, a single data chunk, the free-space tree, skinny metadata, no-holes --
 so the writer is tested against the volume a user gets, not a simplified one.
 Its nodes are 4 KiB so that a few hundred items already split leaves.
 
+`dup.img.packed` keeps two copies of everything, data too (`-m dup -d dup`),
+and holds one file, `data.bin`: 12 KiB of bytes from the seed. It is 256 MiB,
+because `--rootdir` makes a 64 MiB DUP data chunk and grows a smaller image
+to fit it. It is what
+the reader's fallback to a second copy is tested on, for nodes and for data
+sectors alike.
+
 `root.img.packed` is the same empty volume at 1 GiB, labelled `ferrix-root`:
 what `cargo xtask run` boots with as `/`, and the label is how the kernel
 tells it from any other btrfs disk. The system alone is tens of megabytes,
@@ -48,7 +55,7 @@ Usage:
     python3 tools/common/gen/gen-btrfs-fixtures.py [--only NAME ...]
 
 `--only` rebuilds just the named images (`none`, `zlib`, `lzo`, `zstd`,
-`default-subvol`, `blank`, `root`), leaving the others' committed bytes
+`default-subvol`, `blank`, `dup`, `root`), leaving the others' committed bytes
 alone.
 """
 
@@ -66,6 +73,9 @@ OUTPUT = pathlib.Path("src/lib/fs/btrfs/testdata")
 VARIANTS = ("none", "zlib", "lzo", "zstd")
 DEFAULT_SUBVOL = "default-subvol"
 BLANK = "blank"
+DUP = "dup"
+DUP_FILE_SIZE = 12 * 1024
+DUP_SIZE = 256 * 1024 * 1024
 ROOT = "root"
 IMAGE_SIZE = 128 * 1024 * 1024
 ROOT_SIZE = 1024 * 1024 * 1024
@@ -193,6 +203,16 @@ def make_blank_image(image: pathlib.Path, size: int = IMAGE_SIZE, label: str = "
     ], check=True)
 
 
+def make_dup_image(source: pathlib.Path, image: pathlib.Path) -> None:
+    with open(image, "wb") as f:
+        f.truncate(DUP_SIZE)
+    subprocess.run([
+        "mkfs.btrfs", "-q", "-m", "dup", "-d", "dup", "--nodesize", str(BLOCK),
+        "-U", FS_UUID, "--device-uuid", DEVICE_UUID, "--rootdir", str(source),
+        str(image),
+    ], check=True)
+
+
 def fs_tree_level(image: pathlib.Path) -> int:
     dump = subprocess.run(
         ["btrfs", "inspect-internal", "dump-tree", "-t", "fs", str(image)],
@@ -221,7 +241,7 @@ def main() -> int:
     if shutil.which("mkfs.btrfs") is None:
         print("mkfs.btrfs is not installed (btrfs-progs)", file=sys.stderr)
         return 1
-    names = VARIANTS + (DEFAULT_SUBVOL, BLANK, ROOT)
+    names = VARIANTS + (DEFAULT_SUBVOL, BLANK, DUP, ROOT)
     only = sys.argv[2:] if sys.argv[1:2] == ["--only"] else list(names)
     if len(sys.argv) > 1 and sys.argv[1] != "--only" or not only or set(only) - set(names):
         print(f"usage: {sys.argv[0]} [--only NAME ...], NAME in {', '.join(names)}",
@@ -273,6 +293,21 @@ def main() -> int:
             packed = pack(image)
             (OUTPUT / f"{BLANK}.img.packed").write_bytes(packed)
             print(f"{BLANK}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
+        if DUP in only:
+            source = pathlib.Path(scratch) / "dup-tree"
+            source.mkdir()
+            (source / "data.bin").write_bytes(Rng(SEED).bytes(DUP_FILE_SIZE))
+            subprocess.run(["find", str(source), "-exec", "touch", "-h", "-d", TIMESTAMP, "{}", "+"],
+                           check=True)
+            image = pathlib.Path(scratch) / f"{DUP}.img"
+            make_dup_image(source, image)
+            packed = pack(image)
+            if len(packed) > BUDGET:
+                print(f"{DUP}: packed image is {len(packed)} bytes, over {BUDGET}",
+                      file=sys.stderr)
+                return 1
+            (OUTPUT / f"{DUP}.img.packed").write_bytes(packed)
+            print(f"{DUP}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
         if ROOT in only:
             image = pathlib.Path(scratch) / f"{ROOT}.img"
             make_blank_image(image, ROOT_SIZE, ROOT_LABEL)

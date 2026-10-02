@@ -213,11 +213,12 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
                         item_type: EXTENT_DATA_KEY,
                     })?;
                 let input = compressed.get_mut(..stored).unwrap_or_default();
-                volume.read_logical(device, file.disk_bytenr, input, ReadKind::Data)?;
-                let input = compressed.get(..stored).unwrap_or_default();
                 if verify {
-                    verify_sectors(volume, device, file.disk_bytenr, input, node)?;
+                    read_checked(volume, device, file.disk_bytenr, input, node)?;
+                } else {
+                    volume.read_logical(device, file.disk_bytenr, input, ReadKind::Data)?;
                 }
+                let input = compressed.get(..stored).unwrap_or_default();
                 let out = plain
                     .get_mut(..expanded_len(extent.ram_bytes)?)
                     .unwrap_or_default();
@@ -272,9 +273,8 @@ impl<B: ExtentBuffers> ReadBuffers<B> {
                 .ok_or(BtrfsError::NotMapped(at))?;
             let span = (last - first).min(window);
             let buf = scratch.get_mut(..span as usize).unwrap_or_default();
-            volume.read_logical(device, first, buf, ReadKind::Data)?;
+            read_checked(volume, device, first, buf, node)?;
             let buf = &*buf;
-            verify_sectors(volume, device, first, buf, node)?;
             let skip = (want - first) as usize;
             let take = (dest.len() - done).min(buf.len().saturating_sub(skip));
             if take == 0 {
@@ -570,6 +570,37 @@ const CRC32C_SIZE: usize = 4;
 const BAD_CSUM_ITEM: BtrfsError = BtrfsError::BadItem {
     item_type: EXTENT_CSUM_KEY,
 };
+
+/// Read `buf.len()` bytes of data at logical address `logical` and check them
+/// against the checksum tree, from the first copy that passes.
+///
+/// Linux's read repair tries every mirror of a data sector whose checksum
+/// fails before the read fails with `EIO`; so does this, for a failed read
+/// too. Any other error — a damaged checksum tree — is the same whichever
+/// copy is read, and is returned at once. Only when every copy fails is the
+/// read an error, the first copy's. Nothing is written back.
+fn read_checked<D: Device, S: ChunkStorage>(
+    volume: &Volume<S>,
+    device: &mut D,
+    logical: u64,
+    buf: &mut [u8],
+    node: &mut [u8],
+) -> Result<(), BtrfsError> {
+    let mut first = None;
+    for copy in 0..volume.copies(logical).max(1) {
+        let checked = volume
+            .read_copy(device, logical, buf, ReadKind::Data, copy)
+            .and_then(|()| verify_sectors(volume, device, logical, buf, node));
+        match checked {
+            Ok(()) => return Ok(()),
+            Err(error @ (BtrfsError::DataChecksum { .. } | BtrfsError::DeviceRead { .. })) => {
+                let _ = first.get_or_insert(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(first.unwrap_or(BtrfsError::NotMapped(logical)))
+}
 
 /// Check the whole data sectors in `data`, starting at logical address
 /// `logical`, against the checksum tree.

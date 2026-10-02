@@ -21,6 +21,8 @@
 //! For SINGLE, DUP, RAID1, RAID1C3 and RAID1C4 the mapping is linear: every
 //! stripe is a complete copy of the chunk, so reading from stripe 0 is correct
 //! and the physical address is just `stripe.offset + (logical - chunk_start)`.
+//! The other stripes are the same bytes again, for a read whose first copy
+//! fails its checksum to fall back on ([`ChunkMap::map_copy`]).
 //!
 //! RAID0, RAID10, RAID5 and RAID6 interleave the logical range across stripes,
 //! and RAID5/6 add parity rotation on top. Those are reported as
@@ -488,12 +490,16 @@ impl<'a> Iterator for SysChunkArray<'a> {
 // The chunk map
 // ---------------------------------------------------------------------------
 
-/// One chunk reduced to what reading needs: a logical range and where stripe 0
-/// of it lives.
+/// The most whole copies a profile keeps: RAID1C4's four.
+pub const MAX_COPIES: usize = 4;
+
+/// One chunk reduced to what reading needs: a logical range and where each
+/// copy of it lives.
 ///
-/// Only stripe 0 is kept. Every profile this crate translates mirrors the whole
-/// chunk into every stripe, so the other stripes are alternatives to fall back
-/// on after a checksum failure — a recovery concern, not a mapping one.
+/// Every profile this crate translates mirrors the whole chunk into every
+/// stripe, so stripe 0 is where a read goes and the others are alternatives
+/// to fall back on after a checksum failure, as Linux retries the next
+/// mirror.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkMapEntry {
     /// First logical address the chunk covers.
@@ -507,6 +513,12 @@ pub struct ChunkMapEntry {
     pub devid: u64,
     /// Physical offset of stripe 0 on that device.
     pub physical: u64,
+    /// How many whole copies there are to read: the stripe count of a
+    /// mirrored profile, at most [`MAX_COPIES`]; one otherwise.
+    pub copies: u8,
+    /// Device and physical offset of stripes 1 up to `copies`; stripe 0 is
+    /// `devid` and `physical`.
+    pub mirrors: [(u64, u64); MAX_COPIES - 1],
 }
 
 impl ChunkMapEntry {
@@ -517,6 +529,8 @@ impl ChunkMapEntry {
         type_bits: 0,
         devid: 0,
         physical: 0,
+        copies: 0,
+        mirrors: [(0, 0); MAX_COPIES - 1],
     };
 }
 
@@ -605,13 +619,23 @@ impl<S: ChunkStorage> ChunkMap<S> {
         if logical.checked_add(item.length()).is_none() {
             return Err(BtrfsError::BadChunk);
         }
-        let entry = ChunkMapEntry {
+        let mut entry = ChunkMapEntry {
             logical,
             length: item.length(),
             type_bits: item.type_bits(),
             devid: stripe.devid,
             physical: stripe.offset,
+            copies: 1,
+            mirrors: [(0, 0); MAX_COPIES - 1],
         };
+        // A SINGLE chunk has one copy whatever its stripe count claims.
+        let profile = ChunkProfile::from_type(item.type_bits());
+        if profile.is_mirrored() && profile != ChunkProfile::Single {
+            for (slot, mirror) in entry.mirrors.iter_mut().zip(item.stripes().skip(1)) {
+                *slot = (mirror.devid, mirror.offset);
+                entry.copies = entry.copies.saturating_add(1);
+            }
+        }
         match self.position(logical) {
             // The system chunk array is a copy of chunk tree items, so the
             // same chunk legitimately arrives twice. The same *start* with a
@@ -698,6 +722,21 @@ impl<S: ChunkStorage> ChunkMap<S> {
     ///
     /// Returns the device id and the byte offset within that device.
     pub fn map(&self, logical: u64) -> Result<(u64, u64), BtrfsError> {
+        self.map_copy(logical, 0)
+    }
+
+    /// How many copies of `logical` a read can choose from: Linux's
+    /// `btrfs_num_copies`. Zero for an address no chunk holds.
+    #[must_use]
+    pub fn copies(&self, logical: u64) -> usize {
+        self.lookup(logical)
+            .map_or(0, |entry| usize::from(entry.copies.max(1)))
+    }
+
+    /// Translate `logical` to where copy `copy` of it lives, counting from
+    /// stripe 0 as [`ChunkMap::map`] does. A copy past
+    /// [`ChunkMap::copies`] is not mapped.
+    pub fn map_copy(&self, logical: u64, copy: usize) -> Result<(u64, u64), BtrfsError> {
         let entry = self.lookup(logical).ok_or(BtrfsError::NotMapped(logical))?;
         let profile = ChunkProfile::from_type(entry.type_bits);
         if !profile.is_supported() {
@@ -710,11 +749,21 @@ impl<S: ChunkStorage> ChunkMap<S> {
         let within = logical
             .checked_sub(entry.logical)
             .ok_or(BtrfsError::NotMapped(logical))?;
-        let physical = entry
-            .physical
+        let (devid, start) = match copy.checked_sub(1) {
+            None => (entry.devid, entry.physical),
+            Some(_) if copy >= usize::from(entry.copies.max(1)) => {
+                return Err(BtrfsError::NotMapped(logical));
+            }
+            Some(mirror) => entry
+                .mirrors
+                .get(mirror)
+                .copied()
+                .ok_or(BtrfsError::NotMapped(logical))?,
+        };
+        let physical = start
             .checked_add(within)
             .ok_or(BtrfsError::NotMapped(logical))?;
-        Ok((entry.devid, physical))
+        Ok((devid, physical))
     }
 
     /// Translate `logical` to a device id and a physical byte offset.

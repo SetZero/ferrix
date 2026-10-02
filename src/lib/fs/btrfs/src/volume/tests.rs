@@ -17,7 +17,13 @@ use crate::chunk::ChunkMapEntry;
 use crate::items::INODE_ITEM_KEY;
 
 const BLOCK: usize = 4096;
+/// The size of every fixture but [`DUP`].
 const IMAGE_SIZE: u64 = 128 * 1024 * 1024;
+/// A volume with two copies of everything, data too, holding one file,
+/// `data.bin`; 256 MiB, as `mkfs.btrfs --rootdir` sized it.
+pub(crate) const DUP: &[u8] = include_bytes!("../../testdata/dup.img.packed");
+/// The size of [`DUP`].
+const DUP_SIZE: u64 = 256 * 1024 * 1024;
 
 /// The four images, by the compression `mkfs.btrfs` was asked for.
 pub(crate) const IMAGES: [(&str, &[u8]); 4] = [
@@ -30,6 +36,8 @@ pub(crate) const IMAGES: [(&str, &[u8]); 4] = [
 /// A device over a packed image: the non-zero blocks, and zeros elsewhere.
 pub(crate) struct PackedDevice {
     blocks: BTreeMap<u64, [u8; BLOCK]>,
+    /// Where the device ends.
+    size: u64,
     /// Physical offsets to fail reads at, to test error propagation.
     pub(crate) fail_at: Option<u64>,
 }
@@ -42,8 +50,15 @@ impl PackedDevice {
             let previous = blocks.insert(offset, record[8..].try_into().unwrap());
             assert!(previous.is_none(), "the generator packs each block once");
         }
+        // Only the DUP fixture has blocks past the others' size.
+        let last = blocks.keys().next_back().copied().unwrap_or(0);
         PackedDevice {
             blocks,
+            size: if last < IMAGE_SIZE {
+                IMAGE_SIZE
+            } else {
+                DUP_SIZE
+            },
             fail_at: None,
         }
     }
@@ -85,7 +100,7 @@ impl Device for PackedDevice {
         _kind: ReadKind,
     ) -> Result<(), BtrfsError> {
         let end = physical.checked_add(buf.len() as u64);
-        if end.is_none_or(|end| end > IMAGE_SIZE)
+        if end.is_none_or(|end| end > self.size)
             || self
                 .fail_at
                 .is_some_and(|bad| (physical..end.unwrap()).contains(&bad))
@@ -345,6 +360,72 @@ fn a_pointer_to_the_wrong_generation_is_refused() {
             "a node from another transaction is not the one the pointer meant"
         );
     });
+}
+
+#[test]
+fn a_dup_node_whose_first_copy_fails_is_read_from_the_second() {
+    let mut device = PackedDevice::new(DUP);
+    let mut chunks = [ChunkMapEntry::EMPTY; 16];
+    let mut node = vec![0u8; 65536];
+    let volume = Volume::open(&mut device, &mut chunks, &mut node).unwrap();
+    let root = volume.fs_tree();
+    assert_eq!(volume.copies(root.bytenr), 2, "DUP metadata has two copies");
+    let expected = all_keys(&mut device, &volume, root, &mut node);
+    let (_, first) = volume.chunks().map_copy(root.bytenr, 0).unwrap();
+    let (_, second) = volume.chunks().map_copy(root.bytenr, 1).unwrap();
+    assert_ne!(first, second);
+    // What a volume Ferrix wrote suffered: the first copy of an fs tree leaf
+    // overwritten by a superblock mirror.
+    let mut superblock = [0u8; SUPERBLOCK_SIZE];
+    device
+        .read_at(PRIMARY_OFFSET, &mut superblock, ReadKind::Metadata)
+        .unwrap();
+    device.write(first, &superblock);
+    assert_eq!(
+        all_keys(&mut device, &volume, root, &mut node),
+        expected,
+        "the second copy serves the read"
+    );
+    device.corrupt(second + 200);
+    assert_eq!(
+        volume
+            .seek(&mut device, root, &BtrfsKey::MIN, &mut node)
+            .unwrap_err(),
+        BtrfsError::BadTree {
+            logical: root.bytenr
+        },
+        "with both copies bad the read fails, with the first copy's error"
+    );
+}
+
+#[test]
+fn a_volume_whose_root_tree_has_one_bad_copy_still_opens() {
+    let mut device = PackedDevice::new(DUP);
+    let mut chunks = [ChunkMapEntry::EMPTY; 16];
+    let mut node = vec![0u8; 65536];
+    let volume = Volume::open(&mut device, &mut chunks, &mut node).unwrap();
+    let (_, first) = volume
+        .chunks()
+        .map_copy(volume.root_tree.bytenr, 0)
+        .unwrap();
+    let (_, second) = volume
+        .chunks()
+        .map_copy(volume.root_tree.bytenr, 1)
+        .unwrap();
+    let fs_tree = volume.fs_tree();
+    device.corrupt(first + 300);
+    let mut chunks = [ChunkMapEntry::EMPTY; 16];
+    let reopened = Volume::open(&mut device, &mut chunks, &mut node).unwrap();
+    assert_eq!(reopened.fs_tree(), fs_tree);
+    device.corrupt(second + 300);
+    let mut chunks = [ChunkMapEntry::EMPTY; 16];
+    assert!(
+        matches!(
+            Volume::open(&mut device, &mut chunks, &mut node),
+            Err(BtrfsError::BadChecksum { .. })
+        ),
+        "with both copies bad the volume does not open"
+    );
 }
 
 #[test]

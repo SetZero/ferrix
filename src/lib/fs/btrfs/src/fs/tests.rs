@@ -18,7 +18,7 @@ use crate::chunk::ChunkMapEntry;
 use crate::crc32c::crc32c;
 use crate::items::{FT_DIR, FT_REG_FILE, FT_SYMLINK};
 use crate::tree::{HEADER_SIZE, ITEM_SIZE};
-use crate::volume::tests::{IMAGES, PackedDevice};
+use crate::volume::tests::{DUP, IMAGES, PackedDevice};
 
 /// One manifest line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -662,6 +662,55 @@ fn a_data_sector_that_fails_its_checksum_is_an_error_not_bytes() {
     assert!(
         piece.iter().all(|&b| b == 0xAA || b == 0),
         "and hands back none of its bytes"
+    );
+}
+
+#[test]
+fn a_dup_data_sector_that_fails_its_checksum_is_read_from_the_other_copy() {
+    let f = &mut Fixture::new(DUP);
+    let volume = Volume::open(&mut f.device, &mut f.chunks, &mut f.node).unwrap();
+    let sub = volume.default_subvolume();
+    let (ino, file, _) = first_extent(&volume, &sub, &mut f.device, b"data.bin", &mut f.node);
+    assert_eq!(
+        volume.copies(file.disk_bytenr),
+        2,
+        "DUP data has two copies"
+    );
+    let mut buffers = ReadBuffers::new((
+        &mut f.compressed[..],
+        &mut f.plain[..],
+        &mut f.zstd[..],
+        &mut f.csum_node[..],
+    ))
+    .unwrap();
+    let expected = read_all(&sub, &mut f.device, ino, 5000, &mut f.node, &mut buffers);
+    assert_eq!(expected.len(), 12 * 1024);
+    let (_, first) = volume.chunks().map_copy(file.disk_bytenr, 0).unwrap();
+    let (_, second) = volume.chunks().map_copy(file.disk_bytenr, 1).unwrap();
+    f.device.corrupt(first + 4096 + 100);
+    assert_eq!(
+        read_all(&sub, &mut f.device, ino, 5000, &mut f.node, &mut buffers),
+        expected,
+        "the second copy serves the damaged sector"
+    );
+    f.device.corrupt(second + 4096 + 100);
+    let mut piece = vec![0xAAu8; 100];
+    let error = sub
+        .read(
+            &mut f.device,
+            ino,
+            4096 + 50,
+            &mut piece,
+            &mut f.node,
+            &mut buffers,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            BtrfsError::DataChecksum { logical, .. } if logical == file.disk_bytenr + 4096
+        ),
+        "with both copies bad the read fails and names the sector: {error:?}"
     );
 }
 

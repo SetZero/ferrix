@@ -276,6 +276,16 @@ impl<'a> Node<'a> {
         Ok(node)
     }
 
+    /// The node [`Node::parse`] accepted from these same bytes, rebuilt from
+    /// the header it returned without checking anything again.
+    ///
+    /// For a reader that had to let go of the parsed node to try another
+    /// copy of the block, and kept the bytes of the copy that passed: the
+    /// borrow checker cannot see that only the failing copies were let go.
+    pub(crate) const fn reparsed(bytes: &'a [u8], header: NodeHeader) -> Self {
+        Node { bytes, header }
+    }
+
     /// As [`Node::parse`] but without comparing the header's `bytenr` against
     /// the address the block came from.
     ///
