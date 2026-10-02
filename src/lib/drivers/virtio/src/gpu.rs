@@ -10,7 +10,8 @@
 //! is `ferrix-virtio-gpu`'s. The 3D commands and capability sets came with
 //! `docs/GPU.md`'s Path A and the cursor queue's two commands ([`Cursor`])
 //! with its §3.10, and blob resources, which Venus makes every host-visible
-//! Vulkan allocation as, with §6.1. EDID is later.
+//! Vulkan allocation as, with §6.1. `GET_EDID` came for the refresh a
+//! scanout's display has, which QEMU says only in the EDID it makes.
 //!
 //! # A command is two buffers
 //!
@@ -67,10 +68,14 @@ pub const FEATURE_RESOURCE_BLOB: u64 = 1 << 3;
 pub const FEATURE_CONTEXT_INIT: u64 = 1 << 4;
 
 /// The features a 2D scanout driver accepts: the transport's
-/// [`FEATURE_VERSION_1`], required, and [`FEATURE_ACCESS_PLATFORM`], without
-/// which a device behind an IOMMU refuses `FEATURES_OK`. Every GPU feature is
-/// declined, since each only matters to a driver that sends its commands.
-pub const DRIVER_FEATURES: u64 = FEATURE_VERSION_1 | FEATURE_ACCESS_PLATFORM;
+/// [`FEATURE_VERSION_1`], required, [`FEATURE_ACCESS_PLATFORM`], without
+/// which a device behind an IOMMU refuses `FEATURES_OK`, and [`FEATURE_EDID`],
+/// for `GET_EDID`: the EDID QEMU makes for a scanout is the only place it
+/// says the refresh of the host monitor the scanout is shown on. Every other
+/// GPU feature is declined, since each only matters to a driver that sends
+/// its commands; this one changes nothing the device does until `GET_EDID`
+/// is sent.
+pub const DRIVER_FEATURES: u64 = FEATURE_VERSION_1 | FEATURE_ACCESS_PLATFORM | FEATURE_EDID;
 
 /// The features a driver that means to send 3D commands accepts:
 /// [`DRIVER_FEATURES`] and the two that 3D needs.
@@ -204,6 +209,8 @@ pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 pub const CMD_GET_CAPSET_INFO: u32 = 0x0108;
 /// `VIRTIO_GPU_CMD_GET_CAPSET`.
 pub const CMD_GET_CAPSET: u32 = 0x0109;
+/// `VIRTIO_GPU_CMD_GET_EDID`.
+pub const CMD_GET_EDID: u32 = 0x010a;
 /// `VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB`, which follows `GET_EDID` and
 /// `RESOURCE_ASSIGN_UUID` in the 2D commands' numbering.
 pub const CMD_RESOURCE_CREATE_BLOB: u32 = 0x010c;
@@ -236,6 +243,8 @@ pub const RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 pub const RESP_OK_CAPSET_INFO: u32 = 0x1102;
 /// `VIRTIO_GPU_RESP_OK_CAPSET`.
 pub const RESP_OK_CAPSET: u32 = 0x1103;
+/// `VIRTIO_GPU_RESP_OK_EDID`.
+pub const RESP_OK_EDID: u32 = 0x1104;
 /// `VIRTIO_GPU_RESP_OK_MAP_INFO`, after `OK_EDID` and `OK_RESOURCE_UUID`.
 pub const RESP_OK_MAP_INFO: u32 = 0x1106;
 /// `VIRTIO_GPU_RESP_ERR_UNSPEC`, the first error response.
@@ -388,6 +397,15 @@ pub const CREATE_BLOB_LEN: usize = HEADER_LEN + 32;
 /// Bytes of `struct virtio_gpu_resp_map_info`.
 pub const MAP_INFO_LEN: usize = HEADER_LEN + 8;
 
+/// Bytes of `struct virtio_gpu_resp_edid`'s `edid`: the most an EDID from
+/// the device can be.
+pub const EDID_MAX_BYTES: usize = 1024;
+/// Where the EDID starts after the response's header: its `size` and a
+/// padding word come first.
+pub const EDID_AT: usize = 8;
+/// Bytes of `struct virtio_gpu_resp_edid`.
+pub const EDID_LEN: usize = HEADER_LEN + EDID_AT + EDID_MAX_BYTES;
+
 /// Bytes of `struct virtio_gpu_box`: a rectangle with a depth, which is what
 /// a 3D transfer names instead of a [`Rect`].
 pub const BOX_LEN: usize = 24;
@@ -514,6 +532,12 @@ pub struct MemEntry {
 pub enum Command<'a> {
     /// Ask for every scanout's mode.
     GetDisplayInfo,
+    /// Ask for the EDID of the display on a scanout, for a device that
+    /// granted [`FEATURE_EDID`].
+    GetEdid {
+        /// Which scanout.
+        scanout: u32,
+    },
     /// Create a 2D resource.
     ResourceCreate2d {
         /// The id to give it, not 0.
@@ -741,6 +765,7 @@ impl Command<'_> {
     pub const fn code(&self) -> u32 {
         match self {
             Self::GetDisplayInfo => CMD_GET_DISPLAY_INFO,
+            Self::GetEdid { .. } => CMD_GET_EDID,
             Self::ResourceCreate2d { .. } => CMD_RESOURCE_CREATE_2D,
             Self::ResourceUnref { .. } => CMD_RESOURCE_UNREF,
             Self::SetScanout { .. } => CMD_SET_SCANOUT,
@@ -781,6 +806,7 @@ impl Command<'_> {
             Self::ResourceCreate2d { .. } => HEADER_LEN + 16,
             Self::ResourceUnref { .. }
             | Self::ResourceDetachBacking { .. }
+            | Self::GetEdid { .. }
             | Self::GetCapsetInfo { .. }
             | Self::GetCapset { .. }
             | Self::CtxAttachResource { .. }
@@ -810,6 +836,7 @@ impl Command<'_> {
     pub const fn response_len(&self) -> usize {
         match *self {
             Self::GetDisplayInfo => DISPLAY_INFO_LEN,
+            Self::GetEdid { .. } => EDID_LEN,
             Self::GetCapsetInfo { .. } => CAPSET_INFO_LEN,
             // The set itself is as long as the device said it would be,
             // which the caller took from `GET_CAPSET_INFO` and passed back.
@@ -935,8 +962,8 @@ impl Command<'_> {
             | Self::TransferFromHost3d { .. }
             | Self::Submit3d { .. }
             | Self::Submit3dHeader { .. } => self.write_3d(body, &mut put),
-            Self::GetCapsetInfo { index } => {
-                put(body, &index.to_le_bytes());
+            Self::GetCapsetInfo { index: word } | Self::GetEdid { scanout: word } => {
+                put(body, &word.to_le_bytes());
                 put(body + 4, &[0; 4]);
             }
             Self::GetCapset {
@@ -1171,6 +1198,7 @@ fn put_entries(put: &mut dyn FnMut(usize, &[u8]), at: usize, entries: &[MemEntry
 pub const fn expects(code: u32) -> u32 {
     match code {
         CMD_GET_DISPLAY_INFO => RESP_OK_DISPLAY_INFO,
+        CMD_GET_EDID => RESP_OK_EDID,
         CMD_GET_CAPSET_INFO => RESP_OK_CAPSET_INFO,
         CMD_GET_CAPSET => RESP_OK_CAPSET,
         CMD_RESOURCE_MAP_BLOB => RESP_OK_MAP_INFO,
@@ -1290,6 +1318,15 @@ pub enum Response {
     DisplayInfo([Scanout; MAX_SCANOUTS]),
     /// What one capability set is, from `GET_CAPSET_INFO`.
     CapsetInfo(CapsetInfo),
+    /// A display's EDID, from `GET_EDID`: how many bytes of it the device
+    /// wrote, at [`EDID_AT`] after the header.
+    ///
+    /// The bytes are left where they are, as a capability set's are; what
+    /// they say is the reader's to check.
+    Edid {
+        /// How many bytes the EDID is, at most [`EDID_MAX_BYTES`].
+        len: usize,
+    },
     /// A capability set, from `GET_CAPSET`: how many bytes of the response
     /// buffer *after the header* the device wrote.
     ///
@@ -1359,7 +1396,7 @@ impl Response {
             RESP_ERR_INVALID_CONTEXT_ID => Some(DeviceError::InvalidContextId),
             RESP_ERR_INVALID_PARAMETER => Some(DeviceError::InvalidParameter),
             RESP_OK_NODATA | RESP_OK_DISPLAY_INFO | RESP_OK_CAPSET_INFO | RESP_OK_CAPSET
-            | RESP_OK_MAP_INFO => None,
+            | RESP_OK_EDID | RESP_OK_MAP_INFO => None,
             other => return Err(GpuError::UnknownResponse(other)),
         };
         if let Some(error) = error {
@@ -1401,6 +1438,9 @@ impl Response {
             }
             return Ok(Self::Capset { len });
         }
+        if code == RESP_OK_EDID {
+            return Self::parse_edid(bytes);
+        }
         if code == RESP_OK_MAP_INFO {
             if written < MAP_INFO_LEN {
                 return Err(GpuError::ResponseTooShort(written));
@@ -1435,6 +1475,18 @@ impl Response {
             };
         }
         Ok(Self::DisplayInfo(scanouts))
+    }
+
+    /// `RESP_OK_EDID`'s body, from the `bytes` the device wrote. The size it
+    /// names has to fit both the field and what it wrote: a size past either
+    /// is bytes that are not there.
+    fn parse_edid(bytes: &[u8]) -> Result<Self, GpuError> {
+        let short = GpuError::ResponseTooShort(bytes.len());
+        let size = get32(bytes, HEADER_LEN).ok_or(short)? as usize;
+        if size > EDID_MAX_BYTES || HEADER_LEN + EDID_AT + size > bytes.len() {
+            return Err(short);
+        }
+        Ok(Self::Edid { len: size })
     }
 }
 

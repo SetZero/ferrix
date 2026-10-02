@@ -13,14 +13,18 @@
 //!    requests and the driver's replies, it never accepts a FLIPPED out of
 //!    order, never reports a buffer attached that it did not ask to attach,
 //!    and once broken refuses everything.
+//! 3. **An EDID's refresh is bounded**: whatever bytes a device answers
+//!    `GET_EDID` with, the refresh read from them is 0 or one a scanout may
+//!    report.
 
 #![no_main]
 
 use std::collections::BTreeSet;
 
+use ferrix_displayctl::edid::preferred_refresh_mhz;
 use ferrix_displayctl::message::{
-    Attach, FORMAT, Hello, MAX_SCANOUTS, Message, PAGE_SIZE, Rect, ScanoutMode, Status, Timings,
-    VERSION,
+    Attach, FORMAT, Hello, MAX_REFRESH_MHZ, MAX_SCANOUTS, Message, PAGE_SIZE, Rect, ScanoutMode,
+    Status, Timings, VERSION,
 };
 use ferrix_displayctl::session::{Event, Session};
 use libfuzzer_sys::fuzz_target;
@@ -49,12 +53,16 @@ fuzz_target!(|bytes: &[u8]| {
         assert_eq!(message.encode().as_bytes(), bytes);
     }
 
+    // 3.
+    assert!(preferred_refresh_mhz(bytes) <= MAX_REFRESH_MHZ);
+
     // 2.
     let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
     modes[0] = ScanoutMode {
         width: 64,
         height: 64,
         enabled: true,
+        refresh_mhz: 0,
     };
     let hello = Hello {
         version: VERSION,

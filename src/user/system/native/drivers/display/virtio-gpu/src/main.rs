@@ -1439,8 +1439,14 @@ impl Deferred {
     }
 }
 
-/// Each scanout's preferred mode, from `GET_DISPLAY_INFO`: what HELLO and
-/// MODES carry.
+/// Each scanout's preferred mode, from `GET_DISPLAY_INFO`, and its refresh,
+/// from `GET_EDID` where the device granted `VIRTIO_GPU_F_EDID`: what HELLO
+/// and MODES carry.
+///
+/// The refresh is asked again with the size, since QEMU makes the EDID when
+/// it is asked, at the size and refresh its window is at now. A refusal or
+/// an EDID that does not say is a refresh of 0, which the kernel lists as
+/// 60 Hz: the card is driven whatever it says.
 fn display_modes(
     driver: &mut Gpu,
     port: &Port<Kernel>,
@@ -1458,7 +1464,18 @@ fn display_modes(
                 width: scanout.rect.width,
                 height: scanout.rect.height,
                 enabled: true,
+                refresh_mhz: 0,
             };
+        }
+    }
+    if driver.info().features & gpu::FEATURE_EDID != 0 {
+        for (index, mode) in modes.iter_mut().enumerate().take(count) {
+            if !mode.enabled {
+                continue;
+            }
+            let scanout = u32::try_from(index).map_err(|_| Step::Device)?;
+            let answer = run_command(driver, port, &Command::GetEdid { scanout })?;
+            mode.refresh_mhz = driver.edid_refresh_mhz(&answer);
         }
     }
     Ok(modes)

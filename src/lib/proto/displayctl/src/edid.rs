@@ -411,6 +411,149 @@ fn descriptor(base: &[u8], tag: u8) -> Option<Text> {
     None
 }
 
+/// A `DisplayID` extension's tag, which QEMU's EDID carries its preferred
+/// timing in when a base block's descriptor cannot hold it.
+const DISPLAYID_TAG: u8 = 0x70;
+
+/// A `DisplayID` data block's tag for type I detailed timings.
+const DISPLAYID_TYPE_I: u8 = 0x03;
+
+/// Bytes of one `DisplayID` type I timing.
+const DISPLAYID_TIMING_BYTES: usize = 20;
+
+/// How many frames a second the monitor's preferred timing shows, in
+/// millihertz, as its EDID says: what a virtio-gpu's `GET_EDID` answers
+/// with, whose preferred timing QEMU makes at the refresh of the host
+/// monitor its window is on (`hw/display/edid-generate.c`).
+///
+/// The preferred timing is the base block's first detailed timing
+/// descriptor -- the first of the four whose pixel clock is not zero, which
+/// EDID 1.4 says is the preferred one. A base block whose descriptors are
+/// all display descriptors has it in a `DisplayID` extension's first type I
+/// timing instead: QEMU puts it there for a mode whose clock or size a
+/// descriptor's 16 and 12 bits cannot hold, a large window at 144 Hz among
+/// them.
+///
+/// 0 for anything that is not that: bytes too short for a base block, a
+/// header, checksum or version that is not an EDID's, an interlaced timing,
+/// a timing with no pixels, or a refresh above
+/// [`crate::message::MAX_REFRESH_MHZ`]. Nothing is read past `bytes`, and
+/// bytes from a device are read, never trusted: every caller treats 0 as
+/// "not known".
+#[must_use]
+pub fn preferred_refresh_mhz(bytes: &[u8]) -> u32 {
+    let Some(base) = bytes.get(..BLOCK_BYTES) else {
+        return 0;
+    };
+    if base.get(..HEADER.len()) != Some(&HEADER[..])
+        || !sums_to_zero(base)
+        || base.get(18) != Some(&1)
+    {
+        return 0;
+    }
+    let found = DESCRIPTORS
+        .iter()
+        .filter_map(|&at| base.get(at..at + 18))
+        .find(|block| {
+            block
+                .first()
+                .zip(block.get(1))
+                .is_some_and(|(&low, &high)| low != 0 || high != 0)
+        });
+    if let Some(block) = found {
+        return detailed_refresh(block).unwrap_or(0);
+    }
+    let extensions = usize::from(base.get(EXTENSIONS_AT).copied().unwrap_or(0));
+    (1..=extensions)
+        .filter_map(|index| bytes.get(index * BLOCK_BYTES..(index + 1) * BLOCK_BYTES))
+        .filter(|block| block.first() == Some(&DISPLAYID_TAG) && sums_to_zero(block))
+        .find_map(displayid_timing)
+        .and_then(refresh_of)
+        .unwrap_or(0)
+}
+
+/// A pixel clock in units of 10 kHz, and the active and blanking pixels
+/// and lines it is spent on.
+#[derive(Clone, Copy)]
+struct Spans {
+    clock: u32,
+    hactive: u32,
+    hblank: u32,
+    vactive: u32,
+    vblank: u32,
+}
+
+/// The refresh of an 18-byte detailed timing descriptor: `None` for an
+/// interlaced one, or one that does not describe a frame.
+fn detailed_refresh(block: &[u8]) -> Option<u32> {
+    let byte = |at: usize| block.get(at).copied().map(u32::from);
+    // Bit 7 of the flags: interlaced, whose clock paints half a frame.
+    if byte(17)? & 0x80 != 0 {
+        return None;
+    }
+    refresh_of(Spans {
+        clock: byte(0)? | byte(1)? << 8,
+        hactive: byte(2)? | (byte(4)? >> 4) << 8,
+        hblank: byte(3)? | (byte(4)? & 0xF) << 8,
+        vactive: byte(5)? | (byte(7)? >> 4) << 8,
+        vblank: byte(6)? | (byte(7)? & 0xF) << 8,
+    })
+}
+
+/// A `DisplayID` extension block's first type I timing.
+///
+/// The section's bytes are the block's from 5, as many as its byte 2 says,
+/// and a section that would run into the checksum is not one; each data
+/// block in it is a tag, a revision, a length and that many bytes.
+fn displayid_timing(block: &[u8]) -> Option<Spans> {
+    let end = 5 + usize::from(*block.get(2)?);
+    if end > BLOCK_BYTES - 1 {
+        return None;
+    }
+    let mut at = 5;
+    while at + 3 <= end {
+        let tag = *block.get(at)?;
+        let len = usize::from(*block.get(at + 2)?);
+        if at + 3 + len > end {
+            return None;
+        }
+        let payload = block.get(at + 3..at + 3 + len)?;
+        if tag == DISPLAYID_TYPE_I && len >= DISPLAYID_TIMING_BYTES {
+            let byte = |at: usize| payload.get(at).copied().map(u32::from);
+            // Every field is stored one less than it is, the clock too.
+            let word = |at: usize| Some((byte(at)? | byte(at + 1)? << 8) + 1);
+            // Bit 4 of the options: interlaced.
+            if byte(3)? & 0x10 != 0 {
+                return None;
+            }
+            return Some(Spans {
+                clock: (byte(0)? | byte(1)? << 8 | byte(2)? << 16) + 1,
+                hactive: word(4)?,
+                hblank: word(6)?,
+                vactive: word(12)?,
+                vblank: word(14)?,
+            });
+        }
+        at += 3 + len;
+    }
+    None
+}
+
+/// Frames a second in millihertz, rounded: `None` for a frame with no
+/// pixels or a rate no monitor has.
+fn refresh_of(spans: Spans) -> Option<u32> {
+    let total = u64::from(spans.hactive.checked_add(spans.hblank)?)
+        * u64::from(spans.vactive.checked_add(spans.vblank)?);
+    if spans.clock == 0 || spans.hactive == 0 || spans.vactive == 0 || total == 0 {
+        return None;
+    }
+    // 10 kHz units, to millihertz: 10^4 Hz and 10^3 more.
+    let millihertz = (u64::from(spans.clock) * 10_000_000 + total / 2) / total;
+    u32::try_from(millihertz)
+        .ok()
+        .filter(|&rate| (1..=crate::message::MAX_REFRESH_MHZ).contains(&rate))
+}
+
 /// `GETPROPERTY` of the `EDID` property, as `drm_mode_getproperty_ioctl`
 /// answers a blob property: its name and flags, no values and no enum
 /// records, whatever room the caller gave.

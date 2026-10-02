@@ -8,8 +8,9 @@ use std::vec::Vec;
 
 use ferrix_displayctl::message::{Attach, FORMAT, Message, Rect as CtlRect, Status};
 use ferrix_virtio::gpu::{
-    CMD_GET_DISPLAY_INFO, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_UNREF, CMD_SUBMIT_3D, Command,
-    Context, DeviceError as Refusal, MemEntry, PAGE_SIZE, Response, backing_entries,
+    CMD_GET_DISPLAY_INFO, CMD_GET_EDID, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_UNREF,
+    CMD_SUBMIT_3D, Command, Context, DeviceError as Refusal, MemEntry, PAGE_SIZE, Response,
+    backing_entries,
 };
 use ferrix_virtio::pci::FEATURE_VERSION_1;
 
@@ -81,7 +82,11 @@ fn take_all(driver: &mut TestDriver) -> Vec<Done> {
 fn bring_up_negotiates_and_reads_the_displays() {
     let (_bus, device, mut driver) = build((1280, 800));
     assert!(driver.info().features & FEATURE_VERSION_1 != 0);
-    assert_eq!(driver.info().features & (1 << 1), 0, "EDID is declined");
+    assert_ne!(
+        driver.info().features & (1 << 1),
+        0,
+        "EDID is taken, for the refresh"
+    );
     assert_eq!(driver.info().config.num_scanouts, 1);
 
     let Ok(Response::DisplayInfo(scanouts)) =
@@ -586,4 +591,90 @@ fn only_a_quiet_or_a_periodic_interrupt_reads_the_device_status() {
         "a quiet interrupt may be a configuration change"
     );
     assert_eq!(device.borrow().status_reads.get() - before, 3);
+}
+
+/// A base block as QEMU makes one for a scanout of `width` by `height` at
+/// `millihertz`: the header, version 1.4, the preferred timing in the first
+/// descriptor with QEMU's made-up blanking, and the checksum.
+fn qemu_base_block(width: u32, height: u32, millihertz: u64) -> Vec<u8> {
+    let (xblank, yblank) = (width * 35 / 100, height * 35 / 1000);
+    let clock = millihertz * u64::from(width + xblank) * u64::from(height + yblank) / 10_000_000;
+    let mut block = vec![0u8; 128];
+    block[..8].copy_from_slice(&[0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0]);
+    block[18] = 1;
+    block[19] = 4;
+    let timing = &mut block[54..72];
+    timing[..2].copy_from_slice(&u16::try_from(clock).expect("small").to_le_bytes());
+    timing[2] = width as u8;
+    timing[3] = xblank as u8;
+    timing[4] = (((width >> 8) << 4) | (xblank >> 8)) as u8;
+    timing[5] = height as u8;
+    timing[6] = yblank as u8;
+    timing[7] = (((height >> 8) << 4) | (yblank >> 8)) as u8;
+    timing[17] = 0x18;
+    let sum = block[..127]
+        .iter()
+        .fold(0u8, |sum, &byte| sum.wrapping_add(byte));
+    block[127] = 0u8.wrapping_sub(sum);
+    block
+}
+
+/// `GET_EDID` goes to the large place -- its 1056-byte answer is more than
+/// a slot holds -- and the refresh is read out of the EDID the device left
+/// there: QEMU's 75 Hz for a display that told it none.
+#[test]
+fn the_refresh_is_read_from_the_edid_the_device_answers_with() {
+    let (_bus, device, mut driver) = build((1280, 800));
+    let mut edid = qemu_base_block(1280, 800, 75_000);
+    edid.resize(1024, 0);
+    device.borrow_mut().edid = edid;
+    let done = run(&mut driver, &device, &Command::GetEdid { scanout: 0 });
+    assert_eq!(done.result, Ok(Response::Edid { len: 1024 }));
+    assert_eq!(driver.edid_refresh_mhz(&done.result), 74_994);
+    assert_eq!(device.borrow().commands, [CMD_GET_EDID]);
+
+    // A host monitor at 120 Hz, in an EDID of only its base block.
+    device.borrow_mut().edid = qemu_base_block(1920, 1080, 120_000);
+    let done = run(&mut driver, &device, &Command::GetEdid { scanout: 0 });
+    assert_eq!(done.result, Ok(Response::Edid { len: 128 }));
+    assert_eq!(driver.edid_refresh_mhz(&done.result), 119_999);
+    assert_eq!(driver.fault(), None);
+}
+
+/// Whatever the device answers, the refresh is a number or 0 and the device
+/// is still driven: a refusal, garbage, an EDID cut short.
+#[test]
+fn an_edid_that_says_nothing_is_a_refresh_of_zero() {
+    let (_bus, device, mut driver) = build((1280, 800));
+    // A scanout the device does not have.
+    let done = run(&mut driver, &device, &Command::GetEdid { scanout: 3 });
+    assert_eq!(done.result, Err(Refusal::InvalidParameter));
+    assert_eq!(driver.edid_refresh_mhz(&done.result), 0);
+    // Garbage, of QEMU's length.
+    device.borrow_mut().edid = (0..1024u32).map(|byte| (byte * 7) as u8).collect();
+    let done = run(&mut driver, &device, &Command::GetEdid { scanout: 0 });
+    assert_eq!(driver.edid_refresh_mhz(&done.result), 0);
+    // A base block cut short.
+    device.borrow_mut().edid = qemu_base_block(1280, 800, 75_000)[..100].to_vec();
+    let done = run(&mut driver, &device, &Command::GetEdid { scanout: 0 });
+    assert_eq!(done.result, Ok(Response::Edid { len: 100 }));
+    assert_eq!(driver.edid_refresh_mhz(&done.result), 0);
+    // Nothing at all.
+    device.borrow_mut().edid = Vec::new();
+    let done = run(&mut driver, &device, &Command::GetEdid { scanout: 0 });
+    assert_eq!(driver.edid_refresh_mhz(&done.result), 0);
+    // And an answer that is not an EDID's says nothing about a refresh.
+    let done = run(&mut driver, &device, &Command::GetDisplayInfo);
+    assert_eq!(driver.edid_refresh_mhz(&done.result), 0);
+    assert_eq!(driver.fault(), None);
+    // A size past what was written is the device breaking the protocol.
+    device.borrow_mut().edid = qemu_base_block(1280, 800, 75_000);
+    device.borrow_mut().edid_size = Some(1024);
+    driver
+        .submit(&Command::GetEdid { scanout: 0 })
+        .expect("submitted");
+    device.borrow_mut().serve();
+    let _ = driver.on_interrupt();
+    assert!(driver.take_done().is_err());
+    assert!(driver.fault().is_some());
 }

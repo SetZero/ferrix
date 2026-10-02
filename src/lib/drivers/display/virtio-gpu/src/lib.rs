@@ -1139,6 +1139,27 @@ where
         }
     }
 
+    /// How many frames a second the display behind a `GET_EDID` shows, in
+    /// millihertz, from `answer` -- the outcome [`Driver::take_done`] last
+    /// handed back -- and the EDID it left in the response: what its
+    /// preferred timing says (`ferrix_displayctl::edid::preferred_refresh_mhz`).
+    ///
+    /// 0 for a refusal, for an answer that is not an EDID's, and for an EDID
+    /// that does not say: a refresh nobody knows is not a reason to stop
+    /// driving the card.
+    #[must_use]
+    pub fn edid_refresh_mhz(&self, answer: &Result<Response, Refusal>) -> u32 {
+        let Ok(Response::Edid { len }) = *answer else {
+            return 0;
+        };
+        let mut edid = [0u8; gpu::EDID_MAX_BYTES];
+        let Some(bytes) = edid.get_mut(..len) else {
+            return 0;
+        };
+        self.read_response(gpu::EDID_AT, bytes);
+        ferrix_displayctl::edid::preferred_refresh_mhz(bytes)
+    }
+
     /// Show `resource_id` -- a resource [`gpu::CURSOR_SIZE`] pixels square,
     /// its pixels already on the device -- as `scanout`'s cursor with its
     /// hotspot at (`hot_x`, `hot_y`), where the cursor last was: an

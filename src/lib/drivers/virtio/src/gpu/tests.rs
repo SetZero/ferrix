@@ -451,6 +451,7 @@ fn write_with_puts_every_byte_once_and_agrees_with_encode() {
     };
     for command in [
         Command::GetDisplayInfo,
+        Command::GetEdid { scanout: 3 },
         Command::ResourceCreate2d {
             resource_id: 1,
             format: Format::B8G8R8X8,
@@ -1127,4 +1128,82 @@ fn a_blob_is_mapped_at_the_drivers_offset_and_told_its_caching() {
         "VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB"
     );
     assert_eq!([u32_at(&bytes, 24), u32_at(&bytes, 28)], [9, 0]);
+}
+
+/// `GET_EDID` names its scanout and padding, as `struct
+/// virtio_gpu_cmd_get_edid`; its response is `struct virtio_gpu_resp_edid`,
+/// a header, a `size`, a padding word and 1024 bytes of EDID.
+#[test]
+fn get_edid_names_its_scanout_and_has_room_for_a_whole_edid() {
+    let command = Command::GetEdid { scanout: 2 };
+    let bytes = encoded(&command);
+    assert_eq!(bytes.len(), 24 + 8);
+    assert_eq!(u32_at(&bytes, 0), 0x010a, "VIRTIO_GPU_CMD_GET_EDID");
+    assert_eq!(u32_at(&bytes, 24), 2, "the scanout");
+    assert_eq!(u32_at(&bytes, 28), 0, "the padding");
+    assert_eq!(command.response_len(), 24 + 8 + 1024);
+    assert_eq!(expects(CMD_GET_EDID), 0x1104);
+    // Accepted by a scanout driver: the refresh is only in the EDID.
+    assert_ne!(DRIVER_FEATURES & (1 << 1), 0, "VIRTIO_GPU_F_EDID");
+
+    // QEMU's answer: the size is the whole field, as it writes.
+    let mut body = vec![0u8; 8 + 1024];
+    body[..4].copy_from_slice(&1024u32.to_le_bytes());
+    body[8..16].copy_from_slice(&[0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0]);
+    let buffer = response(0x1104, &body);
+    assert_eq!(
+        Response::parse(&command, &buffer, written(&buffer)),
+        Ok(Response::Edid { len: 1024 })
+    );
+    // A shorter EDID in a buffer long enough for it.
+    let mut short = response(0x1104, &body[..8 + 128]);
+    short[24..28].copy_from_slice(&128u32.to_le_bytes());
+    assert_eq!(
+        Response::parse(&command, &short, written(&short)),
+        Ok(Response::Edid { len: 128 })
+    );
+}
+
+/// A `GET_EDID` answer whose size names bytes it did not write, or more
+/// than the field holds, or which is not an EDID answer at all, is refused.
+#[test]
+fn an_edid_answer_that_overstates_itself_is_refused() {
+    let command = Command::GetEdid { scanout: 0 };
+    let mut body = vec![0u8; 8 + 1024];
+    body[..4].copy_from_slice(&1025u32.to_le_bytes());
+    let buffer = response(0x1104, &body);
+    assert_eq!(
+        Response::parse(&command, &buffer, written(&buffer)),
+        Err(GpuError::ResponseTooShort(24 + 8 + 1024))
+    );
+    // 128 bytes said, 64 written.
+    let mut cut = response(0x1104, &body[..8 + 64]);
+    cut[24..28].copy_from_slice(&128u32.to_le_bytes());
+    assert_eq!(
+        Response::parse(&command, &cut, written(&cut)),
+        Err(GpuError::ResponseTooShort(24 + 8 + 64))
+    );
+    // No size at all.
+    let bare = response(0x1104, &[]);
+    assert_eq!(
+        Response::parse(&command, &bare, written(&bare)),
+        Err(GpuError::ResponseTooShort(24))
+    );
+    // And an EDID for a command that did not ask for one.
+    let mut fine = response(0x1104, &body);
+    fine[24..28].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(
+        Response::parse_for(CMD_GET_DISPLAY_INFO, &fine, written(&fine)),
+        Err(GpuError::UnexpectedResponse {
+            command: CMD_GET_DISPLAY_INFO,
+            response: 0x1104,
+        })
+    );
+    // A device refusing it is its refusal, which the driver reads as "no
+    // refresh known".
+    let refused = response(0x1205, &[]);
+    assert_eq!(
+        Response::parse(&command, &refused, written(&refused)),
+        Err(GpuError::Device(DeviceError::InvalidParameter))
+    );
 }

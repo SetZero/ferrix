@@ -6,7 +6,7 @@
 //! [`Ready::HANDLE_RIGHTS`] say what they must be.
 //!
 //! ```text
-//! HELLO     driver -> core, 612 bytes, handles [driver port]
+//! HELLO     driver -> core, 676 bytes, handles [driver port]
 //!   8 version u16   10 scanouts u16   12 location u32
 //!   16 scanout 0: width u32, height u32, enabled u32   ... 16 of them, 12 bytes each
 //!   208 virgl u16   210 capsets u16   212 capset u32   216 capset_bytes u32
@@ -15,6 +15,7 @@
 //!   228 timing 0: clock_khz u32, hdisplay hsync_start hsync_end htotal
 //!       vdisplay vsync_start vsync_end vtotal u16 each, flags u32 (bit 0
 //!       hsync positive, bit 1 vsync positive)   ... 16 of them, 24 bytes each
+//!   612 scanout 0's refresh_mhz u32   ... 16 of them, 4 bytes each
 //! READY     core -> driver, 24 bytes, handles [card VMO, core port]
 //!   8 card u32   12 reserved   16 card_bytes u64
 //! REFUSED   core -> driver, 12 bytes: 8 reason u32
@@ -38,8 +39,9 @@
 //!   24 hot_x u32   28 hot_y u32   32 x i32   36 y i32
 //! MOVE      core -> driver, 24 bytes, not answered
 //!   8 scanout u32   12 reserved   16 x i32   20 y i32
-//! MODES     driver -> core, 200 bytes, not answered
+//! MODES     driver -> core, 264 bytes, not answered
 //!   8 scanout 0: width u32, height u32, enabled u32   ... 16 of them, as HELLO's
+//!   200 scanout 0's refresh_mhz u32   ... 16 of them, as HELLO's
 //! ```
 //!
 //! CURSOR shows a [`CURSOR_SIZE`]-square buffer as a scanout's cursor, and
@@ -61,6 +63,14 @@
 //! goes on showing whatever it was showing until the card's user asks for
 //! another mode.
 //!
+//! Each scanout's refresh is what its display says it shows a second, in
+//! millihertz, and 0 where the driver does not know: a virtio-gpu reads it
+//! from the EDID `GET_EDID` returns, whose preferred timing QEMU makes at
+//! the host monitor's rate. It follows every other field, so that every
+//! offset before it is where it was in version 6 and only the lengths grew;
+//! a disabled scanout's is 0, as its size may be, and none is above
+//! [`MAX_REFRESH_MHZ`].
+//!
 //! HELLO's timings are for a card that runs only the modes it can make a
 //! clock for -- a board's HDMI output, not a virtio-gpu, which shows any
 //! size and lists none. The first is the mode the scanout runs now and has
@@ -73,8 +83,9 @@ use ::core::fmt;
 use ferrix_linux_abi::drm::FORMAT_XRGB8888;
 use ferrix_native_abi::rights::Rights;
 
-/// The protocol version this crate speaks. 5 added HELLO's timings, 6 MODES.
-pub const VERSION: u16 = 6;
+/// The protocol version this crate speaks. 5 added HELLO's timings, 6 MODES,
+/// 7 each scanout's refresh.
+pub const VERSION: u16 = 7;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -125,15 +136,27 @@ pub const MAX_TIMINGS: usize = 16;
 pub const TIMING_BYTES: usize = 24;
 /// Where HELLO's timing count lies.
 const TIMINGS_AT: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 16;
+/// Bytes of one scanout's refresh, which HELLO and MODES carry after
+/// everything else.
+pub const REFRESH_BYTES: usize = 4;
+/// Where HELLO's refreshes lie: after its timings.
+const HELLO_REFRESH_AT: usize = TIMINGS_AT + 4 + MAX_TIMINGS * TIMING_BYTES;
 /// Bytes of HELLO.
-pub const HELLO_BYTES: usize = TIMINGS_AT + 4 + MAX_TIMINGS * TIMING_BYTES;
+pub const HELLO_BYTES: usize = HELLO_REFRESH_AT + MAX_SCANOUTS * REFRESH_BYTES;
+/// Where MODES's refreshes lie: after its scanouts.
+const MODES_REFRESH_AT: usize = HEADER_BYTES + MAX_SCANOUTS * SCANOUT_BYTES;
 /// Bytes of MODES.
-pub const MODES_BYTES: usize = HEADER_BYTES + MAX_SCANOUTS * SCANOUT_BYTES;
+pub const MODES_BYTES: usize = MODES_REFRESH_AT + MAX_SCANOUTS * REFRESH_BYTES;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = HELLO_BYTES;
 
 /// The largest width or height a mode may have: `docs/DISPLAY.md` §2.2.
 pub const MAX_DIMENSION: u32 = 8192;
+
+/// The fastest refresh a scanout may say it has, in millihertz: 1 kHz, four
+/// times the fastest monitor sold, so that a driver's misreading is refused
+/// rather than paced to.
+pub const MAX_REFRESH_MHZ: u32 = 1_000_000;
 
 /// The most pages one buffer may have: 32 MiB, which holds a 4K mode's
 /// `XRGB8888` buffer. A driver sizes its backing lists for this many.
@@ -164,6 +187,9 @@ pub struct ScanoutMode {
     pub height: u32,
     /// Whether a display is attached.
     pub enabled: bool,
+    /// How many frames a second the display shows, in millihertz: 0 when
+    /// the driver does not know, and on a scanout with nothing attached.
+    pub refresh_mhz: u32,
 }
 
 /// One mode a scanout can run, in DRM's terms: each `*_start` and `*_end`
@@ -458,8 +484,9 @@ impl Hello {
 }
 
 /// Check a scanout list, HELLO's or MODES's, for a card of `scanouts`: an
-/// enabled mode has a size a display can have, a disabled one no larger, and
-/// every entry past the count is zero.
+/// enabled mode has a size a display can have and a refresh of at most
+/// [`MAX_REFRESH_MHZ`], a disabled one no larger and no refresh, and every
+/// entry past the count is zero.
 ///
 /// # Errors
 ///
@@ -470,9 +497,11 @@ pub fn validate_modes(modes: &[ScanoutMode; MAX_SCANOUTS], scanouts: u16) -> Res
         let fine = if index >= count {
             *mode == ScanoutMode::default()
         } else if mode.enabled {
-            (1..=MAX_DIMENSION).contains(&mode.width) && (1..=MAX_DIMENSION).contains(&mode.height)
+            (1..=MAX_DIMENSION).contains(&mode.width)
+                && (1..=MAX_DIMENSION).contains(&mode.height)
+                && mode.refresh_mhz <= MAX_REFRESH_MHZ
         } else {
-            mode.width <= MAX_DIMENSION && mode.height <= MAX_DIMENSION
+            mode.width <= MAX_DIMENSION && mode.height <= MAX_DIMENSION && mode.refresh_mhz == 0
         };
         if !fine {
             return Err(Refusal::Mode);
@@ -910,7 +939,10 @@ impl Message {
                 put32(bytes, 16, x as u32);
                 put32(bytes, 20, y as u32);
             }
-            Self::Modes { modes } => put_modes(bytes, HEADER_BYTES, &modes),
+            Self::Modes { modes } => {
+                put_modes(bytes, HEADER_BYTES, &modes);
+                put_refreshes(bytes, MODES_REFRESH_AT, &modes);
+            }
         }
         out
     }
@@ -998,7 +1030,7 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
         STOPPED => Message::Stopped,
         CURSOR | MOVE => return decode_cursor(kind, bytes),
         MODES => Message::Modes {
-            modes: get_modes(bytes, HEADER_BYTES)?,
+            modes: get_refreshes(bytes, MODES_REFRESH_AT, get_modes(bytes, HEADER_BYTES)?)?,
         },
         _ => return None,
     })
@@ -1066,6 +1098,7 @@ fn put_hello(bytes: &mut [u8], hello: &Hello) {
         let flags = u32::from(timing.hsync_high) | (u32::from(timing.vsync_high) << 1);
         put32(bytes, at + 20, flags);
     }
+    put_refreshes(bytes, HELLO_REFRESH_AT, &hello.modes);
 }
 
 /// HELLO's timing at `index`: `None` for flags other than the two sync
@@ -1091,7 +1124,7 @@ fn get_timing(bytes: &[u8], index: usize) -> Option<Timing> {
 
 /// HELLO, from `bytes`: `None` for a field outside its range.
 fn decode_hello(bytes: &[u8]) -> Option<Message> {
-    let modes = get_modes(bytes, 16)?;
+    let modes = get_refreshes(bytes, HELLO_REFRESH_AT, get_modes(bytes, 16)?)?;
     let mut timings = Timings {
         count: get32(bytes, TIMINGS_AT)?,
         ..Timings::NONE
@@ -1145,7 +1178,28 @@ fn get_modes(bytes: &[u8], at: usize) -> Option<[ScanoutMode; MAX_SCANOUTS]> {
                 1 => true,
                 _ => return None,
             },
+            refresh_mhz: 0,
         };
+    }
+    Some(modes)
+}
+
+/// Each scanout's refresh, which HELLO and MODES carry after everything
+/// else, from `at` on.
+fn put_refreshes(bytes: &mut [u8], at: usize, modes: &[ScanoutMode; MAX_SCANOUTS]) {
+    for (index, mode) in modes.iter().enumerate() {
+        put32(bytes, at + index * REFRESH_BYTES, mode.refresh_mhz);
+    }
+}
+
+/// [`put_refreshes`]'s refreshes back, into `modes`.
+fn get_refreshes(
+    bytes: &[u8],
+    at: usize,
+    mut modes: [ScanoutMode; MAX_SCANOUTS],
+) -> Option<[ScanoutMode; MAX_SCANOUTS]> {
+    for (index, mode) in modes.iter_mut().enumerate() {
+        mode.refresh_mhz = get32(bytes, at + index * REFRESH_BYTES)?;
     }
     Some(modes)
 }

@@ -51,8 +51,9 @@ use core::ptr;
 
 use ferrix_blkring::control::{Block as StartBlock, Message as StartMessage, START_BYTES, Start};
 use ferrix_displayctl::message::{
-    Attach, CURSOR_SIZE, Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_SCANOUTS,
-    MAX_TIMINGS, Message, PORT_RIGHTS, Rect, ScanoutMode, Status, Timing, Timings, VERSION,
+    Attach, CURSOR_SIZE, Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_REFRESH_MHZ,
+    MAX_SCANOUTS, MAX_TIMINGS, Message, PORT_RIGHTS, Rect, ScanoutMode, Status, Timing, Timings,
+    VERSION,
 };
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
@@ -388,6 +389,19 @@ fn timing(mode: &Mode) -> Timing {
     }
 }
 
+/// How many frames a second `mode` shows, in millihertz, rounded: 0 for a
+/// mode with no frame, or one faster than a scanout may say.
+fn refresh_mhz(mode: &Mode) -> u32 {
+    let frame = u64::from(mode.htotal) * u64::from(mode.vtotal);
+    if frame == 0 {
+        return 0;
+    }
+    u32::try_from((u64::from(mode.clock_khz) * 1_000_000 + frame / 2) / frame)
+        .ok()
+        .filter(|&rate| rate <= MAX_REFRESH_MHZ)
+        .unwrap_or(0)
+}
+
 /// Say HELLO for the one scanout, running `mode`, with the modes the board
 /// can run listed (`mode` first), and take READY's card VMO.
 fn introduce(
@@ -404,6 +418,9 @@ fn introduce(
             width: u32::from(mode.hdisplay),
             height: u32::from(mode.vdisplay),
             enabled: true,
+            // What the running timing's clock makes of its frame, so that
+            // the scanout says its refresh as a virtio-gpu's does.
+            refresh_mhz: refresh_mhz(mode),
         };
     }
     let mut timings = Timings::NONE;

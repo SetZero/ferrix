@@ -24,6 +24,7 @@ fn hello() -> Hello {
         width: 1280,
         height: 800,
         enabled: true,
+        refresh_mhz: 74_998,
     };
     Hello {
         version: VERSION,
@@ -46,6 +47,7 @@ fn hdmi_hello() -> Hello {
         width: 1920,
         height: 1080,
         enabled: true,
+        refresh_mhz: 0,
     };
     let mut timings = Timings::NONE;
     timings.count = 2;
@@ -235,11 +237,13 @@ fn resized() -> [ScanoutMode; MAX_SCANOUTS] {
         width: 2554,
         height: 1377,
         enabled: true,
+        refresh_mhz: 143_912,
     };
     modes[1] = ScanoutMode {
         width: 1024,
         height: 768,
         enabled: false,
+        refresh_mhz: 0,
     };
     modes
 }
@@ -248,7 +252,7 @@ fn resized() -> [ScanoutMode; MAX_SCANOUTS] {
 fn modes_carries_every_scanout_where_hello_does_after_its_header() {
     let encoded = Message::Modes { modes: resized() }.encode();
     let bytes = encoded.as_bytes();
-    assert_eq!(bytes.len(), 8 + 16 * 12);
+    assert_eq!(bytes.len(), 8 + 16 * 12 + 16 * 4);
     assert_eq!(
         [u32_at(bytes, 8), u32_at(bytes, 12), u32_at(bytes, 16)],
         [2554, 1377, 1]
@@ -257,6 +261,10 @@ fn modes_carries_every_scanout_where_hello_does_after_its_header() {
         [u32_at(bytes, 20), u32_at(bytes, 24), u32_at(bytes, 28)],
         [1024, 768, 0]
     );
+    // Each scanout's refresh after all sixteen scanouts, so that version
+    // 6's offsets hold: the unplugged one has none.
+    assert_eq!([u32_at(bytes, 200), u32_at(bytes, 204)], [143_912, 0]);
+    assert!(bytes[208..].iter().all(|&byte| byte == 0));
     // An `enabled` other than 0 or 1 is not a MODES.
     let mut bent = bytes.to_vec();
     bent[16] = 2;
@@ -274,6 +282,19 @@ fn a_mode_list_is_checked_against_the_card_hello_described() {
     let mut huge = resized();
     huge[0].height = MAX_DIMENSION + 1;
     assert_eq!(validate_modes(&huge, 2), Err(Refusal::Mode));
+    // A refresh no display has, and one for a display that is not there.
+    let mut fastest = resized();
+    fastest[0].refresh_mhz = MAX_REFRESH_MHZ;
+    assert_eq!(validate_modes(&fastest, 2), Ok(()));
+    fastest[0].refresh_mhz = MAX_REFRESH_MHZ + 1;
+    assert_eq!(validate_modes(&fastest, 2), Err(Refusal::Mode));
+    let mut unplugged = resized();
+    unplugged[1].refresh_mhz = 60_000;
+    assert_eq!(validate_modes(&unplugged, 2), Err(Refusal::Mode));
+    // And 0, a refresh the driver does not know, is no refusal.
+    let mut unknown = resized();
+    unknown[0].refresh_mhz = 0;
+    assert_eq!(validate_modes(&unknown, 2), Ok(()));
 }
 
 // -- Bytes ----------------------------------------------------------------------
@@ -296,9 +317,12 @@ fn fields_lie_where_the_specification_puts_them() {
     let bytes = plain.as_bytes();
     // 16 of header and fields, 16 scanouts of 12, 12 for what the card said
     // about 3D, 4 for whether it has a cursor plane, and 4 + 16 x 24 for
-    // the timings a card that runs only some lists.
-    assert_eq!(bytes.len(), 612);
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 6, "VERSION");
+    // the timings a card that runs only some lists, and 16 x 4 for each
+    // scanout's refresh.
+    assert_eq!(bytes.len(), 676);
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 7, "VERSION");
+    assert_eq!(u32_at(bytes, 612), 74_998, "scanout 0's refresh");
+    assert!(bytes[616..].iter().all(|&byte| byte == 0));
     assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 1);
     assert_eq!(u32_at(bytes, 12), 0x800);
     assert_eq!(
@@ -454,16 +478,19 @@ fn hello_is_validated_field_by_field_and_by_its_rights() {
             width: 0,
             height: 800,
             enabled: true,
+            refresh_mhz: 0,
         },
         ScanoutMode {
             width: 8193,
             height: 800,
             enabled: true,
+            refresh_mhz: 0,
         },
         ScanoutMode {
             width: 8193,
             height: 0,
             enabled: false,
+            refresh_mhz: 0,
         },
     ] {
         let mut wrong = hello();
@@ -543,6 +570,7 @@ fn modes_replaces_what_hello_said_and_a_bad_list_breaks_the_session() {
         width: 2554,
         height: 1377,
         enabled: true,
+        refresh_mhz: 0,
     };
     assert_eq!(session.receive(&Message::Modes { modes }), Ok(Event::Modes));
     assert_eq!(session.modes(), &modes[..1]);

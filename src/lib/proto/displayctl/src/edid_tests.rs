@@ -302,3 +302,152 @@ fn a_blob_is_copied_only_into_room_of_exactly_its_size() {
     assert!(!answer_blob(&mut more, 384));
     assert_eq!(more.length, 384);
 }
+
+// -- The preferred timing's refresh ---------------------------------------------
+
+/// The EDID QEMU 10.2's `qemu_edid_generate` makes for a scanout of
+/// `width` by `height` at `millihertz`, as far as the refresh goes: its
+/// made-up blanking, its clock rounded down to 10 kHz, the timing in the
+/// base block's first descriptor, or -- for a clock or size a descriptor
+/// cannot hold -- in a `DisplayID` extension after a CTA one, with the base
+/// block's descriptors left to display descriptors.
+fn qemu_edid(width: u32, height: u32, millihertz: u32) -> Vec<u8> {
+    let xblank = width * 35 / 100;
+    let yblank = height * 35 / 1000;
+    let clock =
+        u64::from(millihertz) * u64::from(width + xblank) * u64::from(height + yblank) / 10_000_000;
+    let large = width >= 4096 || height >= 4096 || clock >= 65536;
+    let mut edid = base(if large { 2 } else { 1 });
+    edid[54..126].fill(0);
+    for at in [54, 72, 90, 108] {
+        edid[at + 3] = 0x10;
+    }
+    let mut cta = extension(0x02, 0);
+    if large {
+        let mut did = std::vec![0u8; 128];
+        did[..8].copy_from_slice(&[0x70, 0x13, 23, 0x03, 0, 0x03, 0x00, 0x14]);
+        did[8..11].copy_from_slice(&(clock as u32).to_le_bytes()[..3]);
+        did[11] = 0x88;
+        for (at, value) in [
+            (12, width - 1),
+            (14, xblank - 1),
+            (16, width * 25 / 100 - 1),
+            (18, width * 3 / 100 - 1),
+            (20, height - 1),
+            (22, yblank - 1),
+            (24, height * 5 / 1000 - 1),
+            (26, height * 5 / 1000 - 1),
+        ] {
+            did[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
+        }
+        seal(&mut did);
+        cta.extend_from_slice(&did);
+    } else {
+        let d = &mut edid[54..72];
+        d[..2].copy_from_slice(&(clock as u16).to_le_bytes());
+        d[2] = width as u8;
+        d[3] = xblank as u8;
+        d[4] = (((width & 0xF00) >> 4) | ((xblank & 0xF00) >> 8)) as u8;
+        d[5] = height as u8;
+        d[6] = yblank as u8;
+        d[7] = (((height & 0xF00) >> 4) | ((yblank & 0xF00) >> 8)) as u8;
+        d[17] = 0x18;
+    }
+    seal(&mut edid);
+    edid.extend_from_slice(&cta);
+    edid
+}
+
+#[test]
+fn the_preferred_timing_says_the_refresh_qemu_made_it_at() {
+    // What a VNC display gets, which reports no refresh: QEMU's 75 Hz,
+    // 74.998 once its clock is rounded down to 10 kHz.
+    assert_eq!(
+        preferred_refresh_mhz(&qemu_edid(1920, 1080, 75_000)),
+        74_998
+    );
+    // A GTK window on a 120 Hz monitor, and on a 60 Hz one.
+    assert_eq!(
+        preferred_refresh_mhz(&qemu_edid(1920, 1080, 120_000)),
+        119_999
+    );
+    assert_eq!(preferred_refresh_mhz(&qemu_edid(1280, 800, 60_000)), 59_995);
+    // A large window at 144 Hz, whose clock a descriptor cannot hold: the
+    // timing is in the `DisplayID` block, after the CTA one.
+    let large = qemu_edid(2560, 1440, 144_000);
+    assert_eq!(large.len(), 3 * 128);
+    assert_eq!(preferred_refresh_mhz(&large), 144_000);
+    // And 4K at 60, whose width a descriptor's 12 bits cannot hold.
+    assert_eq!(
+        preferred_refresh_mhz(&qemu_edid(4096, 2160, 60_000)),
+        60_000
+    );
+}
+
+#[test]
+fn an_edid_that_is_not_one_has_no_refresh() {
+    let good = qemu_edid(1920, 1080, 75_000);
+    // Too short for a base block, and empty.
+    assert_eq!(preferred_refresh_mhz(&good[..127]), 0);
+    assert_eq!(preferred_refresh_mhz(&[]), 0);
+    // All zero, which is what a device that wrote nothing leaves.
+    assert_eq!(preferred_refresh_mhz(&[0; 1024]), 0);
+    // A header byte, the checksum, the version wrong.
+    for at in [3, 127, 18] {
+        let mut bent = good.clone();
+        bent[at] ^= 0x40;
+        assert_eq!(preferred_refresh_mhz(&bent), 0, "byte {at}");
+    }
+    // An interlaced timing.
+    let mut interlaced = good.clone();
+    interlaced[54 + 17] |= 0x80;
+    seal(&mut interlaced[..128]);
+    assert_eq!(preferred_refresh_mhz(&interlaced), 0);
+    // A timing with no pixels a line.
+    let mut empty = good.clone();
+    empty[56] = 0;
+    empty[58] &= 0x0F;
+    seal(&mut empty[..128]);
+    assert_eq!(preferred_refresh_mhz(&empty), 0);
+    // A clock that would make it faster than any display.
+    let mut fast = good;
+    fast[54..56].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    fast[56] = 1;
+    fast[57] = 1;
+    fast[58] = 0;
+    fast[59] = 1;
+    fast[60] = 1;
+    fast[61] = 0;
+    seal(&mut fast[..128]);
+    assert_eq!(preferred_refresh_mhz(&fast), 0);
+}
+
+#[test]
+fn a_displayid_block_is_read_within_its_bounds() {
+    let good = qemu_edid(2560, 1440, 144_000);
+    // The extension the count names is not there.
+    assert_eq!(preferred_refresh_mhz(&good[..256]), 0);
+    // A `DisplayID` block with a wrong checksum.
+    let mut bent = good.clone();
+    bent[256 + 20] ^= 1;
+    assert_eq!(preferred_refresh_mhz(&bent), 0);
+    // A section that claims more than the block holds, and a data block
+    // running past its section: neither is read past.
+    for (at, value) in [(2, 0xFF), (7, 0x7F)] {
+        let mut long = good.clone();
+        long[256 + at] = value;
+        seal(&mut long[256..]);
+        assert_eq!(preferred_refresh_mhz(&long), 0, "byte {at}");
+    }
+    // A data block that is not type I timings is stepped over.
+    let mut other = good.clone();
+    other[256 + 5] = 0x7E;
+    seal(&mut other[256..]);
+    assert_eq!(preferred_refresh_mhz(&other), 0);
+    // A `DisplayID` block where the base block has a timing is not read.
+    let mut both = qemu_edid(1920, 1080, 75_000);
+    both[126] = 2;
+    seal(&mut both[..128]);
+    both.extend_from_slice(&good[256..]);
+    assert_eq!(preferred_refresh_mhz(&both), 74_998);
+}

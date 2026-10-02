@@ -14,11 +14,12 @@ use std::vec;
 use std::vec::Vec;
 
 use ferrix_virtio::gpu::{
-    CMD_GET_DISPLAY_INFO, CMD_MOVE_CURSOR, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_CREATE_2D,
-    CMD_RESOURCE_DETACH_BACKING, CMD_RESOURCE_FLUSH, CMD_RESOURCE_UNREF, CMD_SET_SCANOUT,
-    CMD_SUBMIT_3D, CMD_TRANSFER_TO_HOST_2D, CMD_UPDATE_CURSOR, CURSOR_LEN, CURSOR_SIZE,
-    DeviceConfig, MAX_SCANOUTS, PAGE_SIZE, RESP_ERR_INVALID_PARAMETER,
-    RESP_ERR_INVALID_RESOURCE_ID, RESP_OK_DISPLAY_INFO, RESP_OK_NODATA,
+    CMD_GET_DISPLAY_INFO, CMD_GET_EDID, CMD_MOVE_CURSOR, CMD_RESOURCE_ATTACH_BACKING,
+    CMD_RESOURCE_CREATE_2D, CMD_RESOURCE_DETACH_BACKING, CMD_RESOURCE_FLUSH, CMD_RESOURCE_UNREF,
+    CMD_SET_SCANOUT, CMD_SUBMIT_3D, CMD_TRANSFER_TO_HOST_2D, CMD_UPDATE_CURSOR, CURSOR_LEN,
+    CURSOR_SIZE, DeviceConfig, MAX_SCANOUTS, PAGE_SIZE, RESP_ERR_INVALID_PARAMETER,
+    RESP_ERR_INVALID_RESOURCE_ID, RESP_ERR_UNSPEC, RESP_OK_DISPLAY_INFO, RESP_OK_EDID,
+    RESP_OK_NODATA,
 };
 use ferrix_virtio::pci::{
     CONFIG_MSIX_VECTOR, CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS,
@@ -298,6 +299,11 @@ pub(super) struct Device {
     /// a copy: the resource's host copy at the time.
     pub(super) cursor_image: Vec<u8>,
     pub(super) misbehave: Misbehave,
+    /// What `GET_EDID` answers for scanout 0, after the size and padding:
+    /// QEMU's is 1024 bytes, which this need not be.
+    pub(super) edid: Vec<u8>,
+    /// The size `GET_EDID` says, when it is not `edid`'s length.
+    pub(super) edid_size: Option<u32>,
     pub(super) protocol_errors: Vec<&'static str>,
     /// Every `SUBMIT_3D` stream, as the device read it out of its chain.
     pub(super) streams: Vec<Vec<u8>>,
@@ -332,6 +338,8 @@ impl Device {
             cursor_log: Vec::new(),
             cursor_image: Vec::new(),
             misbehave: Misbehave::default(),
+            edid: Vec::new(),
+            edid_size: None,
             status_reads: core::cell::Cell::new(0),
             protocol_errors: Vec::new(),
             streams: Vec::new(),
@@ -594,6 +602,49 @@ impl Device {
         RESP_OK_NODATA
     }
 
+    /// `GET_DISPLAY_INFO`'s answer: scanout 0 at the device's mode, the rest
+    /// off.
+    fn display_info(&self) -> Vec<u8> {
+        let mut bytes = vec![0u8; 24];
+        bytes[..4].copy_from_slice(&RESP_OK_DISPLAY_INFO.to_le_bytes());
+        for index in 0..MAX_SCANOUTS {
+            let (width, height, enabled) = if index == 0 {
+                (self.mode.0, self.mode.1, 1)
+            } else {
+                (0, 0, 0)
+            };
+            for value in [0, 0, width, height, enabled, 0] {
+                bytes.extend_from_slice(&u32::to_le_bytes(value));
+            }
+        }
+        bytes
+    }
+
+    /// `GET_EDID` for `scanout`, as QEMU's `virtio_gpu_get_edid` answers
+    /// it: a scanout past the device's is a bad parameter, and a driver
+    /// that did not take the feature is answered nothing useful.
+    fn edid_answer(&self, scanout: u32) -> Vec<u8> {
+        let mut bytes = vec![0u8; 24];
+        let code = if self.accepted & (1 << 1) == 0 {
+            RESP_ERR_UNSPEC
+        } else if scanout != 0 {
+            RESP_ERR_INVALID_PARAMETER
+        } else {
+            RESP_OK_EDID
+        };
+        bytes[..4].copy_from_slice(&code.to_le_bytes());
+        if code != RESP_OK_EDID {
+            return bytes;
+        }
+        let size = self
+            .edid_size
+            .unwrap_or_else(|| u32::try_from(self.edid.len()).expect("small"));
+        bytes.extend_from_slice(&size.to_le_bytes());
+        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend_from_slice(&self.edid);
+        bytes
+    }
+
     fn execute(&mut self, request: &[u8]) -> (u32, Vec<u8>) {
         let field = |at: usize| u32::from_le_bytes(request[at..at + 4].try_into().unwrap());
         let code = field(0);
@@ -607,20 +658,8 @@ impl Device {
         }
         let resource = |at: usize| field(at);
         let result = match code {
-            CMD_GET_DISPLAY_INFO => {
-                let mut bytes = answer(RESP_OK_DISPLAY_INFO);
-                for index in 0..MAX_SCANOUTS {
-                    let (width, height, enabled) = if index == 0 {
-                        (self.mode.0, self.mode.1, 1)
-                    } else {
-                        (0, 0, 0)
-                    };
-                    for value in [0, 0, width, height, enabled, 0] {
-                        bytes.extend_from_slice(&u32::to_le_bytes(value));
-                    }
-                }
-                return (code, bytes);
-            }
+            CMD_GET_DISPLAY_INFO => return (code, self.display_info()),
+            CMD_GET_EDID => return (code, self.edid_answer(field(24))),
             CMD_RESOURCE_CREATE_2D => {
                 let (width, height) = (field(32), field(36));
                 let _ = self.resources.insert(
