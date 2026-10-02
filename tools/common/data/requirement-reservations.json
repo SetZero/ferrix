@@ -26,13 +26,6 @@
       "purpose": "S4: Verdict::Trap (allocated by os-bd)"
     },
     {
-      "ids": ["L.x86_64.128", "L.user.110"],
-      "owner": "nvidia",
-      "branch": "nvidia-n0",
-      "date": "2026-10-02",
-      "purpose": "NVIDIA N0a-c, the consultant's conditions fixed forward (docs/handover/2026-10-02-bridge.md, A and B): MSI, the PAT and write-combining"
-    },
-    {
       "ids": ["L.device.24-26", "L.object.117"],
       "owner": "nvidia",
       "branch": "nvidia-n0d",
