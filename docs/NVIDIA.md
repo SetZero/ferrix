@@ -971,6 +971,46 @@ and took the recommended answer for D2, D3 and D5.
       writable. Two host tests hold it.
     * As its advisory asked, `hello_accepted` reads the configuration back
       before it releases the quarantine.
+* **2026-10-02 — N0f built: a pin budget per device** (branch
+  `nvidia-n0f`, for the consultant; the design and its conditions F1–F5
+  are `nvidia-n0-designs` §12.2). QEMU only, rebased on N0d:
+  * **The budget and its counts.** Each device has a budget `B`, 66560
+    pages by default, and `live`, `quarantined` and `kept` counts, kept on
+    its domain and changed only under the quarantine's lock. A pin is
+    refused `LIMIT_REACHED` (a new status, `ENOSPC`) when `live + n > B`,
+    and `QUARANTINE_FULL` when `quarantined + kept + live + n > 2B` (F1).
+    `live` is reserved in the same step, before `Domain::pin`, and given
+    back if the domain refuses (F2). Kept pages stay counted, and a release
+    takes off only what it gave back (F3). The pin path no longer walks the
+    quarantine list.
+  * **The calls**: `device_set_limit` (0x1057), needing `SET_LIMIT`, and
+    `device_get_limit` (0x1058), through N0d's `device_call`. The kernel
+    hands devmgr both device handles with `SET_LIMIT`, and every launch
+    path narrows it away. A set is `BAD_STATE` under live pins and
+    `NO_MEMORY` past the ceiling, a quarter of RAM counted at stage 10;
+    the default is not counted (F5).
+  * **devmgr's rule for `nvrm`** (F4) is `ferrix_devmgr_proto::budget`,
+    with its four lines. devmgr has no `Gpu` kind until N1b, so the rule is
+    host-tested at 16, 8, 4 and 1 GiB and with the ceiling partly taken,
+    and not yet called.
+  * **Checks P1–P5** run at stage 10 on x86-64 and AArch64, at a budget of
+    two pages, in place of `check_quarantine`. P6 is two devmgr-proto host
+    tests. Each check's negative control fired: P1 `>` as `>=`, P2 the old
+    `quarantined >= 2B` rule, P3 the give-back dropped, P4 a refused unpin
+    counted as freed, P5 the `SET_LIMIT` check dropped, P6 one launch path
+    at `SAME_RIGHTS` and the floor not yielding.
+  * **Departures from §12.2 and §12.4**, all small:
+    * `DEVICE_LIMIT_PIN_ROOM` leaves out the asking device's own raised
+      budget, so devmgr setting a budget again after its own restart is not
+      cut by itself.
+    * The requirements are split so that each check verifies a whole one:
+      `L.object.48` is the `2B` rule over quarantined and live pages (P2),
+      `L.object.49` the release and the kept count (P4), and `L.object.120`
+      the reservation and its give-back (P3). `L.object.118` (P5) and
+      `L.object.119` (P1) are as §12.4 says. H.DMA.4's criterion names the
+      budget's line.
+    * `device_set_limit` writes no audit record. job_set_limit does, and the
+      design did not ask for one.
 
 ## 11. CUDA (N5)
 
