@@ -278,7 +278,8 @@ pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
 /// ([`desktop_config`], Y7). It waits for the server's socket, says the
 /// `DISPLAY` the compositor gave it, then runs `xdpyinfo`, whose screen line
 /// says whether the root took the compositor's screen for its own
-/// (docs/YSERVER.md, Y2), then `xev`, whose
+/// (docs/YSERVER.md, Y2), then `xprop`'s view of the window manager EWMH
+/// clients find (`xwindow: wm:` lines), then `xev`, whose
 /// window must become one of the compositor's (Y3): `hyprctl clients` lists
 /// it, and xtask looks for it on the screen once the script has ended, while
 /// `xev` still runs. xev names its window but gives it no class, so the
@@ -318,6 +319,11 @@ echo "xwindow: DISPLAY is $DISPLAY"
 xdpyinfo > /tmp/xdpyinfo.txt 2>&1
 echo "xwindow: xdpyinfo exited $?"
 grep dimensions: /tmp/xdpyinfo.txt | sed 's/^/xwindow: /'
+# The window manager, as EWMH clients such as Steam find it: the root names
+# a window, which names itself and carries the manager's name.
+xprop -root _NET_SUPPORTING_WM_CHECK _NET_SUPPORTED | sed 's/^/xwindow: wm: root /'
+wm=$(xprop -root _NET_SUPPORTING_WM_CHECK | sed -n 's/.*window id # \(0x[0-9a-f]*\).*/\1/p')
+[ -n "$wm" ] && xprop -id $wm _NET_SUPPORTING_WM_CHECK _NET_WM_NAME | sed 's/^/xwindow: wm: check /'
 xev > /tmp/xev.txt 2>&1 &
 waited=0
 until xwininfo -name "Event Tester" 2>/dev/null | grep -q IsViewable || [ $waited -ge 30 ]; do
@@ -403,7 +409,7 @@ echo "xwindow: menu"
 sleep 3
 xdotool mousemove --window $(id_of xfontsel) 15 40 mousedown 1
 sleep 2
-xwininfo -root -children | grep -E '^ +0x[0-9a-f]+ \(has no name\)' | sed 's/^/xwindow: menu window: /'
+xwininfo -root -children | grep -E '^ +0x[0-9a-f]+ \(has no name\)' | grep -v ' 1x1+' | sed 's/^/xwindow: menu window: /'
 echo "xwindow: menu open"
 sleep 4
 xdotool mouseup 1
@@ -484,6 +490,42 @@ pub(crate) fn judge_xwindow(arch: Arch, lines: &[String]) -> Result<()> {
         (dimensions, said) => Err(Error::new(format!(
             "{arch}: xdpyinfo said the screen is {dimensions:?}, and yserver said it took {said:?} \
              from the compositor; the `xwindow:` lines say more"
+        ))),
+    }
+}
+
+/// The window manager's name the server announces for the compositor.
+const WINDOW_MANAGER: &str = "hyprix";
+
+/// Whether `test-xwindow`'s `xwindow: wm:` lines say the server announces
+/// a window manager as EWMH clients look for one (Steam's "X Window
+/// Manager"): the root's `_NET_SUPPORTING_WM_CHECK` names a window, that
+/// window's names itself, and its `_NET_WM_NAME` is [`WINDOW_MANAGER`].
+pub(crate) fn judge_window_manager(arch: Arch, lines: &[String]) -> Result<()> {
+    let check = |prefix: &str| {
+        lines.iter().find_map(|line| {
+            let (_, rest) = line.split_once(prefix)?;
+            let (_, id) = rest.split_once("_NET_SUPPORTING_WM_CHECK(WINDOW): window id # ")?;
+            Some(id.trim().to_owned())
+        })
+    };
+    let name = lines.iter().find_map(|line| {
+        let (_, rest) = line.split_once("xwindow: wm: check ")?;
+        let (_, name) = rest.split_once("_NET_WM_NAME(UTF8_STRING) = ")?;
+        Some(name.trim().trim_matches('"').to_owned())
+    });
+    match (
+        check("xwindow: wm: root "),
+        check("xwindow: wm: check "),
+        name,
+    ) {
+        (Some(root), Some(own), Some(name)) if root == own && name == WINDOW_MANAGER => {
+            println!("  {arch}: X clients find the window manager {name}, window {own}");
+            Ok(())
+        }
+        (root, own, name) => Err(Error::new(format!(
+            "{arch}: the root names window manager window {root:?}, which names {own:?} and \
+             is called {name:?}, not {WINDOW_MANAGER:?}; the `xwindow: wm:` lines say more"
         ))),
     }
 }
@@ -1326,6 +1368,26 @@ KeyRelease event, serial 13, synthetic NO, window 0x200001,
         };
         assert!(judge_xwindow(Arch::X86_64, &lines("xwindow: DISPLAY is :0")).is_ok());
         assert!(judge_xwindow(Arch::X86_64, &lines("xwindow: DISPLAY is ")).is_err());
+    }
+
+    #[test]
+    fn the_window_manager_is_judged_by_its_round_trip_and_name() {
+        let lines = |own: &str, name: &str| -> Vec<String> {
+            [
+                "xwindow: wm: root _NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x110".to_owned(),
+                "xwindow: wm: root _NET_SUPPORTED(ATOM) = _NET_SUPPORTING_WM_CHECK, _NET_WM_NAME"
+                    .to_owned(),
+                format!("xwindow: wm: check _NET_SUPPORTING_WM_CHECK(WINDOW): window id # {own}"),
+                format!("xwindow: wm: check _NET_WM_NAME(UTF8_STRING) = \"{name}\""),
+            ]
+            .to_vec()
+        };
+        assert!(judge_window_manager(Arch::X86_64, &lines("0x110", "hyprix")).is_ok());
+        assert!(judge_window_manager(Arch::X86_64, &lines("0x111", "hyprix")).is_err());
+        assert!(judge_window_manager(Arch::X86_64, &lines("0x110", "other")).is_err());
+        // What a server without the announcement gives.
+        let none = vec!["xwindow: wm: root _NET_SUPPORTING_WM_CHECK:  not found.".to_owned()];
+        assert!(judge_window_manager(Arch::X86_64, &none).is_err());
     }
 
     #[test]

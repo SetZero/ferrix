@@ -527,6 +527,7 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
     crate::yserver::judge_xwindow(arch, &said)?;
+    crate::yserver::judge_window_manager(arch, &said)?;
     crate::yserver::judge_xev(arch, &said, screen.as_ref(), &dump)?;
     crate::yserver::judge_xev_input(arch, &said)?;
     crate::yserver::judge_windows(arch, &said, screen.as_ref())?;
