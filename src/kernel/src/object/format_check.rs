@@ -190,6 +190,7 @@ fn space_errors() -> Result<u32, &'static str> {
         ),
         (SpaceError::PastEnd(4), "PastEnd(4)"),
         (SpaceError::Unreadable(5), "Unreadable(5)"),
+        (SpaceError::OtherMemoryType, "OtherMemoryType"),
     ];
     for (error, name) in space {
         let _ = names(&error, name)?;

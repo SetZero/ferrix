@@ -2144,8 +2144,12 @@ fn io_mapping_map(
         Ok(Arc::clone(mapping))
     })?;
     // Gathered stores reach a register as one burst, or out of order: only
-    // memory the device says reads have no side effects on may combine.
-    if combining && !mapping.prefetchable() {
+    // memory the device says reads have no side effects on may combine. The
+    // driver is trusted to combine only memory: the prefetchable bit is the
+    // device's own claim. And on x86-64 not before every processor's PAT has
+    // its write-combining entry, without which the mapping would be
+    // write-through.
+    if combining && (!mapping.prefetchable() || !object::io_mapping::combining_ready()) {
         return Err(status::INVALID_ARGS);
     }
     let at = (address != 0).then_some(address);
@@ -2198,6 +2202,8 @@ fn space_status(why: SpaceError) -> Errno {
     match why {
         SpaceError::OutOfMemory => status::NO_MEMORY,
         SpaceError::Refused(_) => status::ACCESS_DENIED,
+        // Another mapping holds the pages with another memory type.
+        SpaceError::OtherMemoryType => status::ALREADY_BOUND,
         SpaceError::NotUserRange(_)
         | SpaceError::BadRange
         | SpaceError::NotMapped(_)

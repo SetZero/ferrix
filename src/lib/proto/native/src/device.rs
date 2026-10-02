@@ -278,7 +278,10 @@ impl<S: Syscall> IoMapping<S> {
     /// # Errors
     ///
     /// [`Error::InvalidArgs`] for an address that overlaps or is not the
-    /// user's; [`Error::NoMemory`]; [`Error::AccessDenied`] without `MAP`.
+    /// user's; [`Error::NoMemory`]; [`Error::AccessDenied`] without `MAP`;
+    /// [`Error::AlreadyBound`] while a page of the aperture is mapped, by any
+    /// process, with another memory type -- write-combining, or cached as a
+    /// render node's window: one memory type per device page.
     pub fn map(&self, at: Option<usize>) -> Result<usize, Error> {
         let value = Call::new(nr::IO_MAPPING_MAP)
             .value(register(self.handle()))
@@ -292,8 +295,12 @@ impl<S: Syscall> IoMapping<S> {
     ///
     /// # Errors
     ///
-    /// As [`IoMapping::map`], and [`Error::InvalidArgs`] for an aperture the
-    /// device does not say is prefetchable.
+    /// As [`IoMapping::map`] ([`Error::AlreadyBound`] while a page of it is
+    /// mapped uncached or cached), and [`Error::InvalidArgs`] for an aperture
+    /// the device does not say is prefetchable, or on x86-64 while a
+    /// processor's PAT lacks its write-combining entry. The prefetchable bit
+    /// is the device's own claim: the driver is trusted to combine only
+    /// memory.
     pub fn map_combining(&self, at: Option<usize>) -> Result<usize, Error> {
         let value = Call::new(nr::IO_MAPPING_MAP_COMBINING)
             .value(register(self.handle()))

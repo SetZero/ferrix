@@ -2519,12 +2519,13 @@ fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<
 /// Every processor programmed its PAT with the write-combining entry, a
 /// prefetchable aperture maps write-combining -- its page table entry says
 /// so, and it reaches the device's own memory -- and an aperture of
-/// registers is refused it.
+/// registers is refused it. On x86-64, with one processor's PAT counted as
+/// not programmed, write-combining is refused.
 ///
 /// x86-64 needs the PAT for it; the Arm architectures map normal
 /// non-cacheable memory. Runs where a whole-page aperture of each kind
-/// exists: every x86-64 and AArch64 boot, whose virtio functions have a
-/// prefetchable 64-bit BAR and registers beside it.
+/// exists: every x86-64, AArch64 and ARMv7-A boot, whose virtio-pci
+/// functions have a prefetchable 64-bit BAR and registers beside it.
 ///
 /// Verifies: `L.x86_64.127`, L.user.108
 fn check_write_combining(counter: &mut Counter) -> Result<(), &'static str> {
@@ -2565,6 +2566,17 @@ fn check_write_combining(counter: &mut Counter) -> Result<(), &'static str> {
             &[reg(handle), SPEC],
             "io_mapping_create of a prefetchable aperture failed",
         )?;
+        if arch::write_combining_processors().is_some() {
+            object::io_mapping::count_one_unprogrammed_for_check(true);
+            let made = side.call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0]);
+            object::io_mapping::count_one_unprogrammed_for_check(false);
+            refused(
+                made,
+                status::INVALID_ARGS,
+                "write-combining was mapped while a processor's PAT was not programmed",
+                counter,
+            )?;
+        }
         let at = side
             .call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0])
             .map_err(|_| "io_mapping_map_combining of a prefetchable aperture failed")?
@@ -2580,9 +2592,79 @@ fn check_write_combining(counter: &mut Counter) -> Result<(), &'static str> {
             return Err("a write-combining mapping was not mapped write-combining");
         }
         counter.combined += 1;
+        one_memory_type_per_page(&side, mapping, at, aperture.phys(), aperture.len(), counter)?;
     }
     side.close_everything();
     Ok(())
+}
+
+/// One memory type per page of device memory: with the aperture at `phys`
+/// mapped write-combining at `at` through `mapping`, mapping it uncached or
+/// as a cached window, as a render node's `mmap` would, is refused; with it
+/// mapped cached or uncached, write-combining is refused; and once nothing
+/// maps it, write-combining is allowed again. The window is never touched,
+/// so no cached access reaches the device.
+///
+/// Verifies: L.user.109
+fn one_memory_type_per_page(
+    side: &Side,
+    mapping: Handle,
+    at: u64,
+    phys: u64,
+    len: u64,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let space = side.process.space();
+    let window = || {
+        let keeper: Arc<dyn Any + Send + Sync> = Arc::new(());
+        space.map_window(
+            FilePlace::Anywhere(None),
+            len,
+            phys,
+            VmaFlags::READ_WRITE,
+            true,
+            keeper,
+        )
+    };
+    let unmap = |at: u64| {
+        space
+            .unmap(at, len)
+            .map_err(|_| "a device mapping could not be unmapped")
+    };
+    refused(
+        side.call(nr::IO_MAPPING_MAP, &[reg(mapping), 0]),
+        status::ALREADY_BOUND,
+        "an aperture mapped write-combining was mapped uncached beside it",
+        counter,
+    )?;
+    match window() {
+        Err(SpaceError::OtherMemoryType) => counter.refusals += 1,
+        _ => return Err("an aperture mapped write-combining was mapped cached beside it"),
+    }
+    unmap(at)?;
+    let cached = window().map_err(|_| "a window over an unmapped aperture was refused")?;
+    refused(
+        side.call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0]),
+        status::ALREADY_BOUND,
+        "an aperture mapped cached was mapped write-combining beside it",
+        counter,
+    )?;
+    unmap(cached)?;
+    let uncached =
+        side.call(nr::IO_MAPPING_MAP, &[reg(mapping), 0])
+            .map_err(|_| "an aperture nothing maps could not be mapped uncached")? as u64;
+    refused(
+        side.call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0]),
+        status::ALREADY_BOUND,
+        "an aperture mapped uncached was mapped write-combining beside it",
+        counter,
+    )?;
+    unmap(uncached)?;
+    let again = side
+        .call(nr::IO_MAPPING_MAP_COMBINING, &[reg(mapping), 0])
+        .map_err(|_| "write-combining was refused after every other mapping had gone")?
+        as u64;
+    unmap(again)
 }
 
 /// An interrupt is claimed once, held pending from delivery until the driver

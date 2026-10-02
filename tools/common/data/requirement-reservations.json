@@ -26,7 +26,7 @@
       "purpose": "S4: Verdict::Trap (allocated by os-bd)"
     },
     {
-      "ids": ["L.x86_64.128", "L.user.109-110"],
+      "ids": ["L.x86_64.128", "L.user.110"],
       "owner": "nvidia",
       "branch": "nvidia-n0",
       "date": "2026-10-02",

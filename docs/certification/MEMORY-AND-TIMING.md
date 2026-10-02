@@ -586,6 +586,20 @@ comparisons, a few thousand on any machine Ferrix boots, with no
 allocation and no wait. Placement at boot (`iommu::discover`) holds it the
 same way once per function.
 
+### 2.2f Device memory types (`user::memory_type::CLAIMS`)
+
+A spin lock over one entry per live user mapping of device memory -- an
+I/O mapping or a render node's window -- recording its physical range and
+its memory type (device, write-combining or cached), so that no page is
+mapped with two (L.user.109). It is a leaf: taken under an address space's
+lock by `map_device` and `map_window`, and on its own when a mapping's
+hold drops after its unmap's shootdown; nothing is taken under it. A
+mapping's hold is one pass over the entries, comparing two bounds each,
+and one fallible push (`fallible::try_push`, `NO_MEMORY` to the caller); a
+drop is one pass and a `swap_remove`. The entries are at most the live
+device mappings, which on the machines Ferrix boots is a handful per
+driver; there is no wait under it.
+
 ### 2.3 What is missing, per standard
 
 * **DO-178C DAL C** does not require WCET as such, but does require that

@@ -77,7 +77,11 @@ pub(crate) fn refused(error: SpaceError) -> Errno {
     match error {
         SpaceError::OutOfMemory | SpaceError::Backing(_) => Errno::ENOMEM,
         SpaceError::Unreadable(_) => Errno::EIO,
-        SpaceError::NotUserRange(_) | SpaceError::BadRange => Errno::EINVAL,
+        // Linux's answer to a mapping whose memory type conflicts with a
+        // mapping already made (`reserve_pfn_range`).
+        SpaceError::NotUserRange(_) | SpaceError::BadRange | SpaceError::OtherMemoryType => {
+            Errno::EINVAL
+        }
         // A copy into a file mapping past the file's end is EFAULT from a
         // system call, where the same touch from user mode is SIGBUS.
         SpaceError::NotMapped(_) | SpaceError::Refused(_) | SpaceError::PastEnd(_) => Errno::EFAULT,

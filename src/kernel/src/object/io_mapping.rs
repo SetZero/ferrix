@@ -19,11 +19,37 @@
 //! BARs are whole pages.
 
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_vma::VmaFlags;
 
+use crate::arch;
 use crate::device::Aperture;
 use crate::user::space::{AddressSpace, SpaceError};
+
+/// Set by stage 9's check alone, for one call, to count one processor's PAT
+/// as not programmed: the refusal below is then run, as a machine with such
+/// a processor would run it. Nothing else sets it, and it is set only before
+/// any program runs.
+static ONE_UNPROGRAMMED_FOR_CHECK: AtomicBool = AtomicBool::new(false);
+
+/// Whether a write-combining mapping may be made: on x86-64 only once every
+/// processor programmed its PAT with the write-combining entry. Until then a
+/// descriptor selecting entry 1 would select the power-on table's
+/// write-through, which caches reads of the aperture, so
+/// `io_mapping_map_combining` is refused rather than mapped so. The Arm
+/// architectures have no table to program.
+pub(crate) fn combining_ready() -> bool {
+    let unprogrammed = usize::from(ONE_UNPROGRAMMED_FOR_CHECK.load(Ordering::Acquire));
+    arch::write_combining_processors()
+        .is_none_or(|programmed| programmed.saturating_sub(unprogrammed) == crate::smp::count())
+}
+
+/// Count one processor's PAT as not programmed while `on`: stage 9's check of
+/// the refusal (`object::check`), which runs before any program does.
+pub(crate) fn count_one_unprogrammed_for_check(on: bool) {
+    ONE_UNPROGRAMMED_FOR_CHECK.store(on, Ordering::Release);
+}
 
 /// Why an I/O mapping could not be made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

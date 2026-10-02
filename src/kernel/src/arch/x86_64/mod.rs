@@ -184,7 +184,7 @@ pub(crate) unsafe fn init_traps() {
         let _ = PAT_PROGRAMMED.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
         "entry 1 write-combining"
     } else {
-        "not programmed, so nothing is mapped write-combining"
+        "not programmed, so write-combining is refused and stage 9 stops the boot"
     };
     crate::console::println!("  cpu      page attribute table: {pat}");
     // Before `CpuStarter::new` snapshots `CR4`, so secondaries take

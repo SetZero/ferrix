@@ -452,6 +452,13 @@ const IA32_PAT: u32 = 0x277;
 /// follows is for the rule (SDM Vol. 3A §11.12.4), not for one that does.
 /// `false` on a processor whose `CPUID` says it has no PAT, which no x86-64
 /// processor is.
+///
+/// Called once per processor, at its bring-up: Ferrix has no processor
+/// hotplug, no S3 resume and no UEFI runtime calls, any of which can leave a
+/// processor with another table. Whichever is added must call this again
+/// before that processor runs anything that reaches a write-combining
+/// mapping, and `object::io_mapping::combining_ready` refuses
+/// write-combining while the count it keeps is short.
 pub(crate) fn program_pat() -> bool {
     use core::arch::x86_64::__cpuid;
 

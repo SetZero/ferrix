@@ -1701,18 +1701,55 @@ package FerrixMemoryRequirements {
             attribute :>> statement = "io_mapping_map_combining shall map an
                 aperture the device says is prefetchable write-combining, its pages
                 faulted in to the device's own memory, and shall refuse an aperture
-                of registers with INVALID_ARGS.";
-            attribute :>> criterion = "On a machine with a whole-page prefetchable
-                aperture, its write-combining mapping reaches the aperture's
-                physical address and its page table entry reads write-combining
-                (normal non-cacheable on the Arm architectures), not device; a
-                register aperture's is refused with INVALID_ARGS.";
+                of registers with INVALID_ARGS; on x86-64 it shall refuse every
+                aperture with INVALID_ARGS unless every processor programmed its
+                PAT with the write-combining entry.";
+            attribute :>> criterion = "On x86-64, AArch64 and ARMv7-A -- each of
+                whose test-boot machines has a virtio-pci function with a whole-page
+                prefetchable aperture, the boot's handles line saying 1 mapped
+                write-combining -- its write-combining mapping reaches the
+                aperture's physical address and its page table entry reads
+                write-combining (normal non-cacheable on the two Arm
+                architectures), not device; a register aperture's is refused with
+                INVALID_ARGS; on x86-64, with one processor's PAT counted as not
+                programmed, the prefetchable aperture's is refused with
+                INVALID_ARGS, and with that refusal dropped stage 9 fails naming
+                it.";
             attribute :>> parent = ("H.MEM.1", "H.DMA.5");
             attribute :>> unit = ("syscall::native::io_mapping_map",
                 "object::io_mapping::IoMapping::map_into",
                 "object::io_mapping::IoMapping::prefetchable",
+                "object::io_mapping::combining_ready",
+                "object::io_mapping::count_one_unprogrammed_for_check",
                 "user::space::AddressSpace::map_device",
                 "user::space::AddressSpace::fault_device", "mm::flags_in");
+        }
+        requirement <'L.user.109'> oneMemoryTypePerDevicePage : ItemLowLevel {
+            attribute :>> statement = "A page of device memory shall be mapped into
+                user address spaces with one memory type at a time: map_device and
+                map_window shall refuse a range any page of which a live user
+                mapping holds as another of device, write-combining or cached with
+                OtherMemoryType -- ALREADY_BOUND from io_mapping_map and
+                io_mapping_map_combining, EINVAL from mmap of a render node's blob
+                -- and a mapping's hold shall end only once no region of any
+                address space maps it, after its unmap's shootdown has returned.";
+            attribute :>> criterion = "On x86-64, AArch64 and ARMv7-A, with a
+                prefetchable aperture mapped write-combining, io_mapping_map of it is
+                ALREADY_BOUND and a cached window over it is OtherMemoryType; with
+                it mapped as a cached window, and then uncached, after the
+                write-combining mapping is unmapped, io_mapping_map_combining is
+                ALREADY_BOUND; with every mapping of it unmapped it maps
+                write-combining again; with the type comparison dropped from
+                memory_type::hold, stage 9 fails naming the uncached mapping made
+                beside the write-combining one.";
+            attribute :>> parent = ("H.MEM.1", "H.DMA.5");
+            attribute :>> unit = ("user::memory_type::hold",
+                "user::memory_type::MemoryType::of",
+                "user::space::hold_type",
+                "user::space::AddressSpace::map_device",
+                "user::space::AddressSpace::map_window",
+                "user::space::AddressSpace::give_back",
+                "user::memory_type::Hold::drop");
         }
         requirement <'L.user.107'> aCopyThroughADevicePageIsRefused : ItemLowLevel {
             attribute :>> statement = "with_page and with_present_page shall refuse

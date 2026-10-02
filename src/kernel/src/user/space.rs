@@ -106,6 +106,7 @@ use crate::arch;
 use crate::fallible;
 use crate::mm;
 use crate::smp::{self, CpuMask, TlbPages};
+use crate::user::memory_type::{self, MemoryType};
 use crate::user::vmo::{Kept, Own, Retired, ShadowCopies, Sharing, Vmo, VmoError};
 
 /// The lowest address a program may map anything at: 64 KiB, the
@@ -142,6 +143,9 @@ pub(crate) enum SpaceError {
     /// not be read from it: a `SIGBUS` too, as Linux gives for a mapped page
     /// whose read fails.
     Unreadable(u64),
+    /// A page of the device memory asked for is mapped, by this or another
+    /// address space, with another memory type (`user::memory_type`).
+    OtherMemoryType,
 }
 
 impl fmt::Display for SpaceError {
@@ -156,6 +160,9 @@ impl fmt::Display for SpaceError {
             SpaceError::PastEnd(at) => write!(f, "{at:#x} is past the end of the mapped file"),
             SpaceError::Unreadable(at) => {
                 write!(f, "the mapped file's page at {at:#x} is unreadable")
+            }
+            SpaceError::OtherMemoryType => {
+                f.write_str("the device memory is mapped with another memory type")
             }
         }
     }
@@ -2436,6 +2443,31 @@ fn check_device_range(
     Ok(())
 }
 
+/// Hold `physical..physical + len` as `kind` for a device region
+/// ([`memory_type::hold`]).
+fn hold_type(
+    physical: u64,
+    len: u64,
+    kind: MemoryType,
+) -> Result<Arc<memory_type::Hold>, SpaceError> {
+    memory_type::hold(physical, len, kind).map_err(|refused| match refused {
+        memory_type::Refused::OtherType => SpaceError::OtherMemoryType,
+        memory_type::Refused::NoMemory => SpaceError::OutOfMemory,
+    })
+}
+
+/// What a window's region keeps under its id: its keeper, and its memory
+/// type's hold.
+#[derive(Debug)]
+struct WindowKept {
+    /// What the caller asked to have kept: the blob, for a render node.
+    #[expect(dead_code, reason = "kept for its drop, never read")]
+    keeper: Arc<dyn Any + Send + Sync>,
+    /// The memory type of its pages.
+    #[expect(dead_code, reason = "kept for its drop, never read")]
+    held: Arc<memory_type::Hold>,
+}
+
 impl AddressSpace {
     /// Place `len` bytes of device memory, starting at physical address
     /// `physical`, in this space: at `at` if one is given, otherwise wherever
@@ -2455,10 +2487,16 @@ impl AddressSpace {
     /// own image ([`mm::overlaps_image`]), whose text has no writable mapping
     /// anywhere.
     ///
+    /// The region holds its range's memory type, device or write-combining
+    /// if `combining`, until no region of any space maps it any more
+    /// ([`memory_type`]): one memory type per device page.
+    ///
     /// # Errors
     ///
     /// [`SpaceError::Refused`] if `flags` asks for execute, or the range
     /// touches the kernel's image;
+    /// [`SpaceError::OtherMemoryType`] if a page of the range is mapped with
+    /// another memory type;
     /// [`SpaceError::BadRange`] for a physical range that wraps the address
     /// space, a length or physical address that is not whole pages, or a
     /// range overlapping a mapping;
@@ -2473,6 +2511,8 @@ impl AddressSpace {
         combining: bool,
     ) -> Result<u64, SpaceError> {
         check_device_range(physical, len, flags, at.unwrap_or(0))?;
+        let held: Arc<dyn Any + Send + Sync> =
+            hold_type(physical, len, MemoryType::of(false, combining))?;
         let mut inner = self.inner.lock();
         let at = match at {
             Some(at) => at,
@@ -2485,12 +2525,16 @@ impl AddressSpace {
             return Err(SpaceError::NotUserRange(at));
         }
         let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+        // An id, as a window's region has, so the hold is kept beside it.
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
         let flags = VmaFlags {
             execute: false,
             shared: true,
             grows_down: false,
             ..flags
         };
+        let reserved = fallible::reserve().map_err(|_| SpaceError::OutOfMemory)?;
         inner
             .map
             // FALLIBLE: the map's insert refuses with `VmaError::NoMemory`.
@@ -2499,12 +2543,21 @@ impl AddressSpace {
                 flags,
                 Backing::Device {
                     physical,
-                    id: 0,
+                    id,
                     cached: false,
                     combining,
                 },
             )
             .map_err(map_error)?;
+        let _ = fallible::insert_held(
+            &reserved,
+            &mut inner.files,
+            id,
+            FileMapping {
+                file: held,
+                may_write: false,
+            },
+        );
         Ok(at)
     }
 
@@ -2519,7 +2572,9 @@ impl AddressSpace {
     /// back while a program still maps it. So the region is given an id, as a
     /// file mapping is, and `keeper` is kept under that id beside the file
     /// mappings' own, until no region names it: until then nothing can hand
-    /// the window's pages to anyone else. A `fork` child keeps it too.
+    /// the window's pages to anyone else. A `fork` child keeps it too. Kept
+    /// with it is the range's memory type, cached if `cached` and device
+    /// memory otherwise, as [`AddressSpace::map_device`] holds its own.
     ///
     /// # Errors
     ///
@@ -2534,6 +2589,9 @@ impl AddressSpace {
         keeper: Arc<dyn Any + Send + Sync>,
     ) -> Result<u64, SpaceError> {
         check_device_range(physical, len, flags, 0)?;
+        let held = hold_type(physical, len, MemoryType::of(cached, false))?;
+        let keeper: Arc<dyn Any + Send + Sync> =
+            fallible::try_arc(WindowKept { keeper, held }).map_err(|_| SpaceError::OutOfMemory)?;
         let mut inner = self.inner.lock();
         let at = match place {
             FilePlace::Fixed(at) => at,
@@ -3480,7 +3538,8 @@ fn still_named(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
 fn naming(region: &Vma) -> Option<u64> {
     match region.backing {
         Backing::Anonymous { id, .. } | Backing::File { id, .. } => Some(id),
-        // A window's keeper is kept under its id; registers have none.
+        // A window's keeper, and every device region's memory-type hold,
+        // is kept under its id.
         Backing::Device { id, .. } => (id != 0).then_some(id),
     }
 }
