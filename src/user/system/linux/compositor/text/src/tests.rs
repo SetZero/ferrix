@@ -17,9 +17,14 @@ fn tree_fonts() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../../../assets/fonts")
 }
 
+/// The tree's Inter and Liberation faces, in the order `add_dir` of the
+/// whole directory gave them before it held anything else: the other
+/// families there (Noto CJK, five faces in 33 MB) are for the image, not for
+/// these tests, which index faces by position.
 fn fonts() -> Fonts {
     let mut fonts = Fonts::new();
-    assert_eq!(fonts.add_dir(&tree_fonts()), 14);
+    assert_eq!(fonts.add_dir(&tree_fonts().join("inter")), 2);
+    assert_eq!(fonts.add_dir(&tree_fonts().join("liberation")), 12);
     fonts
 }
 
