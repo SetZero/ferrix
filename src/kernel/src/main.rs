@@ -859,6 +859,25 @@ fn report_processors(cpus: &smp::Topology) {
     arch::report_speculation();
 }
 
+/// The timer's skipped arm (`stages_check::check_a_skipped_arm`), on the
+/// boot processor with its record and before any other processor runs.
+fn check_the_skipped_arm() {
+    if !checks::run() {
+        return;
+    }
+    match stages_check::check_a_skipped_arm() {
+        Ok(arm) => println!(
+            "  arm      a 2 ms one-shot asked for under a 1 s one fired after {} us; a 1 s \
+             one asked for over a 2 ms one left it to fire after {} us",
+            arm.after_long, arm.before_long
+        ),
+        Err(problem) => fatal!(
+            catalog::STAGE3_TIMER,
+            "stage 3 self-check failed: {problem}"
+        ),
+    }
+}
+
 /// Stage 4: find every processor, start them, and require them to work
 /// together.
 ///
@@ -874,6 +893,10 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
             "could not enumerate the processors: {problem}"
         ),
     };
+
+    // The timer's skipped arm, which needs this processor's record and no
+    // other processor arming a timer: here, between the two.
+    check_the_skipped_arm();
 
     // Then the rest of them. Each is started, waited for, and required to
     // find its own record through its own register before the next one is

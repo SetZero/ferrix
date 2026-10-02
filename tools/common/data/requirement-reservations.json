@@ -38,13 +38,6 @@
       "branch": "nvidia-c3k",
       "date": "2026-10-02",
       "purpose": "NVIDIA C3-K, the kernel's fault windows (docs/NVIDIA.md §11.4, the consultant's OK IF of 2026-10-02): window regions, forwarded faults and their wait, kernel copies that never wait, refused partial operations, the mapping count and UNMAPPED, break-before-make entries, revoke, server death, insert checks and holds, answers only from the server handle; a server-inserted frame unreachable before its hold goes, and a client waiting on a server only by its own mapping"
-    },
-    {
-      "ids": ["L.sched.5-8"],
-      "owner": "ipc-step1",
-      "branch": "ipc-step1",
-      "date": "2026-10-02",
-      "purpose": "OPAQUE-KERNEL.md 9.5 step 1, channel_write_read (0x1013): the inbox's slot for a small message, the slot as every reader's head, the small read's bytes then zeros, the answer in registers and a failing call's registers left as sent, and the trusting wait woken by a message, the peer's close and a kill; the timer's skipped arm, the clock's exact conversion, the deferred decision of a wake in a call or a Sync wake, and the Sync wake's move (the consultant's conditions of 2026-10-02)"
     }
   ]
 }

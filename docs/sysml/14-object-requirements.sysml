@@ -1470,8 +1470,9 @@ package FerrixObjectRequirements {
                 as Endpoint::write does -- the peer closed, more bytes than three
                 words, the queue full -- and shall otherwise hold a message of at
                 most three words without handles in the peer's slot only while
-                nothing waits there, queueing it behind what does, so that the
-                slot always holds the oldest message.";
+                nothing waits there and the inbox's spare has room for it or can be
+                given it, queueing it behind what does, so that the slot always
+                holds the oldest message and a buffer for it.";
             attribute :>> criterion = "A small message written behind a queued one
                 is read after it, and a send to a closed peer, one past three words
                 and one on a handle without WRITE send nothing (the `wrread` line).";
@@ -1482,11 +1483,11 @@ package FerrixObjectRequirements {
         }
         requirement <'L.object.129'> theSlotIsEveryReadersHead : ItemLowLevel {
             attribute :>> statement = "Endpoint::read shall take the message held
-                in the slot before any queued, as a message without handles, leave
-                it with its size reported when the caller has too little room, and
-                Endpoint::unread shall put a message back ahead of one the slot has
-                taken since, so that every reader sees the messages in the order
-                written.";
+                in the slot before any queued, as a message without handles in the
+                inbox's spare, never failing for memory, leave it with its size
+                reported when the caller has too little room, and Endpoint::unread
+                shall put a message back ahead of one the slot has taken since, so
+                that every reader sees the messages in the order written.";
             attribute :>> criterion = "A message held in the slot is read before
                 one queued after it; a read with room for 2 bytes of a 5-byte slot
                 message is refused with its size and the next read returns it whole;
@@ -1494,7 +1495,8 @@ package FerrixObjectRequirements {
                 another is read first, then the other (the `wrread` line).";
             attribute :>> parent = "H.OBJ.7";
             attribute :>> unit = ("object::channel::Inbox::pop_fitting",
-                "object::channel::Inbox::unpop", "object::channel::Inbox::head_needs_topology");
+                "object::channel::Inbox::unpop", "object::channel::Inbox::head_needs_topology",
+                "object::channel::Inbox::take_spare");
         }
         requirement <'L.object.130'> aSmallReadIsBytesThenZeros : ItemLowLevel {
             attribute :>> statement = "Endpoint::read_small shall take the oldest
@@ -1535,8 +1537,12 @@ package FerrixObjectRequirements {
             attribute :>> statement = "channel_write_read's wait shall file no
                 recheck while it is listed on its end's queue, and shall end on each
                 of what it waits for: a message arriving on the end, the peer's
-                close, and its process's end, each of which wakes it; it shall then
-                answer the message, PEER_CLOSED, or EINTR.";
+                close, and its process's end or another thread's execve, each of
+                which wakes it; it shall then answer the message, PEER_CLOSED, or
+                EINTR. The message and the close shall be looked at under the end's
+                inbox lock, which their wakers take, and the task's blocked state
+                and its process's end shall be ordered by a SeqCst fence on each
+                side (WaitQueue::wait_trusting, Process::wake_other_tasks).";
             attribute :>> criterion = "A thread blocked in channel_write_read and
                 listed on its end's queue is woken within 10 s by a message, which it
                 answers, by its peer's close, which it answers PEER_CLOSED, and by
@@ -1544,7 +1550,8 @@ package FerrixObjectRequirements {
                 line).";
             attribute :>> parent = "H.OBJ.11";
             attribute :>> unit = ("object::channel::Endpoint::readable_or_closed",
-                "sched::wait::WaitQueue::wait_trusting", "object::channel::Endpoint::drop");
+                "sched::wait::WaitQueue::wait_trusting", "sched::wait::WaitQueue::wait_sliced",
+                "object::channel::Endpoint::drop");
         }
     }
 }

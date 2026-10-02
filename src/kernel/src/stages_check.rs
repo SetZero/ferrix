@@ -1428,6 +1428,72 @@ pub(super) fn check_one_shot(interval_nanos: u64) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// How long the skipped-arm check gives a timer interrupt to arrive after its
+/// deadline: an emulated processor on a loaded host, not the skip, which adds
+/// nothing (`timer::ARMED`). Far below the long one-shot, so a short one
+/// that waited for it is plainly late.
+const ARRIVAL_NANOS: u64 = 200_000_000;
+/// The long one-shot of the skipped-arm check.
+const LONG_ARM_NANOS: u64 = 1_000_000_000;
+/// The short one.
+const SHORT_ARM_NANOS: u64 = 2_000_000;
+
+/// What the skipped-arm check measured: how long after it was asked for the
+/// short one-shot fired, in microseconds, asked after the long one and then
+/// before it.
+pub(super) struct SkippedArm {
+    /// Short asked for after long: written over it.
+    pub(super) after_long: u64,
+    /// Long asked for after short: skipped, the short left to fire.
+    pub(super) before_long: u64,
+}
+
+/// A one-shot asked for while a later one is armed fires by its own
+/// deadline, and one asked for while an earlier one is armed leaves the
+/// earlier one to fire: `timer::after`'s skip, which keeps an upper bound on
+/// the armed interrupt and writes only an earlier deadline.
+///
+/// On the boot processor once it has its record, which the skip needs, and
+/// before any other processor or the scheduler arms a timer, so every tick
+/// counted is this processor's. Each one-shot must fire within
+/// [`ARRIVAL_NANOS`] of its 2 ms deadline; one the skip wrongly left waits
+/// for the 1 s one.
+///
+/// Verifies: L.sched.5
+pub(super) fn check_a_skipped_arm() -> Result<SkippedArm, &'static str> {
+    if smp::this_cpu().is_none() {
+        return Err("the skipped-arm check ran before the boot processor had its record");
+    }
+    let after_long = short_fires_in_time(&[LONG_ARM_NANOS, SHORT_ARM_NANOS]).ok_or(
+        "a 2 ms one-shot asked for while a 1 s one was armed did not fire by its deadline",
+    )?;
+    let before_long = short_fires_in_time(&[SHORT_ARM_NANOS, LONG_ARM_NANOS]).ok_or(
+        "a 1 s one-shot asked for while a 2 ms one was armed kept the 2 ms one from firing",
+    )?;
+    Ok(SkippedArm {
+        after_long,
+        before_long,
+    })
+}
+
+/// Ask for each of `arms` in order, then wait for the first tick: the
+/// microseconds it took, if it came within [`ARRIVAL_NANOS`] of the short
+/// deadline.
+fn short_fires_in_time(arms: &[u64]) -> Option<u64> {
+    let before = timer::ticks();
+    let start = timer::now_nanos();
+    for nanos in arms {
+        timer::after(*nanos);
+    }
+    let give_up = start.saturating_add(LONG_ARM_NANOS + ARRIVAL_NANOS);
+    while timer::ticks() == before && timer::now_nanos() < give_up {
+        arch::wait_for_interrupt();
+    }
+    let took = timer::now_nanos().saturating_sub(start);
+    timer::stop();
+    (timer::ticks() != before && took <= SHORT_ARM_NANOS + ARRIVAL_NANOS).then_some(took / 1000)
+}
+
 /// Spin on the counter for `nanos`.
 ///
 /// Deliberately not `wait_for_interrupt`: the point is to let real time pass

@@ -73,6 +73,42 @@ pub const MODE_SYSCALL: u64 = 0;
 /// `rdtsc * 1e9 / hz`, as the kernel's own `now_nanos` does.
 pub const MODE_TSC: u64 = 1;
 
+/// `ticks` of a `hz` counter in nanoseconds: `ticks * 10^9 / hz`, rounded
+/// down, exactly, and `u64::MAX` past what 64 bits hold. The kernel's clock
+/// (`timer::now_nanos`) is this, the [`MODE_TSC`] functions' answer.
+///
+/// # Two narrow divisions, not one wide one
+///
+/// The kernel reads the clock several times on every switch and every wake,
+/// and the product in 128 bits divided by `hz` is a library call of a hundred
+/// cycles or so. Split at whole seconds, the same answer takes two 64-bit
+/// divisions the processor does itself: the seconds times 10^9, plus the
+/// ticks left over, fewer than a second's, times 10^9 over `hz`, which fits
+/// 64 bits for any counter below 18 GHz. Exact, so every other reading of
+/// the counter agrees with it to the nanosecond. A counter of zero hertz
+/// counts nothing and reads zero.
+#[must_use]
+pub const fn counter_nanos(ticks: u64, hz: u64) -> u64 {
+    const NANOS: u64 = 1_000_000_000;
+    if hz == 0 {
+        return 0;
+    }
+    let seconds = ticks / hz;
+    let rest = ticks % hz;
+    let Some(within) = rest.checked_mul(NANOS) else {
+        // A counter past 18 GHz: the wide way, saturating rather than
+        // truncating, as a wrong answer that is obviously wrong beats one
+        // that looks plausible.
+        let scaled = ticks as u128 * NANOS as u128 / hz as u128;
+        return if scaled > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            scaled as u64
+        };
+    };
+    seconds.saturating_mul(NANOS).saturating_add(within / hz)
+}
+
 /// The name the image gives itself, Linux's for its vDSO.
 pub const SONAME: &str = "linux-vdso.so.1";
 

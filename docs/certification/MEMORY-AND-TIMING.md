@@ -546,6 +546,23 @@ part of the switch a domain changes (SPECULATION.md §3). The p99 is three to
 four times the p50 on a shared host. These are measurements of one
 configuration, not a bound.
 
+Two decisions the round trip's wakes defer are bounded, though no check
+times them (L.sched.7). A wake made inside a system call asks for no timer:
+the decision it wants is made when the call ends (`sched::call_left`), at
+the next `preempt_enable` that brings the count to zero, or at the next
+interrupt's exit, whichever comes first, and the running task's slice timer
+is still armed. A `Wake::Sync` waker that does not block after all shares
+its processor with the task it woke until the next decision, which the
+woken task's arrival arms the timer for at most one slice away: the woken
+task waits at most one slice, inside H.SCHED.2's bound of one slice plus
+the timer overruns served.
+
+The timer's skipped arm (`timer::after`, L.sched.5) adds no lateness: what
+it keeps is the clock read after the hardware was armed plus the delay, an
+upper bound on the interrupt, and a request is skipped only when that bound
+is no later than its own deadline. The one lateness left is the hardware's,
+a delay shorter than one timer tick armed as one tick, which every arm has.
+
 ### 2.2d btrfs
 
 No time bound is claimed for the btrfs crates either, and their time is

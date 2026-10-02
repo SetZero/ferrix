@@ -16,9 +16,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch;
 use crate::irq::{self, IrqError};
 
-/// Nanoseconds in a second, as the unit conversions want it.
-const NANOS_PER_SECOND: u128 = 1_000_000_000;
-
 /// Timer interrupts taken since boot.
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
@@ -110,8 +107,22 @@ const PROCESSORS: usize = 256;
 /// deadline asked for is left as it is: it fires early, the scheduler finds
 /// nothing yet due and asks again, and the asking is what was going to happen
 /// anyway. Only a deadline earlier than the one armed is written. An early
-/// interrupt costs one decision; a late one would cost a task its turn, and
-/// that never happens here.
+/// interrupt costs one decision; a late one would cost a task its turn.
+///
+/// # Why a skip is never late
+///
+/// What is kept is an upper bound on when the interrupt fires: the clock is
+/// read *after* the architecture has armed the hardware, plus the delay
+/// asked for. The hardware's count starts at or before that read -- the
+/// local APIC's at the write of its initial count, the generic timer's from
+/// the counter value its comparator was computed from -- and is the delay
+/// rounded down to whole timer ticks, so it fires no later than the bound.
+/// A request is skipped only when that bound is no later than its own
+/// deadline, so a skipped request is never served late: the one exception
+/// is the hardware's own, a delay shorter than one timer tick, which every
+/// arm rounds up to one tick whether or not anything is skipped. Read before
+/// the write, the bound could be early by the time the write took -- an exit
+/// under a hypervisor -- and a skip late by as much.
 static ARMED: [AtomicU64; PROCESSORS] = [const { AtomicU64::new(0) }; PROCESSORS];
 
 /// This processor's slot in [`ARMED`], once processors have records.
@@ -135,8 +146,9 @@ pub(crate) fn after(nanos: u64) {
     if !periodic && armed != 0 && armed <= wanted {
         return;
     }
-    slot.store(wanted, Ordering::Relaxed);
     arch::timer_arm(nanos);
+    // After the arm, so that what is kept bounds the interrupt from above.
+    slot.store(now_nanos().saturating_add(nanos).max(1), Ordering::Relaxed);
 }
 
 /// Fire the timer interrupt every `nanos` until [`stop`].
@@ -218,30 +230,10 @@ pub(crate) fn now_nanos() -> u64 {
     ticks_to_nanos(arch::counter_now(), hz)
 }
 
-/// `ticks` of a `hz` counter in nanoseconds: `ticks * 10^9 / hz`, rounded
-/// down, exactly.
-///
-/// # Two narrow divisions, not one wide one
-///
-/// The clock is read several times on every switch and every wake, and the
-/// product in 128 bits divided by `hz` is a library call of a hundred cycles
-/// or so. Split at whole seconds, the same answer takes two 64-bit divisions
-/// the processor does itself: the seconds times 10^9, plus the ticks left
-/// over, fewer than a second's, times 10^9 over `hz`, which fits 64 bits for
-/// any counter below 18 GHz. Exact, so every other reading of the counter,
-/// the vDSO's among them, agrees with it to the nanosecond.
+/// `ticks` of a `hz` counter in nanoseconds: `ferrix_vdso::counter_nanos`,
+/// whose host tests hold it to the 128-bit formula.
 fn ticks_to_nanos(ticks: u64, hz: u64) -> u64 {
-    const NANOS: u64 = 1_000_000_000;
-    let seconds = ticks / hz;
-    let rest = ticks % hz;
-    let Some(within) = rest.checked_mul(NANOS) else {
-        // A counter past 18 GHz: the wide way.
-        let scaled = u128::from(ticks) * NANOS_PER_SECOND / u128::from(hz);
-        // Saturating rather than truncating: a wrong answer that is obviously
-        // wrong beats one that looks plausible.
-        return u64::try_from(scaled).unwrap_or(u64::MAX);
-    };
-    seconds.saturating_mul(NANOS).saturating_add(within / hz)
+    ferrix_vdso::counter_nanos(ticks, hz)
 }
 
 /// How fast the free-running counter counts.

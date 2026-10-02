@@ -251,3 +251,66 @@ fn a_lookup_in_a_broken_image_finds_nothing() {
     }
     assert_eq!(lookup_hashed(&looped, "nothing", None), None);
 }
+
+/// The 128-bit formula `counter_nanos` must equal: `ticks * 10^9 / hz`, and
+/// `u64::MAX` past 64 bits.
+fn wide(ticks: u64, hz: u64) -> u64 {
+    let scaled = u128::from(ticks) * 1_000_000_000 / u128::from(hz);
+    u64::try_from(scaled).unwrap_or(u64::MAX)
+}
+
+/// Two 64-bit divisions answer as the one 128-bit division does, at the
+/// boundaries of both: a counter of 1 Hz, of a second's nanoseconds, of
+/// every rate the reference machines run (QEMU's 62.5 MHz and 1 GHz, a 24
+/// MHz Arm, a 3.4 GHz TSC), just under and just over the 18.4 GHz past which
+/// the remainder's product no longer fits, and the widest; each at zero, one
+/// short of a second, a second, a second and one, the last tick before the
+/// answer saturates and the first after, and `u64::MAX`.
+///
+/// Verifies: L.sched.6
+#[test]
+fn counter_nanos_is_the_wide_formula_exactly() {
+    use crate::counter_nanos;
+    let rates = [
+        1,
+        3,
+        24_000_000,
+        62_500_000,
+        999_999_999,
+        1_000_000_000,
+        1_000_000_001,
+        3_400_000_000,
+        18_446_744_073,
+        18_446_744_074,
+        u64::MAX / 2,
+        u64::MAX,
+    ];
+    for hz in rates {
+        let saturates_at = u64::try_from(u128::from(u64::MAX) * u128::from(hz) / 1_000_000_000)
+            .unwrap_or(u64::MAX);
+        let ticks = [
+            0,
+            1,
+            hz - 1,
+            hz,
+            hz.saturating_add(1),
+            hz.saturating_mul(7).saturating_add(hz / 3),
+            saturates_at,
+            saturates_at.saturating_add(1),
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        for tick in ticks {
+            assert_eq!(
+                counter_nanos(tick, hz),
+                wide(tick, hz),
+                "{tick} ticks at {hz} Hz"
+            );
+        }
+    }
+    assert_eq!(
+        counter_nanos(12_345, 0),
+        0,
+        "a counter of no rate counts nothing"
+    );
+}
