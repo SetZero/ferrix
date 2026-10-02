@@ -705,8 +705,13 @@ whose walk does not snoop, then a write of the tail register, and a wait for
 the wait descriptor's status word to read this submission's sequence
 number. Memory: three 4 KiB kernel frames per unit -- the root table, the
 queue (256 descriptors of 16 bytes) and the status word's frame -- taken
-once at stage 10's bring-up through `vtd::table` and never given back. No
-domain maps them. A submission allocates nothing.
+once at stage 10's bring-up through `vtd::table` and never given back, and
+on a unit that remaps interrupts a fourth, its interrupt remapping table
+(256 entries of 16 bytes). No domain maps them. A submission allocates
+nothing, nor does writing an interrupt entry: its index is its vector's
+slot among the sixty-four the architecture hands out, taken by the existing
+compare-and-swap on `TAKEN`, so remapping needs no allocator and no lock of
+its own, and an entry, like its vector, is never given back.
 
 Time: a submission is held inside the unit's `commands` gate (`gate.rs`), a
 gate and not a lock, entered with interrupts on wherever the caller may
@@ -714,9 +719,16 @@ block, so the wait gives up the processor between looks as the register
 wait it replaces did. The hold is two descriptor writes, their clean, one
 register write, and the wait, bounded by the unit's patience, 100 ms. The
 order with a domain's `changing` gate is unchanged: `changing`, then
-`commands`, never the reverse. An MSI mint (step 3 of N0g, to come) will
-enter `commands` under a device's `minted` lock; there the gate spins with
-its deadline, as it does under any spin lock.
+`commands`, never the reverse. An MSI or MSI-X mint enters `commands` under
+its device's `minted` lock, to write the vector's interrupt entry and wait
+for its invalidation: there the gate spins with its deadline, the unit's
+patience, with interrupts masked on that processor where `minted` is an
+`IrqSpinLock` -- a hold bounded by one entry write, its clean and one
+invalidation, at stage 10 and when a driver first asks for a vector, never
+per interrupt. The console's I/O APIC line takes its `CONSOLE_INPUT` lock
+twice at bring-up, once to mask it and once to write its remappable entry,
+and the entry and its invalidation are made between the two, never under
+it. The check vector 0xFC's handler only counts and acknowledges.
 
 A failed invalidation -- the status not written within the patience, or
 `IQE`, `ICE` or `ITE` seen -- answers an error and its caller releases

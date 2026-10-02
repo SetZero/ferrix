@@ -1106,8 +1106,7 @@ and took the recommended answer for D2, D3 and D5.
   
   The kernel half of N0g is separate.
 * **2026-10-03 — N0g step 1 built: every VT-d invalidation through the
-  queue** (branch `nvidia-n0g`, for the consultant before the rest of
-  N0g). The first of §12.3's steps, as its own slice:
+  queue** (landed as slice 1, 68c49655a). The first of §12.3's steps, as its own slice:
   * register-based invalidation is gone; each invalidation is one
     descriptor and a fenced, sequence-numbered wait through F-58's
     helpers (`ferrix_paging::vtd::queue`, six host tests);
@@ -1126,7 +1125,35 @@ and took the recommended answer for D2, D3 and D5.
     left in `FSTS` are cleared at bring-up, or the unit is refused;
     `L.iommu.49` is released to F-58's `L.iommu.56`/`57`.
 
-  The rest of N0g (the IRT onward) continues on the same branch.
+* **2026-10-03 — N0g's interrupt remapping built** (branch `nvidia-n0g`,
+  for the consultant before `land.sh take`, C6). §12.3's steps 2 to 8 on
+  slice 1:
+  * the IRT per unit that can remap, `IRE` without `CFI` and `CFIS` read
+    back clear, remappable MSI and MSI-X with `msi_allocate`'s shared
+    signature (no Arm file changes: x86-64 registers its hooks with
+    `iommu::remapping` from `console_receive_irq`), the check vector 0xFC,
+    interrupt faults 0x20 to 0x26 as `Cause::Interrupt` and
+    `INTERRUPT_FAULT` records;
+  * the console's I/O APIC line converted to a fresh vector at bring-up
+    (amended above), masked before it is rewritten, the port serviced
+    once, and check R9 over every vector handed out;
+  * firmware's x2APIC on every processor; `device_isolation`, the
+    set-once isolated-interrupts mark and its refusals; devmgr-proto's
+    launch rule, which N1b's `Gpu` kind calls;
+  * checks R1 to R10 under KVM (split irqchip) and TCG on the patched
+    QEMU, and test-boot requires every line. F-57 closes with it.
+
+  What differs from §12.3: R3 names the first MSI-X table's entry, a
+  virtio function at 00:02.0, rather than the rng's; `L.device.28` is
+  shown on a requester no unit places, since no QEMU function is aliased;
+  a check that a present entry is never rewritten (`L.iommu.52`) was
+  added; R8 puts the first application processor to arrive in x2APIC
+  mode, and TCG's CPU gains `+x2apic`; R1 to R3 wait for the fault and 2 ms
+  more, not 50 ms per message; and `device_isolation`'s bit 1 is not yet
+  set for an AArch64 device behind a GICv3 ITS, which would change Arm
+  files (G7). R5 loops a byte back through COM1, which QEMU delivers; a
+  16550 on real hardware may hold its interrupt in loopback, so the check
+  is the reference machine's.
 
 ## 11. CUDA (N5)
 
@@ -2515,19 +2542,39 @@ has no way back to polling once its interrupt has started. So at step 5
 of the bring-up order:
 
 1. Under `CONSOLE_INPUT`'s lock, mask the RTE (bit 16), and read the
-   vector and destination it is routed to now. Drop the lock.
-2. Outside that lock (the gate spins there), write the IRTE with that
-   vector and destination, `TM` and polarity from the input, and `SID` =
-   the I/O APIC's. Then an IEC and a wait.
+   vector `V0` and destination it is routed to now. Drop the lock.
+2. Outside that lock (the gate spins there), take a **fresh vector `V1`**
+   and write `V1`'s IRTE with `V1`, that destination, `TM` from the input,
+   and `SID` = the I/O APIC's. Then an IEC and a wait. `V0` stays taken
+   for good, so its IRTE index is never present. Move the console's
+   handler from `V0` to `V1` through the generic interrupt layer
+   (`irq::move_handler`) now, while the line is masked, leaving `V0` a
+   handler that counts what still arrives on it: from here, until the
+   rewrite, a delivery on `V0` can only be a compatibility route that
+   survived `IRE`, and it is counted.
 3. Set `IRE` and read back `CFIS` (step 6).
 4. Under the lock again, write the RTE in remappable format: bit 48 set,
-   handle bits 14:0 in 63:49, handle bit 15 in bit 11, bits 10:8 zero.
-   The **vector field is the IRTE's vector**, because the I/O APIC matches
-   EOIs to RTEs by vector for level-triggered lines (VT-d §5.1.5.1). The
-   trigger bit equals the IRTE's `TM`. Then unmask, and drop the lock.
+   handle bits 14:0 in 63:49, handle bit 15 in bit 11, bits 10:8 zero. The **vector field is
+   the IRTE's vector, `V1`**, because the I/O APIC matches EOIs to RTEs by
+   vector for level-triggered lines (VT-d §5.1.5.1). The trigger bit
+   equals the IRTE's `TM`. Then unmask, and drop the lock.
 5. **Service the port once**, as its interrupt handler would. An edge
    raised while the line was masked is lost, and a byte left in the UART
    would otherwise wait for the next one.
+
+**Why a fresh vector (amended 2026-10-03, the consultant's ledger 271).**
+Under KVM's split irqchip a refused route update leaves the old route
+delivering, and `IRE` recomputes no route (below, "A refused route keeps
+the old one"). With the IRTE written for the line's own `V0`, a stale
+compatibility route and the IRTE would deliver the same vector, and no
+check could tell which did. With `V1`, a delivery on `V1` can come only
+through the IRTE, and a stale or compatibility route only on `V0`: check
+R5 loops a byte back through the port and requires it on `V1` and nothing
+on `V0`, and any delivery on `V0` after the conversion fails test-boot.
+The consultant accepted it on these terms: `V0` stays taken; a delivery on
+it fails the boot; the handler is on `V1` before the unmask, moved through
+the generic layer; the RTE's vector is the IRTE's `V1`; and the port is
+still serviced once.
 
 **No matching scope.** If a routed input's I/O APIC has no DMAR scope,
 the conversion cannot be done, and the console cannot go back to polling.
@@ -2790,6 +2837,28 @@ control, and the landing message gives each control's FIRED count:
 | R8 | **x2APIC per processor** (G6): every processor reports `EXTD` clear before its MMIO APIC is used. The control path is exercised by the check build turning x2APIC on, on one AP, before its `secondary_start` check (QEMU offers x2APIC under KVM, and under TCG since 8.1). That AP must report "switched to xAPIC" and come up | the `secondary_start` check removed: the AP touches the MMIO window in x2APIC mode and never comes up, and the boot fails on the processor count |
 | R9 | **no compatibility-format MSI before IR**: bring-up's assertion over `TAKEN` holds, and its line counts the converted inputs (1, the console) | edu's vector minted before `bring_up` in a check build: the boot stops by name |
 | R10 | **the isolated-interrupts mark** (G5): set on edu, `interrupt_create` is allowed while isolated, and refused with `ACCESS_DENIED` when the check forces the machine's bit 1 clear through a check-only path; a `device_set_limit` that would clear the mark is `ACCESS_DENIED`. devmgr's host test: setting the mark failing stops the GPU launch with its line | the refusal skipped: `interrupt_create` succeeds; devmgr ignoring the failure: the launch goes on |
+
+**Amended 2026-10-03 (the C6 review, ledger line 278).**
+
+* *R1's second half and R2's control* cannot be one-file controls: with
+  `CFI` kept, R1 fires before R2 runs, and the stray 0xFC needs R1's own
+  check out of the way. Both are run by hand as two-file controls, with
+  ruling 262's record.
+* *R3* holds the other function's vector for the unit's patience, 100 ms,
+  before it requires that nothing arrived, so a late delivery still fails.
+* *R5 on real hardware:* a PC's 16550 loops OUT2 back internally in
+  loopback mode, so its line to the I/O APIC is not driven. Only a delivery
+  on `V0` fails R5; with nothing on either vector it prints "R5: the UART
+  raised no interrupt in loopback; not observable here" and the boot goes
+  on, and test-boot still requires the positive line on the reference
+  machine. G3's service-once reads the port, so it is shown either way.
+* *A function no remapping unit places* gets no message vector while any
+  unit remaps (`L.device.28`): fail-closed, and an availability loss on a
+  machine whose units do not cover every function. The boot names each
+  such function, and SAFETY-MANUAL AoU-23 records it.
+* *AArch64 behind a GICv3 ITS* gets no isolation bit yet, so a device that
+  runs firmware of its own cannot be driven on AArch64 until that path sets
+  it.
 
 There is no check for **the IEC skipped**. QEMU does not cache IRTEs:
 `vtd_interrupt_remap_msi` reads the entry from memory on every message,

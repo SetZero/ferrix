@@ -259,7 +259,12 @@ cleaned, and `Walked`, the `unsafe impl PhysMem` that puts the mapper's own
 writes and fresh tables through it (`L.iommu.56`, `L.iommu.57`). And since
 NVIDIA's N0g, the descriptors of the VT-d invalidation queue every
 invalidation goes through, and the queue registers' encodings, are
-`ferrix_paging::vtd::queue` (`L.iommu.47`, `L.iommu.48`). Their host
+`ferrix_paging::vtd::queue` (`L.iommu.47`, `L.iommu.48`); and the
+interrupt remapping entries, the remappable messages and I/O APIC entries
+that name them, the fault reasons and the isolation rule are
+`ferrix_paging::vtd::remap` (`L.iommu.50`, `L.iommu.53` to `L.iommu.55`,
+`L.x86_64.129`, `L.x86_64.130`, `L.x86_64.132`), with the I/O APIC's source
+ID matched by its identifier in `ferrix_acpi::dmar` (`L.x86_64.130`). Their host
 tests trace to those requirements, but the item-scoped gates do not read
 them; `docs/BACKLOG.md` has the row that classifies them.
 
@@ -375,6 +380,7 @@ A certificate attaches to a configuration, not to a repository.
 | Cargo features | 7 in the workspace, **0** in `src/kernel/` or `src/boot/common/uefi/` |
 | Build settings | **one**, `cargo xtask --mitigations on\|off`; the reference is `on`, the default |
 | Boot options that change the item's work | **one**, `ferrix.devmgr=kernel\|init`; the reference is `kernel`, the default |
+| Test platform | QEMU; on x86-64 the patched 10.2.1 `(ferrix-cfi)`, whose VT-d blocks compatibility-format interrupts, with `intel-iommu,intremap=on,eim=off` and, under KVM, the split interrupt controller ([TOOLS.md](TOOLS.md)) |
 | Kernel link (`on`) | a static PIE on x86-64 (PIC code model, every x86-64 crate) and AArch64 (static code model, `-pie -z notext`); on ARMv7-A a fixed-address link that keeps its relocations (`--emit-relocs`). The loader moves it each boot (KASLR). `off`: the static fixed-address image |
 | External crates | 21, listed in [SOUP.md](SOUP.md) |
 | Assembly | 500 lines across 22 allow-listed sites outside the Pixel 7 loader, ~99.76% Rust (`check-asm-budget.py`) |

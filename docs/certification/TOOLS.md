@@ -126,6 +126,21 @@ observer of it. Every claim in [VERIFICATION.md](VERIFICATION.md) except the
 host unit tests is a claim about the item's behaviour under emulation, and the
 STM32MP157D-DK1 is the only hardware any of it has run on.
 
+**x86-64's QEMU is a patched build** since NVIDIA's N0g: QEMU 10.2.1 with
+`tools/common/data/qemu/0002-intel_iommu-honour-CFI-and-block-compatibility-format.patch`,
+built by `tools/common/fetch/fetch-qemu-linux.sh` and reporting `(ferrix-cfi)`
+in its version, which xtask requires for an x86-64 boot on Linux. Stock QEMU's
+VT-d ignores `GCMD.CFI` and passes a compatibility-format interrupt through
+with remapping on, so on it no configuration isolates interrupts and finding
+F-57's closure, and checks R1 and R2, would show nothing. The patch makes
+`GSTS.CFIS` follow `CFI` and refuses such a message with fault 0x25; its qtest
+fails with either half removed. It is offered upstream, and the pin moves to
+the first release that carries it. It is test infrastructure of the reference
+configuration, T2 as QEMU is. The reference machine's x86-64 CPU model
+carries `+x2apic` under TCG as well as KVM (`qemu::x86_cpu`), so that check
+R8 can put a processor in x2APIC mode and see it switched back; the kernel
+runs xAPIC either way.
+
 ---
 
 ## 4. Host crates

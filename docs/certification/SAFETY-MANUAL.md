@@ -54,7 +54,7 @@ integrator whose system needs something else must say so (§4, AoU-1).
 | ASR-1 | A partition shall not read or write memory belonging to another partition or to the element. | per-process page tables, `user/space.rs` | `spaces` check on every boot; SMEP+SMAP (x86-64), PAN (AArch64) |
 | ASR-2 | No mapping shall be simultaneously writable and executable. | map-time enforcement | every boot sweeps all mappings: *1,874 swept, 387 executable, none writable* |
 | ASR-3 | A partition shall reach a resource only through a capability it holds. | `object/`, handle tables | `object/check.rs`, 135 refusal assertions |
-| ASR-4 | A device shall not access memory outside the region its driver was granted. | VT-d, SMMUv3 | *12 PCI functions behind one unit on x86-64, two of them below PCIe root ports, 0 bypassing, 0 unresolved; a function whose DMA arrives under a bridge's alias gets no domain, never one of its own (L.iommu.45, L.iommu.46)* |
+| ASR-4 | A device shall not access memory outside the region its driver was granted, and, where the machine's interrupts are isolated, shall raise only the interrupt vectors minted for it (H.DMA.9). | VT-d, SMMUv3; VT-d interrupt remapping | *12 PCI functions behind one unit on x86-64, two of them below PCIe root ports, 0 bypassing, 0 unresolved; a function whose DMA arrives under a bridge's alias gets no domain, never one of its own (L.iommu.45, L.iommu.46); on x86-64 a forged compatibility-format message and one naming another device's entry refused, the console's line delivered only through its entry (checks R1 to R5, L.x86_64.129, L.x86_64.130); not claimed on AArch64 under GICv2m nor on ARMv7-A* |
 | ASR-5 | Memory released by one partition shall not be readable by the next. | `mm::zero_frame` on allocation | called at three sites in `user/vmo.rs` |
 | ASR-6 | On detecting an inconsistent internal state, the element shall enter its safe state rather than continue. | `panic.rs` with a catalogued explanation | `check-panic-audit.py`; the safe state is defined in §3 |
 | ASR-7 | Data supplied by a partition shall be validated before use. | `syscall/uaccess.rs` | 427 refusal assertions in `syscall/check.rs` |
@@ -397,6 +397,24 @@ such a function, acknowledge the `Interrupt` before draining the device's
 status, and service the device as soon as they claim the interrupt. An
 NVIDIA GPU's re-arm write, in particular, comes after the acknowledgement.
 
+### AoU-21 — devmgr marks every device that runs firmware of its own
+A device that runs firmware of its own -- a GPU running NVIDIA's GSP is the
+first -- can raise any interrupt vector on a machine whose interrupts are
+not isolated, whatever its driver does. The element refuses a device marked
+for isolated interrupts its vectors and its pins there (`L.device.27`), and
+the mark is set-once; it does not decide which devices need it. The
+integrator shall use a `devmgr` whose match table marks, through
+`device_set_limit`'s `DEVICE_LIMIT_ISOLATED_INTERRUPTS`, every device that
+runs firmware of its own before its driver starts, and starts no driver for
+one it could not mark; and shall accept that on a machine whose interrupts
+are not isolated -- no VT-d interrupt remapping, a unit that lets
+compatibility format through, a PCI function behind no unit, AArch64 under
+GICv2m, ARMv7-A, and AArch64 behind a GICv3 ITS until that path sets the
+bit -- such a device is not started. There is no boot option that
+accepts the residual (the customer's decision, 2026-10-02). The element
+remaps in xAPIC format only (`IRTA.EIME` = 0): on a platform that locks the
+local APIC in x2APIC mode it stops the boot by name.
+
 ### AoU-22 — a driver writes no kernel-owned register or structure through a BAR
 A driver writes its PCI function's configuration space only through
 `device_config_write`, which makes a write only inside the function's
@@ -428,6 +446,19 @@ element restarts (every call that needs `MANAGE` answers
 `BAD_STATE`, the quiesce too, so devmgr starts no driver on it again), and
 prints the register. What a breach does between two read-backs is not
 detected.
+
+### AoU-23 — every PCI function that needs interrupts is behind a unit that remaps
+While any VT-d unit remaps interrupts, a PCI function no remapping unit
+places as its own requester -- behind no unit, behind one that does not
+remap, or below a PCIe-to-PCI bridge whose alias it shares -- gets no
+message vector at all (`L.device.28`): its messages could not be told from
+another function's, so it is refused rather than given a compatibility
+vector that would undo the isolation. That is fail-closed for isolation and
+an availability loss: its driver gets no interrupt. The boot names each such
+function ("gets no message vector: no unit that remaps interrupts places it
+as its own requester"). The integrator shall use a platform whose DMAR
+places every function that needs interrupts behind a unit that remaps, as
+its own requester, or accept that those functions run without interrupts.
 
 ## 5. Element failure analysis
 
