@@ -2,7 +2,8 @@
 
 use ferrix_native_abi::nr;
 use ferrix_native_abi::types::{
-    APERTURE_INFO_BYTES, ApertureInfo, DEVICE_INFO_BYTES, DeviceBlock, DeviceInfo, IoMappingSpec,
+    APERTURE_INFO_BYTES, ApertureInfo, DEVICE_INFO_BYTES, DEVICE_LIMIT_PIN_CEILING,
+    DEVICE_LIMIT_PIN_PAGES, DEVICE_LIMIT_PIN_ROOM, DeviceBlock, DeviceInfo, IoMappingSpec,
 };
 
 use crate::call::{Call, Syscall};
@@ -15,6 +16,31 @@ object_handle!(
     /// A device node, as `devmgr` hands one to a driver.
     Device
 );
+
+/// A limit of a device's: `device_set_limit` and `device_get_limit`'s
+/// (`docs/NVIDIA.md` §12.2). Each is in pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limit {
+    /// The device's pin budget, which only `devmgr` sets.
+    PinPages,
+    /// The machine's ceiling on twice every budget raised above the
+    /// default: a quarter of RAM. Read only.
+    PinCeiling,
+    /// What of the ceiling other devices' raised budgets leave: the most
+    /// twice this device's budget may be raised to. Read only.
+    PinRoom,
+}
+
+impl Limit {
+    /// The number the calls take.
+    const fn number(self) -> u64 {
+        match self {
+            Limit::PinPages => DEVICE_LIMIT_PIN_PAGES,
+            Limit::PinCeiling => DEVICE_LIMIT_PIN_CEILING,
+            Limit::PinRoom => DEVICE_LIMIT_PIN_ROOM,
+        }
+    }
+}
 
 object_handle!(
     /// A hardware interrupt claimed from a device.
@@ -196,6 +222,40 @@ impl<S: Syscall> Device<S> {
             .make(self.syscall());
         let rate = decode(value)?;
         u32::try_from(rate).map_err(|_| Error::InvalidArgs)
+    }
+
+    /// `device_set_limit`: set `which` of the device's limits to `value`.
+    /// Needs `SET_LIMIT`, which `devmgr` keeps and no driver is given.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AccessDenied`] without `SET_LIMIT`; [`Error::BadState`]
+    /// while the device has live pins; [`Error::NoMemory`], with nothing
+    /// changed, when the budget would take raised budgets past the kernel's
+    /// ceiling; [`Error::InvalidArgs`] for a limit that cannot be set.
+    pub fn set_limit(&self, which: Limit, value: usize) -> Result<(), Error> {
+        decode_unit(
+            Call::new(nr::DEVICE_SET_LIMIT)
+                .value(register(self.handle()))
+                .value(which.number() as usize)
+                .value(value)
+                .make(self.syscall()),
+        )
+    }
+
+    /// `device_get_limit`: `which` of the device's limits, in pages. Any
+    /// device handle will do.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongType`] for a handle that is not a device.
+    pub fn limit(&self, which: Limit) -> Result<usize, Error> {
+        decode(
+            Call::new(nr::DEVICE_GET_LIMIT)
+                .value(register(self.handle()))
+                .value(which.number() as usize)
+                .make(self.syscall()),
+        )
     }
 
     /// Ask the kernel for a block ring on this device: the driver's end of

@@ -78,6 +78,17 @@ pub const PIN_COHERENT: u64 = 2;
 /// would be.
 pub const CLOCK_SET: u64 = 1;
 
+/// `device_set_limit` and `device_get_limit`'s limit: the device's pin
+/// budget, in pages (`docs/NVIDIA.md` §12.2).
+pub const DEVICE_LIMIT_PIN_PAGES: u64 = 0;
+/// `device_get_limit`'s: the machine's ceiling, in pages, on twice every
+/// budget raised above the default -- a quarter of RAM.
+pub const DEVICE_LIMIT_PIN_CEILING: u64 = 1;
+/// `device_get_limit`'s: the ceiling less twice every budget other devices
+/// have raised above the default, in pages: the most twice this device's
+/// budget may be raised to.
+pub const DEVICE_LIMIT_PIN_ROOM: u64 = 2;
+
 /// `job_set_limit` and `job_get_quota`'s resource: physical memory, in bytes.
 pub const JOB_MEMORY: u64 = 0;
 /// `job_set_limit` and `job_get_quota`'s resource: kernel objects a program

@@ -123,6 +123,10 @@ pub const DEVICE_APERTURE: usize = 0x1054;
 pub const DEVICE_CONFIG_READ: usize = 0x1055;
 /// [`NativeCall::DeviceConfigWrite`].
 pub const DEVICE_CONFIG_WRITE: usize = 0x1056;
+/// [`NativeCall::DeviceSetLimit`].
+pub const DEVICE_SET_LIMIT: usize = 0x1057;
+/// [`NativeCall::DeviceGetLimit`].
+pub const DEVICE_GET_LIMIT: usize = 0x1058;
 /// The most records one [`NativeCall::AuditRead`] copies.
 pub const AUDIT_READ_MAX: u64 = 64;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
@@ -415,10 +419,29 @@ pub enum NativeCall {
     /// vendor-specific capabilities, virtio's `pci_cfg_data` excepted -- is
     /// made; any other is `ACCESS_DENIED` and writes nothing. Needs `MANAGE`.
     DeviceConfigWrite,
+    /// `(device, which, value)` → 0. Set one of the device's limits; today
+    /// only [`crate::types::DEVICE_LIMIT_PIN_PAGES`], its pin budget in
+    /// pages (`docs/NVIDIA.md` §12.2): a pin that would take the pages its
+    /// device's live pins hold past it is refused `LIMIT_REACHED`, and one
+    /// that would take what its quarantine, its kept pins and its live pins
+    /// hold past twice it is refused `QUARANTINE_FULL`. Needs `SET_LIMIT`,
+    /// which `devmgr` holds and never hands a driver. `BAD_STATE` while the
+    /// device has live pins, so a budget never changes under a driver;
+    /// `NO_MEMORY`, with nothing changed, when budgets raised above the
+    /// default would then hold more than the kernel's ceiling;
+    /// `INVALID_ARGS` for another `which`.
+    DeviceSetLimit,
+    /// `(device, which)` → value. Read one of the device's limits:
+    /// [`crate::types::DEVICE_LIMIT_PIN_PAGES`], its pin budget;
+    /// [`crate::types::DEVICE_LIMIT_PIN_CEILING`], the machine's ceiling on
+    /// raised budgets; [`crate::types::DEVICE_LIMIT_PIN_ROOM`], what of the
+    /// ceiling other devices' raised budgets leave. Any device handle will
+    /// do; `INVALID_ARGS` for another `which`.
+    DeviceGetLimit,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 50] = [
+pub const ALL: [NativeCall; 52] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -469,6 +492,8 @@ pub const ALL: [NativeCall; 50] = [
     NativeCall::DeviceAperture,
     NativeCall::DeviceConfigRead,
     NativeCall::DeviceConfigWrite,
+    NativeCall::DeviceSetLimit,
+    NativeCall::DeviceGetLimit,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -534,6 +559,8 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         DEVICE_APERTURE => NativeCall::DeviceAperture,
         DEVICE_CONFIG_READ => NativeCall::DeviceConfigRead,
         DEVICE_CONFIG_WRITE => NativeCall::DeviceConfigWrite,
+        DEVICE_SET_LIMIT => NativeCall::DeviceSetLimit,
+        DEVICE_GET_LIMIT => NativeCall::DeviceGetLimit,
         _ => return None,
     };
     Some(call)
@@ -593,5 +620,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::DeviceAperture => DEVICE_APERTURE,
         NativeCall::DeviceConfigRead => DEVICE_CONFIG_READ,
         NativeCall::DeviceConfigWrite => DEVICE_CONFIG_WRITE,
+        NativeCall::DeviceSetLimit => DEVICE_SET_LIMIT,
+        NativeCall::DeviceGetLimit => DEVICE_GET_LIMIT,
     }
 }

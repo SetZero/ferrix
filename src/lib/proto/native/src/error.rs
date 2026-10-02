@@ -55,6 +55,9 @@ pub enum Error {
     /// [`status::QUARANTINE_FULL`]: a device's DMA quarantine holds all it
     /// may, so no pin for it is taken until a driver of it is accepted.
     QuarantineFull,
+    /// [`status::LIMIT_REACHED`]: a pin would take its device's live pins
+    /// past the device's pin budget. Nothing was pinned.
+    LimitReached,
     /// Some other `errno`, which no native call is documented to return.
     Other(Errno),
     /// A success value this call cannot produce: a handle of zero, or one
@@ -87,6 +90,7 @@ impl Error {
             status::NOT_CHILD => Error::NotChild,
             Errno::EINTR => Error::Interrupted,
             status::QUARANTINE_FULL => Error::QuarantineFull,
+            status::LIMIT_REACHED => Error::LimitReached,
             other => Error::Other(other),
         }
     }
@@ -115,6 +119,7 @@ impl Error {
             Error::NotChild => status::NOT_CHILD,
             Error::Interrupted => Errno::EINTR,
             Error::QuarantineFull => status::QUARANTINE_FULL,
+            Error::LimitReached => status::LIMIT_REACHED,
             Error::Other(errno) => errno,
             Error::Unexpected(_) => return None,
         })

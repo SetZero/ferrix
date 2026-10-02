@@ -29,7 +29,7 @@ use ferrix_native_abi::types::{
 
 use crate::call::{Raw, Syscall};
 use crate::channel::{self, Channel, ReadError, Received};
-use crate::device::{Device, Interrupt, IoMapping};
+use crate::device::{Device, Interrupt, IoMapping, Limit};
 use crate::error::{Error, decode, decode_handle};
 use crate::handle::{Deadline, Object, OwnedHandle, rights_register};
 use crate::job::{self, Job};
@@ -857,6 +857,52 @@ fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
     );
 }
 
+/// The pin budget: set, refused, and read back, each limit by its number.
+#[test]
+fn device_limits_travel_by_their_numbers() {
+    let sys = Recorder::default();
+    let device = Device::from_owned(owned(&sys, 0xA7));
+    sys.returns(0);
+    assert_eq!(device.set_limit(Limit::PinPages, 262_144), Ok(()), "set");
+    sys.fails(status::BAD_STATE);
+    assert_eq!(
+        device.set_limit(Limit::PinPages, 1),
+        Err(Error::BadState),
+        "refused under live pins"
+    );
+    sys.returns(1_048_576);
+    assert_eq!(device.limit(Limit::PinCeiling), Ok(1_048_576), "ceiling");
+    sys.returns(524_288);
+    assert_eq!(device.limit(Limit::PinRoom), Ok(524_288), "room");
+    let calls = sys.take();
+    assert_eq!(
+        calls[0],
+        made(
+            nr::DEVICE_SET_LIMIT,
+            &[0xA7, types::DEVICE_LIMIT_PIN_PAGES as usize, 262_144]
+        )
+    );
+    assert_eq!(
+        calls[2],
+        made(
+            nr::DEVICE_GET_LIMIT,
+            &[0xA7, types::DEVICE_LIMIT_PIN_CEILING as usize]
+        )
+    );
+    assert_eq!(
+        calls[3],
+        made(
+            nr::DEVICE_GET_LIMIT,
+            &[0xA7, types::DEVICE_LIMIT_PIN_ROOM as usize]
+        )
+    );
+    assert_eq!(
+        Error::from_errno(status::LIMIT_REACHED),
+        Error::LimitReached,
+        "a pin past its budget has a name of its own"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Process creation, now on the table
 // ---------------------------------------------------------------------------
@@ -1058,6 +1104,8 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.aperture(0);
     let _ = device.config_read(0, 4);
     let _ = device.config_write(0x48, 4, 0);
+    let _ = device.set_limit(Limit::PinPages, 1);
+    let _ = device.limit(Limit::PinRoom);
     let _ = pending::create_process(&job, &vmo, "x");
     let _ = Process::from_owned(handle()).start(handle());
     let _ = Process::from_owned(handle()).status();

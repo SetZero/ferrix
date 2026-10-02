@@ -65,8 +65,13 @@ pub const NOT_CHILD: Errno = Errno::ECHILD;
 /// kernel). A pin for it is refused until a driver of the device is accepted.
 pub const QUARANTINE_FULL: Errno = Errno::EDQUOT;
 
+/// A pin would take the pages its device's live pins hold past the device's
+/// pin budget, which `devmgr` sets (`docs/NVIDIA.md` §12.2). Nothing was
+/// pinned; a driver treats it as it treats `NO_MEMORY`.
+pub const LIMIT_REACHED: Errno = Errno::ENOSPC;
+
 /// Every name above, for the tests that hold them distinct.
-pub const ALL: [Errno; 17] = [
+pub const ALL: [Errno; 18] = [
     BAD_HANDLE,
     WRONG_TYPE,
     ACCESS_DENIED,
@@ -84,4 +89,5 @@ pub const ALL: [Errno; 17] = [
     NO_PROCESS,
     NOT_CHILD,
     QUARANTINE_FULL,
+    LIMIT_REACHED,
 ];
