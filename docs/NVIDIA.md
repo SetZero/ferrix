@@ -1,6 +1,7 @@
 # NVIDIA's own driver on Ferrix
 
-Version 1, a draft written on 2026-10-02 for the customer, who decides §9.
+Version 2, 2026-10-02. Version 1 was the draft for the customer, who
+answered §9 the same day; the design below follows those answers.
 The customer chose the path that day (`docs/BACKLOG.md` Decisions): a real
 NVIDIA driver, not nouveau and not NVK. NVIDIA's
 [open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules)
@@ -462,7 +463,8 @@ sits in the `load` ring beside display and render (§6).
 
 * **Registration.** `nvrm` registers device numbers with the core:
   * 195:0, 195:255, 195:254;
-  * later `nvidia-uvm`'s dynamic major;
+  * `nvidia-uvm`'s and `nvidia-uvm-tools`' dynamic majors (CUDA, D7), whose
+    raw ioctl numbers the core forwards as it forwards the others;
   * a name for `/proc/devices` for each.
   
   The core makes the devfs nodes and `/dev/char` links, and lists the
@@ -574,7 +576,8 @@ nvidia-drm. That leaves two options:
   same X11 path. That costs one Mesa build in the volume and no NVIDIA
   GLX.
 
-(b) needs less from Ferrix. (a) is what NVIDIA supports (D4).
+(b) needs less from Ferrix. (a) is what NVIDIA supports, and the customer
+chose it (D4, 2026-10-02): yserver gains DRI3 and Present over N3b.
 
 **Chrome.** Chrome runs `--enable-gpu` over EGL or ANGLE-Vulkan, with
 dmabuf presentation to Wayland. It needs N3b.
@@ -684,7 +687,10 @@ Each milestone's total, and what it shows:
 * **N4**: 20 points.
 
 That is **111 points from here to Chrome and Steam on the card**. N5 (CUDA)
-and N6 (its own monitor) are sized apart and decided apart.
+and N6 (its own monitor) are sized apart. CUDA is wanted now, alongside the
+graphics (D7), and has its own feasibility pass and design by a separate
+session; this design only keeps `/dev/nvidia-uvm` servable by the same
+forwarding core (§4.4). N6 waits for a monitor on the 3060 (D6).
 
 `docs/GPU.md` §4 said "well over a hundred points". It still is. The
 difference is that every part is now named.
@@ -753,42 +759,37 @@ refuses (R1).
 
 ## 9. Decisions for the customer
 
-Taken on 2026-10-02:
+All taken on 2026-10-02. The customer answered D1, D4, D6, D7, D8 and D9
+and took the recommended answer for D2, D3 and D5.
 
 1. **A real NVIDIA driver**: NVIDIA's open modules, their GSP firmware and
    their unmodified userspace. Not nouveau or NVK.
-
-Open:
-
-* **D1 — where the core runs.**
-  * Recommended: `nvrm`, a ring-3 Linux-personality process using native
-    calls for the device (§4.1).
-  * Alternatives: a native program after native threads are built, or the
-    kernel (against 2026-09-13).
-* **D2 — the sources.**
-  * Recommended: fetched at a pinned tag and built out of tree; only
-    Ferrix's OS layer is in the repository (§3).
-  * Alternative: vendor the 2-million-line core.
-* **D3 — the release.**
-  * Recommended: 580.173.02, which is nazuna's own userspace and firmware.
-  * Alternative: the newest, 615.71.09.
-* **D4 — GL for X clients.**
-  * Option (a): DRI3 and Present in yserver over the nvidia-drm subset.
-    This is what NVIDIA supports.
-  * Option (b): Mesa zink over NVIDIA's Vulkan. This is less work for
-    Ferrix (§4.6).
-* **D5 — presentation order.** N3a's copy layer first, which is the
-  smallest step to a picture, or straight to N3b. Also whether N3c (hyprix
-  on the card) is in scope.
-* **D6 — a monitor on the 3060.** Is one attached, or can one be? N6
-  replaces VNC with real scan-out.
-* **D7 — CUDA (N5)**: now, later, or not at all. At 40+ points it is as
-  large as N0–N2 together.
-* **D8 — the platform changes in the item** (N0a–d, f). Accept them as
-  generic prerequisites for any PCIe GPU, reviewed by the consultant.
-* **D9 — the card's time.** May an agent start `ferrix-3060` whenever the
-  five shared domains are shut off, as was done for this pass? Or only in
-  windows the customer names?
+2. **D1 — where the core runs: `nvrm`**, a ring-3 Linux-personality
+   program built against ferrousli, using native calls for the device
+   (§4.1). Not native threads, not the kernel.
+3. **D2 — the sources are fetched, never committed**: a pinned tag built
+   out of tree by `fetch-nvidia.sh`; only Ferrix's OS layer is in the
+   repository (§3).
+4. **D3 — the release is 580.173.02**, nazuna's own userspace and
+   firmware.
+5. **D4 — GL for X clients is DRI3 and Present in yserver**, over the
+   nvidia-drm subset of N3b. Not zink.
+6. **D5 — the copy layer first** (N3a), then dmabuf (N3b). N3c, hyprix on
+   the card, stays in the plan after them.
+7. **D6 — a monitor on the 3060 will be added later.** N6 waits for it;
+   until then the screen is virtio-gpu over VNC.
+8. **D7 — CUDA now, alongside the graphics.** `nvidia-uvm` gets its own
+   feasibility pass and design from a separate session. This design keeps
+   the forwarding core and `nvrm`'s request bridge able to serve
+   `/dev/nvidia-uvm` (raw ioctl numbers, its dynamic major, its own
+   mmap and fault paths) without a second mechanism.
+9. **D8 — the platform changes inside the item** (N0a–d, f) go one by one
+   through the certification consultant, each as its own commit with its
+   tests and negative controls.
+10. **D9 — the card's time.** An agent may start `ferrix-3060` whenever
+    GameLab, win11 and the manjaro domains are shut off, checked before
+    every start, and shuts it down when done. The RTX 3090 is never
+    touched.
 
 ## 10. Where it stands
 
@@ -801,8 +802,9 @@ Open:
     registers, and gives it a VT-d domain on the root bus. It does not
     give it one behind a root port (N0a), and it gives it no interrupt
     (N0b).
-  * The probe is a never-land commit on branch `nvidia`.
-  * Nothing is built toward N1 until the customer answers §9.
+  * The probe is a never-land commit on branch `nvidia-probe-wip`.
+  * The customer answered §9 the same day. N0, the kernel prerequisites,
+    starts next on branch `nvidia-n0`.
 
 ---
 

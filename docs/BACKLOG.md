@@ -552,6 +552,7 @@ log path and commit; a new sighting is added to its row the day it is seen.
 | Input hotplug: devices exist from boot in the input iteration. A device that arrives or leaves later, and how a compositor learns of it without udev (`inotify` on `/dev/input`, in the kernel since 2026-09-27 but not for devfs's own nodes, which it makes without a call and so without `IN_CREATE`; or a rescan) (`docs/INPUT.md` §3.4, §6, os-f6 2026-09-16) | 17 |
 | `card0` is opened by one process at a time, standing in for DRM master (`docs/DISPLAY.md` §5, a written deviation from Linux): Linux's many opens with one master, `SET_MASTER`/`DROP_MASTER` arbitrating between them, and the render node beside it come in stage 19 | 19 |
 | The GPU for clients: A4 `zwp_linux_dmabuf` and a GBM-shaped allocator, and Mesa's virgl on ferrousli (`docs/GPU.md` §3, 3a), for clients that render on the GPU themselves, 8 points and 40 or more; zero-copy presentation for Venus through the same dmabuf (§3 step 4); and the Khronos Vulkan loader, which waits on `dlopen` of a library with thread-local storage | 19 |
+| NVIDIA's own driver on the RTX 3060 (`docs/NVIDIA.md` §7, decided 2026-10-02). N0, the kernel prerequisites, inside the item and each through the consultant: N0a DMAR scopes through bridges (2), N0b MSI next to MSI-X (3), N0c the PAT and write-combining (3), N0d 64-bit apertures and a driver's configuration-space window (3), N0e `run-nvidia` and `test-nvidia-probe` (2), N0f a per-driver pin budget (2). Then N1 `nvrm` and GSP boot to `nvidia-smi` (32), N2 Vulkan offscreen (14), N3 frames to hyprix, copy layer first (30), N4 Chrome and Steam on the card, with yserver's DRI3 and Present (20). CUDA (`nvidia-uvm`) is designed by a separate session; N6 waits for a monitor on the 3060 | 21 |
 | Gears on the DK1's GC400 (`docs/GPU.md` §6.2, §6.3): G1 and G2 were done on the board on 2026-09-24. Left: G3 a clear resolved to the LTDC's buffer (8), G4 draws with host-compiled shaders (8), G5 gears on the board (5) | 19, P3 |
 | The DK1's LTDC display and USB HID, done 2026-09-23 (`docs/DISPLAY.md` §6, `docs/INPUT.md` §7). Left: other modes than 720p60, display hotplug, and HID's absolute axes and vendor reports (§7.5) | 17, P3 |
 | The DK1's USB host after U-Boot's `ums`: ending mass-storage mode switches the PMIC's `vdd_usb` (STPMIC1 LDO4, on I2C4) off, and the kernel never turns it on, so the USB PHY is unpowered and nothing enumerates; U-Boot's `regulator dev vdd_usb; regulator enable` before `bootefi` is the workaround (`docs/vendor/st/stm32mp157-dk.md`, 2026-09-23). The kernel's USB preparation should turn LDO4 on itself -- a write to the PMIC every rail of the board hangs off, so with the care the RCC gets | 17, P3 |
@@ -775,8 +776,17 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   talks to `/dev/nvidia*` as on Linux. Not nouveau and not NVK. The
   hardware is nazuna's RTX 3060, through libvirt, and only while the
   customer's domains sharing it are shut off. The order follows yserver's:
-  a feasibility pass and a written design (`docs/NVIDIA.md`, on branch
-  `nvidia`), then the customer's decisions (§9 there), then small landings.
+  a feasibility pass and a written design (`docs/NVIDIA.md`), then the
+  customer's decisions, then small landings. The customer answered the
+  design's questions the same day (`docs/NVIDIA.md` §9). The core runs in
+  `nvrm`, a ring-3 Linux-personality program. GL for X clients is DRI3 and
+  Present in yserver. CUDA is wanted now, alongside the graphics, with
+  `nvidia-uvm` designed by a separate session. A monitor on the 3060 comes
+  later, and N6 waits for it. The sources are fetched at 580.173.02 and
+  never committed. The copy layer comes before dmabuf. Each platform change
+  inside the item goes through the consultant on its own. Agents may start
+  `ferrix-3060` whenever the customer's domains sharing the card are shut
+  off; the 3090 is never touched.
 * **2026-10-02 (customer)** **Build System V shared memory for Steam's web
   helper's MIT-SHM.** Asked by the session making Steam smooth: the web
   helper's Chromium presents its software-composited frames to yserver with
@@ -1085,11 +1095,6 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
 
 ## Waiting on the customer
 
-* The NVIDIA design (`docs/NVIDIA.md` §9, branch `nvidia`, 2026-10-02):
-  D1–D9. These are where the core runs, fetched versus vendored sources,
-  the pinned release, GL for X clients, the presentation order, a monitor
-  on the 3060, CUDA, the platform changes inside the item, and when agents
-  may use the card. N0–N4 come to 111 points.
 * The Steam-performance session's pushes (2026-10-02): local `main` on
   nazuna is ahead of `origin` by the night's landings (`docs/STEAM.md` §8),
   and yserver's `steam-perf` branch is not on the fork. Both are the
