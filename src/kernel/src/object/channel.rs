@@ -687,8 +687,16 @@ impl Endpoint {
 
     /// Whether a message is waiting on this end, or nothing more will come:
     /// what `channel_write_read`'s wait waits for.
+    ///
+    /// Both looked at under this end's inbox lock, which a writer holds as it
+    /// queues and a closing peer takes after it marks itself closed and
+    /// before it wakes this end's waiters (`Endpoint::drop`). So a look that
+    /// takes the lock after theirs sees the message or the close, and one that
+    /// takes it before is made by a waiter already listed, whom their wake
+    /// then finds: see `WaitQueue::wait_trusting`.
     pub(crate) fn readable_or_closed(&self) -> bool {
-        self.peer_closed() || !self.own().inbox.lock().is_empty()
+        let inbox = self.own().inbox.lock();
+        !inbox.is_empty() || self.peer_closed()
     }
 
     /// Put back a message [`Endpoint::read`] took and the caller could not

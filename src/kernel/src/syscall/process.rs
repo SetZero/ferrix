@@ -1327,6 +1327,10 @@ impl Process {
     /// spinning there would outlive the change until it chose to make a call.
     /// The caller's own task, if it is one, is already on its way.
     fn wake_other_tasks(&self) {
+        // The other half of `WaitQueue::wait_trusting`'s fence pair: the end
+        // or the replacing thread, recorded before this, is ordered before
+        // the task states the wakes below read.
+        core::sync::atomic::fence(Ordering::SeqCst);
         let current = sched::current();
         let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
         for task in &tasks {

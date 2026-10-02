@@ -150,6 +150,28 @@ impl WaitQueue {
     /// [`WaitQueue::wait_on_any`]'s long `recheck`. A task there was no
     /// memory to list is on no list a waker reads, and rechecks as every
     /// wait does (finding F-23).
+    ///
+    /// # Why no wake is missed
+    ///
+    /// The task is listed on this queue, then marked blocked, then `ready` is
+    /// looked at, and a wake finds it only if it is listed and blocked. For
+    /// each waker of `channel_write_read`'s wait:
+    /// - **A message and the peer's close**, the inbox lock. The writer queues
+    ///   under the end's inbox lock and the closer takes that lock after it
+    ///   marks itself closed; each then takes this queue's lock to wake it.
+    ///   `ready` reads both under the inbox lock (`readable_or_closed`). A
+    ///   look that takes the lock after the waker's sees what it did; one that
+    ///   takes it before was made after the task listed itself, so the
+    ///   waker's wake, later on this queue's lock, finds it listed.
+    /// - **A kill and another thread's `execve`**, a fence pair. They take no
+    ///   lock this wait takes: they record the end, or the replacing thread,
+    ///   and wake the process's tasks (`Process::wake_other_tasks`), which
+    ///   reads each task's state. That is a store then a load on each side,
+    ///   so each side has a `SeqCst` fence between them: here after the task
+    ///   is marked blocked, and in `wake_other_tasks` before the first
+    ///   state is read. Of two such fences one comes first, and the side
+    ///   whose fence comes second sees the other's store: the waker finds the
+    ///   task blocked and wakes it, or `ready` finds the process ending.
     pub(crate) fn wait_trusting(&self, ready: impl FnMut() -> bool) -> bool {
         self.wait_sliced(ready, u64::MAX, None)
     }
@@ -222,6 +244,13 @@ impl WaitQueue {
                 task.set_sleep_deadline(wake_at);
             }
             task.set_state(BLOCKED);
+            // A wait that trusts its wakes has no recheck to find a wake it
+            // missed, so the store above is ordered before `ready`'s loads
+            // for the wakers that take no lock this wait takes: a kill and
+            // an `execve`, whose own fence is in `Process::wake_other_tasks`.
+            if recheck.is_none() {
+                core::sync::atomic::fence(Ordering::SeqCst);
+            }
 
             // The last look, now that both a waker and the timer could find
             // us. Cancelling the sleep as well as the block, so a deadline
