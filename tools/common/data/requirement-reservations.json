@@ -38,6 +38,13 @@
       "branch": "nvidia-n0",
       "date": "2026-10-02",
       "purpose": "NVIDIA N0, the kernel prerequisites (docs/NVIDIA.md §7): DMAR scopes through bridges, MSI, the PAT and write-combining, a driver's configuration-space window, a per-driver pin budget"
+    },
+    {
+      "ids": ["H.STORE.8", "L.btrfs.24-107"],
+      "owner": "ferrix-po",
+      "branch": "btrfs-cert",
+      "date": "2026-10-02",
+      "purpose": "btrfs in the item: the consultant's one-check-per-requirement split of H.STORE.* and L.btrfs.1-23"
     }
   ]
 }
