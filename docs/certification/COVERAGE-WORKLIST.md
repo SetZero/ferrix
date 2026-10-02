@@ -11,8 +11,8 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | Module | x86_64 | aarch64 | armv7a | Files |
 |---|---:|---:|---:|---:|
 | [`discovery`](#discovery) | 53 | 111 | 131 | 2 |
+| [`object`](#object) | 9 | 17 | 40 | 7 |
 | [`arch/x86_64`](#archx86_64) | 34 | - | - | 5 |
-| [`object`](#object) | 9 | 17 | 17 | 7 |
 | [`syscall`](#syscall) | 15 | 10 | 10 | 2 |
 | [`init`](#init) | 3 | 14 | 14 | 1 |
 | [`console`](#console) | 3 | 6 | 7 | 4 |
@@ -31,7 +31,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
 | [`user`](#user) | - | - | 1 | 1 |
-| **Total** | **133** | **176** | **210** | 38 |
+| **Total** | **133** | **176** | **233** | 38 |
 
 ---
 
@@ -45,6 +45,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 | F-58, VT-d table-walk coherency and the SMMUv3's coherent walks (branch f58-coherency) | x86_64, aarch64, armv7a | carried from 6694cc234, 8 anchors dropped as unmeasured: x86_64 and armv7a residual iommu/smmuv3.rs 466 and 482 (Unit::map and Unit::unmap, now passing a coherent record); aarch64 and armv7a residual iommu/vtd.rs 218-219, 304-305, 313, 327, 329, 344-345, 370-372, 390, 405, 425, 438 and 448 (every vtd.rs line the record touched); armv7a residual mm.rs 1080, with its absent-hardware argument (unmap_io's mapper call, now through Walked); armv7a residual iommu.rs 878, with its absent-hardware argument (map_all's unwind loop, which now also takes out a page refused as not cleaned). | On aarch64 and armv7a, re-argue as other-architecture the VT-d lines no Arm boot reaches: vtd.rs's cleaning record in Unit::open, attach, install, detach, map, unmap, flush, writes, publish, the invalidations' check, table, settle, require_published and write_entry; on armv7a re-argue mm.rs's map_io and unmap_io (and WalkerClean::clean) and iommu.rs's map_all unwind as absent-hardware, as before. On x86_64, measure the new vtd.rs lines, arch::x86_64::cpu::clean_for_walker and clflush_line, and argue as absent-hardware the lines no boot reaches because QEMU's unit reports ECAP.C clear: the coherent (C=1) branches -- Unit::open's coherent arm, where UNITS_CLEANING is not counted, and check_cleaning's arm for no unit that cleans -- and clflush_line's fallback for a CPUID that reports no CLFLUSH size; test or argue as defensive the refusals only a negative control reaches: require_published's refusal, map's and unmap's MapError::NotCleaned returns, map_all's unwind of the refused page, check_cleaning's error arms and check_iommu's arm that names the cleaning failure (the controls of the F-58 landing). On aarch64, argue smmuv3.rs's COHACC refusal as absent-hardware (QEMU's SMMUv3 sets COHACC) and CR1's read-back refusal as defensive. |
 | NVIDIA N0d (64-bit apertures, a driver's configuration window, one lock per node, the breach detector; branch nvidia-n0d) | x86_64, aarch64, armv7a | N0d's carry from c0bbc5751, 3 anchors dropped as unmeasured, one per architecture, all device.rs 584 at the old numbering (MsixTable's Debug field for config_phys, which N0d removed). | Measure and test or argue the new lines in device.rs and syscall/native.rs: DeviceNode::config_read, config_write and its refusal line, verify_config, breach, config_breach's MSI and MSI-X arms and msix_control_breach (reached only by a provoked rewrite of those registers, which W7 does not make: it rewrites COMMAND), MsixTable::rewritten's mismatch arm, MappedConfig::read's out-of-space answer (reached only on a CAM window, crosvm), config_access's refusals, ConfigWrites's outside-the-space refusal, DeviceNode::hello_accepted on each core's HELLO, quiesce_while's refusal arm, device_in's BAD_STATE for a refused node, device_aperture, aperture_bytes and config_status; and the consultant's conditions 1 and 2: DeviceNode::refuse (its unmapped arm reached by no boot), set_bus_master's refusal of a refused node (W7 reaches it), and hello_accepted's new order. The allowlist itself, ferrix_pci::window, its full-array refusals included, is host-tested and outside the kernel's measurement. |
 | NVIDIA N0f (a per-device pin budget in place of the quarantine's cap; branch nvidia-n0f) | x86_64, aarch64, armv7a | carried from 3038b5a9e, 2 anchors dropped as unmeasured: armv7a residual object/pin.rs 183, 189, 229, 284, 312-313, 324, 328-330, 335, 397 and 403 at the old numbering (the cap's test and its line, with_cap's spare and pin, Drop's quarantine call, quarantine's list push, quarantined_pages, release's list and its unpin match), whose other-architecture argument is kept for the lines the change left alone. | Measure and test or argue the new lines in object/pin.rs, object/pin/check.rs, iommu/check.rs and syscall/native.rs: PinBudget and its counts, count_ceiling, ceiling_room, room, raise_of, set_budget, reserve, unreserve, keep, account_release, Pin::new's announce, Pin::with_budget and Pin::map, release's refusing parameter and its kept arm, quarantine_release's longer line, device_set_limit and device_get_limit, and (the fix-forward) set_limit_on, device_and_rights, budget_of and audit::device_limit. The boot checks P1-P5 reach every rule on x86_64 and aarch64; no boot reaches announce (a driver refused at its budget or at twice it), device_set_limit's INVALID_ARGS for another limit and its NO_MEMORY for a budget no usize holds, device_get_limit's INVALID_ARGS and its answers for a node whose domain was never made, or quarantine_release's line for an entry kept by a refused unpin: test or argue them as defensive. On armv7a, where every domain is untranslated and the checks return at their first line, argue the quarantine's and the checks' lines as other-architecture, and measure reserve, unreserve and keep, which every driver's pin reaches there. |
+| F-59 (an untranslated domain's live close given back, its dead pins quarantined; branch f59-untranslated-pins) | x86_64, aarch64, armv7a | carried from 342b8a48e, 2 anchors dropped as unmeasured: armv7a residual object/pin.rs 505-507 at the old numbering (Pin::map's spare, now made on every domain). The armv7a other-architecture argument over the quarantine (Pin::drop's dead arm, quarantine, quarantine_release, release and fold) is withdrawn: those lines are reached on ARMv7-A now, by P8 and by every dead driver's pins. | On armv7a, measure object/pin.rs's quarantine, release, fold and Pin::drop's dead arm, which P8 reaches, and object/pin/check.rs's check_untranslated, check_live_close, check_dead_close, watched_pin, freed and untranslated_domain; argue their refusal arms as defensive (each only a negative control reaches). On x86_64 and aarch64, where every domain made is translated, argue check_untranslated's lines past untranslated_domain as other-architecture. |
 
 ---
 
@@ -57,6 +58,20 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 ---
 
+## `object`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `object/pin.rs` | `core` | 0 | 1 | 23 | 0 | - |
+| `object/oom.rs` | `core` | 0 | 6 | 5 | 0 | - |
+| `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 315-317, 322 |
+| `object/process.rs` | `core` | 3 | 3 | 3 | 2 | 133, 172 |
+| `object/mod.rs` | `core` | 2 | 2 | 2 | 0 | - |
+| `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
+| `object/quota.rs` | `core` | 0 | 1 | 1 | 0 | - |
+
+---
+
 ## `arch/x86_64`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
@@ -66,20 +81,6 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 | `arch/x86_64/switch.rs` | `core` | 3 | - | - | 3 | 202, 482, 491 |
 | `arch/x86_64/mod.rs` | `core` | 2 | - | - | 2 | 1313-1314 |
 | `arch/x86_64/signal/compat.rs` | `core` | 1 | - | - | 1 | 336 |
-
----
-
-## `object`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `object/oom.rs` | `core` | 0 | 6 | 5 | 0 | - |
-| `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 315-317, 322 |
-| `object/process.rs` | `core` | 3 | 3 | 3 | 2 | 133, 172 |
-| `object/mod.rs` | `core` | 2 | 2 | 2 | 0 | - |
-| `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
-| `object/pin.rs` | `core` | 0 | 1 | 0 | 0 | - |
-| `object/quota.rs` | `core` | 0 | 1 | 1 | 0 | - |
 
 ---
 
