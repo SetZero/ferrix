@@ -310,13 +310,13 @@
       "recursive": false
     },
     "syscall/native.rs::answer": {
-      "complexity": 29,
-      "lines": 94,
+      "complexity": 30,
+      "lines": 95,
       "recursive": false
     },
     "syscall/native.rs::channel_read": {
-      "complexity": 16,
-      "lines": 54,
+      "complexity": 15,
+      "lines": 53,
       "recursive": false
     },
     "syscall/native.rs::channel_write": {

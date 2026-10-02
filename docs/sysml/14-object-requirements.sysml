@@ -1525,9 +1525,11 @@ package FerrixObjectRequirements {
                 with registers 2 to 4 as sent, 6 of 6 (the `wrread` line).";
             attribute :>> parent = ("H.TRAP.10", "H.OBJ.2");
             attribute :>> unit = ("syscall::native::channel_write_read",
-                "syscall::native::dispatch_write_read", "syscall::native_call",
-                "arch::x86_64::syscall::ferrix_syscall_entry",
-                "arch::aarch64::trap::system_call", "arch::armv7a::trap::system_call");
+                "syscall::native::dispatch_write_read", "syscall::native::send_words",
+                "syscall::native::receive_words", "syscall::native::read_refusal",
+                "syscall::native_call", "arch::x86_64::syscall::ferrix_syscall_entry",
+                "arch::aarch64::trap::system_call", "arch::armv7a::trap::system_call",
+                "arch::armv7a::trap::store_words");
         }
         requirement <'L.object.132'> aTrustingWaitIsWokenByWhatEndsIt : ItemLowLevel {
             attribute :>> statement = "channel_write_read's wait shall file no

@@ -492,24 +492,10 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
     };
 
     match outcome {
-        Outcome::Return(value) => {
-            if let Some(result) = frame.r.first_mut() {
-                *result = value as u32;
-            }
-            Ok(())
-        }
-        // The value in R0, the words in R1 to R3: 32 bits each, which is
-        // all a 32-bit program's words are.
+        Outcome::Return(value) => store_words(frame, &[value as u64]),
+        // The value in R0, the words in R1 to R3.
         Outcome::ReturnWords { value, words } => {
-            if let Some(registers) = frame.r.get_mut(..4) {
-                registers.copy_from_slice(&[
-                    value as u32,
-                    words[0] as u32,
-                    words[1] as u32,
-                    words[2] as u32,
-                ]);
-            }
-            Ok(())
+            store_words(frame, &[value as u64, words[0], words[1], words[2]])
         }
         // `execve`: the registers belong to a program that no longer exists, so
         // they are replaced rather than returned into. The stack pointer is
@@ -528,6 +514,15 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
             Ok(())
         }
     }
+}
+
+/// Put a call's answer in `r0` and on, the rest of the frame as it was: 32
+/// bits each, which is all a 32-bit program's words are.
+fn store_words(frame: &mut TrapFrame, answer: &[u64]) -> Result<(), &'static str> {
+    for (register, word) in frame.r.iter_mut().zip(answer) {
+        *register = *word as u32;
+    }
+    Ok(())
 }
 
 unsafe extern "C" {

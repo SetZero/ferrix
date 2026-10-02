@@ -704,6 +704,15 @@ static IN_CALL: [AtomicBool; IN_CALL_PROCESSORS] =
 /// Processors [`IN_CALL`] covers: as many as a domain can name.
 const IN_CALL_PROCESSORS: usize = 256;
 
+/// Whether each task is inside a system call goes with it across the switch
+/// on `cpu` from `previous` to `next`: see [`IN_CALL`].
+fn carry_in_call(cpu: usize, previous: &Task, next: &Task) {
+    if let Some(flag) = IN_CALL.get(cpu) {
+        let _ = previous.swap_in_call(flag.load(Ordering::Relaxed));
+        flag.store(next.swap_in_call(false), Ordering::Relaxed);
+    }
+}
+
 /// The running task has entered a system call.
 pub(crate) fn call_entered() {
     let saved = <arch::Irq as IrqControl>::disable();
@@ -1798,6 +1807,21 @@ pub(crate) fn wake(task: &Arc<Task>) {
     wake_at_home(task, false);
 }
 
+/// The processor a wake that made a task runnable on `queue`, processor
+/// `cpu`, must interrupt for a decision, if any; with `deferred`, for a
+/// waker that runs there and blocks next, none.
+fn kick_after_wake(queue: &mut CpuQueue, cpu: usize, deferred: bool) -> Option<usize> {
+    // Deferred to the waker's block, behind a waker that runs here.
+    if deferred && !queue.is_running_idle() {
+        queue.arm_timer(crate::timer::now_nanos());
+        return None;
+    }
+    // As `spawn_on`, and for the same three reasons: something better has
+    // arrived, or the processor is idle, or this is the first task to wait
+    // behind the running one and so the first that needs its timer to exist.
+    (queue.should_preempt() || queue.is_running_idle() || queue.waiting() == 1).then_some(cpu)
+}
+
 /// [`wake`], and with `defer`, for a waker that blocks next ([`Wake::Sync`]):
 /// a task made runnable on the waker's own processor asks for no decision
 /// now. The waker's block is the decision, and until then this processor's
@@ -1840,18 +1864,7 @@ fn wake_at_home(task: &Arc<Task>, defer: bool) {
             // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
             queue.insert(task);
         }
-        // Deferred to the waker's block, behind a waker that runs here.
-        if defer && here == Some(cpu) && !queue.is_running_idle() {
-            queue.arm_timer(crate::timer::now_nanos());
-            break;
-        }
-        // As `spawn_on`, and for the same three reasons: something better has
-        // arrived, or the processor is idle, or this is the first task to
-        // wait behind the running one and so the first that needs its timer
-        // to exist.
-        if queue.should_preempt() || queue.is_running_idle() || queue.waiting() == 1 {
-            kick_cpu = Some(cpu);
-        }
+        kick_cpu = kick_after_wake(&mut queue, cpu, defer && here == Some(cpu));
         break;
     }
     // As `spawn_task`: a wake-up onto this processor arms this processor's
@@ -2186,11 +2199,7 @@ fn choose_next(
     if interrupted_user && previous.state() == RUNNABLE {
         previous.note_preemption();
     }
-    // Whether each is inside a system call goes with it: see `IN_CALL`.
-    if let Some(flag) = IN_CALL.get(cpu) {
-        let _ = previous.swap_in_call(flag.load(Ordering::Relaxed));
-        flag.store(next.swap_in_call(false), Ordering::Relaxed);
-    }
+    carry_in_call(cpu, &previous, &next);
     queue.previous = Some(Arc::clone(&previous));
     queue.current = Some(Arc::clone(&next));
     note_running(cpu, next.id, next.group(), next.moves_seen());

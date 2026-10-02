@@ -777,9 +777,7 @@ fn channel_read(
                 report_actual(process, actual, bytes, handles)?;
                 return Err(status::BUFFER_TOO_SMALL);
             }
-            Err(ReadError::Empty) => return Err(status::SHOULD_WAIT),
-            Err(ReadError::PeerClosed) => return Err(status::PEER_CLOSED),
-            Err(ReadError::NoMemory) => return Err(status::NO_MEMORY),
+            Err(refused) => return Err(read_refusal(refused)),
         };
         let through = if topology.is_some() {
             UserCopy::Present
@@ -852,12 +850,8 @@ pub(crate) fn dispatch_write_read(
 /// [`dispatch_write_read`]'s answer, before the audit record.
 fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3]), Errno> {
     let process = caller.core();
+    // A 32-bit program's all-ones register is `usize::MAX` there too.
     let count = usize::try_from(a[1]).unwrap_or(nr::WRITE_READ_NOTHING);
-    let count = if a[1] == u64::from(u32::MAX) && size_of::<usize>() == 4 {
-        nr::WRITE_READ_NOTHING
-    } else {
-        count
-    };
     let sending = count != nr::WRITE_READ_NOTHING;
     let needed = if sending {
         Rights::READ | Rights::WRITE
@@ -865,27 +859,37 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
         Rights::READ
     };
     let endpoint = process.with_handles(|table| channel_in(table, handle(a[0]), needed))?;
-
     if sending {
-        if count > nr::CHANNEL_WRITE_READ_BYTES {
-            return Err(status::TOO_BIG);
-        }
-        let mut bytes = [0_u8; nr::CHANNEL_WRITE_READ_BYTES];
-        for (chunk, word) in bytes.chunks_exact_mut(size_of::<usize>()).zip(&a[2..5]) {
-            // The word as the program held it: a `usize` in its registers,
-            // the low half of the register on a 32-bit processor.
-            chunk.copy_from_slice(&(*word as usize).to_ne_bytes());
-        }
-        endpoint
-            .write_small(bytes.get(..count).unwrap_or_default())
-            .map_err(|failure| match failure {
-                WriteFailure::PeerClosed => status::PEER_CLOSED,
-                WriteFailure::TooBig => status::TOO_BIG,
-                WriteFailure::Full => status::SHOULD_WAIT,
-                WriteFailure::NoMemory | WriteFailure::Take(()) => status::NO_MEMORY,
-            })?;
+        send_words(&endpoint, count, a)?;
     }
+    receive_words(&endpoint, caller)
+}
 
+/// `channel_write_read`'s write: `count` bytes of the words in the third to
+/// fifth argument registers, as they would lie in memory.
+fn send_words(endpoint: &Endpoint, count: usize, a: &[u64; 6]) -> Result<(), Errno> {
+    if count > nr::CHANNEL_WRITE_READ_BYTES {
+        return Err(status::TOO_BIG);
+    }
+    let mut bytes = [0_u8; nr::CHANNEL_WRITE_READ_BYTES];
+    for (chunk, word) in bytes.chunks_exact_mut(size_of::<usize>()).zip(&a[2..5]) {
+        // The word as the program held it: a `usize` in its registers,
+        // the low half of the register on a 32-bit processor.
+        chunk.copy_from_slice(&(*word as usize).to_ne_bytes());
+    }
+    endpoint
+        .write_small(bytes.get(..count).unwrap_or_default())
+        .map_err(|failure| match failure {
+            WriteFailure::PeerClosed => status::PEER_CLOSED,
+            WriteFailure::TooBig => status::TOO_BIG,
+            WriteFailure::Full => status::SHOULD_WAIT,
+            WriteFailure::NoMemory | WriteFailure::Take(()) => status::NO_MEMORY,
+        })
+}
+
+/// `channel_write_read`'s read: wait for the next message on `endpoint` and
+/// answer its size and its words, the bytes after it zero.
+fn receive_words(endpoint: &Endpoint, caller: &dyn Host) -> Result<(usize, [u64; 3]), Errno> {
     loop {
         match endpoint.read_small() {
             Ok(small) => {
@@ -901,20 +905,26 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
                 return Ok((small.len, words));
             }
             Err(ReadError::Empty) => {}
-            Err(ReadError::PeerClosed) => return Err(status::PEER_CLOSED),
-            Err(ReadError::TooSmall { .. } | ReadError::NeedsTopology) => {
-                return Err(status::BUFFER_TOO_SMALL);
-            }
-            Err(ReadError::NoMemory) => return Err(status::NO_MEMORY),
+            Err(refused) => return Err(read_refusal(refused)),
         }
         // Trusting the queue: a message and the peer's close both wake it,
-        // and a signal or a kill wakes the task.
+        // and its process's end wakes the task.
         let _ = endpoint
             .waiters()
             .wait_trusting(|| endpoint.readable_or_closed() || must_leave(caller));
         if must_leave(caller) {
             return Err(Errno::EINTR);
         }
+    }
+}
+
+/// The status a read that took nothing answers.
+const fn read_refusal(refused: ReadError) -> Errno {
+    match refused {
+        ReadError::Empty => status::SHOULD_WAIT,
+        ReadError::PeerClosed => status::PEER_CLOSED,
+        ReadError::TooSmall { .. } | ReadError::NeedsTopology => status::BUFFER_TOO_SMALL,
+        ReadError::NoMemory => status::NO_MEMORY,
     }
 }
 
