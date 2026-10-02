@@ -38,17 +38,34 @@ it permits software items of different classes in one system.
 ## 2. Three rings
 
 The manifest puts every one of the kernel's source files into exactly one of
-three nested rings. A file in no ring fails the build.
+three nested rings, and, since 2026-10-02, two library crates outside the
+kernel into the `item` ring whole (`crates` in the manifest; see *btrfs* below).
+A file in no ring fails the build, and so does a file of a classified crate
+that its module tree does not reach.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 52,417 | 13,503 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 9,204 | 1,420 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 53,420 | 27,711 | nothing |
+| `core` | 56,644 | 18,815 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 8,144 | 3,795 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 64,036 | 37,745 | nothing |
 
-**The certified item is `core` + `item`: 61,621 lines of product code**, against
-53,420 lines of uncertified load. The item is 53.6% of the kernel's product
-code. (Measured 2026-09-26, after W-5 moved the Linux dispatcher's routing and
+| Library crate | Ring | Product lines | Host-test lines |
+|---|---|---:|---:|
+| `ferrix-btrfs` (`src/lib/fs/btrfs`), the reader | `item` | 8,272 | 6,031 |
+| `ferrix-btrfs-write` (`src/lib/fs/btrfs-write`), the write path | `item` | 6,019 | 2,247 |
+| `ferrix-btrfs-vfs` (`src/lib/fs/btrfs-vfs`), the VFS glue | `load` | 2,185 | 1,822 |
+
+**The certified item is `core` + `item` and the item's crates: 79,079 lines of
+product code** -- 64,788 in the kernel and 14,291 in the two btrfs crates --
+against 64,036 lines of uncertified load in the kernel. The kernel's own part
+is 50.3% of its product code. A crate's product lines are the files its module
+tree reaches from `lib.rs`, other than through a `#[cfg(test)] mod`; those are
+host tests, `cargo test` and Miri, never in the image, and are counted apart.
+(Re-measured 2026-10-02 on main at 5625d22f with
+`check-item-boundary.py --report`, when btrfs joined the item. The kernel's
+rings moved with the work since 2026-09-27 -- the discovery relayout, the
+namespaces, System V IPC -- which this table does not attribute line by line.
+Measured 2026-09-26, after W-5 moved the Linux dispatcher's routing and
 five of the personality's files out of the `item` ring, see below, and after
 F-23 made the item's allocations fallible. That added 2,711 lines, most of
 them in the `core` ring: `fallible.rs` and `mm/reserve.rs`, which the manifest
@@ -169,9 +186,62 @@ code runs it: `main.rs` declares 10 load-ring modules and `syscall/mod.rs`
 declares 36. What either file's *code* then does with them is resolved and
 counted like any other reference.
 
+### btrfs — two crates in the item, and where it meets the VFS
+
+On 2026-10-02 the customer decided that btrfs is certified for as long as it
+runs inside the kernel. Its on-disk logic is two `no_std` crates outside
+`src/kernel`, so the manifest classifies crates as well as files, and puts
+both in `item`:
+
+| Crate | Below it | Above it |
+|---|---|---|
+| `ferrix-btrfs`, the reader | the `Device` trait (`ferrix_btrfs::volume::Device`): sector reads, answered by the kernel's block layer through `Disk` in `src/kernel/src/fs/btrfs.rs`; and memory its caller lends, `ExtentBuffers` and `ChunkStorage` -- the crate allocates little of its own | `Volume`, and the format types it hands out: superblock, chunk map, keys, items, the readers of `fs` and `compress` |
+| `ferrix-btrfs-write`, the write path | the `WriteDevice` trait (`ferrix_btrfs_write::WriteDevice`, a `Device` that also writes and flushes), implemented by the same `Disk`; and `ferrix-btrfs` | `WriteVolume`: its transactions and its inode, directory and extent operations |
+
+**What stays load, and why.** `ferrix-btrfs-vfs` and `src/kernel/src/fs/btrfs*.rs`
+are not in the item. The first implements the VFS's `FileSystem` and `Inode`
+over `Volume` and `WriteVolume`; the second mounts it, implements `Device` and
+`WriteDevice` over the block core, and runs the boot checks. Both are written
+against the VFS (`ferrix-vfs`, `src/kernel/src/fs/`), which is load, so neither
+can be item without the VFS coming with it. **The interface between btrfs and
+the VFS is therefore the two crates' public API**: `Volume` and `WriteVolume`
+and the types they take and return, called from the load, and `Device` and
+`WriteDevice`, implemented by the load. Nothing in the item names the VFS. What
+the item vouches for at that interface is what the crates do with the bytes a
+`Device` returns -- a corrupt or hostile volume gives an error, never a panic:
+every field is read through a checked slice access and every length is checked
+arithmetic, in crates that are `#![forbid(unsafe_code)]` and deny indexing and
+panics (`ferrix-btrfs`'s *Totality*) -- and what a `WriteVolume` writes back. What it does not vouch for is that the
+load calls it correctly: the VFS's locking, its caching of what btrfs returned,
+and the Linux calls that reach it.
+
+The boundary gate holds the crates at their manifests: an item crate may
+depend only on item and core crates or on an allowlisted piece of `no_std`
+infrastructure the core already links (`crates.infrastructure_allowlist`:
+`ferrix-fallible` and `ferrix-sync`, each with its reason, and each held to
+the same rule in turn). `ferrix-btrfs-write` on `ferrix-btrfs` passes; a load
+crate as a dependency fails, which a negative control showed when the rule was
+written. A kernel file naming one of the crates is an edge to the `item` ring
+like a `crate::` path, so the core cannot name btrfs. The item-scoped gates --
+complexity and recursion, fallible allocation, the unsafe trace, and the
+panic-exemption count -- read the crates' product code from 2026-10-02. What
+they found then is recorded as debt, not waived: 185 allocations that cannot
+report failure (19 in the reader, 166 in the write path), which branch
+`btrfs-fallible` is converting, and 40 functions over the complexity floors
+(18 and 22), none recursive. Neither crate has an `unsafe` site or a panic
+exemption.
+
+Two open points are for the assessor rather than settled here. The two
+allowlisted crates are linked by the core today without being classified at
+all, which this change makes visible rather than causes; classifying them
+`core` is the natural next step. And the traceability and coverage evidence,
+which is measured on the kernel image, does not yet reach the crates, whose
+tests run on the host.
+
 ### `load` — everything it runs and does not vouch for
 
-The VFS, btrfs, procfs, sysfs, cgroupfs and tmpfs; the network stack; the
+The VFS, btrfs's glue into it (`ferrix-btrfs-vfs` and the kernel's
+`fs/btrfs*.rs`), procfs, sysfs, cgroupfs and tmpfs; the network stack; the
 Linux personality's syscall surface; the display, render, input and ring
 drivers' kernel halves; STM32MP1 board support.
 

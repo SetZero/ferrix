@@ -81,6 +81,38 @@ comments directly above that line, says one of:
                          where there is nothing to return an error to.
                          Listed with `--report`, and in MEMORY-AND-TIMING.md.
 
+The item's library crates
+-------------------------
+
+Since 2026-10-02 the item includes two crates outside the kernel,
+`ferrix-btrfs` and `ferrix-btrfs-write` (`crates` in the manifest), and their
+product files are scanned with the same patterns and markers -- every file
+their module trees reach except through `#[cfg(test)] mod`, whose code is host
+tests. A crate cannot reach `src/kernel/src/fallible.rs`, so what counts as
+fallible there is:
+
+  * the standard library's own fallible forms, `try_reserve` and
+    `try_reserve_exact` on `Vec`, `VecDeque` and `String`, which the patterns
+    do not match;
+  * the `ferrix-fallible` crate's functions (`try_box`, `try_push`,
+    `try_with_capacity`, `try_collect` and the rest): the code the kernel's
+    own toolkit is built on, and allowlisted for item crates in the manifest
+    (`crates.infrastructure_allowlist`), so they do not match either;
+  * a helper of the crate's own whose infallible call is made into capacity
+    it has just reserved fallibly, which carries `NOALLOC:` saying so, or a
+    first-party method named like a standard one, which carries `FALLIBLE:`.
+
+There is no toolkit file exempt by name in a crate: a helper's push says why it
+cannot fail at the push. `FATAL-ALLOC:` has no use in a crate, which is never
+the boot.
+
+Each crate is held as a whole, not per file: `crates` in the baseline records
+its unmarked count, which may only fall, and like a file's must be re-recorded
+when it has. Its `by_file` breakdown is not the ratchet; it is where the gate
+looks to name the file when the total rises. The target is zero for both; the
+conversion is the work of branch `btrfs-fallible` (2026-10-02), and the
+baseline's own entry says so.
+
 The ratchet
 -----------
 
@@ -282,6 +314,31 @@ def load_gate():
     return module
 
 
+def crate_sites(gate, manifest: dict) -> dict[str, tuple[str, list[dict]]]:
+    """`{path: (package, sites)}` over the item crates' product files, keyed by
+    the path from the repository root. Their `Default`s are found across the
+    item crates only: a kernel type of the same name is not theirs."""
+    files = gate.item_crate_product_files(manifest)
+    sources = {path: (package, (ROOT / path).read_text(encoding="utf-8", errors="replace"))
+               for package, path in files}
+    defaults = frozenset(allocating_defaults([source for _, source in sources.values()]))
+    return {path: (package, scan_source(source, defaults))
+            for path, (package, source) in sorted(sources.items())}
+
+
+def crate_counts(sites: dict[str, tuple[str, list[dict]]], manifest_crates) -> dict[str, int]:
+    """Unmarked calls per item crate, every item crate present."""
+    counts = {package: 0 for package in manifest_crates}
+    for package, found in sites.values():
+        counts[package] = counts.get(package, 0) + sum(1 for s in found if s["marker"] is None)
+    return counts
+
+
+def item_crate_names(gate, manifest: dict) -> list[str]:
+    return sorted(name for name, entry in gate.crate_entries(manifest).items()
+                  if entry["ring"] in ("core", "item"))
+
+
 def item_sites() -> dict[str, list[dict]]:
     """Flagged calls in every product-code file of the certified item, and in
     the load files the item's own calls run ([`REACHED`])."""
@@ -319,7 +376,19 @@ def unmarked_counts(sites: dict[str, list[dict]]) -> dict[str, int]:
     return counts
 
 
-def report(sites: dict[str, list[dict]]) -> None:
+def report(sites: dict[str, list[dict]], crates: dict[str, tuple[str, list[dict]]]) -> None:
+    for package in sorted({package for package, _ in crates.values()}):
+        mine = {path: found for path, (owner, found) in crates.items() if owner == package}
+        unmarked_here = unmarked_counts(mine)
+        print(f"fallible-alloc: crate {package}: {sum(unmarked_here.values())} unmarked "
+              f"allocating call(s) in {len(unmarked_here)} file(s)")
+        for path, count in sorted(unmarked_here.items(), key=lambda item: -item[1]):
+            calls: dict[str, int] = {}
+            for site in mine[path]:
+                if site["marker"] is None:
+                    calls[site["call"]] = calls.get(site["call"], 0) + 1
+            detail = ", ".join(f"{c} {n}" for c, n in sorted(calls.items(), key=lambda c: -c[1]))
+            print(f"  {count:>4}  {path}: {detail}")
     unmarked = unmarked_counts(sites)
     total = sum(unmarked.values())
     noalloc = sum(1 for found in sites.values() for s in found if s["marker"] == "noalloc")
@@ -464,11 +533,23 @@ def main() -> int:
         return 0
 
     sites = item_sites()
+    gate = load_gate()
+    manifest = gate.load_manifest()
+    crates = crate_sites(gate, manifest)
     if args.report:
-        report(sites)
+        report(sites, crates)
         return 0
 
     current = unmarked_counts(sites)
+    current_crates = crate_counts(crates, item_crate_names(gate, manifest))
+    old_crates = json.loads(BASELINE.read_text()).get("crates", {}) if BASELINE.exists() else {}
+    # Per file inside each crate: not the ratchet, which is the crate's total,
+    # but where to look when the total rises.
+    per_file: dict[str, dict[str, int]] = {}
+    for path, (package, found) in crates.items():
+        count = sum(1 for site in found if site["marker"] is None)
+        if count:
+            per_file.setdefault(package, {})[path] = count
     if args.record:
         BASELINE.write_text(
             json.dumps(
@@ -483,12 +564,31 @@ def main() -> int:
                         "being re-recorded. The target is an empty map.",
                     ],
                     "files": dict(sorted(current.items())),
+                    "//crates": [
+                        "The item's library crates (certification-item.json, crates),",
+                        "held whole: the unmarked calls in each one's product code.",
+                        "The same ratchet as the files: a count may only fall, and",
+                        "one that has fallen must be re-recorded. Each entry's own",
+                        "note says who is burning it down; the target is zero.",
+                    ],
+                    "crates": {
+                        package: {
+                            "//": old_crates.get(package, {}).get(
+                                "//", "Target zero. Nobody is named as converting it yet."
+                            ),
+                            "count": count,
+                            "by_file": dict(sorted(per_file.get(package, {}).items())),
+                        }
+                        for package, count in sorted(current_crates.items())
+                    },
                 },
                 indent=2,
+                ensure_ascii=False,
             )
             + "\n"
         )
-        print(f"fallible-alloc: recorded {sum(current.values())} call(s) in {len(current)} file(s)")
+        print(f"fallible-alloc: recorded {sum(current.values())} call(s) in {len(current)} file(s), "
+              f"{sum(current_crates.values())} in {len(current_crates)} item crate(s)")
         return 0
 
     if not BASELINE.exists():
@@ -522,7 +622,45 @@ def main() -> int:
             print(f"    {rel}: {was} -> {now}", file=sys.stderr)
         status = 1
 
+    crate_baseline = {package: entry["count"] for package, entry in old_crates.items()}
+    grown = [(p, crate_baseline.get(p), now) for p, now in current_crates.items()
+             if crate_baseline.get(p) is None or now > crate_baseline[p]]
+    shrunk = [(p, was, current_crates.get(p, 0)) for p, was in crate_baseline.items()
+              if current_crates.get(p, 0) < was or p not in current_crates]
+    if grown:
+        print(
+            "fallible-alloc: infallible allocation added to an item crate, or a crate\n"
+            "  not in the baseline. A crate cannot use src/kernel/src/fallible.rs:\n"
+            "  use try_reserve or ferrix-fallible, or argue the site with NOALLOC:\n"
+            "  (see this script's docstring, \"The item's library crates\"):",
+            file=sys.stderr,
+        )
+        for package, was, now in grown:
+            print(f"    {package}: {was if was is not None else 'unrecorded'} -> {now}", file=sys.stderr)
+            recorded = old_crates.get(package, {}).get("by_file", {})
+            rose = [path for path, count in per_file.get(package, {}).items()
+                    if count > recorded.get(path, 0)]
+            for path in rose if was is not None else []:
+                print(f"      {path}: {recorded.get(path, 0)} -> {per_file[package][path]}",
+                      file=sys.stderr)
+                for site in crates[path][1]:
+                    if site["marker"] is None:
+                        print(f"        line {site['line']}: {site['call']}", file=sys.stderr)
+        status = 1
+    if shrunk:
+        print(
+            "fallible-alloc: fewer unmarked calls in an item crate than the baseline\n"
+            "  records. Re-record (--record) so the converted sites leave no\n"
+            "  allowance behind:",
+            file=sys.stderr,
+        )
+        for package, was, now in shrunk:
+            print(f"    {package}: {was} -> {now}", file=sys.stderr)
+        status = 1
+
     fatal = sum(1 for found in sites.values() for s in found if s["marker"] == "fatal")
+    in_crates = ", ".join(f"{p} {n}" for p, n in sorted(current_crates.items()))
+    print(f"fallible-alloc: item crates, unmarked allocating calls: {in_crates}")
     print(
         f"fallible-alloc: {sum(current.values())} unmarked allocating call(s) in the item and "
         f"the {len(REACHED)} load files it reaches ({len(current)} file(s)), {fatal} fatal by design"

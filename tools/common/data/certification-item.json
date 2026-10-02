@@ -1,8 +1,9 @@
 {
   "//": [
-    "The boundary of the certified item: which kernel source files are inside",
-    "the thing a certificate would attach to, which are the uncertified load",
-    "above it, and which are verification rather than product.",
+    "The boundary of the certified item: which kernel source files and which",
+    "library crates are inside the thing a certificate would attach to, which",
+    "are the uncertified load above it, and which are verification rather",
+    "than product.",
     "",
     "Enforced by tools/common/check/check-item-boundary.py and explained in",
     "docs/certification/ITEM.md. Every assurance artifact in docs/certification",
@@ -19,7 +20,8 @@
     "",
     "A file in no ring fails the build. That is the ratchet's teeth: a new",
     "kernel module cannot drift into the item by being written, and cannot",
-    "drift out of the analysis by being forgotten."
+    "drift out of the analysis by being forgotten. Library crates are",
+    "classified whole, under `crates` below."
   ],
   "reference_configuration": {
     "//": [
@@ -268,6 +270,70 @@
         "syscall/vdso.rs",
         "syscall/vdso_check.rs"
       ]
+    }
+  },
+  "crates": {
+    "//": [
+      "Library crates by ring. The rings above classify src/kernel/src file by",
+      "file; a crate under src/lib is classified here whole, by its Cargo",
+      "package name. Its product code is every file its module tree reaches",
+      "from src/lib.rs through declarations not under #[cfg(test)]; a file",
+      "reached only through a `#[cfg(test)] mod` is host-test code, counted",
+      "apart, and a file under src/ the tree does not reach fails the gate.",
+      "",
+      "Each entry: `ring` (core, item or load, as for files), `path` (the",
+      "crate's directory), and `below` and `above`, the interfaces the crate",
+      "meets the rest of the system through, which docs/certification/ITEM.md",
+      "section 2 argues. A crate in no entry is unclassified: no item or",
+      "core crate may depend on it, and the item-scoped gates do not read it.",
+      "",
+      "The crate-level dependency rule, held by check-item-boundary.py: an",
+      "item or core crate's [dependencies] and [build-dependencies], target-",
+      "specific ones included, may name only crates of its own ring or one",
+      "below it, or a crate in `infrastructure_allowlist`; [dev-dependencies]",
+      "are host-test code and are not read. An allowlisted crate's own",
+      "dependencies are held to the same rule, so the allowlist cannot be a",
+      "door to the load. A kernel file naming a crate (`ferrix_btrfs::..`) is",
+      "an edge to that crate's ring under dependency_rules, as a `crate::`",
+      "path is to a file's.",
+      "",
+      "btrfs joined the item on 2026-10-02 on the customer's decision that it",
+      "is certified for as long as it runs inside the kernel. The reader and",
+      "the write path are the item; the VFS glue above them is not, because",
+      "it is written against the VFS, which is load."
+    ],
+    "members": {
+      "ferrix-btrfs": {
+        "ring": "item",
+        "path": "src/lib/fs/btrfs",
+        "below": "the `Device` trait (ferrix_btrfs::volume::Device): sector reads the kernel's block layer answers (src/kernel/src/fs/btrfs.rs, `Disk`); and caller-lent memory, `ExtentBuffers` and `ChunkStorage`",
+        "above": "`Volume` and the on-disk format types it returns (superblock, chunk map, keys, items, the fs and compress modules' readers), called by ferrix-btrfs-write, ferrix-btrfs-vfs and src/kernel/src/fs/btrfs*.rs"
+      },
+      "ferrix-btrfs-write": {
+        "ring": "item",
+        "path": "src/lib/fs/btrfs-write",
+        "below": "the `WriteDevice` trait (ferrix_btrfs_write::WriteDevice, a `Device` that also writes and flushes), implemented by the kernel's `Disk`; and ferrix-btrfs, item",
+        "above": "`WriteVolume` and its transaction, inode and extent operations, called by ferrix-btrfs-vfs and src/kernel/src/fs/btrfs*.rs"
+      },
+      "ferrix-btrfs-vfs": {
+        "ring": "load",
+        "path": "src/lib/fs/btrfs-vfs",
+        "below": "`Volume` and `WriteVolume`, the item's interface above btrfs; it implements `Device` over a cache for them",
+        "above": "ferrix-vfs's `FileSystem` and `Inode`: it is written against the VFS, which is load, and so is load itself"
+      }
+    },
+    "infrastructure_allowlist": {
+      "//": [
+        "Crates an item or core crate may depend on without being classified",
+        "itself. Each is no_std infrastructure the core already links and",
+        "names from core-ring files; the gate checks that some core or item",
+        "kernel file still names it, so an entry cannot outlive that reason.",
+        "Being here is not being in the item: the item-scoped gates do not",
+        "read these crates. Whether they should be classified `core` is open",
+        "(docs/certification/ITEM.md section 2)."
+      ],
+      "ferrix-fallible": "Fallible Box/Vec/VecDeque/String construction on stable Rust (F-23). The core's own allocation toolkit, src/kernel/src/fallible.rs, is built on it, so an item crate converting to fallible allocation uses the same code the core does rather than a second copy.",
+      "ferrix-sync": "The spin and sleep locks src/kernel/src/sync.rs wraps for the whole core, and ferrix-fallible's one dependency (its injector's `Once`)."
     }
   },
   "dependency_rules": [

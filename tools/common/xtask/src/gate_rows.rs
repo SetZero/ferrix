@@ -237,7 +237,8 @@ fn cross_cutting(path: &str) -> bool {
 }
 
 /// The certification item's manifest, whose `core` and `item` rings name
-/// the kernel files a change to which the consultant reviews.
+/// the kernel files, and whose `crates` the library crates, a change to
+/// which the consultant reviews.
 const MANIFEST: &str = "tools/common/data/certification-item.json";
 
 /// The paths of `changed` that need the certification consultant's review
@@ -245,8 +246,14 @@ const MANIFEST: &str = "tools/common/data/certification-item.json";
 /// item go through review*): the manifest, `docs/certification/`,
 /// `docs/sysml/`, `tools/common/data/`, a kernel file in the `core` or
 /// `item` ring (`members`, relative to `src/kernel/src`, exact or `dir/**`),
-/// and every path in `added_unsafe`.
-fn needs_review(changed: &[String], members: &[String], added_unsafe: &[String]) -> Vec<String> {
+/// any file of a `core` or `item` crate (`crates`, its directory: sources,
+/// tests and `Cargo.toml` alike), and every path in `added_unsafe`.
+fn needs_review(
+    changed: &[String],
+    members: &[String],
+    crates: &[String],
+    added_unsafe: &[String],
+) -> Vec<String> {
     let in_ring = |path: &str| {
         path.strip_prefix("src/kernel/src/")
             .is_some_and(|relative| {
@@ -266,14 +273,18 @@ fn needs_review(changed: &[String], members: &[String], added_unsafe: &[String])
                 || path.starts_with("docs/sysml/")
                 || path.starts_with("tools/common/data/")
                 || in_ring(path)
+                || crates
+                    .iter()
+                    .any(|dir| path.starts_with(&format!("{}/", dir.trim_end_matches('/'))))
                 || added_unsafe.contains(path)
         })
         .cloned()
         .collect()
 }
 
-/// The `core` and `item` rings' members, read from the manifest itself.
-fn ring_members() -> Result<Vec<String>> {
+/// The `core` and `item` rings' members, and the directories of the `core`
+/// and `item` crates, read from the manifest itself.
+fn ring_members() -> Result<(Vec<String>, Vec<String>)> {
     let interpreter = crate::check::python_interpreter()
         .ok_or_else(|| Error::new("no working Python interpreter on PATH"))?;
     let output = Command::new(interpreter)
@@ -281,17 +292,26 @@ fn ring_members() -> Result<Vec<String>> {
         .args([
             "-c",
             "import json, sys\n\
-             rings = json.load(open(sys.argv[1], encoding='utf-8'))['rings']\n\
-             print('\\n'.join(m for r in ('core', 'item') for m in rings[r]['members']))",
+             manifest = json.load(open(sys.argv[1], encoding='utf-8'))\n\
+             rings = manifest['rings']\n\
+             crates = manifest.get('crates', {}).get('members', {}).values()\n\
+             print('\\n'.join(['file ' + m for r in ('core', 'item') for m in rings[r]['members']]\n\
+                 + ['crate ' + c['path'] for c in crates if c['ring'] in ('core', 'item')]))",
             MANIFEST,
         ])
         .output()
         .map_err(|error| Error::new(format!("could not read {MANIFEST}: {error}")))?;
     crate::cargo::finished(output.status, "reading the certification item's rings")?;
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect())
+    let mut members = Vec::new();
+    let mut crates = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(member) = line.strip_prefix("file ") {
+            members.push(member.to_owned());
+        } else if let Some(dir) = line.strip_prefix("crate ") {
+            crates.push(dir.to_owned());
+        }
+    }
+    Ok((members, crates))
 }
 
 /// The kernel files to which the commits since `since` add a line holding
@@ -352,7 +372,8 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         .ok_or_else(|| Error::new("gate-rows needs --since <ref>, the branch's base (main)"))?;
     let branch = changed(since, "HEAD")?;
     // First, since it holds whether the gate stands or not.
-    let review = needs_review(&branch, &ring_members()?, &added_unsafe(since)?);
+    let (members, crates) = ring_members()?;
+    let review = needs_review(&branch, &members, &crates, &added_unsafe(since)?);
     if !review.is_empty() {
         println!(
             "needs the certification consultant's review before land.sh take \
@@ -509,7 +530,10 @@ mod tests {
     #[test]
     fn review_is_asked_for_the_rings_the_evidence_and_new_unsafe() {
         let members = vec!["audit.rs".to_owned(), "arch/**".to_owned()];
+        let crates = vec!["src/lib/fs/btrfs".to_owned()];
         let changed: Vec<String> = [
+            "src/lib/fs/btrfs/Cargo.toml",
+            "src/lib/fs/btrfs-vfs/src/lib.rs",
             "src/kernel/src/audit.rs",
             "src/kernel/src/arch/x86_64/cpu.rs",
             "src/kernel/src/fs/tmpfs.rs",
@@ -524,8 +548,9 @@ mod tests {
         .to_vec();
         let unsafe_added = vec!["src/kernel/src/net/tcp.rs".to_owned()];
         assert_eq!(
-            needs_review(&changed, &members, &unsafe_added),
+            needs_review(&changed, &members, &crates, &unsafe_added),
             [
+                "src/lib/fs/btrfs/Cargo.toml",
                 "src/kernel/src/audit.rs",
                 "src/kernel/src/arch/x86_64/cpu.rs",
                 "src/kernel/src/net/tcp.rs",

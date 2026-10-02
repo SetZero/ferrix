@@ -10,5 +10,48 @@
   ],
   "files": {
     "syscall/process.rs": 13
+  },
+  "//crates": [
+    "The item's library crates (certification-item.json, crates),",
+    "held whole: the unmarked calls in each one's product code.",
+    "The same ratchet as the files: a count may only fall, and",
+    "one that has fallen must be re-recorded. Each entry's own",
+    "note says who is burning it down; the target is zero."
+  ],
+  "crates": {
+    "ferrix-btrfs": {
+      "//": "Target zero. Being burned down by the btrfs-fallible agent on branch btrfs-fallible (2026-10-02), converting the crate to try_reserve and ferrix-fallible as btrfs joins the item; whoever lands the conversion re-records this count.",
+      "count": 19,
+      "by_file": {
+        "src/lib/fs/btrfs/src/chunk.rs": 2,
+        "src/lib/fs/btrfs/src/compress/zlib/block.rs": 2,
+        "src/lib/fs/btrfs/src/compress/zstd.rs": 1,
+        "src/lib/fs/btrfs/src/compress/zstd/huffman.rs": 2,
+        "src/lib/fs/btrfs/src/compress/zstd/literals.rs": 1,
+        "src/lib/fs/btrfs/src/compress/zstd/sequences.rs": 7,
+        "src/lib/fs/btrfs/src/compress/zstd/window.rs": 3,
+        "src/lib/fs/btrfs/src/volume.rs": 1
+      }
+    },
+    "ferrix-btrfs-write": {
+      "//": "Target zero. Being burned down by the btrfs-fallible agent on branch btrfs-fallible (2026-10-02), converting the crate to try_reserve and ferrix-fallible as btrfs joins the item; whoever lands the conversion re-records this count.",
+      "count": 166,
+      "by_file": {
+        "src/lib/fs/btrfs-write/src/chunks.rs": 6,
+        "src/lib/fs/btrfs-write/src/commit.rs": 13,
+        "src/lib/fs/btrfs-write/src/csum.rs": 6,
+        "src/lib/fs/btrfs-write/src/extent.rs": 15,
+        "src/lib/fs/btrfs-write/src/fs.rs": 38,
+        "src/lib/fs/btrfs-write/src/grow.rs": 16,
+        "src/lib/fs/btrfs-write/src/log.rs": 16,
+        "src/lib/fs/btrfs-write/src/node.rs": 11,
+        "src/lib/fs/btrfs-write/src/open.rs": 11,
+        "src/lib/fs/btrfs-write/src/ranges.rs": 8,
+        "src/lib/fs/btrfs-write/src/refs.rs": 6,
+        "src/lib/fs/btrfs-write/src/space.rs": 6,
+        "src/lib/fs/btrfs-write/src/tree.rs": 8,
+        "src/lib/fs/btrfs-write/src/volume.rs": 6
+      }
+    }
   }
 }

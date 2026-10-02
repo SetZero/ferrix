@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Hold the boundary of the certified item.
 
-`tools/common/data/certification-item.json` says which kernel files are inside the thing
+`tools/common/data/certification-item.json` says which kernel files and library crates are inside the thing
 four assurance ratings attach to. That file is the scope of every artifact in
 `docs/certification`: the Security Target's TOE, the hazard analysis's safety
 item, the traceability matrix, the coverage obligation. A boundary that lives
 only in a document is a boundary that has already moved.
 
-So this gate asserts three things.
+So this gate asserts four things.
 
   1. **Every kernel source file is classified.** A file in no ring fails the
      build. Without this the item grows by accretion -- somebody writes
@@ -26,6 +26,22 @@ So this gate asserts three things.
      not grow without editing this file's input, which is a diff somebody has
      to argue for. Stale entries fail too, so a fixed violation cannot leave
      a permanent exemption behind.
+
+  4. **Library crates are classified whole and held at their manifests.**
+     Since 2026-10-02 the item includes two crates outside the kernel,
+     `ferrix-btrfs` and `ferrix-btrfs-write`, under `crates` in the manifest.
+     A classified crate's files are product or test code by its module tree
+     (a file reached only through `#[cfg(test)] mod` is a host test; one
+     the tree does not reach fails). An item or core crate's shipping
+     dependencies -- `[dependencies]` and `[build-dependencies]`, target-
+     specific ones included, never `[dev-dependencies]` -- must be crates of
+     its own ring or below, or in `crates.infrastructure_allowlist`, whose
+     own dependencies are held to the same rule; each allowlist entry must
+     still be named by a core or item kernel file, which is its reason. And
+     a kernel file that names a classified crate (`ferrix_btrfs::..`) is an
+     edge to that crate's ring, under the same rules as rule 2. The
+     item-scoped gates (complexity, fallible allocation, the unsafe trace)
+     read the item crates' product files through `item_crate_product_files`.
 
 Product code and in-kernel test code are counted apart. A standard asks
 different questions of each, and conflating them flatters the item's size
@@ -523,6 +539,8 @@ def find_edges(manifest: dict, ring_of: dict[str, str], modules, refs) -> list[E
         for rule in manifest["dependency_rules"]
     }
     resolver = Resolver(modules)
+    # A path that starts at a classified library crate lands in its ring.
+    crates = {lib_name(name): entry["ring"] for name, entry in crate_entries(manifest).items()}
     edges: dict[tuple[str, str], Edge] = {}
     for ref in refs:
         ring = ring_of.get(ref.file)
@@ -534,6 +552,11 @@ def find_edges(manifest: dict, ring_of: dict[str, str], modules, refs) -> list[E
             continue
         found = resolver.resolve(ref.module, ref.segments, ref.is_use)
         if found is None:
+            first = ref.segments[1] if ref.segments[0] == "::" and len(ref.segments) > 1 else ref.segments[0]
+            if crates.get(first) in forbidden[ring]:
+                key = (ref.file, f"crate {first}")
+                if key not in edges:
+                    edges[key] = Edge(ref.file, ring, key[1], crates[first], ref.line)
             continue
         target_file = resolver.file_of(found[0])
         target_ring = ring_of.get(target_file) if target_file else None
@@ -607,6 +630,14 @@ def report(manifest: dict, ring_of: dict[str, str], modules, edges: list[Edge]) 
     share = 100.0 * certified / (total_product or 1)
     print(f"  the item is {share:.1f}% of the kernel's product code")
 
+    crates = crate_line_counts(manifest)
+    if crates:
+        print("\nitem-boundary: library crates, in lines (tests are host tests)")
+        for package, entry in sorted(crates.items(), key=lambda c: (RING_ORDER[c[1]["ring"]], c[0])):
+            print(f"  {entry['ring']:<6} {entry['product']:>7} product  {entry['test']:>7} test  {package}")
+        in_item = sum(e["product"] for e in crates.values() if e["ring"] in ("core", "item"))
+        print(f"  certified item with its crates: {certified + in_item} lines of product code")
+
     debt, root = split(manifest, edges)
     for title, group in (("upward reference(s)", debt), ("composition-root edge(s)", root)):
         if not group:
@@ -630,6 +661,277 @@ def report(manifest: dict, ring_of: dict[str, str], modules, edges: list[Edge]) 
             by_file[rel].append(child)
         for rel in sorted(by_file):
             print(f"  {rel}: {len(by_file[rel])}")
+
+
+# --- library crates ----------------------------------------------------------
+#
+# The rings above are kernel files. A library crate is classified whole, under
+# `crates` in the manifest, because a crate is what Cargo links and what a
+# dependency names. Three things are asked of one:
+#
+#   * which of its files are product code: the ones its module tree reaches
+#     from `src/lib.rs` other than through a `#[cfg(test)] mod`, which are
+#     host-test code. A file under `src/` the tree does not reach fails, as an
+#     unclassified kernel file does: nobody has said what it is;
+#   * that an item or core crate depends only on its own ring and the rings
+#     below, or on an allowlisted infrastructure crate, whose own dependencies
+#     are held to the same rule ([`crate_dependency_problems`]);
+#   * that a kernel file naming a crate is held to `dependency_rules` like a
+#     kernel file naming a module ([`find_edges`]).
+
+RING_ORDER = {"core": 0, "item": 1, "load": 2}
+# `#[cfg(test)]` exactly. `cfg(any(test, ..))` compiles into some product
+# build, so a module under it is product code and is read as such.
+CFG_TEST = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+DEPENDENCY_TABLES = ("dependencies", "build-dependencies")
+
+
+def crate_entries(manifest: dict) -> dict[str, dict]:
+    """The manifest's classified crates, by package name."""
+    return manifest.get("crates", {}).get("members", {})
+
+
+def crate_allowlist(manifest: dict) -> dict[str, str]:
+    """Allowlisted infrastructure crates, by package name, with the reason."""
+    allow = manifest.get("crates", {}).get("infrastructure_allowlist", {})
+    return {name: why for name, why in allow.items() if not name.startswith("//")}
+
+
+def _a(ring: str) -> str:
+    return f"an {ring}" if ring[:1] in "aeiou" else f"a {ring}"
+
+
+def lib_name(package: str) -> str:
+    return package.replace("-", "_")
+
+
+def crate_module_files(src_dir: Path, fake: dict[str, str] | None = None):
+    """`{path under src_dir: "product" | "test"}` for every file the module tree
+    reaches from `lib.rs`, and the problems met on the way.
+
+    A `mod x;` is followed to `x.rs` or `x/mod.rs` beside a `lib.rs` or a
+    `mod.rs`, and under `<stem>/` beside any other file; an inline `mod a { }`
+    puts its declarations one directory deeper. A declaration with
+    `#[cfg(test)]` among the attributes in front of it makes its file, and
+    everything below that file, test code."""
+    if fake is not None:
+        read, exists, listing = fake.__getitem__, fake.__contains__, sorted(fake)
+    else:
+        def read(rel: str) -> str:
+            return (src_dir / rel).read_text(encoding="utf-8", errors="replace")
+
+        def exists(rel: str) -> bool:
+            return (src_dir / rel).is_file()
+
+        listing = sorted(p.relative_to(src_dir).as_posix() for p in src_dir.rglob("*.rs")) \
+            if src_dir.is_dir() else []
+    kinds: dict[str, str] = {}
+    problems: list[str] = []
+    queue = [("lib.rs", "product")]
+    while queue:
+        rel, kind = queue.pop()
+        if rel in kinds:
+            continue
+        kinds[rel] = kind
+        source = read(rel)
+        masked = rustlex.mask(source)
+        if UNREADABLE.search(masked):
+            problems.append(f"{rel}: #[path] or include! -- its module tree is not where this gate looks")
+        stem = rel[:-3]
+        parts = stem.split("/")
+        base = "/".join(parts[:-1]) if parts[-1] in ("lib", "mod") else stem
+        pairs = rustlex.tokens(masked)
+        toks = [t for t, _ in pairs]
+        stack: list[tuple[str, int]] = []  # (inline module name, depth it closes at)
+        depth = 0
+        for i, tok in enumerate(toks):
+            if tok == "{":
+                depth += 1
+            elif tok == "}":
+                depth -= 1
+                if stack and depth == stack[-1][1]:
+                    stack.pop()
+            elif tok == "mod" and (i == 0 or toks[i - 1] not in ("::", ".")) and i + 2 < len(toks) \
+                    and IDENT.match(toks[i + 1]) and toks[i + 2] in (";", "{"):
+                name = _name(toks[i + 1])
+                if toks[i + 2] == "{":
+                    stack.append((name, depth))
+                    continue
+                # The attributes in front of the declaration: back over `pub`,
+                # `pub(..)` and `#[..]` groups to the previous item's end.
+                start = pairs[i][1]
+                head = masked[: start]
+                cut = max(head.rfind(";"), head.rfind("}"), head.rfind("{"))
+                attrs = head[cut + 1 :]
+                test = kind == "test" or bool(CFG_TEST.search(attrs))
+                directory = "/".join([p for p in [base] + [s for s, _ in stack] if p])
+                prefix = f"{directory}/{name}" if directory else name
+                found = [c for c in (f"{prefix}.rs", f"{prefix}/mod.rs") if exists(c)]
+                if not found:
+                    problems.append(f"{rel}: `mod {name};` has no file this gate can find")
+                    continue
+                queue.append((found[0], "test" if test else "product"))
+    for rel in listing:
+        if rel not in kinds:
+            problems.append(f"{rel}: under src/ but not in the crate's module tree, so neither product nor test")
+    return kinds, problems
+
+
+def crate_files(manifest: dict, rings: tuple[str, ...] = ("core", "item", "load")):
+    """`[(package, ring, path relative to the repository, kind)]` for every file
+    of every classified crate in `rings`, and the problems met."""
+    out = []
+    problems = []
+    for package, entry in sorted(crate_entries(manifest).items()):
+        if entry["ring"] not in rings:
+            continue
+        src_dir = ROOT / entry["path"] / "src"
+        kinds, found = crate_module_files(src_dir)
+        problems += [f"{entry['path']}/src/{p}" for p in found]
+        for rel, kind in sorted(kinds.items()):
+            out.append((package, entry["ring"], f"{entry['path']}/src/{rel}", kind))
+    return out, problems
+
+
+def item_crate_product_files(manifest: dict) -> list[tuple[str, str]]:
+    """`[(package, path relative to the repository)]`: the product code of the
+    `core` and `item` crates, which the item-scoped gates read beside the
+    kernel's item files. Fails loudly rather than reading less."""
+    files, problems = crate_files(manifest, ("core", "item"))
+    if problems:
+        raise SystemExit("item-boundary: cannot list the item crates' files:\n  " + "\n  ".join(problems))
+    return [(package, path) for package, _, path, kind in files if kind == "product"]
+
+
+def _dependency_names(cargo: dict, workspace: dict) -> list[str]:
+    """Package names in a manifest's shipping dependency tables, target-specific
+    ones included; a `package = ` rename is followed, here or in the workspace."""
+    tables = [cargo.get(name, {}) for name in DEPENDENCY_TABLES]
+    for target in cargo.get("target", {}).values():
+        tables += [target.get(name, {}) for name in DEPENDENCY_TABLES]
+    names = []
+    for table in tables:
+        for key, spec in table.items():
+            package = key
+            if isinstance(spec, dict):
+                if spec.get("workspace"):
+                    root_spec = workspace.get(key, {})
+                    if isinstance(root_spec, dict):
+                        package = root_spec.get("package", key)
+                package = spec.get("package", package)
+            names.append(package)
+    return sorted(set(names))
+
+
+def crate_dependency_problems(manifest: dict, cargo_of, workspace: dict) -> tuple[list[str], dict]:
+    """Break the crate-level rule: an item or core crate depending on a crate
+    of a higher ring, an unclassified one, or one reaching such a crate through
+    the allowlist. `cargo_of(package)` gives a parsed Cargo.toml or None;
+    `workspace` is the root's `[workspace.dependencies]`. Returns the problems
+    and, per allowlisted crate, the item crates that use it."""
+    entries = crate_entries(manifest)
+    allow = crate_allowlist(manifest)
+    problems = []
+    used: dict[str, set[str]] = {name: set() for name in allow}
+    for package, entry in sorted(entries.items()):
+        ring = entry["ring"]
+        if ring not in RING_ORDER:
+            problems.append(f"{package}: ring {ring!r} is none of {', '.join(RING_ORDER)}")
+            continue
+        if ring == "load":
+            continue
+        # The crate itself, then every allowlisted crate it reaches.
+        pending = [(package, package)]
+        seen = set()
+        while pending:
+            holder, via = pending.pop()
+            if holder in seen:
+                continue
+            seen.add(holder)
+            cargo = cargo_of(holder)
+            if cargo is None:
+                problems.append(f"{package}: cannot read the manifest of {holder}")
+                continue
+            for dep in _dependency_names(cargo, workspace):
+                chain = f"{package} -> {dep}" if holder == package else f"{package} -> {via} -> {dep}"
+                target = entries.get(dep)
+                if target is not None:
+                    if RING_ORDER.get(target["ring"], 9) > RING_ORDER[ring]:
+                        problems.append(f"{chain}: {_a(ring)} crate depends on {_a(target['ring'])} crate")
+                elif dep in allow:
+                    used[dep].add(package)
+                    pending.append((dep, dep if holder == package else via))
+                else:
+                    problems.append(
+                        f"{chain}: {_a(ring)} crate depends on a crate in no ring and not "
+                        f"in crates.infrastructure_allowlist"
+                    )
+    return problems, used
+
+
+def read_cargo(package: str, workspace: dict, entries: dict):
+    """A package's parsed Cargo.toml, found through the manifest or the
+    workspace's dependency table; None for a crate outside the tree."""
+    import tomllib
+
+    path = entries.get(package, {}).get("path")
+    if path is None:
+        spec = workspace.get(package)
+        path = spec.get("path") if isinstance(spec, dict) else None
+    if path is None or not (ROOT / path / "Cargo.toml").is_file():
+        return None
+    with (ROOT / path / "Cargo.toml").open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def check_crates(manifest: dict, ring_of: dict[str, str]) -> tuple[list[str], list[str]]:
+    """(problems, notes) of the crate-level rules over the real tree."""
+    import tomllib
+
+    with (ROOT / "Cargo.toml").open("rb") as handle:
+        workspace = tomllib.load(handle).get("workspace", {}).get("dependencies", {})
+    entries = crate_entries(manifest)
+    problems = []
+    for package, entry in sorted(entries.items()):
+        cargo = read_cargo(package, workspace, entries)
+        name = (cargo or {}).get("package", {}).get("name")
+        if name != package:
+            problems.append(f"{entry['path']}: Cargo.toml names {name!r}, the manifest {package!r}")
+    _, found = crate_files(manifest)
+    problems += found
+    deps, used = crate_dependency_problems(
+        manifest, lambda package: read_cargo(package, workspace, entries), workspace
+    )
+    problems += deps
+    # An allowlist entry's reason is that the core already relies on it, so
+    # some core or item kernel file has to name it still.
+    trusted = [rel for rel, ring in ring_of.items() if ring in ("core", "item")]
+    notes = []
+    for package, why in sorted(crate_allowlist(manifest).items()):
+        if not why.strip():
+            problems.append(f"crates.infrastructure_allowlist: {package} has no reason")
+        named = re.compile(rf"(?<![\w:]){lib_name(package)}\s*::")
+        if not any(
+            named.search(rustlex.mask((KERNEL_SRC / rel).read_text(encoding="utf-8", errors="replace")))
+            for rel in trusted
+        ):
+            problems.append(
+                f"crates.infrastructure_allowlist: no core or item kernel file names {package} any "
+                f"more, so the reason it is allowed has gone; remove it or classify it"
+            )
+        users = ", ".join(sorted(used.get(package, ()))) or "no item crate yet"
+        notes.append(f"{package} (allowlisted; used by {users})")
+    return problems, notes
+
+
+def crate_line_counts(manifest: dict) -> dict[str, dict[str, int]]:
+    """`{package: {"ring", "product", "test"}}` in lines, as for kernel files."""
+    files, _ = crate_files(manifest)
+    counts: dict[str, dict] = {}
+    for package, ring, path, kind in files:
+        entry = counts.setdefault(package, {"ring": ring, "product": 0, "test": 0})
+        entry[kind] += sum(1 for _ in (ROOT / path).open(encoding="utf-8", errors="replace"))
+    return counts
 
 
 # --- self-test ---------------------------------------------------------------
@@ -686,6 +988,74 @@ def self_test() -> list[str]:
             failures.append(f"resolver: {rel} names {sorted(seen[rel])}, expected {sorted(want)}")
     if modules.get(("sys", "inline")) is None or modules[("sys", "inline")].file != "sys/mod.rs":
         failures.append("resolver: inline module sys::inline not placed in sys/mod.rs")
+    failures += _crate_self_test()
+    return failures
+
+
+# A crate's module tree: product files, a test module in its own file and in a
+# directory below it, an inline module declaring a file, a `cfg(any(test,..))`
+# module that is product code, and a file nothing declares.
+_CRATE_TREE = {
+    "lib.rs": "pub mod a;\n#[cfg(test)]\nmod tests;\nmod inline { pub mod deep; }\n"
+              "#[cfg(any(test, feature = \"x\"))]\npub(crate) mod maybe;\n",
+    "a.rs": "/// docs\n#[cfg(test)]\n#[allow(dead_code)]\npub(crate) mod tests;\nfn f() {}\n",
+    "a/tests.rs": "mod more;\n",
+    "a/tests/more.rs": "",
+    "tests.rs": "",
+    "inline/deep.rs": "",
+    "maybe.rs": "",
+    "orphan.rs": "",
+}
+_CRATE_KINDS = {
+    "lib.rs": "product", "a.rs": "product", "a/tests.rs": "test", "a/tests/more.rs": "test",
+    "tests.rs": "test", "inline/deep.rs": "product", "maybe.rs": "product",
+}
+
+# The crate-level dependency rule. Each case is the dependencies of a pretend
+# `ferrix-btrfs-write`, and whether the rule must refuse it.
+_DEP_MANIFEST = {
+    "crates": {
+        "members": {
+            "ferrix-btrfs": {"ring": "item", "path": "-"},
+            "ferrix-btrfs-write": {"ring": "item", "path": "-"},
+            "ferrix-btrfs-vfs": {"ring": "load", "path": "-"},
+            "ferrix-low": {"ring": "core", "path": "-"},
+        },
+        "infrastructure_allowlist": {"ferrix-fallible": "why", "ferrix-sync": "why"},
+    }
+}
+_DEP_CASES = [
+    ("the reader, item", {"dependencies": {"ferrix-btrfs": {"workspace": True}}}, False),
+    ("a core crate", {"dependencies": {"ferrix-low": "0.1"}}, False),
+    ("an allowlisted crate", {"dependencies": {"ferrix-fallible": {"workspace": True}}}, False),
+    ("a load crate", {"dependencies": {"ferrix-btrfs-vfs": {"workspace": True}}}, True),
+    ("a crate in no ring", {"dependencies": {"ferrix-vfs": {"workspace": True}}}, True),
+    ("a load crate under a target", {"target": {"cfg(x)": {"dependencies": {"ferrix-btrfs-vfs": "1"}}}}, True),
+    ("a load crate to build with", {"build-dependencies": {"ferrix-btrfs-vfs": "1"}}, True),
+    ("a load crate renamed", {"dependencies": {"vfs": {"package": "ferrix-btrfs-vfs"}}}, True),
+    ("a load crate to test with", {"dev-dependencies": {"ferrix-btrfs-vfs": "1"}}, False),
+    ("the load through the allowlist", {"dependencies": {"ferrix-sync": "1"}}, True),
+]
+
+
+def _crate_self_test() -> list[str]:
+    failures = []
+    kinds, problems = crate_module_files(Path("-"), _CRATE_TREE)
+    if kinds != _CRATE_KINDS:
+        failures.append(f"crate tree: got {kinds}, expected {_CRATE_KINDS}")
+    if problems != ["orphan.rs: under src/ but not in the crate's module tree, so neither product nor test"]:
+        failures.append(f"crate tree: problems {problems}")
+    for what, cargo, refused in _DEP_CASES:
+        manifests = {
+            "ferrix-btrfs": {}, "ferrix-btrfs-vfs": {}, "ferrix-low": {}, "ferrix-fallible": {},
+            "ferrix-btrfs-write": cargo,
+            # Allowlisted, and reaching the load: the allowlist is no door.
+            "ferrix-sync": {"dependencies": {"ferrix-btrfs-vfs": "1"}},
+        }
+        problems, _ = crate_dependency_problems(_DEP_MANIFEST, manifests.get, {})
+        mine = [p for p in problems if p.startswith("ferrix-btrfs-write ")]
+        if bool(mine) != refused:
+            failures.append(f"crate rule: {what}: {'passed' if not mine else mine}")
     return failures
 
 
@@ -739,6 +1109,18 @@ def main() -> int:
         status = 1
 
     modules, edges, problems = measure(manifest, ring_of)
+    crate_problems, crate_notes = check_crates(manifest, ring_of)
+    if crate_problems:
+        print(
+            f"item-boundary: {len(crate_problems)} problem(s) with the classified crates.\n"
+            f"  An item crate may depend only on item and core crates and on\n"
+            f"  crates.infrastructure_allowlist; every file of a classified crate\n"
+            f"  has to be product or test code by its module tree:",
+            file=sys.stderr,
+        )
+        for problem in crate_problems:
+            print(f"    {problem}", file=sys.stderr)
+        status = 1
 
     if problems:
         print(
@@ -782,14 +1164,20 @@ def main() -> int:
     )
 
     counts = line_counts(manifest, ring_of)
-    certified = counts["core"]["product"] + counts["item"]["product"]
+    crates = crate_line_counts(manifest)
+    item_crates = {p: e for p, e in crates.items() if e["ring"] in ("core", "item")}
+    in_crates = sum(e["product"] for e in item_crates.values())
+    certified = counts["core"]["product"] + counts["item"]["product"] + in_crates
     print(
         f"item-boundary: {certified} lines of product code in the item "
-        f"({counts['core']['product']} of it core), "
-        f"{counts['load']['product']} uncertified, "
+        f"({counts['core']['product']} of it core, {in_crates} in "
+        f"{len(item_crates)} crate(s): {', '.join(sorted(item_crates))}), "
+        f"{counts['load']['product']} uncertified in the kernel, "
         f"{len(debt)} known upward reference(s), "
         f"{len(root_edges)} composition-root edge(s)"
     )
+    for note in crate_notes:
+        print(f"  {note}")
     return status
 
 

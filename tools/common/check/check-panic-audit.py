@@ -25,11 +25,18 @@ and why it needs an attribute at all.
      instead of accumulating a stale one. An `allow` would sit there forever
      with nobody the wiser.
 
+The scope is every production crate, so the item's library crates
+(`ferrix-btrfs`, `ferrix-btrfs-write`; `crates` in
+`tools/common/data/certification-item.json`) were under both rules before they
+joined the item. What joining adds is a count of their product files'
+exemptions, printed apart, so the item's own number is visible in a diff.
+
 Usage:  python3 tools/common/check/check-panic-audit.py
 """
 
 from __future__ import annotations
 
+import importlib.util
 import pathlib
 import re
 import sys
@@ -116,6 +123,15 @@ def main() -> int:
     root = pathlib.Path(__file__).resolve().parent.parent.parent.parent
     problems: list[str] = []
     audited = 0
+    spec = importlib.util.spec_from_file_location(
+        "boundary", root / "tools" / "common" / "check" / "check-item-boundary.py"
+    )
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    item_crate_files = {
+        path: package for package, path in gate.item_crate_product_files(gate.load_manifest())
+    }
+    in_crates = {package: 0 for package in item_crate_files.values()}
 
     for name in ROOTS:
         for path in sorted((root / name).rglob("*.rs")):
@@ -126,6 +142,9 @@ def main() -> int:
             found, count = check(path)
             problems.extend(found)
             audited += count
+            package = item_crate_files.get(path.relative_to(root).as_posix())
+            if package is not None:
+                in_crates[package] += count
 
     if problems:
         for problem in problems:
@@ -145,6 +164,8 @@ def main() -> int:
         return 1
 
     print(f"panic-audit: {audited} exemption(s) in production code, all argued")
+    print("panic-audit: of them in the item's crates: "
+          + ", ".join(f"{package} {count}" for package, count in sorted(in_crates.items())))
     return 0
 
 

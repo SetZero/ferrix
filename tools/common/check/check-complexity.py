@@ -13,6 +13,15 @@ the `core` and `item` rings, product code only. The uncertified load above them
 carries no assurance claim and is measured but not enforced, so the numbers can
 be compared.
 
+Since 2026-10-02 that includes the item's library crates, `ferrix-btrfs` and
+`ferrix-btrfs-write` (`crates` in the manifest): every product file their module
+trees reach, with any inline `#[cfg(test)] mod` blanked, since tests are
+verification. Their functions are keyed by the path from the repository root
+(`src/lib/fs/btrfs/src/tree.rs::search`), the kernel's by the path under
+`src/kernel/src`, so the two cannot collide. Recursion matters more there, not
+less: a B-tree walk is the natural place to write it, and on a kernel stack
+with no guard page it has to be bounded by the tree's level, not by the data.
+
 Three measures
 --------------
 
@@ -144,9 +153,22 @@ def measure(path: Path) -> list[dict]:
     return measure_source(path.read_text(encoding="utf-8", errors="replace"))
 
 
+TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+
+
+def without_test_modules(text: str) -> str:
+    """`text` with every inline `#[cfg(test)] mod x { ... }` blanked, length kept."""
+    for match in TEST_MODULE.finditer(text):
+        end = body_of(text, match.end() - 1)
+        if end is not None:
+            stop = end[1] + 1
+            text = text[: match.start()] + re.sub(r"[^\n]", " ", text[match.start() : stop]) + text[stop:]
+    return text
+
+
 def measure_source(source: str) -> list[dict]:
     """Every function in `source`, with its three scores."""
-    text = strip(source)
+    text = without_test_modules(strip(source))
     found: list[dict] = []
 
     for match in FN.finditer(text):
@@ -209,6 +231,12 @@ def item_functions() -> list[dict]:
             fn["file"] = rel
             fn["ring"] = ring
             out.append(fn)
+    for package, path in gate.item_crate_product_files(manifest):
+        for fn in measure(ROOT / path):
+            fn["file"] = path
+            fn["ring"] = gate.crate_entries(manifest)[package]["ring"]
+            fn["crate"] = package
+            out.append(fn)
     return out
 
 
@@ -228,6 +256,14 @@ def over_floor(functions: list[dict]) -> dict[str, dict]:
 
 
 def report(functions: list[dict]) -> None:
+    for package in sorted({fn["crate"] for fn in functions if "crate" in fn}):
+        mine = [fn for fn in functions if fn.get("crate") == package]
+        over = over_floor(mine)
+        print(f"complexity: crate {package}: {len(mine)} functions, {len(over)} over a floor, "
+              f"{sum(1 for fn in mine if fn['recursive'])} directly recursive")
+        for key, fn in sorted(over.items()):
+            mark = ", recursive" if fn["recursive"] else ""
+            print(f"    {fn['complexity']:>4}  {fn['lines']:>4} lines{mark}  {key}")
     print(f"complexity: {len(functions)} functions in the certified item")
     worst = sorted(functions, key=lambda f: -f["complexity"])[:12]
     print("  worst by approximate cyclomatic complexity:")
@@ -279,6 +315,11 @@ fn ferrix_switch_body() {
         ret "for" if
     "#);
 }
+
+#[cfg(test)]
+mod tests {
+    fn only_a_test() { if a { only_a_test() } }
+}
 """
 
 _SELF_EXPECT = {
@@ -298,6 +339,8 @@ def self_test() -> list[str]:
     for name, want in _SELF_EXPECT.items():
         if got.get(name) != want:
             failures.append(f"measure: {name} is {got.get(name)}, expected {want}")
+    if "only_a_test" in got:
+        failures.append("measure: a function in a #[cfg(test)] module was measured")
     if "ferrix_switch" in got:
         failures.append("measure: an extern declaration was measured as a function")
     return failures

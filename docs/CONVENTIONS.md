@@ -136,7 +136,10 @@ quietly break it. So send the branch and commit to the certification
 consultant session before `land.sh take` when a change:
 
 * touches a file in the `core` or `item` ring of
-  `tools/common/data/certification-item.json`, or the file itself;
+  `tools/common/data/certification-item.json`, any file of a crate its
+  `crates` section puts in either ring (since 2026-10-02 `ferrix-btrfs` and
+  `ferrix-btrfs-write`, their tests and `Cargo.toml` included), or the file
+  itself;
 * is a kernel change in the load ring that adds `unsafe`, a countermeasure,
   or a check the item's evidence relies on;
 * changes a requirement, a check or a baseline under `docs/sysml/` or

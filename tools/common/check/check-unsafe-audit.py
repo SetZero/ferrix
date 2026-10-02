@@ -58,6 +58,13 @@ whose comment spells it any other way (measured, rustc 1.97.1). One site may
 name two ids, `(FRAME, DMA)`, when its one operation meets both; the per-id
 counts count it under each.
 
+Since 2026-10-02 the item also includes two library crates, `ferrix-btrfs`
+and `ferrix-btrfs-write` (`crates` in the manifest). Their product files --
+what their module trees reach except through `#[cfg(test)] mod`; their tests
+are host tests and never in the image -- are item files here, named by their
+path from the repository root. Both are `#![forbid(unsafe_code)]` today, so
+they hold no site; the scope is so that the first one is traced.
+
 Two more rules follow:
 
   4. An id anywhere in the tree must be one the registry defines. An id that
@@ -279,9 +286,10 @@ def load_obligations() -> dict[str, dict]:
     return {entry["id"]: entry for entry in register.get("unsafe_obligations", [])}
 
 
-def item_files() -> dict[str, str]:
+def item_files() -> tuple[dict[str, str], dict[str, str]]:
     """Every kernel file in the `core` or `item` ring, relative to
-    src/kernel/src, with its ring."""
+    src/kernel/src, with its ring; and every product file of an item crate,
+    relative to the repository, with its crate."""
     spec = importlib.util.spec_from_file_location(
         "boundary", ROOT / "tools" / "common" / "check" / "check-item-boundary.py"
     )
@@ -289,7 +297,9 @@ def item_files() -> dict[str, str]:
     spec.loader.exec_module(gate)
     manifest = gate.load_manifest()
     ring_of, _, _ = gate.classify(manifest, gate.kernel_files())
-    return {rel: ring for rel, ring in ring_of.items() if ring in ("core", "item")}
+    kernel = {rel: ring for rel, ring in ring_of.items() if ring in ("core", "item")}
+    crates = {path: package for package, path in gate.item_crate_product_files(manifest)}
+    return kernel, crates
 
 
 # --- self-test ---------------------------------------------------------------
@@ -389,7 +399,8 @@ def main() -> int:
         return 0
 
     obligations = load_obligations()
-    item = item_files()
+    item, item_crate_files = item_files()
+    crate_sites: dict[str, int] = {package: 0 for package in item_crate_files.values()}
     problems: list[str] = []
     unknown: list[str] = []
     per_crate: dict[str, int] = {}
@@ -417,7 +428,11 @@ def main() -> int:
                     if ident not in obligations:
                         unknown.append(f"{label}:{site.line}: ({ident}) is no obligation id")
             rel = path.relative_to(KERNEL_SRC).as_posix() if path.is_relative_to(KERNEL_SRC) else None
-            if rel in item:
+            if label in item_crate_files:
+                # An item crate's product file, named from the repository root.
+                rel = label
+                crate_sites[item_crate_files[label]] += len(sites)
+            if rel in item or rel in item_crate_files:
                 item_sites += len(sites)
                 for site in sites:
                     for ident in site.ids:
@@ -505,6 +520,8 @@ def main() -> int:
     )
     for ident, count in sorted(per_id.items(), key=lambda item: (-item[1], item[0])):
         print(f"    {count:5}  ({ident})")
+    print("unsafe-audit: of them in the item's crates: "
+          + ", ".join(f"{package} {count}" for package, count in sorted(crate_sites.items())))
     return status
 
 
