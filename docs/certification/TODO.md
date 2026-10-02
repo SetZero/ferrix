@@ -484,8 +484,12 @@ is left, each with how to know it is done:
 
 1. **Done 2026-10-02: fallible allocation in the write path** (`H.STORE.7`,
    `L.btrfs.22`, `L.btrfs.108` to `L.btrfs.116`, `L.mm.63`, `L.mm.64`; branch
-   `btrfs-fallible`). Both crates count 0 sites, the host tests fail every
-   allocation in turn, and both ids left the baseline. It was done when
+   `btrfs-fallible`). Both crates count 0 sites, held there by a `cargo xtask
+   check` step that names `L.btrfs.22` (`item_crates_allocate_fallibly`);
+   the host tests fail every allocation in turn and name `H.STORE.7` and
+   `L.btrfs.108` to `L.btrfs.116`; and both ids left the baseline. The plan
+   below said a host test would name `L.btrfs.22`: a gate does, since the
+   property is one of the source, not of a run. It was done when
    `check-fallible-alloc.py` reads both crates and finds no unmarked site,
    a host test fails every allocation of a create, a data write, a commit
    and an open in turn and names `L.btrfs.22` and `H.STORE.7` in its

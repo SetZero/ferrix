@@ -275,21 +275,14 @@ fn run_failing_at(packed: &[u8], at: u64, persist: bool, after: &(u64, Tree)) ->
 }
 
 /// Which allocations of `made` to fail: every one, and the one after the
-/// last; past a few thousand, every one of the first thousand, where opening
-/// and the first edits are, and then a spread over the rest that reaches the
-/// last.
+/// last. A scenario that grew past 5,000 allocations fails here rather than
+/// being sampled silently: shorten it, or decide on sampling in the open.
 fn sample(made: u64) -> Vec<u64> {
-    if made <= 5000 {
-        return (1..=made + 1).collect();
-    }
-    let mut out: Vec<u64> = (1..=1000).collect();
-    let mut at = 1000;
-    while at < made {
-        at += 37;
-        out.push(at.min(made));
-    }
-    out.push(made + 1);
-    out
+    assert!(
+        made <= 5000,
+        "{made} allocations: too many to fail every one"
+    );
+    (1..=made + 1).collect()
 }
 
 /// Verifies: L.btrfs.116
@@ -364,8 +357,20 @@ fn opening_out_of_memory_answers_out_of_memory() {
                     Ok(_) => {}
                     Err(error) => assert_eq!(error, Error::OutOfMemory, "allocation {at}"),
                 }
-                // A failed open wrote nothing: the disk opens again and checks
-                // clean, holding what an undisturbed open found.
+                // A failed open wrote nothing: no write reached the device,
+                // whose bytes are the image's; it opens again and checks clean,
+                // holding what an undisturbed open found.
+                {
+                    let device = disk.0.borrow();
+                    assert!(
+                        device.log.iter().all(|op| matches!(op, super::Op::Flush)),
+                        "allocation {at}: the open wrote to the device"
+                    );
+                    assert!(
+                        device.blocks == MemDevice::new(packed).blocks,
+                        "allocation {at}: the device's bytes changed"
+                    );
+                }
                 let mut volume = WriteVolume::open(disk.clone()).unwrap();
                 assert_eq!(volume.generation(), generation, "allocation {at}");
                 let reopened = items_shared(&mut volume);

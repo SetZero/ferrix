@@ -20,12 +20,12 @@
   ],
   "crates": {
     "ferrix-btrfs": {
-      "//": "Target zero. Being burned down by the btrfs-fallible agent on branch btrfs-fallible (2026-10-02), converting the crate to try_reserve and ferrix-fallible as btrfs joins the item; whoever lands the conversion re-records this count.",
+      "//": "Held at 0 by cargo xtask check (L.btrfs.22): converted to try_reserve and ferrix-fallible on 2026-10-02, the reader's name matches argued NOALLOC.",
       "count": 0,
       "by_file": {}
     },
     "ferrix-btrfs-write": {
-      "//": "Target zero. Being burned down by the btrfs-fallible agent on branch btrfs-fallible (2026-10-02), converting the crate to try_reserve and ferrix-fallible as btrfs joins the item; whoever lands the conversion re-records this count.",
+      "//": "Held at 0 by cargo xtask check (L.btrfs.22): converted to try_reserve and ferrix-fallible on 2026-10-02, the reader's name matches argued NOALLOC.",
       "count": 0,
       "by_file": {}
     }
