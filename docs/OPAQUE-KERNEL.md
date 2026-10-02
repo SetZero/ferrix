@@ -863,7 +863,8 @@ certification consultant. `os-ipc/prof` and `os-ipc/prof2` are timing builds
 land. The per-span figures they gave are the ones in §9.1 and the list above.
 
 **Step 1 (2026-10-02), branch `ipc-step1`.** The six commits are on it, on
-`main` at 039fd5963 and the reservation of L.object.128-132 (6991fdd67).
+`main` at 5e1341d35 and the reservation of L.object.128-132 and L.sched.5-8
+(16605f863).
 The two owed checks are `object::write_read_check`, stage 9's `wrread` line,
 which makes every call through each architecture's own entry from a thread
 of a check's process:
@@ -882,8 +883,23 @@ complexity floor are split, and `native::answer`'s one new arm is recorded.
 `ipc-bench` carries the `domain-call` run from 5658e7c0c, on `main`'s
 `Job::create_speculation_domain`. Measured on that head, KVM, one
 processor, back to back at a load of 7 to 13, p50 (mitigations on, then
-off): `call` 6.5 us and 2.8 us, and `domain-call` 3.0 us both ways. The
-branch goes to the certification consultant before it lands.
+off): `call` 6.5 us and 2.8 us, and `domain-call` 3.0 us both ways.
+
+The consultant's review (2026-10-02) was OK IF, with four conditions,
+each met on the branch:
+1. The trusting wait reads the message and the close under the end's
+   inbox lock. A kill and an `execve` are ordered against it by a `SeqCst`
+   fence pair (`wait_trusting`'s documentation gives each waker's order).
+2. The `sync` line: a Sync write from another processor moves a reader
+   free to move in at least one of 8 rounds. A pinned reader is woken
+   where it is pinned.
+3. The timer keeps the clock read after the arm, so a skip is never late
+   (the `arm` line). The clock's conversion is ferrix-vdso's
+   `counter_nanos`, host-tested against the 128-bit formula. The deferred
+   decisions are bounded in MEMORY-AND-TIMING §2.2c. The rows are
+   L.sched.5-8.
+4. A kernel reader takes the slot's message in the inbox's spare buffer
+   without allocating, and `ReadError::NoMemory` is gone.
 
 ### 9.5 Within 1.5 times seL4: the plan (2026-10-01, os-86)
 
