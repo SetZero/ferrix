@@ -253,10 +253,10 @@ pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (X11; Ferrix; not Linux x86_64)
 /// stay `Linux`. Those are constants in Chrome's build, whatever `uname`
 /// says, and no switch reaches them: saying Ferrix there takes a Chromium
 /// built from source.
-/// Where the image carries the tree's `assets/fonts/`: Inter, Liberation and the
-/// fontconfig file that adds them to the system's, which `FONTCONFIG_FILE`
-/// names ([`WINDOW_ENV`]). `assets/fonts/README.md` says what each face is for and
-/// where it came from.
+/// Where the image carries the tree's `assets/fonts/`: Inter, Liberation, Noto
+/// Sans CJK and the fontconfig file that adds them to the system's, which
+/// `FONTCONFIG_FILE` names ([`WINDOW_ENV`]). `assets/fonts/README.md` says what
+/// each face is for and where it came from.
 const FONTS: &str = "usr/share/ferrix/fonts";
 
 /// `assets/fonts/`'s files, by their path under it.
@@ -328,6 +328,14 @@ const FONT_FILES: &[(&str, &[u8])] = &[
     (
         "liberation/LICENSE",
         include_bytes!("../../../../assets/fonts/liberation/LICENSE"),
+    ),
+    (
+        "noto-cjk/NotoSansCJK-VF.otf.ttc",
+        include_bytes!("../../../../assets/fonts/noto-cjk/NotoSansCJK-VF.otf.ttc"),
+    ),
+    (
+        "noto-cjk/LICENSE",
+        include_bytes!("../../../../assets/fonts/noto-cjk/LICENSE"),
     ),
 ];
 
@@ -735,6 +743,7 @@ mod tests {
         for face in [
             "inter/InterVariable.ttf",
             "liberation/LiberationSans-Regular.ttf",
+            "noto-cjk/NotoSansCJK-VF.otf.ttc",
         ] {
             assert!(paths.contains(&format!("{FONTS}/{face}")), "{face}");
         }

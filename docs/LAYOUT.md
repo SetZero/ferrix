@@ -170,7 +170,7 @@ that exercise the system from outside any one crate.
 
 | Path | What |
 |---|---|
-| `assets/fonts/` | Inter and Liberation, with their licences, and `fonts.conf`. xtask puts them into the image under `/usr/share/ferrix/fonts`. |
+| `assets/fonts/` | Inter, Liberation and Noto Sans CJK, with their licences, and `fonts.conf`. xtask puts them into the image under `/usr/share/ferrix/fonts`. |
 | `assets/start/` | The page Chrome opens on a desktop. xtask fills in the boot's keys and facts and puts it under `/usr/share/ferrix/start`. |
 
 ## `tools/`

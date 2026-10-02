@@ -10,6 +10,7 @@ them in `/usr/share/ferrix/fonts` on every image that runs Chrome in a window
 |---|---|---|---|
 | `inter/` | Inter, variable, upright and italic | 4.1 | SIL Open Font License 1.1, `inter/LICENSE` |
 | `liberation/` | Liberation Sans, Serif and Mono, four styles each | 2.1.5 | SIL Open Font License 1.1, `liberation/LICENSE` |
+| `noto-cjk/` | Noto Sans CJK, variable, Japanese, Korean, Simplified, Traditional and Hong Kong Chinese | 2.004 | SIL Open Font License 1.1, `noto-cjk/LICENSE` |
 
 **Inter** is fontconfig's sans-serif: what a program gets for `sans`,
 `sans-serif` or `system-ui`, Chrome's own tabs, toolbar and menus among
@@ -23,7 +24,14 @@ for those does not reflow. Chrome's default fonts on Linux are those three,
 and a great many pages name them; fontconfig's `30-metric-aliases.conf`
 answers them with Liberation.
 
-The OFL lets both be bundled and redistributed with software, provided the
+**Noto Sans CJK** draws Chinese, Japanese and Korean, which neither of the
+others has a glyph for: without it, a page's title in Japanese is a row of
+boxes. Nothing names it; fontconfig offers it to Chrome as the fallback for
+the characters the first choice lacks. The one collection holds every
+weight from Thin to Black for all five regions, which share most of their
+glyphs, in 33 MB, and fontconfig picks the region by the page's language.
+
+The OFL lets all three be bundled and redistributed with software, provided the
 licence travels with them and they are not sold on their own. It does, in
 each directory.
 
@@ -35,8 +43,11 @@ Each file is unchanged from its project's release archive:
 |---|---|
 | [`Inter-4.1.zip`](https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip) | `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e` |
 | [`liberation-fonts-ttf-2.1.5.tar.gz`](https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz) | `7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0` |
+| [`01_NotoSansCJK-OTF-VF.zip`](https://github.com/notofonts/noto-cjk/releases/download/Sans2.004/01_NotoSansCJK-OTF-VF.zip) | `d5e33aebad9f8a0c0896a4a29199ef85ca966134db164426c74e83e6f13c43cd` |
 
 `inter/LICENSE` is the archive's `LICENSE.txt`.
+`noto-cjk/NotoSansCJK-VF.otf.ttc` is the archive's
+`Variable/OTC/NotoSansCJK-VF.otf.ttc`.
 
 ## `fonts.conf`
 
