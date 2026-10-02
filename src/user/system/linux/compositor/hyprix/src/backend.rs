@@ -300,6 +300,10 @@ pub struct Drm {
     /// Whether the card said its connectors changed and nobody has asked
     /// [`Backend::modes_changed`] since.
     modes_changed: bool,
+    /// The thread that flushes what the GPU drew, made at the first such
+    /// flush (`crate::flush`): the loop does not wait for the host to show
+    /// a frame.
+    flushing: Option<crate::flush::FlushThread>,
 }
 
 /// How often a lost screen's card is looked for.
@@ -411,6 +415,7 @@ impl Drm {
             cursors: [None, None],
             next_cursor: 0,
             modes_changed: false,
+            flushing: None,
         })
     }
 
@@ -460,6 +465,7 @@ impl Drm {
     /// Note that the card went away, for [`Backend::recover`] to look for it
     /// from the next frame on.
     fn lose(&mut self) {
+        self.flushing = None;
         self.lost = Some(
             std::time::Instant::now()
                 .checked_sub(RETRY)
@@ -613,10 +619,37 @@ impl Backend for Drm {
                 .collect();
             // A frame that drew nothing has nothing to send, and an empty
             // list would say "all of it".
-            if !clips.is_empty() {
-                self.card.dirty(buffer, &clips)
-            } else {
+            if clips.is_empty() {
                 Ok(())
+            } else if self.adopted.is_some() {
+                // What the GPU drew is flushed by a thread of its own, the
+                // loop going on meanwhile (`crate::flush`): the drawing and
+                // the flush reach the host in order on one queue, so the
+                // next frame's drawing cannot tear this one. Not a copied
+                // dumb buffer, which the next frame is drawn into while the
+                // host may still be copying it.
+                if self.flushing.is_none() {
+                    self.flushing = self
+                        .card
+                        .flusher()
+                        .and_then(crate::flush::FlushThread::start)
+                        .ok();
+                }
+                match self.flushing.as_ref() {
+                    Some(thread) if thread.gone() => {
+                        Err(io::Error::from_raw_os_error(libc::ENODEV))
+                    }
+                    Some(thread) => {
+                        thread.flush(buffer.framebuffer(), &clips);
+                        match thread.refused() {
+                            Some(refusal) => Err(io::Error::other(refusal)),
+                            None => Ok(()),
+                        }
+                    }
+                    None => self.card.dirty(buffer, &clips),
+                }
+            } else {
+                self.card.dirty(buffer, &clips)
             }
         } else {
             self.card.page_flip(&self.plan, buffer)

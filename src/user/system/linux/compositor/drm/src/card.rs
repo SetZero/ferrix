@@ -2,7 +2,7 @@
 
 use std::ffi::CStr;
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, FbDirtyCmd, Field, GetBlob,
@@ -144,13 +144,20 @@ impl Card {
     /// Run `request` with `value` as its argument, and read the kernel's
     /// answer back into it.
     fn ioctl<L: Layout>(&self, request: u32, value: &mut L) -> io::Result<()> {
+        ioctl_on(self.fd, request, value)
+    }
+}
+
+/// [`Card::ioctl`] on any descriptor of a card, a [`Flusher`]'s too.
+fn ioctl_on<L: Layout>(fd: libc::c_int, request: u32, value: &mut L) -> io::Result<()> {
+    {
         let mut bytes = vec![0u8; L::SIZE];
         value
             .write(&mut bytes)
             .ok_or_else(|| io::Error::other("a structure larger than its buffer"))?;
         // SAFETY: `bytes` is a live buffer of exactly the size the request's
         // number encodes, which the kernel reads and writes within.
-        let result = unsafe { libc::ioctl(self.fd, request as _, bytes.as_mut_ptr()) };
+        let result = unsafe { libc::ioctl(fd, request as _, bytes.as_mut_ptr()) };
         if result < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -989,37 +996,27 @@ impl Card {
     ///
     /// Whatever the card said.
     pub fn dirty(&self, buffer: &dyn Shown, clips: &[(u32, u32, u32, u32)]) -> io::Result<()> {
-        let edge = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
-        let mut bytes = vec![0u8; clips.len().min(MAX_CLIPS) * ClipRect::SIZE];
-        for (&(x, y, width, height), out) in
-            clips.iter().zip(bytes.chunks_exact_mut(ClipRect::SIZE))
-        {
-            ClipRect {
-                x1: edge(x),
-                y1: edge(y),
-                x2: edge(x.saturating_add(width)),
-                y2: edge(y.saturating_add(height)),
-            }
-            .write(out)
-            .ok_or_else(|| io::Error::other("a clip larger than its buffer"))?;
+        dirty_on(self.fd, buffer.framebuffer(), clips)
+    }
+
+    /// A second descriptor on this card, for a thread of the compositor's
+    /// own to make its [`Card::dirty`] calls on: on a virtio-gpu each waits
+    /// until the host has shown the frame, which a compositor's loop should
+    /// not.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `fcntl(F_DUPFD_CLOEXEC)` said.
+    pub fn flusher(&self) -> io::Result<Flusher> {
+        // SAFETY: `fcntl` duplicates a descriptor this card owns; the copy
+        // is owned by the `Flusher`, which closes it.
+        let fd = unsafe { libc::fcntl(self.fd, libc::F_DUPFD_CLOEXEC, 0) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
         }
-        let mut command = FbDirtyCmd {
-            fb_id: buffer.framebuffer(),
-            // More clips than the call takes is all of it, which is what
-            // none at all says.
-            num_clips: if clips.len() > MAX_CLIPS {
-                0
-            } else {
-                u32::try_from(clips.len()).unwrap_or(0)
-            },
-            clips_ptr: if clips.is_empty() || clips.len() > MAX_CLIPS {
-                0
-            } else {
-                address(&mut bytes)
-            },
-            ..FbDirtyCmd::ZERO
-        };
-        self.ioctl(drm::IOCTL_MODE_DIRTYFB, &mut command)
+        // SAFETY: `fd` was just made and nothing else owns it.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        Ok(Flusher { fd })
     }
 
     /// The size of the image this card's cursor plane shows, if it has one:
@@ -1133,4 +1130,55 @@ impl Card {
         let pixels = unsafe { core::slice::from_raw_parts_mut(base.cast::<u8>(), size) };
         Ok(pixels)
     }
+}
+
+/// A second descriptor on a card, which makes [`Card::dirty`]'s call and no
+/// other ([`Card::flusher`]).
+#[derive(Debug)]
+pub struct Flusher {
+    fd: OwnedFd,
+}
+
+impl Flusher {
+    /// [`Card::dirty`] for the framebuffer `framebuffer`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said; `ENODEV` once its driver has gone.
+    pub fn dirty(&self, framebuffer: u32, clips: &[(u32, u32, u32, u32)]) -> io::Result<()> {
+        dirty_on(self.fd.as_raw_fd(), framebuffer, clips)
+    }
+}
+
+/// `DRM_IOCTL_MODE_DIRTYFB` on descriptor `fd`: [`Card::dirty`]'s body.
+fn dirty_on(fd: libc::c_int, framebuffer: u32, clips: &[(u32, u32, u32, u32)]) -> io::Result<()> {
+    let edge = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
+    let mut bytes = vec![0u8; clips.len().min(MAX_CLIPS) * ClipRect::SIZE];
+    for (&(x, y, width, height), out) in clips.iter().zip(bytes.chunks_exact_mut(ClipRect::SIZE)) {
+        ClipRect {
+            x1: edge(x),
+            y1: edge(y),
+            x2: edge(x.saturating_add(width)),
+            y2: edge(y.saturating_add(height)),
+        }
+        .write(out)
+        .ok_or_else(|| io::Error::other("a clip larger than its buffer"))?;
+    }
+    let mut command = FbDirtyCmd {
+        fb_id: framebuffer,
+        // More clips than the call takes is all of it, which is what
+        // none at all says.
+        num_clips: if clips.len() > MAX_CLIPS {
+            0
+        } else {
+            u32::try_from(clips.len()).unwrap_or(0)
+        },
+        clips_ptr: if clips.is_empty() || clips.len() > MAX_CLIPS {
+            0
+        } else {
+            address(&mut bytes)
+        },
+        ..FbDirtyCmd::ZERO
+    };
+    ioctl_on(fd, drm::IOCTL_MODE_DIRTYFB, &mut command)
 }
