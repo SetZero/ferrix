@@ -26,13 +26,6 @@
       "purpose": "S4: Verdict::Trap (allocated by os-bd)"
     },
     {
-      "ids": ["L.object.118-120"],
-      "owner": "nvidia",
-      "branch": "nvidia-n0f",
-      "date": "2026-10-02",
-      "purpose": "NVIDIA N0f (docs/NVIDIA.md §12.2): a per-device pin budget set through SET_LIMIT, refused past it, the quarantine bounded at twice it"
-    },
-    {
       "ids": ["L.iommu.47-55", "L.x86_64.129-132", "L.device.27-28", "H.DMA.9"],
       "owner": "nvidia",
       "branch": "nvidia-n0g",

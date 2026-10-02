@@ -578,11 +578,13 @@ package FerrixObjectRequirements {
     }
 
     package Pins {
-        doc /* src/kernel/src/object/pin.rs. The quarantine's own check,
-             * check_quarantine, is in object/pin/check.rs, a child module that
-             * may read what pin.rs keeps to itself, and verifies the three
-             * quarantine requirements. The domain side of a pin is iommu's
-             * (part 16). */
+        doc /* src/kernel/src/object/pin.rs. The budget's and the quarantine's
+             * checks, P1 to P5 of docs/NVIDIA.md section 12.2, are in
+             * object/pin/check.rs, a child module that may read what pin.rs
+             * keeps to itself. Each device has a pin budget B, and live,
+             * quarantined and kept counts against it, kept on its domain under
+             * the quarantine's lock (NVIDIA N0f). The domain side of a pin is
+             * iommu's (part 16). */
 
         requirement <'L.object.45'> aDeviceGetsExactlyItsPages : ItemLowLevel {
             attribute :>> statement = "A pin shall map exactly the held pages of the
@@ -592,8 +594,8 @@ package FerrixObjectRequirements {
                 of which the domain translates to the VMO's page holding what the
                 VMO holds.";
             attribute :>> parent = "H.DMA.3";
-            attribute :>> unit = ("object::pin::Pin::with_cap", "object::pin::Pin::new",
-                "object::pin::Pin::addresses");
+            attribute :>> unit = ("object::pin::Pin::with_budget", "object::pin::Pin::map",
+                "object::pin::Pin::new", "object::pin::Pin::addresses");
         }
         requirement <'L.object.46'> unpinnedBeforeFreed : ItemLowLevel {
             attribute :>> statement = "Dropping a pin of a live owner shall take its
@@ -603,40 +605,91 @@ package FerrixObjectRequirements {
             attribute :>> criterion = "On a translated domain a closed pin's pages
                 are no longer reachable through the domain.";
             attribute :>> parent = "H.DMA.3";
-            attribute :>> unit = "object::pin::Pin::drop";
+            attribute :>> unit = ("object::pin::Pin::drop", "object::pin::keep");
         }
         requirement <'L.object.47'> aDeadDriversPinIsQuarantined : ItemLowLevel {
             attribute :>> statement = "Dropping a pin on a translated domain after
                 its owner terminated shall keep its pages mapped and its frames
-                held, charged to nobody, in the quarantine, and a pin closed by a
-                live owner shall not be quarantined.";
-            attribute :>> criterion = "A pin closed by a dead process adds its 1
-                page to the domain's quarantine; one closed by a live process adds
-                0.";
+                held, charged to nobody, in the quarantine, moving them from its
+                device's live count to its quarantined count; a pin closed by a
+                live owner shall not be quarantined, and its pages shall leave the
+                live count.";
+            attribute :>> criterion = "A 2-page pin closed by a dead process leaves
+                the device 2 pages quarantined and 0 live; a pin closed by a live
+                process leaves 0 live, 0 quarantined and 0 kept.";
             attribute :>> parent = "H.DMA.4";
             attribute :>> unit = ("object::pin::Pin::drop", "object::pin::quarantine",
-                "object::pin::fold");
+                "object::pin::fold", "object::pin::unreserve");
         }
-        requirement <'L.object.48'> theQuarantineIsCapped : ItemLowLevel {
-            attribute :>> statement = "A pin shall be refused while its device's
-                quarantine holds the cap's worth of pages.";
-            attribute :>> criterion = "With a cap of one page and one page
-                quarantined, the next pin is refused QuarantineFull.";
+        requirement <'L.object.48'> twiceTheBudgetBoundsTheQuarantine : ItemLowLevel {
+            attribute :>> statement = "A pin shall be refused QuarantineFull, with
+                nothing counted, when its device's quarantined and live pages and
+                its own would pass twice the device's budget.";
+            attribute :>> criterion = "With a budget of 2 pages and nothing kept: a
+                2-page pin is taken with 2 pages quarantined; a 1-page pin is
+                refused with 4 quarantined; a 2-page pin is refused with 3
+                quarantined.";
             attribute :>> parent = "H.DMA.4";
-            attribute :>> unit = ("object::pin::Pin::with_cap",
-                "object::pin::quarantined_pages");
+            attribute :>> unit = ("object::pin::reserve", "object::pin::Pin::with_budget");
         }
         requirement <'L.object.49'> theQuarantineGoesBackOnHello : ItemLowLevel {
             attribute :>> statement = "quarantine_release shall give back every
                 quarantined pin of the device's domain, out of the domain first and
                 then to the allocator, counting the pages written after their driver
-                died.";
-            attribute :>> criterion = "A release gives back exactly the pages
-                quarantined and leaves the domain's quarantine at 0 pages; a pin is
-                taken again afterwards.";
+                died, and take off the quarantined count exactly the pages it gave
+                back; a pin whose unpin is refused shall move to the kept count,
+                which counts against twice the budget for good.";
+            attribute :>> criterion = "Of two 1-page quarantined pins, one refused
+                its unpin: the release gives back 1 page and leaves 0 quarantined
+                and 1 kept; a 2-page pin is then taken at a budget of 2; with 2
+                more pages quarantined, a 2-page pin is refused QuarantineFull (1
+                kept + 2 + 2 > 4).";
             attribute :>> parent = "H.DMA.4";
             attribute :>> unit = ("object::pin::quarantine_release",
-                "object::pin::release", "object::pin::fold");
+                "object::pin::release", "object::pin::fold",
+                "object::pin::account_release");
+        }
+        requirement <'L.object.118'> theBudgetIsTheDelegators : ItemLowLevel {
+            attribute :>> statement = "device_set_limit shall set a device's pin
+                budget only through a handle carrying SET_LIMIT, never while the
+                device has live pins, and never so that twice every budget raised
+                above the default would pass the ceiling, a quarter of RAM; a
+                refusal shall change nothing. device_get_limit shall answer the
+                budget, the ceiling and the room.";
+            attribute :>> criterion = "Without SET_LIMIT the set is ACCESS_DENIED;
+                with a live pin, BAD_STATE; a budget whose double passes the room,
+                NO_MEMORY, with the budget and the room read back unchanged; the
+                ceiling read back is the kernel's, nonzero, and the room no more
+                than it.";
+            attribute :>> parent = ("H.DMA.4", "H.OBJ.2");
+            attribute :>> unit = ("object::pin::set_budget", "object::pin::raise_of",
+                "object::pin::room", "object::pin::ceiling_room",
+                "object::pin::count_ceiling", "object::pin::counts",
+                "syscall::native::device_set_limit",
+                "syscall::native::device_get_limit");
+        }
+        requirement <'L.object.119'> aPinPastTheBudgetIsRefused : ItemLowLevel {
+            attribute :>> statement = "A pin shall be refused LimitReached, with
+                nothing pinned and nothing counted, when its device's live pages and
+                its own would pass the device's budget.";
+            attribute :>> criterion = "With a budget of 2 pages, a 2-page pin is
+                taken and counted 2 live, and a 1-page pin after it is refused
+                LimitReached with the live count still 2.";
+            attribute :>> parent = "H.DMA.4";
+            attribute :>> unit = ("object::pin::reserve", "object::pin::Pin::new",
+                "object::pin::announce");
+        }
+        requirement <'L.object.120'> liveIsReservedBeforeThePin : ItemLowLevel {
+            attribute :>> statement = "A pin's pages shall be counted live under the
+                quarantine's lock, in the step that tests the budget, before the
+                domain maps them, and given back if the domain refuses.";
+            attribute :>> criterion = "A page pinned twice into one domain is
+                refused by the domain, and the live count is as before the refused
+                pin.";
+            attribute :>> parent = "H.DMA.4";
+            attribute :>> unit = ("object::pin::Pin::with_budget", "object::pin::Pin::map",
+                "object::pin::reserve", "object::pin::unreserve",
+                "object::pin::PinBudget::write");
         }
     }
 

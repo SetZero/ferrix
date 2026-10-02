@@ -63,7 +63,7 @@
     "mm::print_frame_delta": "Prints which way a check's frame count missed, for a check about to fail; called only from check files. Nothing private keeps it in mm.rs; it can move to mm/check.rs with FrameWindow.",
     "mm::unlinked::UnlinkedTables::frames": "The frames a list holds, for smp/check.rs's check that an unmap's tables are still held; it reads the list's private links.",
     "object::as_if_draining_elsewhere": "Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs.",
-    "object::process::Exit::for_check": "An end no process has, for object/pin/check.rs's check_quarantine; it needs Exit's private constructor.",
+    "object::process::Exit::for_check": "An end no process has, for object/pin/check.rs's budget checks; it needs Exit's private constructor.",
     "sched::trip::answered": "A stamp point of the seam's depth-1 trace (block_ring/trip_check.rs). Unarmed it loads TRACING and returns; only hop_check arms it. It sits in block_ring's complete() under the disk's state lock, which is what keeps it in product code.",
     "sched::trip::arm": "Raises the seam's depth-1 trace and zeroes its counts; its only caller is block_ring/hop_check.rs.",
     "sched::trip::bell": "A stamp point of the seam's depth-1 trace, on the ring task's bell to the driver. Unarmed it loads TRACING and returns; only hop_check arms it.",

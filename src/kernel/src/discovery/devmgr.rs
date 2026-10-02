@@ -62,11 +62,18 @@ const NAME: &[u8] = b"devmgr";
 /// HELLO; generous under TCG.
 const REPORT_PATIENCE_NANOS: u64 = 20_000_000_000;
 
+/// The rights of the device handle `devmgr` hands on, the first of each
+/// pair: a driver's, and `SET_LIMIT`, for the device's pin budget, which is
+/// `devmgr`'s to set and never the driver's: every launch path narrows the
+/// handle to exactly a driver's rights before it goes (`docs/NVIDIA.md`
+/// §12.2).
+const GIVEN_DEVICE_RIGHTS: Rights = Rights(DEVICE_RIGHTS.0 | Rights::SET_LIMIT.0);
+
 /// The rights of the device handle `devmgr` keeps, the second of each pair:
-/// a driver's, and `DUPLICATE`, so a driver that died can be started again
+/// the first's, and `DUPLICATE`, so a driver that died can be started again
 /// with a handle of its own while `devmgr` keeps this one for the next
 /// quiesce (`docs/DEVMGR.md` §4).
-const KEPT_DEVICE_RIGHTS: Rights = Rights(DEVICE_RIGHTS.0 | Rights::DUPLICATE.0);
+const KEPT_DEVICE_RIGHTS: Rights = Rights(GIVEN_DEVICE_RIGHTS.0 | Rights::DUPLICATE.0);
 
 /// Read a whole file from the root the initramfs was unpacked into: how
 /// `devmgr`'s program, its drivers and their manifest are read.
@@ -502,7 +509,7 @@ fn write_devices(
         for node in nodes.iter().skip(index).take(take) {
             let _ = fallible::push_within(
                 &mut transfers,
-                (Object::Device(Arc::clone(node)), DEVICE_RIGHTS),
+                (Object::Device(Arc::clone(node)), GIVEN_DEVICE_RIGHTS),
             );
             let _ = fallible::push_within(
                 &mut transfers,

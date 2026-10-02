@@ -76,11 +76,11 @@ const MAX_EVENTS: usize = 64;
 /// a third buffer (`docs/DISPLAY.md` §2.1).
 pub(crate) const CARD_BYTES: u64 = 256 * 1024 * 1024;
 
-// The pin quarantine's cap counts a driver's pins as at most the card
-// (`object::pin::QUARANTINE_CAP_PAGES`).
+// A device's default pin budget counts a driver's pins as at most the card
+// (`object::pin::DEFAULT_PIN_BUDGET_PAGES`).
 const _: () = assert!(
     CARD_BYTES / PAGE_SIZE <= crate::object::pin::LARGEST_DRIVER_PIN_PAGES as u64,
-    "the card is larger than the quarantine's cap allows a driver to pin"
+    "the card is larger than a device's default pin budget allows a driver to pin"
 );
 
 /// How long the core waits for its driver's HELLO.

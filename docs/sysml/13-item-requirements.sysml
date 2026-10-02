@@ -669,9 +669,9 @@ package FerrixItemRequirements {
                 after the driver dies until its replacement announces itself, and the
                 frames so held shall be bounded.";
             attribute :>> criterion = "A dead driver's pin is quarantined, a pin past
-                the quarantine's cap is refused and taken again once the quarantine
-                is released, and a live driver's pin is given back (the `iommu`
-                quarantine line).";
+                twice the device's pin budget, its quarantine counted, is refused
+                and taken again once the quarantine is released, and a live
+                driver's pin is given back (the `iommu` pin budget line).";
             attribute :>> parent = ("O.DMA", "O.QUOTA");
         }
         requirement <'H.DMA.5'> registersOnlyThroughApertures : ItemHighLevel {

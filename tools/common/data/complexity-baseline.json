@@ -311,7 +311,7 @@
     },
     "syscall/native.rs::answer": {
       "complexity": 29,
-      "lines": 92,
+      "lines": 94,
       "recursive": false
     },
     "syscall/native.rs::channel_read": {

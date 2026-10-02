@@ -46,10 +46,28 @@
 //! that published and of the one after it that died before publishing, and
 //! one more driver's for each explicit rebind an administrator asks of a
 //! device whose drivers keep dying so (SAFETY-MANUAL AoU-12). The kernel does
-//! not rely on that: a domain whose quarantine holds
-//! [`QUARANTINE_CAP_PAGES`] refuses the next pin for its device
-//! ([`PinError::QuarantineFull`]) until a release, so the device stops
-//! working rather than the memory grow.
+//! not rely on that: see the budget below.
+//!
+//! # The budget
+//!
+//! Each device has a pin budget `B`, in pages ([`PinBudget`], kept on its
+//! domain, `docs/NVIDIA.md` §12.2): [`DEFAULT_PIN_BUDGET_PAGES`] until
+//! `devmgr`, which alone holds `SET_LIMIT` on the device, sets another
+//! ([`set_budget`]). Against it three counts are kept, each read and changed
+//! only under [`QUARANTINE`]'s lock: `live`, the pages of the device's pins
+//! still open, reserved before the domain is asked to map them ([`reserve`])
+//! and given back if it refuses; `quarantined`, the pages its quarantine
+//! holds; and `kept`, the pages kept for good because the domain would not
+//! give them back or the device can reach them untranslated. A pin of `n`
+//! pages is refused, with nothing mapped, when `live + n > B`
+//! ([`PinError::LimitReached`]), and when `quarantined + kept + live + n >
+//! 2B` ([`PinError::QuarantineFull`]). A death moves pages from `live` to
+//! `quarantined` or `kept` and never adds to the sum, and a release takes off
+//! `quarantined` only what it gave back, so the memory a device's pins hold
+//! never passes `2B`: two drivers' worth, the last that published and one
+//! that died before publishing. A budget raised above the default is
+//! counted against the kernel's ceiling, a quarter of RAM ([`ceiling`]); the
+//! default is not, as it is the per-device bound AoU-12 accepts.
 //!
 //! Until the release, a quarantined page stays reachable by its device, and
 //! so by that device's next driver, which is the dead one's successor in the
@@ -61,7 +79,7 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_frame::Frame;
 use ferrix_paging::{MapFlags, PAGE_SIZE};
@@ -83,26 +101,44 @@ static KEPT: AtomicBool = AtomicBool::new(false);
 /// Whether a quarantined pin has been announced.
 static QUARANTINED: AtomicBool = AtomicBool::new(false);
 
-/// Every quarantined pin's frames, newest first.
-static QUARANTINE: SpinLock<Option<Box<Quarantined>>> = SpinLock::new(None);
+/// Every quarantined pin's frames, newest first, and what raised budgets
+/// hold of the ceiling. Its lock is also the one every [`PinBudget`]'s
+/// counts are read and changed under: a leaf, taken for a few loads and
+/// stores, never across an unpin or the allocator.
+static QUARANTINE: SpinLock<Quarantine> = SpinLock::new(Quarantine {
+    head: None,
+    raised: 0,
+});
+
+/// What [`QUARANTINE`] guards beside the budgets' counts.
+struct Quarantine {
+    /// Every quarantined pin, newest first.
+    head: Option<Box<Quarantined>>,
+    /// Twice every budget raised above [`DEFAULT_PIN_BUDGET_PAGES`], in
+    /// pages: what [`ceiling`] bounds.
+    raised: usize,
+}
 
 /// Pins refused because their device's quarantine was full, since boot.
 static REFUSED: AtomicU64 = AtomicU64::new(0);
 
-/// The pages a device's quarantine may hold before a new pin for the device
-/// is refused ([`PinError::QuarantineFull`]): memory the kernel holds for no
-/// job, so the kernel bounds it itself rather than trust devmgr to stop
-/// restarting.
+/// The kernel's ceiling on twice every raised budget, in pages: a quarter of
+/// the RAM the allocator manages, counted at stage 10 ([`count_ceiling`]).
+/// Zero until then, which refuses every raise.
+static CEILING: AtomicUsize = AtomicUsize::new(0);
+
+/// A device's pin budget until `devmgr` sets another: one driver's worst
+/// case. Twice it bounds what a device's pins hold, for the two drivers
+/// devmgr's restart rule allows to have pinned: it starts no driver again
+/// after one that died before its HELLO was accepted.
 ///
-/// Chosen as two drivers' worst case, since devmgr starts no driver again
-/// after one that died before its HELLO was accepted: the largest pin set a
-/// Ferrix driver makes is the GPU's windows onto the display card, 256 MiB
-/// (`display::CARD_BYTES`, 65536 pages, which the display core asserts fits),
-/// and every driver's rings, areas and scratch are under 1024 pages more. Seen
-/// in the gates: 1580 pages for a `gpu` at 1024x768, 20 for `snd`. A
-/// quarantine can pass the cap by what drivers already pinned when it was
-/// reached, never by a pin made after.
-pub(crate) const QUARANTINE_CAP_PAGES: usize = 2 * (LARGEST_DRIVER_PIN_PAGES + 1024);
+/// The largest pin set a Ferrix driver makes today is the GPU's windows onto
+/// the display card, 256 MiB (`display::CARD_BYTES`, 65536 pages, which the
+/// display core asserts fits), and every driver's rings, areas and scratch
+/// are under 1024 pages more. Seen in the gates: 1580 pages for a `gpu` at
+/// 1024x768, 20 for `snd`. So twice the default is the fixed cap the
+/// quarantine had before budgets, and no existing driver sees a change.
+pub(crate) const DEFAULT_PIN_BUDGET_PAGES: usize = LARGEST_DRIVER_PIN_PAGES + 1024;
 
 /// The most pages one driver pins: the display card, 256 MiB.
 pub(crate) const LARGEST_DRIVER_PIN_PAGES: usize = 256 * 1024 * 1024 / PAGE_SIZE as usize;
@@ -124,6 +160,240 @@ struct Quarantined {
     next: Option<Box<Quarantined>>,
 }
 
+/// A device's pin budget and the pages counted against it, kept on its
+/// domain (`docs/NVIDIA.md` §12.2).
+///
+/// Atomic only so that a shared domain can carry them without `unsafe`:
+/// every field but the two announcements is read and changed under
+/// [`QUARANTINE`]'s lock alone, so a check and the count it allows are one
+/// step.
+#[derive(Debug)]
+pub(crate) struct PinBudget {
+    /// `B`, in pages.
+    budget: AtomicUsize,
+    /// Pages of pins still open, reserved before the domain maps them.
+    live: AtomicUsize,
+    /// Pages in the quarantine.
+    quarantined: AtomicUsize,
+    /// Pages kept for good: a pin the domain would not give back, one that
+    /// could not be quarantined, one closed on an untranslated domain.
+    kept: AtomicUsize,
+    /// Whether a pin past the budget has been announced for this device.
+    said_limit: AtomicBool,
+    /// Whether a pin past twice the budget has been announced.
+    said_full: AtomicBool,
+}
+
+impl PinBudget {
+    /// The default budget, and nothing counted.
+    pub(crate) const fn new() -> Self {
+        PinBudget {
+            budget: AtomicUsize::new(DEFAULT_PIN_BUDGET_PAGES),
+            live: AtomicUsize::new(0),
+            quarantined: AtomicUsize::new(0),
+            kept: AtomicUsize::new(0),
+            said_limit: AtomicBool::new(false),
+            said_full: AtomicBool::new(false),
+        }
+    }
+
+    /// The four numbers, read under the caller's hold of [`QUARANTINE`].
+    fn read(&self, _held: &Quarantine) -> Counts {
+        Counts {
+            budget: self.budget.load(Ordering::Relaxed),
+            live: self.live.load(Ordering::Relaxed),
+            quarantined: self.quarantined.load(Ordering::Relaxed),
+            kept: self.kept.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Store `counts`, under the caller's hold of [`QUARANTINE`].
+    fn write(&self, _held: &mut Quarantine, counts: Counts) {
+        self.budget.store(counts.budget, Ordering::Relaxed);
+        self.live.store(counts.live, Ordering::Relaxed);
+        self.quarantined
+            .store(counts.quarantined, Ordering::Relaxed);
+        self.kept.store(counts.kept, Ordering::Relaxed);
+    }
+}
+
+/// A device's budget and its counts at one moment, in pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Counts {
+    /// `B`.
+    pub(crate) budget: usize,
+    /// Pages of live pins.
+    pub(crate) live: usize,
+    /// Pages in the quarantine.
+    pub(crate) quarantined: usize,
+    /// Pages kept for good.
+    pub(crate) kept: usize,
+}
+
+impl fmt::Display for Counts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "budget {} pages, {} live, {} quarantined, {} kept",
+            self.budget, self.live, self.quarantined, self.kept
+        )
+    }
+}
+
+/// `domain`'s budget and counts now.
+pub(crate) fn counts(domain: &Domain) -> Counts {
+    let held = QUARANTINE.lock();
+    domain.pin_budget().read(&held)
+}
+
+/// Count the kernel's ceiling: a quarter of the RAM the allocator manages.
+/// Stage 10 calls it once, before any budget can be set.
+pub(crate) fn count_ceiling() {
+    let quarter = usize::try_from(mm::managed_frames() / 4).unwrap_or(usize::MAX);
+    CEILING.store(quarter, Ordering::Relaxed);
+}
+
+/// The kernel's ceiling on twice every raised budget, in pages.
+pub(crate) fn ceiling() -> usize {
+    CEILING.load(Ordering::Relaxed)
+}
+
+/// What twice `budget` holds of the ceiling: nothing at or below the
+/// default (`docs/NVIDIA.md` §12.2, F5).
+fn raise_of(budget: usize) -> usize {
+    if budget > DEFAULT_PIN_BUDGET_PAGES {
+        budget.saturating_mul(2)
+    } else {
+        0
+    }
+}
+
+/// What of the ceiling budgets raised on devices other than `domain`'s
+/// leave: the most twice `domain`'s budget may be.
+pub(crate) fn room(domain: &Domain) -> usize {
+    let held = QUARANTINE.lock();
+    let own = raise_of(domain.pin_budget().read(&held).budget);
+    ceiling().saturating_sub(held.raised.saturating_sub(own))
+}
+
+/// What of the ceiling raised budgets leave, for a device whose budget was
+/// never set and so holds none of it.
+pub(crate) fn ceiling_room() -> usize {
+    let held = QUARANTINE.lock();
+    ceiling().saturating_sub(held.raised)
+}
+
+/// Why a budget was not set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BudgetError {
+    /// The device has live pins.
+    LivePins,
+    /// Raised budgets would hold more than the ceiling.
+    PastCeiling,
+}
+
+/// Set `domain`'s pin budget to `pages`: for `device_set_limit`, whose
+/// caller holds `SET_LIMIT`.
+///
+/// # Errors
+///
+/// [`BudgetError::LivePins`] while the device has live pins, tested under
+/// the lock a pin's reservation takes, so no pin is counted against one
+/// budget and held against another; [`BudgetError::PastCeiling`] when twice
+/// every raised budget, this one's new value counted and its old one not,
+/// would pass [`ceiling`]. Nothing changes on either.
+pub(crate) fn set_budget(domain: &Domain, pages: usize) -> Result<(), BudgetError> {
+    let mut held = QUARANTINE.lock();
+    let pins = domain.pin_budget();
+    let mut now = pins.read(&held);
+    if now.live != 0 {
+        return Err(BudgetError::LivePins);
+    }
+    let raised = held
+        .raised
+        .saturating_sub(raise_of(now.budget))
+        .saturating_add(raise_of(pages));
+    if raised > ceiling() {
+        return Err(BudgetError::PastCeiling);
+    }
+    held.raised = raised;
+    now.budget = pages;
+    pins.write(&mut held, now);
+    Ok(())
+}
+
+/// Reserve `pages` of live pins against `domain`'s budget, or `budget` for a
+/// boot check's pin, testing both rules and counting the pages in one step
+/// under the lock (`docs/NVIDIA.md` §12.2, F1 and F2).
+///
+/// # Errors
+///
+/// [`PinError::LimitReached`] when the live pins would pass the budget, and
+/// [`PinError::QuarantineFull`] when quarantined, kept and live pages would
+/// pass twice it. Nothing is counted then.
+fn reserve(domain: &Domain, pages: usize, budget: Option<usize>) -> Result<(), PinError> {
+    let mut held = QUARANTINE.lock();
+    let pins = domain.pin_budget();
+    let mut now = pins.read(&held);
+    let budget = budget.unwrap_or(now.budget);
+    let live = now.live.saturating_add(pages);
+    if live > budget {
+        return Err(PinError::LimitReached);
+    }
+    let all = now
+        .quarantined
+        .saturating_add(now.kept)
+        .saturating_add(live);
+    if all > budget.saturating_mul(2) {
+        return Err(PinError::QuarantineFull);
+    }
+    now.live = live;
+    pins.write(&mut held, now);
+    Ok(())
+}
+
+/// Give back `pages` [`reserve`] counted for a pin the domain then refused,
+/// or one closed and given back whole.
+fn unreserve(domain: &Domain, pages: usize) {
+    let mut held = QUARANTINE.lock();
+    let pins = domain.pin_budget();
+    let mut now = pins.read(&held);
+    now.live = now.live.saturating_sub(pages);
+    pins.write(&mut held, now);
+}
+
+/// Move `pages` of a closed pin from `live` to `kept`: its frames stay held
+/// for good.
+fn keep(domain: &Domain, pages: usize) {
+    let mut held = QUARANTINE.lock();
+    let pins = domain.pin_budget();
+    let mut now = pins.read(&held);
+    now.live = now.live.saturating_sub(pages);
+    now.kept = now.kept.saturating_add(pages);
+    pins.write(&mut held, now);
+}
+
+/// What a release did with one quarantined pin's pages.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Release {
+    /// Given back to the allocator: off `quarantined`.
+    Freed,
+    /// The domain would not unpin them: from `quarantined` to `kept`.
+    Kept,
+}
+
+/// Count `pages` a release took out of `domain`'s quarantine as `how`.
+fn account_release(domain: &Domain, pages: usize, how: Release) {
+    let mut held = QUARANTINE.lock();
+    let pins = domain.pin_budget();
+    let mut now = pins.read(&held);
+    now.quarantined = now.quarantined.saturating_sub(pages);
+    if how == Release::Kept {
+        now.kept = now.kept.saturating_add(pages);
+    }
+    pins.write(&mut held, now);
+}
+
 /// Pages of a VMO pinned into a device's domain.
 pub(crate) struct Pin {
     /// The domain they are pinned into.
@@ -141,6 +411,8 @@ pub(crate) struct Pin {
     spare: Option<Box<Quarantined>>,
     /// Whether it is a boot check's, which says nothing on the console.
     quiet: bool,
+    /// The pages it counts in its device's `live`, until it is closed.
+    pages: usize,
 }
 
 impl fmt::Debug for Pin {
@@ -153,46 +425,79 @@ impl fmt::Debug for Pin {
 }
 
 impl Pin {
-    /// Pin `held`'s pages into `domain`, writable when `flags` says so, for
-    /// the process whose end is `owner`.
+    /// Pin `held`'s pages into `node`'s domain `domain`, writable when
+    /// `flags` says so, for the process whose end is `owner`, against the
+    /// device's budget.
     ///
     /// # Errors
     ///
-    /// What the domain refused, and [`PinError::NoMemory`] for the
-    /// quarantine's record. The hold is then released: nothing was mapped.
+    /// [`PinError::LimitReached`] and [`PinError::QuarantineFull`] for the
+    /// budget's two rules, the first of each per device announced with its
+    /// counts; what the domain refused; [`PinError::NoMemory`] for the
+    /// quarantine's record. The hold is then released and nothing is counted:
+    /// nothing was mapped.
     pub(crate) fn new(
-        domain: Arc<Domain>,
+        node: &DeviceNode,
+        domain: &Arc<Domain>,
         held: Held,
         flags: MapFlags,
         owner: Arc<Exit>,
     ) -> Result<Pin, PinError> {
-        Pin::with_cap(domain, held, flags, owner, QUARANTINE_CAP_PAGES, false)
+        let pages = held.frames().len();
+        let made = Pin::with_budget(Arc::clone(domain), held, flags, owner, None, false);
+        if let Err(why @ (PinError::LimitReached | PinError::QuarantineFull)) = made {
+            announce(node, domain, pages, why);
+        }
+        made
     }
 
-    /// [`Pin::new`], refused when `domain`'s quarantine holds `cap` pages or
-    /// more; `quiet` for a boot check's, which neither announces nor counts.
-    fn with_cap(
+    /// [`Pin::new`]'s work, against `budget` in place of the device's when a
+    /// boot check gives one; `quiet` for a boot check's, which neither
+    /// announces nor counts in [`REFUSED`].
+    fn with_budget(
         domain: Arc<Domain>,
         held: Held,
         flags: MapFlags,
         owner: Arc<Exit>,
-        cap: usize,
+        budget: Option<usize>,
         quiet: bool,
     ) -> Result<Pin, PinError> {
-        if domain.translated() && quarantined_pages(&domain) >= cap {
-            if !quiet && REFUSED.fetch_add(1, Ordering::Relaxed) == 0 {
-                println!(
-                    "  iommu    a device's quarantine is full: its next pins are refused \
-                     until a driver of it is accepted"
-                );
+        let pages = held.frames().len();
+        if let Err(why) = reserve(&domain, pages, budget) {
+            if why == PinError::QuarantineFull && !quiet {
+                let _ = REFUSED.fetch_add(1, Ordering::Relaxed);
             }
-            return Err(PinError::QuarantineFull);
+            return Err(why);
         }
+        match Pin::map(&domain, &held, flags) {
+            Ok((spare, pinned)) => Ok(Pin {
+                domain,
+                pinned: Some(pinned),
+                held: Some(held),
+                owner,
+                spare,
+                quiet,
+                pages,
+            }),
+            Err(why) => {
+                unreserve(&domain, pages);
+                Err(why)
+            }
+        }
+    }
+
+    /// The quarantine's record of a pin of `held` -- on a translated domain
+    /// only -- and the domain's mapping of it, for pages already reserved.
+    fn map(
+        domain: &Arc<Domain>,
+        held: &Held,
+        flags: MapFlags,
+    ) -> Result<(Option<Box<Quarantined>>, Pinned), PinError> {
         let spare = if domain.translated() {
             let frames = fallible::try_boxed_slice(held.frames())?;
             let sums = fallible::try_boxed_filled(0, frames.len())?;
             Some(fallible::try_box(Quarantined {
-                domain: Arc::clone(&domain),
+                domain: Arc::clone(domain),
                 pinned: None,
                 frames,
                 sums,
@@ -201,21 +506,35 @@ impl Pin {
         } else {
             None
         };
-        let pinned = domain.pin(held.frames(), flags)?;
-        Ok(Pin {
-            domain,
-            pinned: Some(pinned),
-            held: Some(held),
-            owner,
-            spare,
-            quiet,
-        })
+        Ok((spare, domain.pin(held.frames(), flags)?))
     }
 
     /// Each page's device address, in page order.
     pub(crate) fn addresses(&self) -> &[u64] {
         self.pinned.as_ref().map_or(&[], Pinned::addresses)
     }
+}
+
+/// Say, the first time for `node`, that a pin of `pages` was refused `why`,
+/// with the device's counts.
+fn announce(node: &DeviceNode, domain: &Domain, pages: usize, why: PinError) {
+    let pins = domain.pin_budget();
+    let (said, rule) = if why == PinError::LimitReached {
+        (&pins.said_limit, "past its pin budget")
+    } else {
+        (
+            &pins.said_full,
+            "past twice its pin budget, counting its quarantine",
+        )
+    };
+    if said.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    println!(
+        "  iommu    {}: a pin of {pages} pages was refused, {rule}: {}",
+        node.location(),
+        counts(domain),
+    );
 }
 
 impl Drop for Pin {
@@ -226,7 +545,7 @@ impl Drop for Pin {
         if let Some(spare) = self.spare.take()
             && self.owner.is_terminated()
         {
-            quarantine(spare, pinned, held, self.quiet);
+            quarantine(spare, pinned, held, self.quiet, self.pages);
             return;
         }
         let freeable = match self.domain.unpin(pinned) {
@@ -238,9 +557,11 @@ impl Drop for Pin {
         };
         if freeable {
             drop(held);
+            unreserve(&self.domain, self.pages);
             return;
         }
         let _ = core::mem::ManuallyDrop::new(held);
+        keep(&self.domain, self.pages);
         if !KEPT.swap(true, Ordering::Relaxed) {
             println!(
                 "  iommu    a pin was closed while its device may still reach its pages: \
@@ -257,7 +578,9 @@ pub(crate) enum PinError {
     Domain(DomainError),
     /// No memory for the quarantine's record.
     NoMemory,
-    /// The device's quarantine holds [`QUARANTINE_CAP_PAGES`] already.
+    /// The device's live pins would pass its budget.
+    LimitReached,
+    /// Its quarantined, kept and live pages would pass twice its budget.
     QuarantineFull,
 }
 
@@ -281,7 +604,9 @@ impl From<AllocError> for PinError {
 /// not count, which the VMOs drivers pin never have -- the pin is kept for
 /// good instead, mapped and held, as an untranslated domain keeps its pins:
 /// giving it back would free what the device may still write (finding F-38).
-fn quarantine(mut spare: Box<Quarantined>, pinned: Pinned, held: Held, quiet: bool) {
+///
+/// `pages` move from the device's `live` to its `quarantined`, or to `kept`.
+fn quarantine(mut spare: Box<Quarantined>, pinned: Pinned, held: Held, quiet: bool, pages: usize) {
     let taken = spare
         .frames
         .iter()
@@ -293,6 +618,7 @@ fn quarantine(mut spare: Box<Quarantined>, pinned: Pinned, held: Held, quiet: bo
         }
         pinned.leak();
         let _ = core::mem::ManuallyDrop::new(held);
+        keep(&spare.domain, pages);
         if !quiet && !KEPT.swap(true, Ordering::Relaxed) {
             println!(
                 "  iommu    a dead driver's pin could not be quarantined: its frames are kept \
@@ -308,9 +634,15 @@ fn quarantine(mut spare: Box<Quarantined>, pinned: Pinned, held: Held, quiet: bo
     drop(held);
     spare.pinned = Some(pinned);
     {
-        let mut head = QUARANTINE.lock();
-        spare.next = head.take();
-        *head = Some(spare);
+        let mut queue = QUARANTINE.lock();
+        let domain = Arc::clone(&spare.domain);
+        let pins = domain.pin_budget();
+        let mut now = pins.read(&queue);
+        now.live = now.live.saturating_sub(pages);
+        now.quarantined = now.quarantined.saturating_add(pages);
+        pins.write(&mut queue, now);
+        spare.next = queue.head.take();
+        queue.head = Some(spare);
     }
     if !quiet && !QUARANTINED.swap(true, Ordering::Relaxed) {
         println!(
@@ -320,20 +652,6 @@ fn quarantine(mut spare: Box<Quarantined>, pinned: Pinned, held: Held, quiet: bo
     }
 }
 
-/// The pages `domain`'s quarantine holds.
-fn quarantined_pages(domain: &Arc<Domain>) -> usize {
-    let head = QUARANTINE.lock();
-    let mut pages = 0usize;
-    let mut next = head.as_deref();
-    while let Some(entry) = next {
-        if Arc::ptr_eq(&entry.domain, domain) {
-            pages = pages.saturating_add(entry.frames.len());
-        }
-        next = entry.next.as_deref();
-    }
-    pages
-}
-
 /// What a release gave back.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Released {
@@ -341,6 +659,8 @@ struct Released {
     pages: usize,
     /// Of those, the ones written after their driver died.
     written: usize,
+    /// Pages the domain would not unpin, kept for good.
+    kept: usize,
 }
 
 /// Give back the frames of every pin into `node`'s domain that its process's
@@ -352,26 +672,31 @@ pub(crate) fn quarantine_release(node: &DeviceNode) {
     let Some(domain) = node.domain_made() else {
         return;
     };
-    let released = release(&domain);
-    if released.pages != 0 {
+    let released = release(&domain, 0);
+    if released.pages != 0 || released.kept != 0 {
         println!(
             "  iommu    {} pages a dead driver's device could still write went back once its \
-             next driver had reset it, {} of them written after it died; {} pins refused \
-             while a quarantine was full",
+             next driver had reset it, {} of them written after it died; {} kept for good; {} \
+             pins refused while a quarantine was full; {}: {}",
             released.pages,
             released.written,
+            released.kept,
             REFUSED.load(Ordering::Relaxed),
+            node.location(),
+            counts(&domain),
         );
     }
 }
 
-/// [`quarantine_release`]'s work, for `domain`.
-fn release(domain: &Arc<Domain>) -> Released {
+/// [`quarantine_release`]'s work, for `domain`. A boot check names in
+/// `refusing` how many of the pins to treat as refused by the domain, as a
+/// unit that never answers would refuse them; every other caller passes 0.
+fn release(domain: &Arc<Domain>, refusing: usize) -> Released {
     let mut freed: Option<Box<Quarantined>> = None;
     {
-        let mut head = QUARANTINE.lock();
+        let mut held = QUARANTINE.lock();
         let mut kept: Option<Box<Quarantined>> = None;
-        let mut next = head.take();
+        let mut next = held.head.take();
         while let Some(mut entry) = next {
             next = entry.next.take();
             let list = if Arc::ptr_eq(&entry.domain, domain) {
@@ -382,28 +707,42 @@ fn release(domain: &Arc<Domain>) -> Released {
             entry.next = list.take();
             *list = Some(entry);
         }
-        *head = kept;
+        held.head = kept;
     }
     // Outside the lock: an unpin enters the unit's gate, and a frame's
     // release takes the allocator's lock. Out of the domain first, the
     // invalidation completed, and only then to the allocator, as any pin.
     let mut released = Released::default();
+    let mut refused = 0;
     let mut next = freed;
     while let Some(mut entry) = next {
         next = entry.next.take();
         let Some(pinned) = entry.pinned.take() else {
             continue;
         };
-        match domain.unpin(pinned) {
+        let pages = entry.frames.len();
+        let unpinned = if refused < refusing {
+            refused += 1;
+            Err((DomainError::Unit("refused by a boot check"), pinned))
+        } else {
+            domain.unpin(pinned)
+        };
+        match unpinned {
             Ok(()) => {
                 for (&frame, &sum) in entry.frames.iter().zip(entry.sums.iter()) {
                     released.written += usize::from(fold(frame) != sum);
                     let _ = mm::release_frame(frame);
                 }
-                released.pages += entry.frames.len();
+                released.pages += pages;
+                account_release(domain, pages, Release::Freed);
             }
-            // Refused: the device may still reach them, so they stay.
-            Err((_, back)) => back.leak(),
+            // Refused: the device may still reach them, so they stay, and
+            // stay counted (F3).
+            Err((_, back)) => {
+                back.leak();
+                released.kept += pages;
+                account_release(domain, pages, Release::Kept);
+            }
         }
     }
     released

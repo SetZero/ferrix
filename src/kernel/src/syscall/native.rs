@@ -481,7 +481,9 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         | NativeCall::DeviceConfigRead
         | NativeCall::DeviceConfigWrite
         | NativeCall::DeviceQuiesce
-        | NativeCall::DeviceClock => device_call(call, process, &a),
+        | NativeCall::DeviceClock
+        | NativeCall::DeviceSetLimit
+        | NativeCall::DeviceGetLimit => device_call(call, process, &a),
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortCreate => port_create(process),
@@ -1269,7 +1271,7 @@ fn job_call(call: NativeCall, caller: &dyn Host, a: &[u64; 6]) -> Result<usize, 
 }
 
 /// The calls on a device node -- what it is, its apertures, its
-/// configuration space, its quiesce and its clock -- and on the I/O mappings
+/// configuration space, its quiesce, its clock and its limits -- and on the I/O mappings
 /// made from one, which `dispatch` hands on as one.
 fn device_call(call: NativeCall, process: &Process, a: &[u64; 6]) -> Result<usize, Errno> {
     let [first, second, third, fourth, ..] = *a;
@@ -1286,6 +1288,8 @@ fn device_call(call: NativeCall, process: &Process, a: &[u64; 6]) -> Result<usiz
         }
         NativeCall::DeviceQuiesce => device_quiesce(process, device),
         NativeCall::DeviceClock => device_clock(process, device, second, third),
+        NativeCall::DeviceSetLimit => device_set_limit(process, device, second, third),
+        NativeCall::DeviceGetLimit => device_get_limit(process, device, second),
         _ => Err(Errno::ENOSYS),
     }
 }
@@ -2176,7 +2180,7 @@ fn pin_through(
     owner: Arc<object::process::Exit>,
 ) -> Result<Arc<object::pin::Pin>, Errno> {
     let domain = node.domain().map_err(|_| status::NO_MEMORY)?;
-    let pin = object::pin::Pin::new(domain, held, flags, owner).map_err(pin_status)?;
+    let pin = object::pin::Pin::new(node, &domain, held, flags, owner).map_err(pin_status)?;
     fallible::try_arc(pin).map_err(|_| status::NO_MEMORY)
 }
 
@@ -2185,7 +2189,56 @@ fn pin_status(why: object::pin::PinError) -> Errno {
     match why {
         object::pin::PinError::Domain(why) => domain_status(why),
         object::pin::PinError::NoMemory => status::NO_MEMORY,
+        object::pin::PinError::LimitReached => status::LIMIT_REACHED,
         object::pin::PinError::QuarantineFull => status::QUARANTINE_FULL,
+    }
+}
+
+/// `device_set_limit`.
+///
+/// The device's pin budget, set by whoever holds `SET_LIMIT` on it: `devmgr`,
+/// which hands its drivers the device without it, so the budget is the
+/// delegator's as a job's limits are (`docs/NVIDIA.md` §12.2). The budget
+/// belongs to the node, through its domain, and outlives every driver.
+/// `BAD_STATE` while the device has live pins, and `NO_MEMORY` past the
+/// kernel's ceiling, with nothing changed.
+fn device_set_limit(
+    process: &Process,
+    device: Handle,
+    which: u64,
+    value: u64,
+) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::SET_LIMIT)?;
+    if which != types::DEVICE_LIMIT_PIN_PAGES {
+        return Err(status::INVALID_ARGS);
+    }
+    // A budget no `usize` holds is past any ceiling.
+    let pages = usize::try_from(value).map_err(|_| status::NO_MEMORY)?;
+    let domain = node.domain().map_err(|_| status::NO_MEMORY)?;
+    object::pin::set_budget(&domain, pages).map_err(|why| match why {
+        object::pin::BudgetError::LivePins => status::BAD_STATE,
+        object::pin::BudgetError::PastCeiling => status::NO_MEMORY,
+    })?;
+    Ok(0)
+}
+
+/// `device_get_limit`. Any device handle will do: the numbers say what a
+/// pin may take, which a driver may know.
+fn device_get_limit(process: &Process, device: Handle, which: u64) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::NONE)?;
+    match which {
+        types::DEVICE_LIMIT_PIN_PAGES => Ok(node
+            .domain_made()
+            .map_or(object::pin::DEFAULT_PIN_BUDGET_PAGES, |domain| {
+                object::pin::counts(&domain).budget
+            })),
+        types::DEVICE_LIMIT_PIN_CEILING => Ok(object::pin::ceiling()),
+        types::DEVICE_LIMIT_PIN_ROOM => Ok(node
+            .domain_made()
+            .map_or_else(object::pin::ceiling_room, |domain| {
+                object::pin::room(&domain)
+            })),
+        _ => Err(status::INVALID_ARGS),
     }
 }
 

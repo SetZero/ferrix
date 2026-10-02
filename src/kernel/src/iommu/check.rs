@@ -71,11 +71,16 @@ pub(crate) fn run() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Stage 10: a device's domain, and the quarantine a dead driver's pins go to,
+/// Stage 10: the ceiling on raised pin budgets, counted; then a device's
+/// domain, and the budget and quarantine a driver's pins count against,
 /// unless the boot was told to skip its checks.
 ///
 /// Halts rather than returning, as every other stage's check does.
 pub(crate) fn check_iommu() {
+    // The ceiling on raised pin budgets, a quarter of RAM, counted here at
+    // stage 10, checks or not: before devmgr can set a budget, and before
+    // the budget's checks below set one (`object::pin`).
+    object::pin::count_ceiling();
     if !crate::checks::run() {
         return;
     }
@@ -114,12 +119,17 @@ pub(crate) fn check_iommu() {
             "stage 10 self-check failed: {problem}"
         ),
     }
-    match object::pin::check::check_quarantine(device::devices()) {
-        Ok(true) => println!(
-            "  iommu    a dead driver's pin was quarantined, a pin past the quarantine's cap \
-             refused and one taken again once it was released, a live driver's given back"
+    match object::pin::check::check_budget(device::devices()) {
+        Ok(Some(report)) => println!(
+            "  iommu    pin budget: {} pins refused at a budget of 2 pages and at twice it, a dead \
+             driver's pins quarantined and released, {} page kept and still counted, \
+             device_set_limit refused without SET_LIMIT, under a live pin and past the ceiling \
+             of {} pages",
+            report.refusals,
+            report.kept,
+            object::pin::ceiling(),
         ),
-        Ok(false) => {}
+        Ok(None) => {}
         Err(problem) => fatal!(
             catalog::STAGE10_IOMMU,
             "stage 10 self-check failed: {problem}"

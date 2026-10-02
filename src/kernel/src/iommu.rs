@@ -567,6 +567,10 @@ pub(crate) struct Domain {
     pinned: AtomicU64,
     /// Who translates it.
     translation: Translation,
+    /// Its device's pin budget and the pages counted against it
+    /// (`object::pin`), which belong to the device for as long as its node,
+    /// as the domain does.
+    budget: crate::object::pin::PinBudget,
 }
 
 /// Who translates a domain.
@@ -713,7 +717,14 @@ impl Domain {
             id: NEXT_DOMAIN.fetch_add(1, Ordering::Relaxed),
             pinned: AtomicU64::new(0),
             translation,
+            budget: crate::object::pin::PinBudget::new(),
         }
+    }
+
+    /// Its device's pin budget and counts, which only `object::pin` reads
+    /// or changes, under its quarantine's lock.
+    pub(crate) fn pin_budget(&self) -> &crate::object::pin::PinBudget {
+        &self.budget
     }
 
     /// Whether a unit translates this domain's DMA, so a device can reach only
