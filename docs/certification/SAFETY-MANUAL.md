@@ -178,11 +178,13 @@ shall treat ASR-8 as unmet until they have. (Finding F-24.)
 ### AoU-5 — the heap is not bounded per partition, and exhaustion outside the element is fatal
 The element allocates dynamically, and reports allocation failure at every
 site in its own source. A native call answers `NO_MEMORY`, a Linux call
-`ENOMEM` (`EAGAIN` from `madvise`), and the element carries on. The
-exception since 2026-10-02 is the btrfs write path, which joined the element
-with its allocations still infallible; they are being converted (`H.STORE.7`,
-F-56), and until then a refusal there stops the element with FX-0008, as one
-in the load does.
+`ENOMEM` (`EAGAIN` from `madvise`), and the element carries on. The btrfs
+crates do the same since 2026-10-02 (`H.STORE.7`): a refusal in the write
+path answers `ENOMEM` and aborts the transaction it was in, so a mount that
+partitions share reloads read-only at its last commit and every partition's
+uncommitted writes to it go. Integrate accordingly: limit every job that
+writes to a shared btrfs mount, or give each partition its own
+(VULNERABILITY-ANALYSIS.md, T.EXHAUST path 6).
 `tools/common/check/check-fallible-alloc.py` fails the build on an allocation that does
 not report failure, and every boot proves the handling by failing allocations
 under the native calls ([MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1). Two
@@ -386,7 +388,7 @@ cause.
 | FM-4 | A device writes outside its granted region | ASR-4 violated, arbitrary corruption | IOMMU fault | VT-d / SMMUv3 domains; a domain's emptied tables are freed only after the unit's invalidation completes (F-36) | no IOMMU on ARMv7-A (AoU-6) |
 | FM-5 | A frame is reused without being cleared | ASR-5 violated, data disclosure | none at runtime | zeroed on allocation | zeroing is on allocation, not free (V-04) |
 | FM-6 | The element continues in a corrupt state | any ASR may be violated silently | invariant checks | safe state on detection | detection is not exhaustive |
-| FM-7 | A partition exhausts memory | calls that allocate fail with `NO_MEMORY` or `ENOMEM` for every partition; the safe state if the load's allocation fails | allocation failure, reported at every site in the element (gate and boot check) | a job's memory, object and task limits, refused at the limit while other jobs go on (`quota` boot line), the Linux personality's heap within the memory limit (`kmem` boot line, F-37); job limits on depth and descendants; capped queues | a partition in no limited job; per-task kernel memory and machine-wide tables with fixed bounds (V-05, low); the load's allocations are fatal (AoU-5) |
+| FM-7 | A partition exhausts memory | calls that allocate fail with `NO_MEMORY` or `ENOMEM` for every partition; the safe state if the load's allocation fails | allocation failure, reported at every site in the element (gate and boot check) | a job's memory, object and task limits, refused at the limit while other jobs go on (`quota` boot line), the Linux personality's heap within the memory limit (`kmem` boot line, F-37); job limits on depth and descendants; capped queues | a partition in no limited job; per-task kernel memory and machine-wide tables with fixed bounds (V-05, low); the load's allocations are fatal (AoU-5); a shared btrfs mount's transaction aborts for every partition (T.EXHAUST path 6) |
 | FM-8 | A partition is starved of processor time | ASR-8 violated | none at runtime; the `quota` boot line checks one job's share against another's | EEVDF eligibility, EDF admission; a job's share of a contended processor is its weight's, whatever its task count | no WCET, so no bound is provable (AoU-4) |
 | FM-9 | Kernel stack overflow | page fault at the instruction that overflowed | **guard page below every kernel stack**, and a boot check that the guard is unmapped | `vmap` reserves an unmapped page on each side of every allocation; no recursion in the element | the loader-provided boot stack is not guarded (early boot only) |
 | FM-10 | A processor stops answering a TLB shootdown or grace period (x86-64) | none while the wait lasts: nothing is freed and no narrowed permission relied on until every processor answers; then the safe state (FX-0001, FX-0002, FX-0003) | `smp::wait_for` and `take_turn`: a wall-clock floor (1 s, 5 s) **and** a count of the waiter's own polls, which stretches with the emulator's slowness | the count is in guest units, so a slow machine is not called stuck; a stuck processor answers no count and is still found (negative control: 1.8 s under KVM, 5.1 s under `tcg`, 32 s under the coverage plugin) | a host that stops running one virtual processor and keeps running the waiter can still end the wait early: availability lost, never integrity |

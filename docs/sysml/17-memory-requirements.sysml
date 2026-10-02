@@ -761,6 +761,33 @@ package FerrixMemoryRequirements {
             attribute :>> parent = ("H.MEM.1", "H.MEM.15");
             attribute :>> unit = ("mm::direct_map_ram", "mm::record_ram");
         }
+        requirement <'L.mm.63'> aLibraryMapInsertRunsInASection : ItemLowLevel {
+            attribute :>> statement = "A library crate's map insert through
+                ferrix_fallible shall run in a reserved section the kernel installs at
+                boot: completed from the reserve when the heap refuses, refused before
+                it starts when the reserve cannot be filled, and refused when its nodes
+                are larger than any size class.";
+            attribute :>> criterion = "With every allocation inside a section sent to the
+                reserve, 200 inserts through ferrix_fallible::try_map_insert complete,
+                hold what was inserted and draw on the reserve at least twice; with the
+                checking processor's fills refused, an insert is refused, the refused
+                count rises and the map is unchanged; a map of 256-byte values is
+                refused.";
+            attribute :>> parent = "H.MEM.11";
+            attribute :>> unit = ("fallible::library_section",
+                "fallible::install_library_sections");
+        }
+        requirement <'L.mm.64'> refusedFillsStayOnOneProcessor : ItemLowLevel {
+            attribute :>> statement = "refuse_reserve_fills shall make every section
+                entered on the calling processor refused, as if its reserve could not be
+                filled, until it is turned off.";
+            attribute :>> criterion = "With fills refused, a library map insert on the
+                checking processor is refused and the refused count rises; turned off
+                again, the next insert completes.";
+            attribute :>> parent = "H.MEM.11";
+            attribute :>> unit = ("mm::reserve::refuse_reserve_fills",
+                "mm::reserve::this_cpu_tag");
+        }
     }
 
     package VirtualMemoryObjects {

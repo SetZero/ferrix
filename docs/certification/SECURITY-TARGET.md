@@ -602,9 +602,13 @@ evaluator would press on:
 * **The write path is not fuzzed.** `btrfs_read` drives the reader; nothing
   drives `WriteVolume` over hostile images
   ([VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md), T.MEDIA).
-* **Allocation failure in the write path** is still fatal while it is being
-  made fallible (`H.STORE.7`, [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md)
-  §1.8, F-56), and an allocation sized from the disk can be driven to it.
+* **Allocation failure in the write path** is reported, not fatal
+  (`H.STORE.7`, [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1.8), but it
+  aborts the transaction: a heap driven to its end -- by an allocation sized
+  from the disk, or by another partition -- reloads a shared mount
+  read-only and discards every partition's uncommitted writes to it
+  ([VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md), T.EXHAUST
+  path 6).
 * **Arithmetic is not linted.** The release kernel has no overflow checks,
   so an unchecked sum of two fields of a hostile volume wraps and only the
   bounds check after it stands; clippy's `arithmetic_side_effects` reports

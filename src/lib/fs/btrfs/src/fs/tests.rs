@@ -879,6 +879,7 @@ fn open_and_read(packed: &[u8], name: &[u8], fail_at: u64) -> (Result<Vec<u8>, B
     (result, device.reads)
 }
 
+/// Verifies: L.btrfs.110
 #[test]
 #[cfg_attr(miri, ignore = "reopens real images once per read they make")]
 fn a_device_out_of_memory_is_answered_as_such_at_every_read() {

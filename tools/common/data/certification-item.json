@@ -333,7 +333,7 @@
         "read these crates. Whether they should be classified `core` is open",
         "(docs/certification/ITEM.md section 2)."
       ],
-      "ferrix-fallible": "Fallible Box/Vec/VecDeque/String construction on stable Rust (F-23). The core's own allocation toolkit, src/kernel/src/fallible.rs, is built on it, so an item crate converting to fallible allocation uses the same code the core does rather than a second copy.",
+      "ferrix-fallible": "Fallible Box/Vec/VecDeque/String construction on stable Rust (F-23). The core's own allocation toolkit, src/kernel/src/fallible.rs, is built on it, so an item crate converting to fallible allocation uses the same code the core does rather than a second copy. It also dispatches an item crate's map inserts to the reserved section the kernel installs at boot (set_section, in_section; src/kernel/src/fallible.rs library_section, L.mm.63): ferrix-btrfs-write's every BTreeMap and BTreeSet insert relies on that dispatch to be fallible.",
       "ferrix-sync": "The spin and sleep locks src/kernel/src/sync.rs wraps for the whole core, and ferrix-fallible's one dependency (its injector's `Once`)."
     }
   },

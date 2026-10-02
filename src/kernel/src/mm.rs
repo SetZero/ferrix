@@ -65,8 +65,7 @@ mod reserve;
 mod unlinked;
 
 pub(crate) use reserve::{
-    Reserved, bypass_heap_in_sections, fill_reserve, refuse_reserve_fills, reserve,
-    reserve_counts,
+    Reserved, bypass_heap_in_sections, fill_reserve, refuse_reserve_fills, reserve, reserve_counts,
 };
 pub(crate) use unlinked::{Owner as TableOwner, UnlinkedTables, tables_kept};
 

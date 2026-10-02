@@ -243,7 +243,7 @@ it.
 **Verdict: F-23 is closed** for what it measured: allocation failure in the
 item's own source is reported, not fatal, and the build says so. That was the
 kernel's part of the item; the btrfs crates, which joined it on 2026-10-02,
-are not converted yet, and are F-56's (§1.8). Two item
+were converted the same way the same day (§1.8). Two item
 calls still run load code whose allocations are fatal (§1.3), which the
 closure did not claim and the first version of this section implied. The bound it also names is
 not claimed, and is exported to the integrator as AoU-5.
@@ -332,7 +332,9 @@ is a counter bumped under the ring's lock, not a record written.
 ### 1.8 btrfs — the reader and the write path
 
 The btrfs crates joined the item on 2026-10-02, and what §1.1 to §1.5 say of
-the item's own source does not yet hold for one of them.
+the item's own source holds for both: the fallible-allocation gate counts 0
+allocating calls in either that cannot report failure, and `cargo xtask
+check` holds them at 0 (`L.btrfs.22`).
 
 **The reader allocates nothing.** `ferrix-btrfs` is `no_std` without
 `alloc`: its chunk map's storage, its node buffer and the buffers a file
@@ -342,21 +344,40 @@ refused with `ChunkMapFull`, not grown into. Its memory is what the caller
 lends: one node (at most 64 KiB), two extent buffers of 128 KiB and zstd's
 workspace, at the size the kernel's glue picks.
 
-**The write path allocates, and today fatally.** `ferrix-btrfs-write` holds
-the running transaction in memory -- every node it copied (`dirty`), the
-delayed reference changes, each block group's free, pinned and reserved
-ranges -- and a cache of nodes read and unchanged (`clean`). Its
-allocations are the standard library's infallible ones: a refusal is the
-allocation error handler, FX-0008, as it is for the load (§1.3). The
-fallible-allocation gate reads both crates since 2026-10-02 and records as
-debt 166 allocations in the write path that stop the machine when memory
-runs out, and beside them 19 calls in the reader it counts by name -- methods
-named like an allocating one (`insert`, `push`) on the reader's own
-fixed-size types -- that allocate nothing, since the crate does not link
-`alloc`, and await their `NOALLOC:` arguments rather than a conversion. Converting the write path is in progress
-on the branch `btrfs-fallible` (`H.STORE.7`, `L.btrfs.22`, TODO.md §4.7,
-F-56); until it lands, AoU-5 covers the write path as it covers the
-load.
+**The write path allocates, and reports failure.** `ferrix-btrfs-write`
+holds the running transaction in memory -- every node it copied (`dirty`),
+the delayed reference changes, each block group's free, pinned and reserved
+ranges -- and a cache of nodes read and unchanged (`clean`). Every one of its
+allocations goes through its `fallible` module, over `ferrix-fallible`, and a
+refusal is `Error::OutOfMemory`, which the VFS glue answers `ENOMEM`:
+
+* a vector is reserved with `try_reserve` before it grows, as in §1.1;
+* a `BTreeMap` or `BTreeSet` insert runs in a reserved section, as the
+  kernel's own do: a library crate cannot name `mm/reserve.rs`, so
+  `ferrix-fallible` dispatches to a section the kernel installs at boot
+  (`fallible::install_library_sections`, right after the boot processor's
+  reserve is filled). One insert per section; a map is copied one insert
+  at a time. A map whose nodes are larger than the largest size class is
+  refused at run time -- the kernel's own maps are checked at compile time
+  -- and a host test holds every map the write path keeps under it
+  (`L.btrfs.116`). The boot's allocation check drives the section with the
+  heap bypassed, with its reserve refused, and with an over-class map
+  (`L.mm.63`, `L.mm.64`).
+
+What a failure does to the transaction: inside an edit -- every tree edit,
+and so every commit -- it aborts the transaction, even before the edit's
+first change, and the volume reopens at its last commit; in an operation's
+own code before its first edit it changes nothing. Nothing allocates after a
+commit's primary superblock is written, so a failure is never reported for a
+commit that is on the device (`L.btrfs.108`, `L.btrfs.113`; `H.STORE.7`). The
+reader still allocates nothing; a device whose read runs out of memory
+answers `OutOfMemory`, which the reader and the writer pass on without
+reading another copy (`L.btrfs.110`, `L.btrfs.111`). Its 19 calls the gate
+counts by name are arguments now (`NOALLOC:`): methods of its own on
+caller-supplied buffers. What the heap's exhaustion still does is AoU-5's:
+the transaction aborts, so the mount reloads read-only at its last commit,
+and every partition's uncommitted writes on it go (VULNERABILITY-ANALYSIS.md,
+T.EXHAUST).
 
 **What bounds it, and what does not.**
 
@@ -540,6 +561,13 @@ What bounds the work in them:
 * **Opening a volume for writing** reads the chunk, root and block-group
   trees and the free-space tree, and replays whatever log the last mount
   left, unmeasured on a full volume (`docs/BACKLOG.md`).
+* **Interrupts masked.** Each map insert of the write path runs in a
+  reserved section (§1.8), so this processor's interrupts are masked for
+  the section's entry -- topping the reserve up to 16 objects of each size
+  class when a section before it drew on it -- and for one insert, which
+  makes at most height + 2 nodes of at most 2 KiB each. A commit makes many
+  such inserts, each its own window, all in task context under the volume's
+  sleeping lock; none waits. This adds to the masked windows AoU-4 budgets.
 
 ### 2.3 What is missing, per standard
 

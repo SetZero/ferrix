@@ -206,6 +206,7 @@ fn run(args: &Args) -> Result<()> {
     })?;
 
     steps_at_once(AUDITS)?;
+    step("btrfs allocates fallibly", item_crates_allocate_fallibly)?;
 
     step("crate layering", || {
         let mut command = Command::new("bash");
@@ -253,6 +254,48 @@ fn run(args: &Args) -> Result<()> {
     cross_target_clippy()?;
 
     println!("\nchecked");
+    Ok(())
+}
+
+/// The item crates that must make every allocation fallibly, by package.
+const FALLIBLE_CRATES: [&str; 2] = ["ferrix-btrfs", "ferrix-btrfs-write"];
+
+/// The btrfs crates allocate nothing that cannot fail: the fallible-allocation
+/// gate finds no unmarked allocating call in either. Its ratchet alone would
+/// let a count stand above zero once recorded; this holds it at zero.
+///
+/// Verifies: `L.btrfs.22`
+fn item_crates_allocate_fallibly() -> Result<()> {
+    let interpreter = python_interpreter().ok_or_else(|| {
+        Error::new("no working Python interpreter on PATH (tried python3, python)")
+    })?;
+    let output = Command::new(interpreter)
+        .current_dir(paths::workspace_root())
+        .arg("tools/common/check/check-fallible-alloc.py")
+        .output()
+        .map_err(|error| Error::new(format!("check-fallible-alloc.py: {error}")))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let counts = text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("fallible-alloc: item crates, unmarked allocating calls: ")
+        })
+        .ok_or_else(|| Error::new("check-fallible-alloc.py reported no item-crate counts"))?;
+    for name in FALLIBLE_CRATES {
+        let count = counts
+            .split(", ")
+            .find_map(|entry| entry.strip_prefix(name)?.strip_prefix(' '))
+            .ok_or_else(|| Error::new(format!("check-fallible-alloc.py did not count {name}")))?;
+        if count != "0" {
+            return Err(Error::new(format!(
+                "{name} makes {count} allocation(s) that cannot fail; it must make none"
+            )));
+        }
+    }
+    println!(
+        "{} each make 0 allocations that cannot fail",
+        FALLIBLE_CRATES.join(" and ")
+    );
     Ok(())
 }
 

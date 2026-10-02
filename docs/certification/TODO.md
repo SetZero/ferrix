@@ -482,14 +482,14 @@ FDP_SDI.2 and §9.8 (SECURITY-TARGET.md), V-08 and V-09
 (VULNERABILITY-ANALYSIS.md), and MEMORY-AND-TIMING.md §1.8 and §2.2d. What
 is left, each with how to know it is done:
 
-1. **Fallible allocation in the write path** (`H.STORE.7`, `L.btrfs.22`;
-   in progress on the branch `btrfs-fallible`). Done when
+1. **Done 2026-10-02: fallible allocation in the write path** (`H.STORE.7`,
+   `L.btrfs.22`, `L.btrfs.108` to `L.btrfs.116`, `L.mm.63`, `L.mm.64`; branch
+   `btrfs-fallible`). Both crates count 0 sites, the host tests fail every
+   allocation in turn, and both ids left the baseline. It was done when
    `check-fallible-alloc.py` reads both crates and finds no unmarked site,
    a host test fails every allocation of a create, a data write, a commit
    and an open in turn and names `L.btrfs.22` and `H.STORE.7` in its
-   `Verifies:` line, and both leave `traceability-baseline.json`. Until
-   then AoU-5's FX-0008 covers a refused allocation there, as it covers the
-   load's.
+   `Verifies:` line, and both leave `traceability-baseline.json`.
 2. **The item-scoped gates read the crates** (the branch
    `btrfs-cert-boundary`): the boundary, unsafe, panic, complexity and
    fallible-allocation gates. `check-traceability.py` resolves a

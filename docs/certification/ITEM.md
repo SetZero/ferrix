@@ -208,19 +208,19 @@ the VFS is therefore the two crates' public API**: `Volume` and `WriteVolume`
 and the types they take and return, called from the load, and `Device` and
 `WriteDevice`, implemented by the load. Nothing in the item names the VFS. What
 the item is to vouch for at that interface is what the crates do with the bytes
-a `Device` returns, and what a `WriteVolume` writes back. **The target, not yet
-the fact, is that a corrupt or hostile volume gives an error and never stops
-the machine.** What holds today is that every field is read through a checked
-slice access, in crates that are `#![forbid(unsafe_code)]` and deny indexing
-and explicit panics (`ferrix-btrfs`'s *Totality*). What does not: the write
-path's 166 baselined allocations that cannot report failure (below) can take
-their sizes from the disk and exhaust the heap, which stops the machine
-(FX-0008) -- the reader's 19 baselined sites are calls on its own fixed-size
-types (`ChunkMap::insert`, `Window::push`), since it does not link `alloc`,
-and want a `NOALLOC:` argument rather than a conversion; and the
-release profile has no overflow checks and the workspace no arithmetic lint,
-so "every length is checked arithmetic" rests on care rather than on a gate.
-Both are F-56, the crates' missing evidence (`FINDINGS.md`). What it does not vouch for is that the
+a `Device` returns, and what a `WriteVolume` writes back: that a corrupt or
+hostile volume gives an error and never stops the machine. What holds is that
+every field is read through a checked slice access, in crates that are
+`#![forbid(unsafe_code)]` and deny indexing and explicit panics
+(`ferrix-btrfs`'s *Totality*), and since 2026-10-02 that no allocation in
+either can stop it: the write path's allocations report failure, and an
+allocation sized from the disk that exhausts the heap fails the mount or
+aborts the transaction with `ENOMEM` (`H.STORE.7`; what that costs other
+partitions is VULNERABILITY-ANALYSIS.md's T.EXHAUST path 6). **The target,
+not yet the fact,** is the rest: the release profile has no overflow checks
+and the workspace no arithmetic lint, so "every length is checked
+arithmetic" rests on care rather than on a gate (`L.btrfs.23`, F-56, the
+crates' missing evidence; `FINDINGS.md`). What it does not vouch for is that the
 load calls it correctly: the VFS's locking, its caching of what btrfs returned,
 and the Linux calls that reach it.
 
@@ -228,19 +228,20 @@ The boundary gate holds the crates at their manifests: an item crate may
 depend only on item and core crates or on an allowlisted piece of `no_std`
 infrastructure the core already links (`crates.infrastructure_allowlist`:
 `ferrix-fallible` and `ferrix-sync`, each with its reason; an allowlisted
-crate's own dependencies are held to the same rule only once an item crate
-depends on it, so while none does -- the case on 2026-10-02 -- `ferrix-sync`
-gaining a load dependency would pass unremarked). `ferrix-btrfs-write` on `ferrix-btrfs` passes; a load
+crate's own dependencies are held to the same rule once an item crate
+depends on it, which `ferrix-btrfs-write` does on both since the allocation
+conversion). `ferrix-btrfs-write` on `ferrix-btrfs` passes; a load
 crate as a dependency fails, which a negative control showed when the rule was
 written. A kernel file naming one of the crates is an edge to the `item` ring
 like a `crate::` path, so the core cannot name btrfs. The item-scoped gates --
 complexity and recursion, fallible allocation, the unsafe trace, and the
 panic-exemption count -- read the crates' product code from 2026-10-02. What
-they found then is recorded as debt, not waived: 166 allocations in the write
-path that cannot report failure, which branch `btrfs-fallible` is
-converting, and 19 calls in the reader the gate counts by name that allocate
-nothing, awaiting their `NOALLOC:` arguments; and 40 functions over the complexity floors
-(18 and 22), none recursive. Neither crate has an `unsafe` site or a panic
+they found then was recorded as debt, not waived: 166 allocations in the
+write path that could not report failure, converted the same day, and 19
+calls in the reader the gate counts by name that allocate nothing, argued
+`NOALLOC:` (both crates are at 0 since); and 40 functions over the
+complexity floors (18 and 22), none recursive, 43 since the conversion
+re-recorded them. Neither crate has an `unsafe` site or a panic
 exemption.
 
 Two open points are for the assessor rather than settled here. The two

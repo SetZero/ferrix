@@ -230,6 +230,8 @@ fn check_a_section_completes_on_the_reserve() -> Result<u64, &'static str> {
 /// whose nodes are larger than any size class is refused outright. A kernel
 /// that never installed the section fails all three: the inserts would run
 /// on the heap, outside any section, and could not fail at all.
+///
+/// Verifies: L.mm.63, L.mm.64
 fn check_a_library_insert_runs_in_a_section() -> Result<u64, &'static str> {
     let (drawn_before, _) = mm::reserve_counts();
     mm::bypass_heap_in_sections(true);
@@ -262,6 +264,9 @@ fn check_a_library_insert_runs_in_a_section() -> Result<u64, &'static str> {
     let (_, refused_after) = mm::reserve_counts();
     if refused.is_ok() || refused_after <= refused_before || map.len() != 200 {
         return Err("a library map insert went ahead in a section that could not be entered");
+    }
+    if ferrix_fallible::try_map_insert(&mut map, 1000, 0).is_err() || map.len() != 201 {
+        return Err("a library map insert was refused once fills were allowed again");
     }
 
     let mut wide: BTreeMap<u64, [u8; 256]> = BTreeMap::new();

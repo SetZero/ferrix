@@ -118,7 +118,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of src/kernel/src/console.rs and src/kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (src/kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 | `FerrixBtrfsRequirements` | `24-btrfs-requirements.sysml` | What each unit of the two btrfs crates in the item does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): `ferrix-btrfs` (src/lib/fs/btrfs), the reader, and `ferrix-btrfs-write` (src/lib/fs/btrfs-write), the write path. They joined the item on 2026-10-02 (the customer's decision; ITEM.md). Their interface below is the `Device` and `WriteDevice` traits, which the kernel's block layer answers; above, `Volume` and `WriteVolume`, which the VFS glue in the load (`ferrix-btrfs-vfs`, src/kernel/src/fs/btrfs\*.rs) calls. A unit is named from the crate's src/, led by the crate's name: `ferrix_btrfs::volume::Volume::read_node`. |
 
-25 files, 122 packages, 5950 elements, 214 relations. Model digest `129d99b9166c9269`.
+25 files, 122 packages, 6005 elements, 214 relations. Model digest `a17d104ed82055a3`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -4053,6 +4053,8 @@ flowchart LR
 | `L.mm.60` | `earlyWindowsRefuseAWrappedRange` | — | — | — |
 | `L.mm.61` | `theEarlyTablePoolIsBounded` | — | — | — |
 | `L.mm.62` | `onlyRamHasACheckedDirectMapAlias` | — | — | — |
+| `L.mm.63` | `aLibraryMapInsertRunsInASection` | — | — | — |
+| `L.mm.64` | `refusedFillsStayOnOneProcessor` | — | — | — |
 | `L.user.1` | `aReservationCostsNothing` | — | — | — |
 | `L.user.2` | `aCommittedPageIsZeroed` | — | — | — |
 | `L.user.3` | `aFirstWriteCommitsAZeroedPage` | — | — | — |
@@ -4567,6 +4569,15 @@ flowchart LR
 | `L.btrfs.21` | `anAbortedTransactionIsDropped` | — | — | — |
 | `L.btrfs.107` | `anUnreadableLastCommitStaysAborted` | — | — | — |
 | `L.btrfs.22` | `allocationsAreFallible` | — | — | — |
+| `L.btrfs.108` | `anOperationOutOfMemoryAbortsOrChangesNothing` | — | — | — |
+| `L.btrfs.109` | `anOpenOutOfMemoryWritesNothing` | — | — | — |
+| `L.btrfs.110` | `theReaderPassesOutOfMemoryOn` | — | — | — |
+| `L.btrfs.111` | `theWriterPassesOutOfMemoryOn` | — | — | — |
+| `L.btrfs.112` | `aRangeSetEditOutOfMemoryChangesNothing` | — | — | — |
+| `L.btrfs.113` | `nothingAllocatesPastTheCommitPoint` | — | — | — |
+| `L.btrfs.114` | `aReplayOutOfMemoryReplaysLater` | — | — | — |
+| `L.btrfs.115` | `aReadOutOfMemoryChangesNothing` | — | — | — |
+| `L.btrfs.116` | `mapNodesFitASizeClass` | — | — | — |
 
 A design rule is upheld by a gate rather than allocated to a part, so the P and N families are expected to be verified but untraced. A goal requirement is traced by the dependency the stage that discharges it draws.
 

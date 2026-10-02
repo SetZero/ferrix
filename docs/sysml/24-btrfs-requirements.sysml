@@ -37,9 +37,7 @@
  *
  * Written and not yet verified, so in the baseline: L.btrfs.9 and
  * L.btrfs.12, the volumes the reader and the writer refuse to open, which no
- * test opens; L.btrfs.22, fallible allocation in the writer, which the
- * branch btrfs-fallible is converting and whose tests will name it; and
- * L.btrfs.23, arithmetic that cannot overflow, which a lint would enforce
+ * test opens; and L.btrfs.23, arithmetic that cannot overflow, which a lint would enforce
  * and none does yet (the certification consultant's advice, 2026-10-02).
  *
  * Ids are `L.btrfs.<n>`, numbered through both crates; the package gives the
@@ -1143,19 +1141,135 @@ package FerrixBtrfsRequirements {
                 "ferrix_btrfs_write::open::WriteVolume::abort");
         }
         requirement <'L.btrfs.22'> allocationsAreFallible : ItemLowLevel {
-            attribute :>> statement = "Every heap allocation of the write path shall be
-                made fallibly, and a refused one shall be answered as an error that
-                aborts the transaction if an edit had begun, never as a panic.";
-            attribute :>> criterion = "With every allocation of a create, a data
-                write, a commit and an open failed in turn, each answers an error or
-                succeeds, no panic is taken, and the volume reopened is the last
-                commit and checks clean.";
+            attribute :>> statement = "Every heap allocation of the btrfs crates' product
+                code shall be made through a helper that reports a refused allocation
+                as an error, never through one that stops the element.";
+            attribute :>> criterion = "tools/common/check/check-fallible-alloc.py finds
+                0 unmarked allocating calls in ferrix-btrfs and in ferrix-btrfs-write.";
             attribute :>> parent = "H.STORE.7";
-            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::load",
-                "ferrix_btrfs_write::volume::WriteVolume::read_node",
-                "ferrix_btrfs_write::volume::WriteVolume::new_node",
-                "ferrix_btrfs_write::node::TreeNode::from_node",
-                "ferrix_btrfs_write::commit::WriteVolume::write_nodes");
+            attribute :>> unit = ("ferrix_btrfs_write::fallible::zeroed",
+                "ferrix_btrfs_write::fallible::filled",
+                "ferrix_btrfs_write::fallible::copy",
+                "ferrix_btrfs_write::fallible::with_capacity",
+                "ferrix_btrfs_write::fallible::push",
+                "ferrix_btrfs_write::fallible::insert_at",
+                "ferrix_btrfs_write::fallible::extend_from_slice",
+                "ferrix_btrfs_write::fallible::resize",
+                "ferrix_btrfs_write::fallible::collect",
+                "ferrix_btrfs_write::fallible::collect_ok",
+                "ferrix_btrfs_write::fallible::split_off",
+                "ferrix_btrfs_write::fallible::copy_map");
+        }
+        requirement <'L.btrfs.108'> anOperationOutOfMemoryAbortsOrChangesNothing : ItemLowLevel {
+            attribute :>> statement = "An operation of the write path whose allocation
+                is refused shall answer OutOfMemory, and either leave the transaction
+                as it was or abort it, so that the volume reopens at its last commit.";
+            attribute :>> criterion = "With each allocation of a script of eleven file
+                operations and a commit on a populated volume failed once in turn,
+                every failing operation answers OutOfMemory; where the transaction was
+                not aborted, the script resumed from that operation ends with the fs
+                tree an undisturbed run makes; where it was, the volume reopens at the
+                commit before the script with its fs tree; every volume checks clean.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = ("ferrix_btrfs_write::volume::WriteVolume::guarded_with",
+                "ferrix_btrfs_write::volume::WriteVolume::operation_with",
+                "ferrix_btrfs_write::volume::WriteVolume::abort_with",
+                "ferrix_btrfs_write::open::WriteVolume::abort");
+        }
+        requirement <'L.btrfs.109'> anOpenOutOfMemoryWritesNothing : ItemLowLevel {
+            attribute :>> statement = "WriteVolume::open shall answer OutOfMemory when an
+                allocation is refused, having written nothing to the device.";
+            attribute :>> criterion = "With each allocation of opening the blank and the
+                populated volume failed in turn, once and from then on, each open
+                succeeds or answers OutOfMemory, and the device then opens at the same
+                generation with the same fs tree and checks clean.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = ("ferrix_btrfs_write::open::WriteVolume::open",
+                "ferrix_btrfs_write::open::WriteVolume::open_committed",
+                "ferrix_btrfs_write::open::WriteVolume::load_block_groups",
+                "ferrix_btrfs_write::open::WriteVolume::load_free_space");
+        }
+        requirement <'L.btrfs.110'> theReaderPassesOutOfMemoryOn : ItemLowLevel {
+            attribute :>> statement = "The reader shall answer a device read that ran out
+                of memory with OutOfMemory, reading no other copy and reporting no
+                damage.";
+            attribute :>> criterion = "With each device read of an open, a lookup and a
+                whole-file read failed in turn with OutOfMemory, on a plain, a zstd and
+                a DUP image, the answer is OutOfMemory and no read follows the failed
+                one.";
+            attribute :>> parent = "H.STORE.2";
+            attribute :>> unit = ("ferrix_btrfs::volume::Volume::read_node",
+                "ferrix_btrfs::fs::read_checked");
+        }
+        requirement <'L.btrfs.111'> theWriterPassesOutOfMemoryOn : ItemLowLevel {
+            attribute :>> statement = "WriteVolume::read_node shall answer a device read
+                that ran out of memory with OutOfMemory, reading no other copy.";
+            attribute :>> criterion = "With the first copy of a DUP fs tree root failing
+                with OutOfMemory, a lookup answers OutOfMemory after that one read,
+                aborts nothing, and succeeds once the device reads again.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = "ferrix_btrfs_write::volume::WriteVolume::read_node";
+        }
+        requirement <'L.btrfs.112'> aRangeSetEditOutOfMemoryChangesNothing : ItemLowLevel {
+            attribute :>> statement = "A RangeSet insert, removal or union that has to make
+                a run of its own shall, when that allocation is refused, answer
+                OutOfMemory with the set unchanged; one that edits a run in place shall
+                allocate nothing.";
+            attribute :>> criterion = "Six edits that make a run, each with its first
+                allocation failed, answer OutOfMemory and leave the set equal to what it
+                was; three in-place edits under the same failure succeed.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = ("ferrix_btrfs_write::ranges::RangeSet::try_insert",
+                "ferrix_btrfs_write::ranges::RangeSet::try_remove",
+                "ferrix_btrfs_write::ranges::RangeSet::try_add");
+        }
+        requirement <'L.btrfs.113'> nothingAllocatesPastTheCommitPoint : ItemLowLevel {
+            attribute :>> statement = "A commit shall make everything it needs after
+                writing the primary superblock before writing it, so that running out of
+                memory is never reported for a commit that is on the device.";
+            attribute :>> criterion = "With each allocation of a script of file
+                operations and a commit on the blank volume failed from then on, in
+                turn, no run whose failure was reported finds the script's commit on the
+                device when the volume is reopened.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = ("ferrix_btrfs_write::commit::WriteVolume::commit",
+                "ferrix_btrfs_write::commit::WriteVolume::write_superblocks",
+                "ferrix_btrfs_write::commit::WriteVolume::finish_commit",
+                "ferrix_btrfs_write::space::Space::prepare_unpin",
+                "ferrix_btrfs_write::space::Space::unpin");
+        }
+        requirement <'L.btrfs.114'> aReplayOutOfMemoryReplaysLater : ItemLowLevel {
+            attribute :>> statement = "An open whose log replay is refused an allocation
+                shall leave the device so that a later open replays the log.";
+            attribute :>> criterion = "With each allocation of opening a volume that
+                holds a committed log failed in turn, the open answers OutOfMemory or
+                succeeds, and the next open of the same device holds the logged file's
+                bytes, commits and checks clean.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = "ferrix_btrfs_write::log::WriteVolume::replay_log";
+        }
+        requirement <'L.btrfs.115'> aReadOutOfMemoryChangesNothing : ItemLowLevel {
+            attribute :>> statement = "A read of the write path whose allocation is
+                refused shall answer OutOfMemory and abort nothing.";
+            attribute :>> criterion = "With each allocation of reading a populated
+                volume's whole fs tree from cold failed in turn, the read answers
+                OutOfMemory, the transaction is not aborted, and the tree then reads
+                whole.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = ("ferrix_btrfs_write::tree::WriteVolume::range",
+                "ferrix_btrfs_write::tree::WriteVolume::next_item",
+                "ferrix_btrfs_write::volume::WriteVolume::load");
+        }
+        requirement <'L.btrfs.116'> mapNodesFitASizeClass : ItemLowLevel {
+            attribute :>> statement = "Every ordered map the write path keeps shall have
+                nodes no larger than the kernel heap's largest size class, so that the
+                kernel's reserve can serve its inserts.";
+            attribute :>> criterion = "The node bound of each of the ten map and set
+                types the write path keeps is at most ferrix_heap::LARGEST_CLASS.";
+            attribute :>> parent = "H.STORE.7";
+            attribute :>> unit = ("ferrix_btrfs_write::fallible::insert",
+                "ferrix_btrfs_write::fallible::entry",
+                "ferrix_btrfs_write::fallible::insert_into_set");
         }
     }
 }

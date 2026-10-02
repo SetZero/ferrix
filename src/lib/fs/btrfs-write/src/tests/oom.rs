@@ -292,6 +292,7 @@ fn sample(made: u64) -> Vec<u64> {
     out
 }
 
+/// Verifies: L.btrfs.116
 #[test]
 fn every_map_node_fits_the_kernels_reserve() {
     // The kernel serves a map insert's nodes from a reserve of size-class
@@ -315,6 +316,7 @@ fn every_map_node_fits_the_kernels_reserve() {
     }
 }
 
+/// Verifies: L.btrfs.115
 #[test]
 fn reads_out_of_memory_change_nothing() {
     let (mut volume, _, before) = fresh(POPULATED);
@@ -342,6 +344,7 @@ fn reads_out_of_memory_change_nothing() {
     assert!(items(&mut volume, FS_TREE_OBJECTID) == before);
 }
 
+/// Verifies: L.btrfs.109
 #[test]
 fn opening_out_of_memory_answers_out_of_memory() {
     for packed in [BLANK, POPULATED] {
@@ -381,6 +384,7 @@ fn items_shared(volume: &mut WriteVolume<Shared>) -> Tree {
         .unwrap()
 }
 
+/// Verifies: L.btrfs.108, H.STORE.7
 #[test]
 fn a_transaction_out_of_memory_aborts_or_changes_nothing() {
     let (generation, tree, made) = reference(POPULATED);
@@ -399,6 +403,7 @@ fn a_transaction_out_of_memory_aborts_or_changes_nothing() {
     }
 }
 
+/// Verifies: L.btrfs.113
 #[test]
 fn memory_that_stays_out_aborts_cleanly() {
     let (generation, tree, made) = reference(BLANK);
@@ -429,6 +434,7 @@ impl WriteDevice for Shared {
     }
 }
 
+/// Verifies: L.btrfs.114
 #[test]
 fn a_log_replay_out_of_memory_leaves_a_volume_that_replays_later() {
     // A file committed, written again, logged and made durable by a log
@@ -502,6 +508,7 @@ fn edit_failing<T: core::fmt::Debug>(
 /// One edit of a range set, answering whether it took.
 type Edit = fn(&mut RangeSet) -> crate::Result<bool>;
 
+/// Verifies: L.btrfs.112
 #[test]
 fn a_range_set_edit_out_of_memory_leaves_the_set_as_it_was() {
     let mut set = RangeSet::new();
@@ -567,6 +574,7 @@ impl WriteDevice for Starving {
     }
 }
 
+/// Verifies: L.btrfs.111
 #[test]
 fn a_node_read_out_of_memory_is_not_retried_from_the_other_copy() {
     let device = Starving {

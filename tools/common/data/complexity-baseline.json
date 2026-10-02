@@ -94,24 +94,29 @@
       "lines": 82,
       "recursive": false
     },
-    "src/lib/fs/btrfs-write/src/chunks.rs::item_bytes": {
-      "complexity": 21,
-      "lines": 18,
+    "src/lib/fs/btrfs-write/src/chunks.rs::encode_item": {
+      "complexity": 19,
+      "lines": 16,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/commit.rs::build_superblock": {
-      "complexity": 22,
+      "complexity": 23,
       "lines": 27,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/commit.rs::run_head": {
-      "complexity": 30,
-      "lines": 45,
+      "complexity": 31,
+      "lines": 50,
+      "recursive": false
+    },
+    "src/lib/fs/btrfs-write/src/commit.rs::write_group_free_space": {
+      "complexity": 15,
+      "lines": 31,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/csum.rs::delete_range": {
-      "complexity": 15,
-      "lines": 28,
+      "complexity": 19,
+      "lines": 38,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/extent.rs::parse_inline": {
@@ -120,12 +125,12 @@
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/fs.rs::drop_extents_inner": {
-      "complexity": 19,
-      "lines": 42,
+      "complexity": 21,
+      "lines": 40,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/fs.rs::encode_inode": {
-      "complexity": 17,
+      "complexity": 18,
       "lines": 26,
       "recursive": false
     },
@@ -136,7 +141,7 @@
     },
     "src/lib/fs/btrfs-write/src/fs.rs::truncate_inner": {
       "complexity": 17,
-      "lines": 22,
+      "lines": 21,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/fs.rs::write_file_inner": {
@@ -145,23 +150,23 @@
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/fs.rs::write_regular": {
-      "complexity": 15,
-      "lines": 40,
+      "complexity": 19,
+      "lines": 46,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/grow.rs::record_chunk": {
-      "complexity": 20,
+      "complexity": 23,
       "lines": 41,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/lib.rs::fmt": {
-      "complexity": 18,
-      "lines": 18,
+      "complexity": 19,
+      "lines": 19,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/log.rs::replay_log": {
-      "complexity": 26,
-      "lines": 52,
+      "complexity": 31,
+      "lines": 50,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/node.rs::write": {
@@ -175,18 +180,18 @@
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/open.rs::load_free_space": {
-      "complexity": 20,
+      "complexity": 21,
       "lines": 31,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/open.rs::load_roots": {
-      "complexity": 18,
+      "complexity": 19,
       "lines": 33,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/open.rs::open_committed": {
-      "complexity": 15,
-      "lines": 63,
+      "complexity": 20,
+      "lines": 67,
       "recursive": false
     },
     "src/lib/fs/btrfs-write/src/tree.rs::fixup": {
@@ -194,14 +199,24 @@
       "lines": 19,
       "recursive": false
     },
+    "src/lib/fs/btrfs-write/src/tree.rs::prev_item": {
+      "complexity": 16,
+      "lines": 27,
+      "recursive": false
+    },
     "src/lib/fs/btrfs-write/src/tree.rs::search": {
-      "complexity": 19,
+      "complexity": 20,
       "lines": 34,
       "recursive": false
     },
+    "src/lib/fs/btrfs-write/src/tree.rs::shrink_root": {
+      "complexity": 16,
+      "lines": 33,
+      "recursive": false
+    },
     "src/lib/fs/btrfs-write/src/tree.rs::split": {
-      "complexity": 25,
-      "lines": 57,
+      "complexity": 32,
+      "lines": 64,
       "recursive": false
     },
     "src/lib/fs/btrfs/src/chunk.rs::check_geometry": {
@@ -285,8 +300,8 @@
       "recursive": false
     },
     "src/lib/fs/btrfs/src/lib.rs::fmt": {
-      "complexity": 27,
-      "lines": 59,
+      "complexity": 28,
+      "lines": 60,
       "recursive": false
     },
     "src/lib/fs/btrfs/src/volume.rs::open": {

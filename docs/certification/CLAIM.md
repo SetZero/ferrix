@@ -116,7 +116,7 @@ load's locks, parsing a volume whose bytes come from a ring-3 block driver
 and whoever wrote the medium. So their own claims are about their interface
 -- total over any image, damage refused, a commit all or nothing -- and
 (a) to (d) below apply to how the load calls them, not to them: they are
-`forbid(unsafe_code)`, their allocations are being made fallible (TODO.md),
+`forbid(unsafe_code)`, their allocations report failure (MEMORY-AND-TIMING.md §1.8),
 and their time is spent inside the load's calls.
 
 The problem is that the load runs **in ring 0, in the item's address
