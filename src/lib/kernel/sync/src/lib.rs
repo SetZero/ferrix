@@ -267,6 +267,33 @@ impl<T: ?Sized> SpinLock<T> {
         unsafe { &mut *self.data.get() }
     }
 
+    /// [`lock_manually`](Self::lock_manually) if the lock is free right now,
+    /// and `None`, having changed nothing, otherwise.
+    ///
+    /// For the same one caller, a context switch, where it cannot wait: the
+    /// direct switch of a channel round trip takes a second processor's run
+    /// queue only if nobody holds it (OPAQUE-KERNEL.md §9.7), and goes the
+    /// general way when somebody does. A failed attempt takes no ticket, so it
+    /// leaves nothing behind for the holder or the next in line.
+    ///
+    /// `clippy::mut_from_ref` is exempted for the reason given on
+    /// [`lock_manually`](Self::lock_manually).
+    ///
+    /// # Safety
+    ///
+    /// As [`lock_manually`](Self::lock_manually), when it returns `Some`.
+    #[must_use = "the lock stays held until force_unlock"]
+    #[allow(clippy::mut_from_ref, reason = "the ticket queue makes it exclusive")]
+    pub unsafe fn try_lock_manually(&self) -> Option<&mut T> {
+        if !self.try_acquire() {
+            return None;
+        }
+        // SAFETY: the attempt above was served, so as in `lock_manually` no
+        // other reference to the data exists; the caller's contract carries
+        // that forward to whoever releases it.
+        Some(unsafe { &mut *self.data.get() })
+    }
+
     /// Reaches the data of a lock this CPU already holds.
     ///
     /// The other half of [`lock_manually`](Self::lock_manually): the context

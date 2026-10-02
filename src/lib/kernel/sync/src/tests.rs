@@ -78,6 +78,30 @@ fn try_lock_is_reusable_after_its_guard_drops() {
 }
 
 #[test]
+fn a_failed_manual_attempt_leaves_the_lock_as_it_found_it() {
+    let lock = SpinLock::new(0_u32);
+    let guard = lock.lock();
+    // SAFETY: a refusal hands out nothing to release.
+    let refused = unsafe { lock.try_lock_manually() }.is_none();
+    assert!(refused, "a held lock refuses a manual attempt");
+    assert!(lock.is_locked(), "and is still held by its guard");
+    drop(guard);
+    assert!(
+        !lock.is_locked(),
+        "the refused attempt took no ticket, so the guard's release frees it"
+    );
+    // SAFETY: released once below with `force_unlock`, and the reference is
+    // not used after that.
+    let data = unsafe { lock.try_lock_manually() }.unwrap();
+    *data += 1;
+    assert!(lock.is_locked(), "a successful attempt holds the lock");
+    assert!(lock.try_lock().is_none(), "against every other holder");
+    // SAFETY: taken manually above; `data` is not used again.
+    unsafe { lock.force_unlock() };
+    assert_eq!(*lock.lock(), 1, "and its write stuck");
+}
+
+#[test]
 fn get_mut_reaches_the_data_without_locking() {
     let mut lock = SpinLock::new(7_u32);
     *lock.get_mut() = 9;
