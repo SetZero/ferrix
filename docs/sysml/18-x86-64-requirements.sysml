@@ -1761,6 +1761,68 @@ package FerrixX8664Requirements {
             attribute :>> parent = "H.TRAP.11";
             attribute :>> unit = "syscall::unanswered";
         }
+        requirement <'L.syscall.20'> everyEndGoesThroughTheCore : ItemLowLevel {
+            attribute :>> statement = "The personality, an interface the item states:
+                its Process::end, the one path exit_group, a kill, a job's kill, an OOM
+                kill and a last thread's exit take, shall record the end through the
+                core's end_record; and a task it launches after its process began to
+                end, or while another thread replaces the program, shall be posted END
+                through notify once it is listed, unless has_end says it holds it.";
+            attribute :>> criterion = "As L.sched.35's: the OOM-killed program ends.";
+            attribute :>> parent = ("H.OBJ.9", "H.QUOTA.6");
+            attribute :>> unit = ("object::process::Process::end_record",
+                "sched::work::has_end");
+        }
+        requirement <'L.syscall.21'> aReplacingThreadPostsEnd : ItemLowLevel {
+            attribute :>> statement = "The personality, an interface the item states:
+                execve's end_other_threads shall post END through post_to_tasks to
+                every task of the process but the caller's after it records the
+                replacing thread, waking each and interrupting its processor.";
+            attribute :>> criterion = "In a program of three threads, two counting in
+                user mode and one waiting, the first thread's replacement of the
+                program sees the other two leave within a second (stage 7's
+                replacement check); with the post removed the counting one outlives
+                it and the check fails by name.";
+            attribute :>> parent = "H.TRAP.4";
+            attribute :>> unit = "object::process::Process::post_to_tasks";
+        }
+        requirement <'L.syscall.22'> aStopPostsStop : ItemLowLevel {
+            attribute :>> statement = "The personality, an interface the item states:
+                enter_stop shall post STOP to every task of the process after it
+                stores the stop: the caller's own through post_own when it is one of
+                the process's threads, and every other's through post_to_tasks, woken
+                and interrupted.";
+            attribute :>> criterion = "The stop check's second stop, made with no
+                signal, parks both counting threads; with the post to the other tasks
+                removed it fails by name, and with the look of L.sched.33 on it stops
+                with FX-0520.";
+            attribute :>> parent = "H.TRAP.4";
+            attribute :>> unit = ("object::process::Process::post_to_tasks",
+                "sched::work::post_own");
+        }
+        requirement <'L.syscall.23'> everySignalPostsSignal : ItemLowLevel {
+            attribute :>> statement = "The personality, an interface the item states:
+                SIGNAL shall be posted wherever needs_attention can turn true for a
+                thread's signals: by Process::post with every
+                signal it records, to the thread it was sent to or to every thread
+                that does not block it; by change_blocked when a change unblocks a
+                signal or saves a mask, to that thread; by force and by a marked
+                restart, to the running task; to the thread a signal is handed on to;
+                to a task launched with a signal it can take already pending; and
+                by return_to_user to its own task when a pass ends on its delivery
+                cap of 65, so the masked look goes round again for the rest.";
+            attribute :>> criterion = "A signal sent to a process whose first thread
+                blocks it is taken by its second, which spins alone on its processor
+                (stage 7's hand-off check); with Process::post's and the wake's
+                SIGNAL removed it never is, and the check fails by name. 35 ignored
+                signals pending for a check's process and for its thread, 70
+                deliveries, are all taken before the way back returns (the `capped`
+                line); with the capped pass's post removed the boot stops on
+                FX-0520.";
+            attribute :>> parent = ("H.TRAP.4", "H.TRAP.9");
+            attribute :>> unit = ("sched::work::post", "sched::work::post_own",
+                "sched::work::notify");
+        }
         requirement <'L.trap.5'> noEntryMeansEnosys : ItemLowLevel {
             attribute :>> statement = "system_call shall answer ENOSYS with no entry
                 registered, and the first registration shall stand.";

@@ -106,6 +106,98 @@ package FerrixSchedRequirements {
                 "sched::may_place", "sched::asleep_at_home",
                 "sched::task::Task::holds_slots");
         }
+        requirement <'L.sched.30'> theWayOutReadsTheWord : ItemLowLevel {
+            attribute :>> statement = "attention_due, asked at every way out to ring 3
+                on every architecture -- a call's, an interrupt's, a fault's, and the
+                last look of the personality's return_to_user -- with interrupts masked,
+                shall read the running task's pending-work word once, clear STOP and
+                SIGNAL in it if they are set before anything reads what they stand
+                for, and ask the personality's needs_attention when END, STOP, SIGNAL
+                or TRACE was set; FILTERED shall not be read there.";
+            attribute :>> criterion = "A program of three threads stopped by its stop
+                alone, which posts STOP and no signal, has both counting threads park
+                and stay still, and runs again after SIGCONT (stage 7's stop check,
+                its second stop); every boot, test-shell, test-threads, test-vfs and
+                test-init pass with the self-checks on, where L.sched.33's look runs
+                at every clear word.";
+            attribute :>> parent = ("H.OBJ.9", "H.TRAP.4");
+            attribute :>> unit = ("trap::attention_due", "sched::work::look",
+                "sched::work::wants_attention", "sched::work::with_running");
+        }
+        requirement <'L.sched.31'> notifyPostsBeforeItWakes : ItemLowLevel {
+            attribute :>> statement = "notify shall post its bits to the task's word
+                with a Release read-modify-write before it wakes the task and
+                interrupts its processor; post and post_own shall only set bits; and
+                only the task's own look shall clear any, with an Acquire
+                read-modify-write, and END never.";
+            attribute :>> criterion = "The stop check's second stop, posted by
+                notify's half under the list's lock and woken after it, parks both
+                counting threads; with the post removed the same check fails by
+                name.";
+            attribute :>> parent = ("H.OBJ.9", "H.SCHED.1");
+            attribute :>> unit = ("sched::work::notify", "sched::work::wake_posted",
+                "sched::work::post", "sched::work::post_own", "sched::work::has_end",
+                "sched::task::Task::work");
+        }
+        requirement <'L.sched.32'> aWakeReadsStateUnderTheHomeLock : ItemLowLevel {
+            attribute :>> statement = "A wake shall read its target's state only
+                under the run-queue lock of the processor that owns the target, after
+                reading which processor that is again under that lock, with no way
+                out before it that reads the state without the lock.";
+            attribute :>> criterion = "At two processors or more, a blocker that holds
+                its own run-queue lock while a poster on another processor reaches its
+                wake, then marks itself blocked and lets the lock go, is woken within
+                100 ms (the `wakerow` line); with a lock-free exit in wake_at_home the
+                check fails by name.";
+            attribute :>> parent = "H.SCHED.1";
+            attribute :>> unit = ("sched::wake_at_home", "sched::wake_onto");
+        }
+        requirement <'L.sched.33'> aClearWordHidesNoWork : ItemLowLevel {
+            attribute :>> statement = "With the self-checks on, attention_due shall
+                ask needs_attention at a clear word too, and audit shall stop the
+                machine with FX-0520 when it answers yes while no poster is between
+                its write and its post and the word is still clear; every poster
+                shall bracket its write and its post in a Posting.";
+            attribute :>> criterion = "Every boot, test-shell, test-threads, test-vfs
+                and test-init reach their marker with the look on; with enter_stop's
+                STOP to the other tasks removed, test-threads stops with FX-0520's
+                message.";
+            attribute :>> parent = "H.FAIL.1";
+            attribute :>> unit = ("sched::work::audit", "sched::work::posting",
+                "sched::work::set_auditing", "sched::work::auditing");
+        }
+        requirement <'L.sched.34'> theWakeHookIsStageNinesAlone : ItemLowLevel {
+            attribute :>> statement = "The hook in notify shall be armed only by stage
+                9's checks, record which check armed it and the task it watches, be
+                disarmed by that check whatever the check found, and be required
+                disarmed before the boot's marker, with F-60's leave hook, which
+                stops with FX-0908 naming the check if it is not.";
+            attribute :>> criterion = "The `wakerow` line, then the marker; with the
+                check's disarm removed the boot stops with FX-0908's message naming
+                the wake row.";
+            attribute :>> parent = "H.FAIL.1";
+            attribute :>> unit = ("sched::work::arm", "sched::work::disarm",
+                "sched::work::armed_by", "sched::work::hook_armed_by");
+        }
+        requirement <'L.sched.35'> theCoreTellsEveryTaskOfAnEnd : ItemLowLevel {
+            attribute :>> statement = "end_record shall store the process's end and
+                then, after a SeqCst fence, post END to every task its list holds,
+                waking each and interrupting its processor, with nothing allocated
+                and no task let go under the list's lock; list_task shall list a
+                task before it can run, failing its start with AllocError when the
+                list cannot grow.";
+            attribute :>> criterion = "A program past its cgroup's memory.max is
+                OOM-killed and ends (the `cgroups` line's OOM case, which no signal
+                reaches first); with end_record's post removed it never ends and
+                the check fails by name.";
+            attribute :>> parent = ("H.OBJ.9", "H.QUOTA.6");
+            attribute :>> unit = ("object::process::Process::end_record",
+                "object::process::Process::list_task",
+                "object::process::Process::post_to_tasks",
+                "object::process::Process::with_tasks", "object::process::Exit::record",
+                "object::process::Process::take_listed", "object::process::take_batch",
+                "object::process::next_live");
+        }
     }
 
     package Preemption {

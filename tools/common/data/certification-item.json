@@ -222,6 +222,7 @@
         "syscall/compat.rs",
         "syscall/credentials.rs",
         "syscall/deliver.rs",
+        "syscall/deliver/**",
         "syscall/epoll.rs",
         "syscall/eventfd.rs",
         "syscall/exec.rs",

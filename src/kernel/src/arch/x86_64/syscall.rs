@@ -541,7 +541,7 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     // waits, and a signal with a handler is delivered by pointing the frame at
     // it. See `crate::syscall::deliver`.
     if let Some(path) = crate::trap::return_path()
-        && (path.needs_attention)()
+        && crate::trap::attention_due(path)
     {
         let mut context = super::signal::UserContext::from_syscall(frame);
         (path.return_to_user)(&mut context);
@@ -602,7 +602,7 @@ fn answer_here(
         }
         super::disable_interrupts();
         if let Some(path) = crate::trap::return_path()
-            && (path.needs_attention)()
+            && crate::trap::attention_due(path)
         {
             (path.return_to_user)(&mut context);
         }
@@ -656,7 +656,7 @@ fn enter_compat_after_execve(entry: u64, stack: u64) -> ! {
     super::switch::enter_compat_segments();
     let mut context = super::signal::UserContext::entering(entry, stack, Abi::Compat);
     if let Some(path) = crate::trap::return_path()
-        && (path.needs_attention)()
+        && crate::trap::attention_due(path)
     {
         (path.return_to_user)(&mut context);
     }

@@ -400,19 +400,22 @@ pub(crate) static CHECK_HOOK_LEFT_ARMED: Explanation = Explanation {
     meaning: "Some of stage 9's checks need the item to do something at a point no program \
               can aim at: the speculation domain check's case 11 makes another processor \
               record a domain between a leave's scan and its grace period \
-              (`arch::speculation::leaving_domain`, the certification finding F-60). It does \
-              that through a hook only stage 9 arms, which records the check that armed it \
-              and which stage 9 disarms before init starts (`docs/OPAQUE-KERNEL.md` §9.7's \
-              rules for such a hook). A hook left armed would run that check's code in every \
-              later leave, on a machine running programs. So boot stops before the success \
-              marker, naming the check, if one still is.",
+              (`arch::speculation::leaving_domain`, the certification finding F-60), and the \
+              wake row's check needs `sched::work::notify` to say when a poster is between \
+              its post and its wake. Each does that through a hook only stage 9 arms, which \
+              records the check that armed it and which stage 9 disarms before init starts \
+              (`docs/OPAQUE-KERNEL.md` §9.7's rules for such a hook). A hook left armed would \
+              run that check's code in every later leave or wake, on a machine running \
+              programs. So boot stops before the success marker, naming the check and the \
+              hook, if one still is.",
     causes: &[
         "A check that arms a hook returned, on success or on an error it reports, without \
          disarming it.",
         "A new check arms a hook and was written without the disarm.",
     ],
     see: "src/kernel/src/arch/speculation.rs CheckHook; src/kernel/src/object/domain_check.rs; \
-          src/kernel/src/main.rs; docs/OPAQUE-KERNEL.md §9.7",
+          src/kernel/src/main.rs; docs/OPAQUE-KERNEL.md §9.7; \
+          src/kernel/src/sched/work.rs hook_armed_by",
 };
 
 /// For `kmain` in `main.rs`, when `self_check` fails.
@@ -1054,6 +1057,30 @@ pub(crate) static SCHEDULER_BRING_UP: Explanation = Explanation {
     ],
     see: "src/kernel/src/sched/mod.rs init; src/kernel/src/sched/mod.rs wait_for_processors; \
           docs/ROADMAP.md stage 5",
+};
+
+/// For `sched::work::audit`, when the way back to user mode finds the running
+/// task's pending-work word clear and something to act on all the same.
+pub(crate) static ATTENTION_WITHOUT_WORK: Explanation = Explanation {
+    code: "FX-0520",
+    title: "the way back to user mode had work no bit of the task's word announced",
+    meaning: "Every return to ring 3 reads the running task's pending-work word \
+              (`sched::work`), and asks the personality whether anything is to be done -- an \
+              end, a stop, a signal, a mask to put back, a call to restart -- only when a bit \
+              is set. So every writer of what the personality's `needs_attention` reads posts \
+              the bit for it, after the write. With the self-checks on, a look that finds the \
+              word clear asks the personality anyway; this stop means it answered yes with no \
+              post on its way, so the way out would have skipped a kill, a stop or a signal \
+              until something else brought the task back through the kernel.",
+    causes: &[
+        "A path writes an input of `needs_attention` -- `terminated`, the replacing thread, \
+         `stopped`, a pending signal, a blocked mask, a saved mask, a call to restart -- and \
+         posts no bit after it: a new writer, or one whose post was removed.",
+        "A poster posts its bit outside the `sched::work::Posting` that brackets its write, \
+         so a look between the write and the post took it for a missing post.",
+    ],
+    see: "src/kernel/src/sched/work.rs; src/kernel/src/trap.rs attention_due; \
+          src/kernel/src/syscall/deliver.rs needs_attention; docs/OPAQUE-KERNEL.md §9.8 2c",
 };
 
 /// For `sched::schedule`, when asked to switch with the preemption count
@@ -2892,6 +2919,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &CONSOLE_OUTPUT,
     &CONSOLE_LOG,
     &PREEMPT_COUNT_WITHOUT_RECORD,
+    &ATTENTION_WITHOUT_WORK,
     &STAGE6_USER_MEMORY,
     &STAGE6_REVERSE_MAP,
     &STAGE7_SYSCALLS,

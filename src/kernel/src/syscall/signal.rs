@@ -42,6 +42,7 @@
 //!   why the size sits at the second word on both widths.
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 
 use ferrix_bootinfo::Arch;
 use ferrix_linux_abi::errno::Errno;
@@ -932,11 +933,28 @@ pub(crate) fn change_blocked<R>(
     thread: &Thread,
     change: impl FnOnce(&mut Signals, &mut Blocking<'_>) -> R,
 ) -> R {
-    let (answer, newly) = thread.with_signals(|shared, own| {
+    let (answer, newly, opened) = thread.with_signals(|shared, own| {
         let before = own.blocked;
+        let saved_before = own.saved_mask.is_some();
         let answer = change(shared, &mut Blocking(own));
-        (answer, own.blocked & !before & shared.pending())
+        // What can make the way back's answer yes: a signal unblocked, or a
+        // mask saved to be put back. A change that only blocks, or puts a
+        // saved mask back without unblocking, can only make it no.
+        let opened = before & !own.blocked != 0 || (!saved_before && own.saved_mask.is_some());
+        (answer, own.blocked & !before & shared.pending(), opened)
     });
+    // `SIGNAL`, so that the way back to user mode looks at what the change
+    // made deliverable or left to put back: the thread's own, which needs no
+    // wake, or another's, woken to look.
+    if opened {
+        if crate::syscall::thread::current()
+            .is_some_and(|me| core::ptr::eq(Arc::as_ptr(&me), thread))
+        {
+            crate::sched::work::post_own(crate::sched::work::SIGNAL);
+        } else {
+            thread.process().wake_thread(thread);
+        }
+    }
     thread.process().hand_on_newly_blocked(thread, newly);
     answer
 }

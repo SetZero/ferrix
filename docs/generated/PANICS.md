@@ -53,6 +53,7 @@ Causes are listed most likely first.
 | [FX-0504](#fx-0504) | console output did not go out by interrupt |
 | [FX-0505](#fx-0505) | the kernel log lost track of what it keeps |
 | [FX-0506](#fx-0506) | the preemption count would start before every processor has its record |
+| [FX-0520](#fx-0520) | the way back to user mode had work no bit of the task's word announced |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0602](#fx-0602) | a page taken from a mapped object stayed reachable, or was not taken as it should be |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
@@ -985,6 +986,30 @@ address.
 
 See: src/kernel/src/sched/preempt.rs start_counting; src/kernel/src/smp.rs
 install_secondary_record, secondary_main.
+
+<a id="fx-0520"></a>
+
+## FX-0520 — the way back to user mode had work no bit of the task's word announced
+
+Every return to ring 3 reads the running task's pending-work word
+(`sched::work`), and asks the personality whether anything is to be done -- an
+end, a stop, a signal, a mask to put back, a call to restart -- only when a bit
+is set. So every writer of what the personality's `needs_attention` reads posts
+the bit for it, after the write. With the self-checks on, a look that finds the
+word clear asks the personality anyway; this stop means it answered yes with no
+post on its way, so the way out would have skipped a kill, a stop or a signal
+until something else brought the task back through the kernel.
+
+1. A path writes an input of `needs_attention` -- `terminated`, the replacing
+   thread, `stopped`, a pending signal, a blocked mask, a saved mask, a call to
+   restart -- and posts no bit after it: a new writer, or one whose post was
+   removed.
+2. A poster posts its bit outside the `sched::work::Posting` that brackets its
+   write, so a look between the write and the post took it for a missing post.
+
+See: src/kernel/src/sched/work.rs; src/kernel/src/trap.rs attention_due;
+src/kernel/src/syscall/deliver.rs needs_attention; docs/OPAQUE-KERNEL.md §9.8
+2c.
 
 <a id="fx-0601"></a>
 
@@ -2098,12 +2123,14 @@ src/kernel/src/smp.rs synchronize; docs/OPAQUE-KERNEL.md §9.3b.
 Some of stage 9's checks need the item to do something at a point no program can
 aim at: the speculation domain check's case 11 makes another processor record a
 domain between a leave's scan and its grace period
-(`arch::speculation::leaving_domain`, the certification finding F-60). It does
-that through a hook only stage 9 arms, which records the check that armed it and
-which stage 9 disarms before init starts (`docs/OPAQUE-KERNEL.md` §9.7's rules
-for such a hook). A hook left armed would run that check's code in every later
-leave, on a machine running programs. So boot stops before the success marker,
-naming the check, if one still is.
+(`arch::speculation::leaving_domain`, the certification finding F-60), and the
+wake row's check needs `sched::work::notify` to say when a poster is between its
+post and its wake. Each does that through a hook only stage 9 arms, which
+records the check that armed it and which stage 9 disarms before init starts
+(`docs/OPAQUE-KERNEL.md` §9.7's rules for such a hook). A hook left armed would
+run that check's code in every later leave or wake, on a machine running
+programs. So boot stops before the success marker, naming the check and the
+hook, if one still is.
 
 1. A check that arms a hook returned, on success or on an error it reports,
    without disarming it.
@@ -2111,7 +2138,7 @@ naming the check, if one still is.
 
 See: src/kernel/src/arch/speculation.rs CheckHook;
 src/kernel/src/object/domain_check.rs; src/kernel/src/main.rs;
-docs/OPAQUE-KERNEL.md §9.7.
+docs/OPAQUE-KERNEL.md §9.7; src/kernel/src/sched/work.rs hook_armed_by.
 
 <a id="fx-1001"></a>
 

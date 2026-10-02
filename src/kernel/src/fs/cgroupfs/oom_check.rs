@@ -249,6 +249,7 @@ struct Watched {
 }
 
 /// Start the waiter on `set`, then the program, and wait for both.
+/// Verifies: `L.sched.35`, `L.syscall.20`
 fn run_watched(job: &Arc<Job>, set: &Arc<OpenFile>, program: &Arc<Process>) -> Checked<Watched> {
     *WAITER_ANSWER.lock() = None;
     *WAITER_SET.lock() = Some(Arc::clone(set));

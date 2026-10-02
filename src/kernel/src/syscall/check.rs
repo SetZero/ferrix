@@ -214,6 +214,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_a_signal_blocked_after_it_was_sent_is_handed_on()?;
     let dethreaded = check_execve_from_a_thread_ends_the_others()?;
     let stopped_threads = check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls()?;
+    check_a_replacing_thread_ends_spinning_ones()?;
     let handed_on = check_a_signal_reaches_the_thread_that_can_take_it()?;
     mark!(5);
     let reclaimed = check_ended_programs_give_their_frames_back()?;
@@ -4455,9 +4456,11 @@ pub(crate) fn spawn_in(
             .map_err(|_| "no memory for a check's thread")?,
     );
     process.add_thread(&thread);
-    let task = crate::sched::spawn_user(name, entry, thread, cpu, None)?;
-    process.add_task(&task);
-    Ok(task)
+    let prepared = crate::sched::prepare_user(name, entry, thread, cpu, None)?;
+    crate::object::process::Host::core(&**process)
+        .list_task(prepared.task())
+        .map_err(|_| "no memory to list a check's task")?;
+    Ok(prepared.launch())
 }
 
 /// Two programs pinned to one processor both finish, each with its own
@@ -6056,7 +6059,10 @@ fn check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls()
     .map_err(|_| "a program of three threads could not be loaded")?;
     let _task =
         process::start(&stopped).map_err(|_| "a program of three threads could not be started")?;
-    let outcome = stop_and_continue(&stopped);
+    // Stopped once by SIGSTOP, which posts every thread `SIGNAL` as well, and
+    // once by the stop alone, which only `STOP` announces (`sched::work`).
+    let outcome = stop_and_continue(&stopped, Stop::BySignal)
+        .and_then(|()| stop_and_continue(&stopped, Stop::Alone));
     crate::syscall::kill::send(&stopped, SIGKILL, Origin::Kernel);
     let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
     let status = stopped.wait_for_exit(deadline);
@@ -6088,6 +6094,7 @@ const HANDOFF_PAGE: u64 = 0x6000_0000;
 /// second thread. That handler waits for it to arrive there, and returns
 /// after about three seconds if it never does -- when the first thread would
 /// take it itself, which fails by name. `SIGKILL` then ends the program.
+/// Verifies: `L.syscall.23`
 fn check_a_signal_reaches_the_thread_that_can_take_it() -> Result<Option<i32>, &'static str> {
     use crate::syscall::signal::Origin;
     use ferrix_linux_abi::types::SIGKILL;
@@ -6242,9 +6249,134 @@ fn hand_a_signal_on(handing: &Process) -> Result<(), &'static str> {
     }
 }
 
+/// How long [`check_a_replacing_thread_ends_spinning_ones`] gives the other
+/// threads to leave once one thread replaces the program.
+const REPLACE_REACH_NANOS: u64 = 1_000_000_000;
+
+/// Another thread's `execve` ends threads spinning in user mode: the stop
+/// check's program of three threads -- two counting on their own words, one
+/// waiting in `FUTEX_WAIT` -- has its first thread replace the program, as
+/// `execve`'s `end_other_threads` does, and the other two must have left
+/// within a second.
+///
+/// The waiter is woken from its wait and finds it must leave whatever the
+/// way out reads, because its call answers a restart code, which posts its
+/// `SIGNAL`. The two counting never enter the kernel but for the interrupt
+/// the replacement sends them, and come back through it to leave only
+/// because their `END` is posted (`sched::work`). The replacement runs on a
+/// kernel task of its own, so that one that never ends is cut short by the
+/// kill below rather than holding the boot.
+/// Verifies: `L.syscall.21`
+fn check_a_replacing_thread_ends_spinning_ones() -> Result<(), &'static str> {
+    use crate::syscall::signal::Origin;
+    use ferrix_linux_abi::types::SIGKILL;
+
+    if arch::USER_STOPPED_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_STOPPED_PROGRAM,
+    );
+    let replaced = process::load(
+        &file,
+        &[b"/stopped"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program of three threads could not be loaded")?;
+    let _task =
+        process::start(&replaced).map_err(|_| "a program of three threads could not be started")?;
+    let outcome = replace_while_two_spin(&replaced);
+    crate::syscall::kill::send(&replaced, SIGKILL, Origin::Kernel);
+    let deadline = crate::timer::now_nanos().saturating_add(PROGRAM_PATIENCE_NANOS);
+    let status = replaced.wait_for_exit(deadline);
+    outcome?;
+    if status.is_none() {
+        return Err("a program of three threads was never released after SIGKILL");
+    }
+    Ok(())
+}
+
+/// The replacement of [`check_a_replacing_thread_ends_spinning_ones`], once
+/// both counts move and the third thread waits.
+fn replace_while_two_spin(replaced: &Arc<Process>) -> Result<(), &'static str> {
+    static REPLACING: crate::sync::SpinLock<Option<Arc<Process>>> =
+        crate::sync::SpinLock::new(None);
+
+    fn replace(_: usize) {
+        let process = REPLACING.lock().take();
+        if let Some(process) = process
+            && let Some(leader) = process.thread_by_tid(process.pid())
+        {
+            let _ = process.end_other_threads(&leader);
+        }
+    }
+
+    let word = |offset: u64| -> Result<u32, &'static str> {
+        let mut bytes = [0_u8; 4];
+        uaccess::copy_from_user(replaced.space(), STOPPED_PAGE + offset, &mut bytes)
+            .map_err(|_| "could not read the page of a program of three threads")?;
+        Ok(u32::from_le_bytes(bytes))
+    };
+    let deadline = crate::timer::now_nanos().saturating_add(STOP_PATIENCE_NANOS);
+    loop {
+        let ready = word(12).is_ok_and(|waiting| waiting == 1)
+            && word(0)? != 0
+            && word(4)? != 0
+            && futex::waiters_on(replaced, STOPPED_PAGE + 8) == 1;
+        if ready {
+            break;
+        }
+        if replaced.is_terminated() {
+            return Err("a program of three threads ended before its thread could replace it");
+        }
+        if crate::timer::now_nanos() >= deadline {
+            return Err(
+                "a program of three threads never had both counts moving and its third \
+                        thread waiting",
+            );
+        }
+        crate::sched::sleep_for(STOP_POLL_NANOS);
+    }
+    *REPLACING.lock() = Some(Arc::clone(replaced));
+    let replacer = crate::sched::spawn("replacer", replace, 0, ferrix_sched::NICE_0_WEIGHT)
+        .map_err(|_| "could not start the task that replaces the program")?;
+    let reach = crate::timer::now_nanos().saturating_add(REPLACE_REACH_NANOS);
+    while replaced.live_thread_count() > 1 {
+        if crate::timer::now_nanos() >= reach {
+            // The caller's kill ends the replacement's wait, on the end.
+            return Err(
+                "a thread spinning in user mode outlived another thread's execve: it was \
+                        never told to leave",
+            );
+        }
+        crate::sched::sleep_for(STOP_POLL_NANOS);
+    }
+    drop(replacer);
+    Ok(())
+}
+
+/// How [`stop_and_continue`] stops its program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// `SIGSTOP`, sent to the process: taken by one thread, which stops
+    /// the rest.
+    BySignal,
+    /// The stop alone, as the thread that takes `SIGSTOP` makes it, with no
+    /// signal pending: what reaches the other threads is the stop's own
+    /// `STOP` (`sched::work`), and nothing else brings a spinning one back
+    /// through the kernel to park.
+    Alone,
+}
+
 /// The stop and the continue of
-/// [`check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls`].
-fn stop_and_continue(stopped: &Process) -> Result<(), &'static str> {
+/// [`check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls`],
+/// the stop made `how`.
+/// Verifies: `L.syscall.22`, `L.sched.30`, `L.sched.31`, `L.sched.33`
+fn stop_and_continue(stopped: &Process, how: Stop) -> Result<(), &'static str> {
     use crate::syscall::signal::Origin;
     use ferrix_linux_abi::types::{SIGCONT, SIGSTOP};
 
@@ -6294,7 +6426,10 @@ fn stop_and_continue(stopped: &Process) -> Result<(), &'static str> {
         &|| waiting(&|| Ok(word(0)? != 0 && word(4)? != 0)),
         "a program of three threads never had both counts moving and its third thread waiting",
     )?;
-    crate::syscall::kill::send(stopped, SIGSTOP, Origin::Kernel);
+    match how {
+        Stop::BySignal => crate::syscall::kill::send(stopped, SIGSTOP, Origin::Kernel),
+        Stop::Alone => stopped.enter_stop(SIGSTOP),
+    }
     until(
         &|| Ok(stopped.is_stopped() && stopped.every_task_blocked()),
         "a thread of a stopped process kept running instead of stopping",
@@ -6542,6 +6677,11 @@ const CHECK_HANDLER: u64 = 0x4000;
 /// method the delivery path calls, driven here against processes the check
 /// builds, the way `check_futexes` drives the futex table.
 fn check_untested_signal_paths() -> Result<(), &'static str> {
+    let capped = crate::syscall::deliver::check_the_delivery_cap()?;
+    println!(
+        "  capped   {capped} signals due at once were all delivered before the way back \
+         returned: a pass that ends on its cap of 65 goes round again"
+    );
     check_a_childs_end_reaches_a_sigchld_handler_and_still_reaps()?;
     check_a_childs_stop_and_continue_are_reported()?;
     check_an_alarm_delivers_sigalrm()?;

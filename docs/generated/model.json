@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "b83eb08a5523e348dae259e5b66f19416f1d9569086af4739bcf926383e8218b",
+  "digest": "f0b97ffa8e2631763ebfc0e3e6f0335c4377a27f3dd13cf36dc89e419a851991",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -105,7 +105,7 @@
   ],
   "summary": {
     "packages": 126,
-    "elements": 6189,
+    "elements": 6239,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -33090,6 +33090,348 @@
                   }
                 }
               ]
+            },
+            {
+              "name": "theWayOutReadsTheWord",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::theWayOutReadsTheWord",
+              "kind": "requirement",
+              "shortName": "L.sched.30",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 109
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWayOutReadsTheWord",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"attention_due, asked at every way out to ring 3 on every architecture -- a call's, an interrupt's, a fault's, and the last look of the personality's return_to_user -- with interrupts masked, shall read the running task's pending-work word once, clear STOP and SIGNAL in it if they are set before anything reads what they stand for, and ask the personality's needs_attention when END, STOP, SIGNAL or TRACE was set; FILTERED shall not be read there.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 116
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWayOutReadsTheWord",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A program of three threads stopped by its stop alone, which posts STOP and no signal, has both counting threads park and stay still, and runs again after SIGCONT (stage 7's stop check, its second stop); every boot, test-shell, test-threads, test-vfs and test-init pass with the self-checks on, where L.sched.33's look runs at every clear word.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 122
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWayOutReadsTheWord",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.OBJ.9\", \"H.TRAP.4\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 123
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWayOutReadsTheWord",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"trap::attention_due\", \"sched::work::look\", \"sched::work::wants_attention\", \"sched::work::with_running\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 125
+                  }
+                }
+              ]
+            },
+            {
+              "name": "notifyPostsBeforeItWakes",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::notifyPostsBeforeItWakes",
+              "kind": "requirement",
+              "shortName": "L.sched.31",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 127
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::notifyPostsBeforeItWakes",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"notify shall post its bits to the task's word with a Release read-modify-write before it wakes the task and interrupts its processor; post and post_own shall only set bits; and only the task's own look shall clear any, with an Acquire read-modify-write, and END never.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 132
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::notifyPostsBeforeItWakes",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The stop check's second stop, posted by notify's half under the list's lock and woken after it, parks both counting threads; with the post removed the same check fails by name.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 136
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::notifyPostsBeforeItWakes",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.OBJ.9\", \"H.SCHED.1\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 137
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::notifyPostsBeforeItWakes",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::work::notify\", \"sched::work::wake_posted\", \"sched::work::post\", \"sched::work::post_own\", \"sched::work::has_end\", \"sched::task::Task::work\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 140
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aWakeReadsStateUnderTheHomeLock",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::aWakeReadsStateUnderTheHomeLock",
+              "kind": "requirement",
+              "shortName": "L.sched.32",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 142
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aWakeReadsStateUnderTheHomeLock",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A wake shall read its target's state only under the run-queue lock of the processor that owns the target, after reading which processor that is again under that lock, with no way out before it that reads the state without the lock.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 146
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aWakeReadsStateUnderTheHomeLock",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"At two processors or more, a blocker that holds its own run-queue lock while a poster on another processor reaches its wake, then marks itself blocked and lets the lock go, is woken within 100 ms (the `wakerow` line); with a lock-free exit in wake_at_home the check fails by name.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 151
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aWakeReadsStateUnderTheHomeLock",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 152
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aWakeReadsStateUnderTheHomeLock",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::wake_at_home\", \"sched::wake_onto\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 153
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aClearWordHidesNoWork",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::aClearWordHidesNoWork",
+              "kind": "requirement",
+              "shortName": "L.sched.33",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 155
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aClearWordHidesNoWork",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"With the self-checks on, attention_due shall ask needs_attention at a clear word too, and audit shall stop the machine with FX-0520 when it answers yes while no poster is between its write and its post and the word is still clear; every poster shall bracket its write and its post in a Posting.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 160
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aClearWordHidesNoWork",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every boot, test-shell, test-threads, test-vfs and test-init reach their marker with the look on; with enter_stop's STOP to the other tasks removed, test-threads stops with FX-0520's message.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 164
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aClearWordHidesNoWork",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 165
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aClearWordHidesNoWork",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::work::audit\", \"sched::work::posting\", \"sched::work::set_auditing\", \"sched::work::auditing\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 167
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theWakeHookIsStageNinesAlone",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::theWakeHookIsStageNinesAlone",
+              "kind": "requirement",
+              "shortName": "L.sched.34",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 169
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWakeHookIsStageNinesAlone",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The hook in notify shall be armed only by stage 9's checks, record which check armed it and the task it watches, be disarmed by that check whatever the check found, and be required disarmed before the boot's marker, with F-60's leave hook, which stops with FX-0908 naming the check if it is not.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 174
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWakeHookIsStageNinesAlone",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The `wakerow` line, then the marker; with the check's disarm removed the boot stops with FX-0908's message naming the wake row.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 177
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWakeHookIsStageNinesAlone",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 178
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theWakeHookIsStageNinesAlone",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::work::arm\", \"sched::work::disarm\", \"sched::work::armed_by\", \"sched::work::hook_armed_by\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 180
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theCoreTellsEveryTaskOfAnEnd",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::theCoreTellsEveryTaskOfAnEnd",
+              "kind": "requirement",
+              "shortName": "L.sched.35",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 182
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theCoreTellsEveryTaskOfAnEnd",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"end_record shall store the process's end and then, after a SeqCst fence, post END to every task its list holds, waking each and interrupting its processor, with nothing allocated and no task let go under the list's lock; list_task shall list a task before it can run, failing its start with AllocError when the list cannot grow.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 188
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theCoreTellsEveryTaskOfAnEnd",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A program past its cgroup's memory.max is OOM-killed and ends (the `cgroups` line's OOM case, which no signal reaches first); with end_record's post removed it never ends and the check fails by name.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 192
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theCoreTellsEveryTaskOfAnEnd",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.OBJ.9\", \"H.QUOTA.6\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 193
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::theCoreTellsEveryTaskOfAnEnd",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"object::process::Process::end_record\", \"object::process::Process::list_task\", \"object::process::Process::post_to_tasks\", \"object::process::Process::with_tasks\", \"object::process::Exit::record\", \"object::process::Process::take_listed\", \"object::process::take_batch\", \"object::process::next_live\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 199
+                  }
+                }
+              ]
             }
           ]
         },
@@ -33100,7 +33442,7 @@
           "doc": "src/kernel/src/sched/preempt.rs and src/kernel/src/sched/mod.rs: the preemption count every crate::sync::SpinLock raises, kept in each processor's record without a locked operation (docs/OPAQUE-KERNEL.md §9.8, 2b; the consultant's OK IF of 2026-10-02, condition 2).",
           "source": {
             "file": "docs/sysml/15-sched-requirements.sysml",
-            "line": 111
+            "line": 203
           },
           "children": [
             {
@@ -33111,7 +33453,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 118
+                "line": 210
               },
               "children": [
                 {
@@ -33122,7 +33464,7 @@
                   "value": "\"A preemption-disabling lock, and a raise by hand, shall raise and lower the preemption count and, for a lock, the locks held of the processor its holder runs on, in that processor's record and without a locked operation, so that no update is lost to an interrupt and none lands on another processor's record: on x86-64 in one GS-relative instruction, with every entry that can reach it running on the kernel's GS base; on AArch64 and ARMv7-A with every exception that can take a lock masked; and a report reading another processor's count shall read each of the count and the locks held whole.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 128
+                    "line": 220
                   }
                 },
                 {
@@ -33133,7 +33475,7 @@
                   "value": "\"At two processors or more, two tasks per processor, preempted by the timer and moving between processors, take and let go of a lock 100000 times each with raises by hand among them and move at least once (the `preempt` line). The stress provokes a lost or misplaced update; what detects one is FX-0503's test at the release, which stops the boot when the locks held or the count it lowers is already zero, and, behind it, every processor's count and locks held read zero there by a task that holds nothing. The three atomicity controls (x86-64's record found before the add, the Arm mask removed on aarch64 and on armv7a at two processors) each stop the boot on FX-0503's held-zero message.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 140
+                    "line": 232
                   }
                 },
                 {
@@ -33144,7 +33486,7 @@
                   "value": "(\"H.SCHED.1\", \"H.SCHED.2\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 141
+                    "line": 233
                   }
                 },
                 {
@@ -33155,7 +33497,7 @@
                   "value": "(\"sched::preempt::raise\", \"sched::preempt::lower\", \"sched::preempt::Preempt::disable\", \"sched::preempt::preempt_disable\", \"sched::preempt::PreemptState::note\", \"sched::preempt::preempt_count\", \"sched::preempt::locks_held\", \"smp::record\", \"arch::percpu::this_cpu_add\", \"arch::x86_64::cpu::gs_xadd\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 146
+                    "line": 238
                   }
                 }
               ]
@@ -33168,7 +33510,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 148
+                "line": 240
               },
               "children": [
                 {
@@ -33179,7 +33521,7 @@
                   "value": "\"The scheduler shall stop the machine (FX-0503), naming the site that last raised the count, when it is asked to switch with its processor's count raised, and when a release finds the count, or for a lock the locks held, already at zero, having put the word back first; a release that brings the count to zero shall make the decision an interrupt deferred, if interrupts are on.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 155
+                    "line": 247
                   }
                 },
                 {
@@ -33190,7 +33532,7 @@
                   "value": "\"The release's cover test refuses a word whose count, or for a lock whose locks held, is zero, and passes one that covers the release (the stage-5 checks). That held-zero test is the detector L.sched.20's stress relies on; the negative controls of a task that sleeps holding a lock and of a release with nothing raised each stop the boot on FX-0503's message.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 161
+                    "line": 253
                   }
                 },
                 {
@@ -33201,7 +33543,7 @@
                   "value": "(\"H.SCHED.1\", \"H.SCHED.2\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 162
+                    "line": 254
                   }
                 },
                 {
@@ -33212,7 +33554,7 @@
                   "value": "(\"sched::preempt::preempt_enable\", \"sched::preempt::Preempt::enable\", \"sched::preempt::enable_from\", \"sched::preempt::unmatched\", \"sched::preempt::covers\", \"sched::preempt::decide_deferred\", \"sched::schedule_from\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 166
+                    "line": 258
                   }
                 }
               ]
@@ -33225,7 +33567,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 168
+                "line": 260
               },
               "children": [
                 {
@@ -33236,7 +33578,7 @@
                   "value": "\"may_block shall answer true only when the scheduler runs, interrupts are on, a task is running, and the count of the processor it runs on, read so that the processor and its count are one processor's (one instruction on x86-64, interrupts masked on Arm), is zero.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 173
+                    "line": 265
                   }
                 },
                 {
@@ -33247,7 +33589,7 @@
                   "value": "\"A task holding nothing may block; holding a preemption-disabling lock, or with the count raised by hand, it may not; once it lets go it may again (the stage-5 checks).\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 176
+                    "line": 268
                   }
                 },
                 {
@@ -33258,7 +33600,7 @@
                   "value": "\"H.SCHED.1\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 177
+                    "line": 269
                   }
                 },
                 {
@@ -33269,7 +33611,7 @@
                   "value": "(\"sched::may_block\", \"sched::preempt::count_here\", \"arch::percpu::this_cpu_read\", \"arch::x86_64::cpu::read_gs_at\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 179
+                    "line": 271
                   }
                 }
               ]
@@ -33282,7 +33624,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 181
+                "line": 273
               },
               "children": [
                 {
@@ -33293,7 +33635,7 @@
                   "value": "\"A try_lock of a preemption-disabling lock that fails shall leave its processor's count and locks held as it found them, and with interrupts masked shall not switch; one that succeeds shall raise both by one until its guard drops; and ferrix_sync::SpinLock::try_lock_manually shall take no ticket when it fails.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 187
+                    "line": 279
                   }
                 },
                 {
@@ -33304,7 +33646,7 @@
                   "value": "\"With a lock held, a try_lock of it with interrupts on and with them masked leaves the count and the locks held unchanged and, masked, the task's switches unchanged; a try_lock_manually of a held plain lock fails and changes neither; a successful try_lock raises both by one until it drops (the stage-5 checks, and ferrix-sync's host test of try_lock_manually).\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 193
+                    "line": 285
                   }
                 },
                 {
@@ -33315,7 +33657,7 @@
                   "value": "\"H.SCHED.1\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 194
+                    "line": 286
                   }
                 },
                 {
@@ -33326,7 +33668,7 @@
                   "value": "(\"sched::preempt::Preempt::disable\", \"sched::preempt::Preempt::enable\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 196
+                    "line": 288
                   }
                 }
               ]
@@ -54221,6 +54563,234 @@
               ]
             },
             {
+              "name": "everyEndGoesThroughTheCore",
+              "qualifiedName": "FerrixX8664Requirements::Dispatch::everyEndGoesThroughTheCore",
+              "kind": "requirement",
+              "shortName": "L.syscall.20",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/18-x86-64-requirements.sysml",
+                "line": 1764
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everyEndGoesThroughTheCore",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The personality, an interface the item states: its Process::end, the one path exit_group, a kill, a job's kill, an OOM kill and a last thread's exit take, shall record the end through the core's end_record; and a task it launches after its process began to end, or while another thread replaces the program, shall be posted END through notify once it is listed, unless has_end says it holds it.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1770
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everyEndGoesThroughTheCore",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"As L.sched.35's: the OOM-killed program ends.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1771
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everyEndGoesThroughTheCore",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.OBJ.9\", \"H.QUOTA.6\")",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1772
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everyEndGoesThroughTheCore",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"object::process::Process::end_record\", \"sched::work::has_end\")",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1774
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aReplacingThreadPostsEnd",
+              "qualifiedName": "FerrixX8664Requirements::Dispatch::aReplacingThreadPostsEnd",
+              "kind": "requirement",
+              "shortName": "L.syscall.21",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/18-x86-64-requirements.sysml",
+                "line": 1776
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aReplacingThreadPostsEnd",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The personality, an interface the item states: execve's end_other_threads shall post END through post_to_tasks to every task of the process but the caller's after it records the replacing thread, waking each and interrupting its processor.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1780
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aReplacingThreadPostsEnd",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"In a program of three threads, two counting in user mode and one waiting, the first thread's replacement of the program sees the other two leave within a second (stage 7's replacement check); with the post removed the counting one outlives it and the check fails by name.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1785
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aReplacingThreadPostsEnd",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.4\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1786
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aReplacingThreadPostsEnd",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"object::process::Process::post_to_tasks\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1787
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aStopPostsStop",
+              "qualifiedName": "FerrixX8664Requirements::Dispatch::aStopPostsStop",
+              "kind": "requirement",
+              "shortName": "L.syscall.22",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/18-x86-64-requirements.sysml",
+                "line": 1789
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aStopPostsStop",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The personality, an interface the item states: enter_stop shall post STOP to every task of the process after it stores the stop: the caller's own through post_own when it is one of the process's threads, and every other's through post_to_tasks, woken and interrupted.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1794
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aStopPostsStop",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The stop check's second stop, made with no signal, parks both counting threads; with the post to the other tasks removed it fails by name, and with the look of L.sched.33 on it stops with FX-0520.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1798
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aStopPostsStop",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.4\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1799
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::aStopPostsStop",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"object::process::Process::post_to_tasks\", \"sched::work::post_own\")",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1801
+                  }
+                }
+              ]
+            },
+            {
+              "name": "everySignalPostsSignal",
+              "qualifiedName": "FerrixX8664Requirements::Dispatch::everySignalPostsSignal",
+              "kind": "requirement",
+              "shortName": "L.syscall.23",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/18-x86-64-requirements.sysml",
+                "line": 1803
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everySignalPostsSignal",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The personality, an interface the item states: SIGNAL shall be posted wherever needs_attention can turn true for a thread's signals: by Process::post with every signal it records, to the thread it was sent to or to every thread that does not block it; by change_blocked when a change unblocks a signal or saves a mask, to that thread; by force and by a marked restart, to the running task; to the thread a signal is handed on to; to a task launched with a signal it can take already pending; and by return_to_user to its own task when a pass ends on its delivery cap of 65, so the masked look goes round again for the rest.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1813
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everySignalPostsSignal",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A signal sent to a process whose first thread blocks it is taken by its second, which spins alone on its processor (stage 7's hand-off check); with Process::post's and the wake's SIGNAL removed it never is, and the check fails by name. 35 ignored signals pending for a check's process and for its thread, 70 deliveries, are all taken before the way back returns (the `capped` line); with the capped pass's post removed the boot stops on FX-0520.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1821
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everySignalPostsSignal",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.TRAP.4\", \"H.TRAP.9\")",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1822
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::everySignalPostsSignal",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"sched::work::post\", \"sched::work::post_own\", \"sched::work::notify\")",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1824
+                  }
+                }
+              ]
+            },
+            {
               "name": "noEntryMeansEnosys",
               "qualifiedName": "FerrixX8664Requirements::Dispatch::noEntryMeansEnosys",
               "kind": "requirement",
@@ -54228,7 +54798,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1764
+                "line": 1826
               },
               "children": [
                 {
@@ -54239,7 +54809,7 @@
                   "value": "\"system_call shall answer ENOSYS with no entry registered, and the first registration shall stand.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1766
+                    "line": 1828
                   }
                 },
                 {
@@ -54250,7 +54820,7 @@
                   "value": "\"With no entry registered, system_call answers -38; a second set_syscall_entry leaves the first in place.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1768
+                    "line": 1830
                   }
                 },
                 {
@@ -54261,7 +54831,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1769
+                    "line": 1831
                   }
                 },
                 {
@@ -54272,7 +54842,7 @@
                   "value": "(\"trap::system_call\", \"trap::set_syscall_entry\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1770
+                    "line": 1832
                   }
                 }
               ]
@@ -54285,7 +54855,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1772
+                "line": 1834
               },
               "children": [
                 {
@@ -54296,7 +54866,7 @@
                   "value": "\"system_call and dispatch shall regroup the running task after a call or a trap from user mode, so that a process moved to another job runs in it from then on.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1775
+                    "line": 1837
                   }
                 },
                 {
@@ -54307,7 +54877,7 @@
                   "value": "\"After a program writes its pid to another cgroup's cgroup.procs, its next charges land in that job.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1777
+                    "line": 1839
                   }
                 },
                 {
@@ -54318,7 +54888,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1778
+                    "line": 1840
                   }
                 },
                 {
@@ -54329,7 +54899,7 @@
                   "value": "(\"trap::system_call\", \"trap::dispatch\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1779
+                    "line": 1841
                   }
                 }
               ]
@@ -54342,7 +54912,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1781
+                "line": 1843
               },
               "children": [
                 {
@@ -54353,7 +54923,7 @@
                   "value": "\"filter_system_call shall answer nothing with no filter registered and ask the registered filter otherwise, the first registration shall stand, and an errno the filter answers shall be cut to 4095 before it is written as the call's result.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1785
+                    "line": 1847
                   }
                 },
                 {
@@ -54364,7 +54934,7 @@
                   "value": "\"Every entry of the running architecture, driven with frames of the check's own, asks the registered filter exactly once per call, and the errnos 0, 13, 512, 4095, 4096, 5000 and 4294967295 come back as 0, -13, -512, -4095, -4095, -4095 and -4095; a slot with nothing registered answers nothing, and one registered twice asks the first (the `seccomp` line).\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1791
+                    "line": 1853
                   }
                 },
                 {
@@ -54375,7 +54945,7 @@
                   "value": "\"H.TRAP.16\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1792
+                    "line": 1854
                   }
                 },
                 {
@@ -54386,7 +54956,7 @@
                   "value": "(\"trap::filter_system_call\", \"trap::set_syscall_filter\", \"trap::register\", \"trap::ask\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1794
+                    "line": 1856
                   }
                 }
               ]

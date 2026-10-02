@@ -48,7 +48,7 @@ const MACHINE_CHECK: usize = 18;
 /// the order they appear in memory — the stack grows down, so the last register
 /// pushed has the lowest address and is the first field.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TrapFrame {
     pub(crate) r15: u64,
     pub(crate) r14: u64,

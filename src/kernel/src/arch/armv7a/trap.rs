@@ -41,7 +41,7 @@ const FRAME_SIZE: usize = 80;
 /// The register state at the point an exception was taken, in the order the
 /// save path leaves it on the stack: lowest address first.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TrapFrame {
     /// Which of the eight vector entries was taken.
     pub(crate) kind: u32,

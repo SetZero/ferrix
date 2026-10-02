@@ -32,7 +32,7 @@ const FRAME_SIZE: usize = 304;
 
 /// The register state at the point an exception was taken.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TrapFrame {
     /// `x0` through `x30`. `x30` is the link register; there is no `x31`,
     /// because that encoding means the zero register or the stack pointer

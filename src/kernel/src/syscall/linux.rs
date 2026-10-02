@@ -188,6 +188,8 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
         && error.is_restart()
     {
         thread.with_own_signals(|signals| signals.mark_restart(args.number as u64, first_argument));
+        // A call to restart: the caller's own `SIGNAL`, for its way out.
+        sched::work::post_own(sched::work::SIGNAL);
     }
     Outcome::Return(errno::encode(answer))
 }

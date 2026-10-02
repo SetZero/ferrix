@@ -71,6 +71,9 @@ pub(crate) fn init(view: &BootView<'_>) {
             println!("  checks   {OPTION}={other} is not understood; every self-check runs");
         }
     }
+    // The way out's check that no poster forgot its bit runs with the rest
+    // (`sched::work::audit`); the core keeps its own copy of the answer.
+    crate::sched::work::set_auditing(run());
 }
 
 /// Whether the self-checks run on this boot: true unless [`init`] read

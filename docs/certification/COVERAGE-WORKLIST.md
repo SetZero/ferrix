@@ -12,7 +12,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 |---|---:|---:|---:|---:|
 | [`discovery`](#discovery) | 53 | 111 | 131 | 2 |
 | [`object`](#object) | 9 | 17 | 40 | 7 |
-| [`arch/x86_64`](#archx86_64) | 34 | - | - | 5 |
+| [`arch/x86_64`](#archx86_64) | 32 | - | - | 5 |
 | [`syscall`](#syscall) | 15 | 10 | 10 | 2 |
 | [`init`](#init) | 3 | 14 | 14 | 1 |
 | [`console`](#console) | 3 | 6 | 7 | 4 |
@@ -31,7 +31,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
 | [`user`](#user) | - | - | 1 | 1 |
-| **Total** | **133** | **177** | **234** | 38 |
+| **Total** | **131** | **177** | **234** | 38 |
 
 ---
 
@@ -41,6 +41,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | Landing | Architectures | Dropped by the carry | Owed |
 |---|---|---|---|
+| OPAQUE-KERNEL.md §9.8 step 2c, the pending-work word (branch step2b; the consultant's OK IF of 2026-10-03, condition 3) | x86_64, aarch64, armv7a | carried from cf83b01dd, 1 anchor dropped as unmeasured: x86_64 arch/x86_64/syscall.rs:659 (the SYSCALL entry's way out, now through trap::attention_due); and on the rebase onto 36d5aedcf with condition 2's fix, 1 more: x86_64 arch/x86_64/trap.rs:51 (TrapFrame's derive, which gained Default for the delivery cap's case). | Measure and test or argue the new lines on every architecture: sched/work.rs whole (notify, wake_posted, post, post_own, has_end, look, wants_attention, with_running, posting and Posting's drop, set_auditing, auditing, audit and its fatal arm, arm, disarm, armed_by, hook_armed_by, PreparedTask::task); sched/work/check.rs (the wake row's case, its retry and failure arms); object/process.rs's task list and end (TaskList, end_record, list_task and its AllocError arm, with_tasks, post_to_tasks, take_listed, take_batch, next_live); trap::attention_due and its audit arm; and the personality's new posts that the item states as its interface (Process::post's SIGNAL, end_other_threads' and enter_stop's posts through post_to_tasks, tell_a_new_task, change_blocked's opened arm, force's and mark_restart's post_own, return_to_user's capped post, the delivery cap's case in syscall/deliver/check.rs). |
 | NVIDIA N0 (N0a DMAR scopes through bridges, N0b MSI, N0c write-combining; carried in f5776a5f7) and its conditions A2 and B1-B3 (branch nvidia-n0-conds) | x86_64, aarch64, armv7a | N0's carry from 95704d498, 11 anchors dropped as unmeasured, all in iommu.rs at the old numbering: x86_64 220 (absent-hardware argument dropped, its code deleted); aarch64 198, 208-209, 213-214 (other-architecture arguments for 198 and 213-214 dropped, 207-209 kept for 207); armv7a 198, 208-209, 213-214, 341 (the same, and 341's dropped). The conditions' own carries, from 039fd5963 and from 7cc78aaf4 across condition 1, dropped none. | On aarch64 and armv7a, re-argue as other-architecture the DMAR lines no Arm boot reaches: place_dmar's body, discover's DMAR arm, Scope::places, vtd_unit_for's scope search and its single-hop claims filter, and iommu::claims. On x86_64, measure and test or argue the new lines: place_dmar's aliased and unfollowed branches and iommu::claims (the decision itself, ferrix_pci::topology::claims and own_to_root, is host-tested and outside the kernel's measurement), MsiFunction's error paths, and N0c's refusals -- io_mapping_map's combining refusals, object::io_mapping::combining_ready, user::memory_type::hold's OtherType and NoMemory returns and Hold::drop, and the OtherMemoryType arms of syscall::native::space_status and syscall::memory::refused; and the counted claims of the consultant's condition 1: memory_type::hold's count-raising and pushing arms, memory_type::release's lowering and removal, memory_type::claims, and AddressSpace::map_window's refusal of pages outside their window (WindowPages::check). |
 | F-58, VT-d table-walk coherency and the SMMUv3's coherent walks (branch f58-coherency) | x86_64, aarch64, armv7a | carried from 6694cc234, 8 anchors dropped as unmeasured: x86_64 and armv7a residual iommu/smmuv3.rs 466 and 482 (Unit::map and Unit::unmap, now passing a coherent record); aarch64 and armv7a residual iommu/vtd.rs 218-219, 304-305, 313, 327, 329, 344-345, 370-372, 390, 405, 425, 438 and 448 (every vtd.rs line the record touched); armv7a residual mm.rs 1080, with its absent-hardware argument (unmap_io's mapper call, now through Walked); armv7a residual iommu.rs 878, with its absent-hardware argument (map_all's unwind loop, which now also takes out a page refused as not cleaned). | On aarch64 and armv7a, re-argue as other-architecture the VT-d lines no Arm boot reaches: vtd.rs's cleaning record in Unit::open, attach, install, detach, map, unmap, flush, writes, publish, the invalidations' check, table, settle, require_published and write_entry; on armv7a re-argue mm.rs's map_io and unmap_io (and WalkerClean::clean) and iommu.rs's map_all unwind as absent-hardware, as before. On x86_64, measure the new vtd.rs lines, arch::x86_64::cpu::clean_for_walker and clflush_line, and argue as absent-hardware the lines no boot reaches because QEMU's unit reports ECAP.C clear: the coherent (C=1) branches -- Unit::open's coherent arm, where UNITS_CLEANING is not counted, and check_cleaning's arm for no unit that cleans -- and clflush_line's fallback for a CPUID that reports no CLFLUSH size; test or argue as defensive the refusals only a negative control reaches: require_published's refusal, map's and unmap's MapError::NotCleaned returns, map_all's unwind of the refused page, check_cleaning's error arms and check_iommu's arm that names the cleaning failure (the controls of the F-58 landing). On aarch64, argue smmuv3.rs's COHACC refusal as absent-hardware (QEMU's SMMUv3 sets COHACC) and CR1's read-back refusal as defensive. |
 | NVIDIA N0d (64-bit apertures, a driver's configuration window, one lock per node, the breach detector; branch nvidia-n0d) | x86_64, aarch64, armv7a | N0d's carry from c0bbc5751, 3 anchors dropped as unmeasured, one per architecture, all device.rs 584 at the old numbering (MsixTable's Debug field for config_phys, which N0d removed). | Measure and test or argue the new lines in device.rs and syscall/native.rs: DeviceNode::config_read, config_write and its refusal line, verify_config, breach, config_breach's MSI and MSI-X arms and msix_control_breach (reached only by a provoked rewrite of those registers, which W7 does not make: it rewrites COMMAND), MsixTable::rewritten's mismatch arm, MappedConfig::read's out-of-space answer (reached only on a CAM window, crosvm), config_access's refusals, ConfigWrites's outside-the-space refusal, DeviceNode::hello_accepted on each core's HELLO, quiesce_while's refusal arm, device_in's BAD_STATE for a refused node, device_aperture, aperture_bytes and config_status; and the consultant's conditions 1 and 2: DeviceNode::refuse (its unmapped arm reached by no boot), set_bus_master's refusal of a refused node (W7 reaches it), and hello_accepted's new order. The allowlist itself, ferrix_pci::window, its full-array refusals included, is host-tested and outside the kernel's measurement. |
@@ -69,7 +70,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 | `object/pin.rs` | `core` | 0 | 1 | 23 | 0 | - |
 | `object/oom.rs` | `core` | 0 | 6 | 5 | 0 | - |
 | `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 538-540, 545 |
-| `object/process.rs` | `core` | 3 | 3 | 3 | 2 | 133, 172 |
+| `object/process.rs` | `core` | 3 | 3 | 3 | 2 | 181, 220 |
 | `object/mod.rs` | `core` | 2 | 2 | 2 | 0 | - |
 | `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
 | `object/quota.rs` | `core` | 0 | 1 | 1 | 0 | - |
@@ -80,8 +81,8 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `arch/x86_64/trap.rs` | `core` | 22 | - | - | 22 | 51, 54-67, 70, 72, 77-81 |
-| `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 412, 655, 658-659, 661, 668 |
+| `arch/x86_64/trap.rs` | `core` | 21 | - | - | 21 | 54-67, 70, 72, 77-81 |
+| `arch/x86_64/syscall.rs` | `core` | 5 | - | - | 5 | 412, 655, 658, 661, 668 |
 | `arch/x86_64/switch.rs` | `core` | 3 | - | - | 3 | 202, 482, 491 |
 | `arch/x86_64/mod.rs` | `core` | 2 | - | - | 2 | 1318-1319 |
 | `arch/x86_64/signal/compat.rs` | `core` | 1 | - | - | 1 | 336 |
@@ -120,7 +121,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 6 | 4 | 3 | 296, 670, 1234 |
+| `main.rs` | `item` | 3 | 6 | 4 | 3 | 296, 676, 1240 |
 
 ---
 
@@ -160,7 +161,7 @@ Code changed after the last measurement, listed in `coverage-owed.json`. Its lin
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1074, 1954 |
+| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1075, 1955 |
 | `sched/task.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---

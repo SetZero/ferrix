@@ -68,6 +68,10 @@ use crate::syscall::uaccess;
 
 use crate::signal_frame::{BadFrame, FrameRequest, StackRecord};
 
+mod check;
+
+pub(crate) use check::check_the_delivery_cap;
+
 /// How many signals one round of the way back to user mode acts on before it
 /// looks again with interrupts masked. One more than there are signals, so
 /// every pending one can be taken in one round. Not a bound on the time spent
@@ -170,8 +174,10 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
             .with_own_signals(signal::ThreadSignals::take_restart)
             .zip(RestartKind::of(context.syscall_result()));
 
+        let mut capped = true;
         for _ in 0..DELIVERY_ROUNDS {
             if process.must_leave(&thread) {
+                capped = false;
                 break;
             }
             if process.is_stopped() {
@@ -182,6 +188,7 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
                 continue;
             }
             let Some(taken) = thread.with_signals(signal::take_next) else {
+                capped = false;
                 break;
             };
             // The first signal that runs a handler settles the restart: only a
@@ -196,6 +203,13 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
             }
             act(&thread, context, &taken);
         }
+        // The cap reached with signals perhaps left: the word's `SIGNAL` was
+        // cleared by the look that brought this thread here, so it is posted
+        // again, and the masked look below goes round once more for the rest,
+        // as the loop went round on the state before the word.
+        if capped {
+            crate::sched::work::post_own(crate::sched::work::SIGNAL);
+        }
         // No handler ran -- a stop, an ignore, or nothing was left to deliver --
         // so the call restarts transparently.
         if let Some((ctx, kind)) = restart {
@@ -209,7 +223,9 @@ pub(crate) fn return_to_user(context: &mut arch::UserContext) {
             process::leave_current();
         }
         arch::disable_interrupts();
-        if !needs_attention() {
+        // The masked look, as every way out makes it: the word's bits cleared
+        // before the state they stand for is read again.
+        if !crate::trap::attention_due(&RETURN_PATH) {
             return;
         }
     }
@@ -475,6 +491,8 @@ pub(crate) fn sigreturn(context: &mut arch::UserContext, rt: bool) {
 pub(crate) fn force(signal: u32, origin: Origin) -> Option<Posted> {
     let thread = thread::current()?;
     let posted = thread.with_signals(|shared, own| signal::force(shared, own, signal, origin));
+    // The thread's own: what it was forced, and the mask `force` opened.
+    crate::sched::work::post_own(crate::sched::work::SIGNAL);
     if posted == Posted::Fatal {
         process::kill(thread.process(), 128 + signal as i32);
     }

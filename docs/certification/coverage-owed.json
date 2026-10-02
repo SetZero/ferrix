@@ -9,6 +9,16 @@
     "re-claimed for the code named here."
   ],
   "owed": [
+  {
+   "landing": "OPAQUE-KERNEL.md §9.8 step 2c, the pending-work word (branch step2b; the consultant's OK IF of 2026-10-03, condition 3)",
+   "architectures": [
+    "x86_64",
+    "aarch64",
+    "armv7a"
+   ],
+   "dropped": "carried from cf83b01dd, 1 anchor dropped as unmeasured: x86_64 arch/x86_64/syscall.rs:659 (the SYSCALL entry's way out, now through trap::attention_due); and on the rebase onto 36d5aedcf with condition 2's fix, 1 more: x86_64 arch/x86_64/trap.rs:51 (TrapFrame's derive, which gained Default for the delivery cap's case).",
+   "what": "Measure and test or argue the new lines on every architecture: sched/work.rs whole (notify, wake_posted, post, post_own, has_end, look, wants_attention, with_running, posting and Posting's drop, set_auditing, auditing, audit and its fatal arm, arm, disarm, armed_by, hook_armed_by, PreparedTask::task); sched/work/check.rs (the wake row's case, its retry and failure arms); object/process.rs's task list and end (TaskList, end_record, list_task and its AllocError arm, with_tasks, post_to_tasks, take_listed, take_batch, next_live); trap::attention_due and its audit arm; and the personality's new posts that the item states as its interface (Process::post's SIGNAL, end_other_threads' and enter_stop's posts through post_to_tasks, tell_a_new_task, change_blocked's opened arm, force's and mark_restart's post_own, return_to_user's capped post, the delivery cap's case in syscall/deliver/check.rs)."
+  },
     {
       "landing": "NVIDIA N0 (N0a DMAR scopes through bridges, N0b MSI, N0c write-combining; carried in f5776a5f7) and its conditions A2 and B1-B3 (branch nvidia-n0-conds)",
       "architectures": [

@@ -267,6 +267,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
             "  domain   not checked: built --mitigations off, no switch decides a barrier"
         );
     }
+    check_the_wake_row()?;
     let formatted = object::format_check::run()?;
     crate::console::println!(
         "  format   {formatted} errors and objects formatted for a diagnostic, each under its \
@@ -285,6 +286,21 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         spawned: after.spawned,
         abandoned: after.abandoned,
     })
+}
+
+/// The wake row (`sched::work::check`), and its line.
+fn check_the_wake_row() -> Result<(), &'static str> {
+    match crate::sched::work::check::run()? {
+        Some(report) => crate::console::println!(
+            "  wakerow  a wake made while its target held its own run-queue lock waited for the \
+             lock and woke it (try {}): no wake reads a task's state without its home's lock",
+            report.tries
+        ),
+        None => crate::console::println!(
+            "  wakerow  not checked: one processor, nowhere for the poster to run"
+        ),
+    }
+    Ok(())
 }
 
 /// Where the process-creation check stages a child's image: apart from the

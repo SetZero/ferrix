@@ -164,9 +164,6 @@ pub(crate) struct Process {
     /// The status its first thread left with through `exit`, which is the
     /// process's status when its last thread ends the same way.
     leader_status: AtomicI32,
-    /// The tasks running its code. Weak, because a task keeps its process
-    /// alive and not the other way round.
-    tasks: SpinLock<Vec<Weak<Task>>>,
     /// Its threads, each listed before it can run -- and a fork child's before
     /// the child can be found -- so that a signal sent to the process is
     /// judged against the mask of the thread that will take it. Weak, as
@@ -401,7 +398,6 @@ impl Process {
             released: AtomicBool::new(false),
             release_finished: AtomicBool::new(false),
             leader_status: AtomicI32::new(0),
-            tasks: SpinLock::new(Vec::new()),
             threads: SpinLock::new(Vec::new()),
             parent: SpinLock::new(Weak::new()),
             // A process the kernel starts leads its own group and session.
@@ -890,7 +886,8 @@ impl Process {
     /// dropping the last reference to one -- which gives back an address
     /// space -- never happens with the lock held.
     pub(crate) fn tasks(&self) -> Vec<Arc<Task>> {
-        self.tasks.lock().iter().filter_map(Weak::upgrade).collect()
+        self.core()
+            .with_tasks(|tasks| tasks.iter().filter_map(Weak::upgrade).collect())
     }
 
     /// Whether the running task, waiting on behalf of this process, is to stop
@@ -941,6 +938,7 @@ impl Process {
                 Ok(())
             };
         }
+        let posting = sched::work::posting();
         if self
             .exec_thread
             .compare_exchange(0, caller.tid(), Ordering::AcqRel, Ordering::Acquire)
@@ -950,7 +948,9 @@ impl Process {
         }
         self.signalled.wake_all();
         self.resumed.wake_all();
-        self.wake_other_tasks();
+        // `END` to every other thread: each must leave (`must_leave`).
+        self.wake_other_tasks(sched::work::END);
+        drop(posting);
         let _ = self.thread_left.wait_until_deadline(
             || self.live_thread_count() <= 1 || self.is_terminated(),
             u64::MAX,
@@ -1034,13 +1034,14 @@ impl Process {
         if self.ending.swap(true, Ordering::AcqRel) {
             return false;
         }
-        self.exit().record(status, signal);
+        // The core stores `terminated` and posts `END` to every task, waking
+        // and interrupting each (`object::process::Process::end_record`).
+        self.core().end_record(status, signal);
         // A `vfork` parent waits for this, and a thread in `pause` or stopped
         // waits for a signal or a continue; none should wait for the release.
         self.vfork_done.wake_all();
         self.signalled.wake_all();
         self.resumed.wake_all();
-        self.wake_other_tasks();
         if self.live_threads.load(Ordering::Acquire) == 0 {
             self.release();
         }
@@ -1326,20 +1327,13 @@ impl Process {
     /// gets none -- the scheduler leaves a lone task to run -- and a program
     /// spinning there would outlive the change until it chose to make a call.
     /// The caller's own task, if it is one, is already on its way.
-    fn wake_other_tasks(&self) {
-        // The other half of `WaitQueue::wait_trusting`'s fence pair: the end
-        // or the replacing thread, recorded before this, is ordered before
-        // the task states the wakes below read.
+    fn wake_other_tasks(&self, bits: u32) {
+        // The other half of `WaitQueue::wait_trusting`'s fence pair: the
+        // replacing thread or the stop, recorded before this, is ordered
+        // before the task states the wakes below read.
         core::sync::atomic::fence(Ordering::SeqCst);
         let current = sched::current();
-        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
-        for task in &tasks {
-            if current.as_ref().is_some_and(|me| Arc::ptr_eq(me, task)) {
-                continue;
-            }
-            sched::wake(task);
-            sched::interrupt(task);
-        }
+        self.core().post_to_tasks(bits, current.as_deref());
     }
 
     /// Hand a signal sent to it as a whole on to a thread that can take it,
@@ -1400,11 +1394,10 @@ impl Process {
 
     /// Wake `thread`'s task from any wait it is in, and interrupt it if it is
     /// running.
-    fn wake_thread(&self, thread: &Thread) {
+    pub(crate) fn wake_thread(&self, thread: &Thread) {
         for task in &self.tasks() {
             if thread::of_task(task).is_some_and(|own| core::ptr::eq(own, thread)) {
-                sched::wake(task);
-                sched::interrupt(task);
+                sched::work::notify(task, sched::work::SIGNAL);
             }
         }
     }
@@ -1424,18 +1417,6 @@ impl Process {
         self.threads()
             .into_iter()
             .find(|thread| thread.tid() == tid)
-    }
-
-    /// List `task` as running its code, forgetting the tasks that have gone
-    /// first, as [`Process::add_thread`] forgets threads: a process that
-    /// starts and joins threads in a loop would otherwise keep a reference,
-    /// and with it the task's allocation, for every thread it ever ran.
-    /// Seen by `syscall::check`, whose kernel threads of a check's process
-    /// are listed the same way.
-    pub(super) fn add_task(&self, task: &Arc<Task>) {
-        let mut tasks = self.tasks.lock();
-        tasks.retain(|listed| listed.strong_count() > 0);
-        tasks.push(Arc::downgrade(task));
     }
 
     /// List `thread` as one of its own, if it is not already: before the
@@ -1482,7 +1463,34 @@ impl Process {
     /// [`Process::post_signal`] without a `target`, and
     /// [`Process::post_signal_to`] with one. The threads are listed before the
     /// signal lock is taken, because the thread list's lock comes first.
+    ///
+    /// A signal recorded is posted as `SIGNAL` here, with the record: to the
+    /// thread it was sent to, or, sent to the process, to every thread that
+    /// does not block it. Whichever of those comes back through the kernel
+    /// first takes it, as when every thread's way out read the pending set;
+    /// only the one [`Process::notify_signal`] gives it to is woken.
     fn post(&self, target: Option<&Thread>, signal: u32, origin: Origin) -> Posted {
+        let _posting = sched::work::posting();
+        let posted = self.record_signal(target, signal, origin);
+        if posted == Posted::Pending {
+            for task in &self.tasks() {
+                let Some(thread) = thread::of_task(task) else {
+                    continue;
+                };
+                let takes = match target {
+                    Some(target) => core::ptr::eq(thread, target),
+                    None => !thread.is_gone() && !thread.blocks(signal),
+                };
+                if takes {
+                    sched::work::post(task, sched::work::SIGNAL);
+                }
+            }
+        }
+        posted
+    }
+
+    /// The record [`Process::post`] makes, under the signal lock.
+    fn record_signal(&self, target: Option<&Thread>, signal: u32, origin: Origin) -> Posted {
         let threads = self.threads();
         let first = threads
             .iter()
@@ -1525,6 +1533,7 @@ impl Process {
         if self.is_terminated() {
             return;
         }
+        let posting = sched::work::posting();
         self.stopped.store(signal, Ordering::Release);
         self.continue_report.store(false, Ordering::Release);
         self.stop_report.store(signal, Ordering::Release);
@@ -1534,7 +1543,14 @@ impl Process {
         // goes now, from the thread that took the signal, and a thread still
         // on its way to park runs no user code before it does.
         self.signalled.wake_all();
-        self.wake_other_tasks();
+        // `STOP` to every task, the caller's own among them when it is one of
+        // this process's threads, which needs no wake: it is on its way back
+        // to user mode, where it parks.
+        if thread::current_of(self).is_some() {
+            sched::work::post_own(sched::work::STOP);
+        }
+        self.wake_other_tasks(sched::work::STOP);
+        drop(posting);
         kill::tell_parent(self, SIGCHLD, kill::CLD_STOPPED, signal as i32);
     }
 
@@ -2016,6 +2032,12 @@ impl StartClaim {
     ) -> Result<PreparedStart, &'static str> {
         self.process.add_thread(&thread);
         let task = sched::prepare_user("user", run_program, thread, cpu, state)?;
+        // Listed before it can run, so that an end recorded from now on
+        // reaches it (`object::process::Process::end_record`).
+        self.process
+            .core()
+            .list_task(task.task())
+            .map_err(|_| "no memory to list the process's first task")?;
         Ok(PreparedStart { task, claim: self })
     }
 }
@@ -2050,15 +2072,10 @@ impl PreparedStart {
     /// Put the task on its queue and spend the claim.
     fn launch(self) -> Arc<Task> {
         let PreparedStart { task, mut claim } = self;
+        let posting = sched::work::posting();
         let task = task.launch();
-        claim.process.add_task(&task);
-        // An end requested between the launch and the push found no task to
-        // wake or interrupt; it is told now, rather than running on in user
-        // mode until it happens to make a call.
-        if claim.process.is_terminated() {
-            sched::wake(&task);
-            sched::interrupt(&task);
-        }
+        tell_a_new_task(&claim.process, &task);
+        drop(posting);
         claim.spent = true;
         task
     }
@@ -2110,21 +2127,41 @@ pub(crate) fn start_thread(
         return Err("the process is ending, or another thread is replacing its program");
     }
     process.add_thread(&thread);
-    let task = sched::spawn_user("thread", run_program, thread, None, Some(state))?;
-    process.add_task(&task);
+    let prepared = sched::prepare_user("thread", run_program, thread, None, Some(state))?;
+    // Listed before it can run, as a process's first task is.
+    process
+        .core()
+        .list_task(prepared.task())
+        .map_err(|_| "no memory to list the thread's task")?;
+    let posting = sched::work::posting();
+    let task = prepared.launch();
     // At the weight the rest of the process runs at, not at nice 0: a program
     // that was reniced and then started a thread would otherwise take back
     // with every thread what the renice gave away. Linux copies the nice
     // value into the new thread; this reads the same one from the same place.
     attributes::apply_nice(&process, &task);
-    // As for a process's first thread: an end requested between the spawn and
-    // the push found no task to wake or interrupt, so it is told now -- and so
-    // is a thread replacing the program, which waits for this one to leave.
-    if process.is_terminated() || process.exec_thread.load(Ordering::Acquire) != 0 {
-        sched::wake(&task);
-        sched::interrupt(&task);
-    }
+    tell_a_new_task(&process, &task);
+    drop(posting);
     Ok(task)
+}
+
+/// Tell `task`, just launched and already listed, what was posted for its
+/// process before it was listed: an end the core recorded, whose walk did not
+/// find it; a thread replacing the program, which waits for it to leave; and a
+/// signal pending for the process that its thread does not block. Each is
+/// read after the listing, and each poster writes before it walks the list
+/// under the same lock, so one of the two sees the other.
+fn tell_a_new_task(process: &Process, task: &Arc<Task>) {
+    if (process.is_terminated() || process.exec_thread.load(Ordering::Acquire) != 0)
+        && !sched::work::has_end(task)
+    {
+        sched::work::notify(task, sched::work::END);
+    }
+    if thread::of_task(task).is_some_and(|thread| {
+        thread.with_signals(|shared, own| super::signal::needs_attention(shared, own))
+    }) {
+        sched::work::notify(task, sched::work::SIGNAL);
+    }
 }
 
 /// End `process` from outside, with `status`.

@@ -325,6 +325,12 @@ fn require_hooks_disarmed() {
             "a check's hook was still armed after stage 9: {check}, in a speculation domain's leave"
         );
     }
+    if let Some(check) = sched::work::hook_armed_by() {
+        fatal!(
+            catalog::CHECK_HOOK_LEFT_ARMED,
+            "a check's hook was still armed after stage 9: {check}, in sched::work::notify's wake"
+        );
+    }
 }
 
 /// The last line of boot before init: the success marker when every check

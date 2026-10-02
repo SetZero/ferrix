@@ -142,6 +142,11 @@ pub(crate) struct Task {
     preemptions: AtomicU64,
     /// Which CPUs it has run on, one bit each.
     cpus_run_on: AtomicU64,
+    /// Its pending work, one bit for each thing the way back to user mode
+    /// would have to act on (`sched::work`): written only through that
+    /// module, set by a poster after the state it stands for and cleared by
+    /// the task itself before it reads that state.
+    work: AtomicU32,
     /// The node a run queue holds it in, while no run queue does.
     ///
     /// Lent to a queue as the task is queued and handed back as it leaves,
@@ -244,6 +249,12 @@ pub(crate) struct NewTask {
 }
 
 impl Task {
+    /// Its pending-work word, for `sched::work` alone, which owns every
+    /// read and write of it.
+    pub(super) const fn work(&self) -> &AtomicU32 {
+        &self.work
+    }
+
     /// A task that will start at `entry` on a stack of its own.
     ///
     /// # Errors
@@ -299,6 +310,7 @@ impl Task {
             switches: AtomicU64::new(0),
             preemptions: AtomicU64::new(0),
             cpus_run_on: AtomicU64::new(0),
+            work: AtomicU32::new(0),
             run_slot: SpinLock::new(Some(run_slot)),
             sleep_slot: SpinLock::new(Some(sleep_slot)),
         })
@@ -351,6 +363,7 @@ impl Task {
             switches: AtomicU64::new(0),
             preemptions: AtomicU64::new(0),
             cpus_run_on: AtomicU64::new(0),
+            work: AtomicU32::new(0),
             run_slot: SpinLock::new(Some(run_slot)),
             sleep_slot: SpinLock::new(Some(sleep_slot)),
         })

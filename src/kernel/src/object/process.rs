@@ -65,7 +65,7 @@ use crate::object::job::{self, Job, JobError};
 use crate::object::port::{self, Observer, Observers, PortError};
 use crate::object::quota::{self, Resource};
 use crate::object::{self as objects, HandleTable, Object};
-use crate::sched::WaitQueue;
+use crate::sched::{Task, WaitQueue};
 use crate::sync::SpinLock;
 use crate::user::space::AddressSpace;
 
@@ -114,6 +114,54 @@ pub(crate) struct Process {
     /// there ([`Process::move_new_to`]), and zero for good once it moves
     /// between jobs or leaves ([`Process::leave_speculation_domain`]).
     domain: AtomicU64,
+    /// The tasks running its code, each listed before it can run
+    /// ([`Process::list_task`]). The core's, so that the core itself tells
+    /// every one of them the process has ended ([`Process::end_record`]).
+    task_list: SpinLock<TaskList>,
+}
+
+/// Take the live tasks of `tasks` from `next` into the empty `batch`, calling
+/// `visit` on each as it is taken, until the batch is full or the list ends:
+/// the index to go on from. Under the list's lock; the tasks are kept in the
+/// batch, every one, so that none is let go there.
+fn take_batch(
+    tasks: &[Weak<Task>],
+    mut next: usize,
+    batch: &mut [Option<Arc<Task>>],
+    mut visit: impl FnMut(&Arc<Task>),
+) -> usize {
+    for slot in batch.iter_mut() {
+        let Some(task) = next_live(tasks, &mut next) else {
+            break;
+        };
+        visit(&task);
+        *slot = Some(task);
+    }
+    next
+}
+
+/// The first task of `tasks` from `next` that is still alive, with `next`
+/// moved past it; `None` at the end of the list.
+fn next_live(tasks: &[Weak<Task>], next: &mut usize) -> Option<Arc<Task>> {
+    while let Some(listed) = tasks.get(*next) {
+        *next += 1;
+        if let Some(task) = listed.upgrade() {
+            return Some(task);
+        }
+    }
+    None
+}
+
+/// A process's tasks, weakly: a task keeps its process alive and not the
+/// other way round.
+#[derive(Debug)]
+pub(crate) struct TaskList {
+    /// The tasks, in the order they were listed, with those gone forgotten
+    /// as the next is listed.
+    tasks: Vec<Weak<Task>>,
+    /// Counted up at every change, so that a walk that let go of the lock
+    /// between batches can tell its place in the list is stale.
+    version: u64,
 }
 
 /// Where a process's bootstrap handle waits for `process_bootstrap`
@@ -244,6 +292,10 @@ impl Process {
             exit,
             bootstrap: SpinLock::new(Bootstrap::Open),
             domain: AtomicU64::new(domain),
+            task_list: SpinLock::new(TaskList {
+                tasks: Vec::new(),
+                version: 0,
+            }),
         })
     }
 
@@ -501,6 +553,103 @@ impl Process {
         &self.exit
     }
 
+    /// Record how it ended, as [`Exit::record`] does, and then post
+    /// [`END`](crate::sched::work::END) to every task of it, waking each and
+    /// interrupting its processor. The store of `terminated` and the bit the
+    /// way back to user mode reads are both the core's, so that a task
+    /// spinning in user mode is ended whatever ended its process: an
+    /// `exit_group`, a kill, a job's kill, a last thread's exit. The
+    /// personality's end does this once, first.
+    ///
+    /// A task listed after the walk here read the list sees `terminated`: it
+    /// is listed under the list's lock, after this store, and its start reads
+    /// `terminated` again once it has listed it.
+    ///
+    /// The fence pairs with `WaitQueue::wait_trusting`'s, after the waiter
+    /// stores `BLOCKED`: of the two the second sees the other side's store,
+    /// so a waiter that looked before the end is woken here.
+    pub(crate) fn end_record(&self, status: i32, signal: u32) {
+        let _posting = crate::sched::work::posting();
+        self.exit.record(status, signal);
+        core::sync::atomic::fence(Ordering::SeqCst);
+        self.post_to_tasks(crate::sched::work::END, None);
+    }
+
+    /// List `task` as running its code, before it can run, forgetting the
+    /// tasks that have gone first: a process that starts and joins threads
+    /// in a loop would otherwise keep every task's allocation.
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when the list cannot grow: the start that asked fails,
+    /// before its task runs.
+    pub(crate) fn list_task(&self, task: &Arc<Task>) -> Result<(), AllocError> {
+        let mut list = self.task_list.lock();
+        list.tasks.retain(|listed| listed.strong_count() > 0);
+        fallible::try_push(&mut list.tasks, Arc::downgrade(task))?;
+        list.version = list.version.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Look at the tasks listed, under the list's lock. `look` must not drop
+    /// a task it upgrades there: the last reference to a task gives back an
+    /// address space, which no lock may be held across.
+    pub(crate) fn with_tasks<R>(&self, look: impl FnOnce(&[Weak<Task>]) -> R) -> R {
+        look(&self.task_list.lock().tasks)
+    }
+
+    /// Post `bits` to every task listed but `except`, waking each and
+    /// interrupting its processor, as `sched::work::notify` does.
+    ///
+    /// Nothing allocated and no task let go under the list's lock: the tasks
+    /// are taken out a batch at a time onto this stack, posted to under the
+    /// lock, and woken and let go once it is. A batch that finds the list
+    /// changed since the last starts again from the top; posting twice is
+    /// harmless, and the list changes only as a start lists a task, which
+    /// reads what was posted for after it lists its own.
+    pub(crate) fn post_to_tasks(&self, bits: u32, except: Option<&Task>) {
+        const BATCH: usize = 8;
+        let is_except = |task: &Arc<Task>| {
+            except.is_some_and(|except| core::ptr::eq(except, Arc::as_ptr(task)))
+        };
+        let post = |task: &Arc<Task>| {
+            if !is_except(task) {
+                crate::sched::work::post(task, bits);
+            }
+        };
+        let mut place = (0, None);
+        loop {
+            let mut batch: [Option<Arc<Task>>; BATCH] = [const { None }; BATCH];
+            let done = self.take_listed(&mut place, &mut batch, post);
+            for task in batch.iter().flatten().filter(|task| !is_except(task)) {
+                crate::sched::work::wake_posted(task);
+            }
+            drop(batch);
+            if done {
+                return;
+            }
+        }
+    }
+
+    /// One batch of [`Process::post_to_tasks`]'s walk, under the list's lock:
+    /// from `place` -- the next index, and the list's version it was taken
+    /// at, which starts the walk again from the top when the list changed --
+    /// into `batch`, with `visit` called on each task taken. Answers whether
+    /// the walk reached the end of the list.
+    fn take_listed(
+        &self,
+        place: &mut (usize, Option<u64>),
+        batch: &mut [Option<Arc<Task>>],
+        visit: impl FnMut(&Arc<Task>),
+    ) -> bool {
+        let list = self.task_list.lock();
+        if place.1 != Some(list.version) {
+            *place = (0, Some(list.version));
+        }
+        place.0 = take_batch(&list.tasks, place.0, batch, visit);
+        place.0 >= list.tasks.len()
+    }
+
     /// Do something with its bootstrap slot, under its lock. What `change`
     /// takes out it hands back, for the reason [`Process::with_handles`]
     /// gives.
@@ -720,8 +869,9 @@ impl Exit {
     }
 
     /// Record how it ended: with `status`, and by `signal` when that is not
-    /// zero. The personality's end does this once, first.
-    pub(crate) fn record(&self, status: i32, signal: u32) {
+    /// zero. Only [`Process::end_record`], which posts `END` after it, and a
+    /// boot check's end with no process ([`Exit::for_check`]) store it.
+    fn record(&self, status: i32, signal: u32) {
         self.ended_by.store(signal, Ordering::Release);
         self.status.store(status, Ordering::Release);
         self.terminated.store(true, Ordering::Release);

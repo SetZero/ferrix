@@ -46,6 +46,7 @@ mod queue;
 mod task;
 pub(crate) mod trip;
 mod wait;
+pub(crate) mod work;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;

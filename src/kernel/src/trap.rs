@@ -159,7 +159,7 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
     // mode reaches here on its next tick, and one that was preempted reaches
     // here when it is resumed. See `crate::syscall::deliver`.
     if let Some(path) = return_path().filter(|_| frame.came_from_user())
-        && (path.needs_attention)()
+        && attention_due(path)
     {
         let mut context = arch::UserContext::from_trap(frame);
         (path.return_to_user)(&mut context);
@@ -403,9 +403,11 @@ pub(crate) enum FaultOutcome {
 
 #[derive(Debug)]
 pub(crate) struct ReturnPath {
-    /// Whether the way back has anything to do for the running task. Asked on
-    /// every return from user mode, so it is kept cheap and the registers are
-    /// only copied into an [`arch::UserContext`] when something will use them.
+    /// Whether the way back has anything to do for the running task. Asked by
+    /// [`attention_due`] when the task's pending-work word has a bit set, so
+    /// the registers are only copied into an [`arch::UserContext`] when
+    /// something will use them. It reads the state alone and clears no bit:
+    /// the way out has cleared the word's before asking.
     pub(crate) needs_attention: fn() -> bool,
     /// Act on whatever `needs_attention` found. Does not return when the
     /// process has ended.
@@ -436,6 +438,22 @@ static RETURN_PATH: AtomicPtr<ReturnPath> = AtomicPtr::new(ptr::null_mut());
 /// is the property that makes the core independently analysable.
 pub(crate) fn set_return_path(path: &'static ReturnPath) {
     RETURN_PATH.store(ptr::from_ref(path).cast_mut(), Ordering::Release);
+}
+
+/// Whether the way back to user mode has anything to do for the running
+/// task: asked with interrupts masked, at every way out to ring 3 on every
+/// architecture, a call's, an interrupt's and a fault's.
+///
+/// One look at the task's pending-work word (`sched::work`), which clears the
+/// bits it finds before `path`'s `needs_attention` reads what they stand
+/// for. The personality is asked only when a bit is set -- or, with the
+/// self-checks on, when none is, to show that none should have been
+/// (`sched::work::audit`).
+pub(crate) fn attention_due(path: &ReturnPath) -> bool {
+    if crate::sched::work::wants_attention(crate::sched::work::look()) {
+        return (path.needs_attention)();
+    }
+    crate::sched::work::auditing() && crate::sched::work::audit(path.needs_attention)
 }
 
 /// The registered return path, if there is one.
