@@ -13,6 +13,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use ferrix_btrfs::BtrfsError;
 use ferrix_btrfs::chunk::{ChunkItem, FIRST_CHUNK_TREE_OBJECTID};
 use ferrix_btrfs::items::{
     CHUNK_ITEM_KEY, CHUNK_TREE_OBJECTID, DEV_ITEM_KEY, DEV_ITEMS_OBJECTID, DevItem,
@@ -21,7 +22,7 @@ use ferrix_btrfs::items::{
 };
 use ferrix_btrfs::superblock::{PRIMARY_OFFSET, SUPERBLOCK_SIZE, Superblock};
 use ferrix_btrfs::tree::{BtrfsKey, NodeHeader};
-use ferrix_btrfs::volume::ReadKind;
+use ferrix_btrfs::volume::{Device, ReadKind};
 
 use crate::bytes::{get_u32, get_u64};
 use crate::chunks::{Chunk, Chunks};
@@ -108,6 +109,8 @@ impl<D: WriteDevice> WriteVolume<D> {
             chunks_changed: false,
             growing: false,
             aborted: false,
+            abort_cause: None,
+            read_only: false,
             edits: 0,
         };
         let _ = volume.roots.insert(
@@ -147,6 +150,60 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// so the last commit is intact and reopening from it is complete.
     pub fn abort(self) -> Result<Self> {
         Self::open(self.device)
+    }
+
+    /// Throw the running transaction away, as [`WriteVolume::abort`] does,
+    /// in place, and take no more changes: what a mount does after a
+    /// transaction aborted, as Linux turns the volume read-only. Reads go
+    /// on against the last commit; every edit answers [`Error::ReadOnly`].
+    ///
+    /// # Errors
+    ///
+    /// The committed state could not be read; the volume is left as it was.
+    #[expect(
+        clippy::unneeded_field_pattern,
+        reason = "every field named, so one added later cannot be left \
+                  holding the aborted transaction's state"
+    )]
+    pub fn reload_read_only(&mut self) -> Result<()> {
+        let WriteVolume {
+            device: _,
+            geometry,
+            chunks,
+            superblock,
+            committed,
+            transid,
+            dirty,
+            clean,
+            roots,
+            stale_roots,
+            refs,
+            space,
+            chunks_changed,
+            growing,
+            aborted,
+            abort_cause,
+            read_only: _,
+            edits,
+        } = WriteVolume::open_committed(Borrowed(&mut self.device))?;
+        self.geometry = geometry;
+        self.chunks = chunks;
+        self.superblock = superblock;
+        self.committed = committed;
+        self.transid = transid;
+        self.dirty = dirty;
+        self.clean = clean;
+        self.roots = roots;
+        self.stale_roots = stale_roots;
+        self.refs = refs;
+        self.space = space;
+        self.chunks_changed = chunks_changed;
+        self.growing = growing;
+        self.aborted = aborted;
+        self.abort_cause = abort_cause;
+        self.read_only = true;
+        self.edits = edits;
+        Ok(())
     }
 
     fn read_chunk_tree_uuid(&mut self, chunk_root: u64) -> Result<[u8; 16]> {
@@ -340,7 +397,7 @@ fn check_writable(sb: &Superblock<'_>) -> Result<()> {
     use ferrix_btrfs::superblock::IncompatFlags;
     let incompat = sb.incompat_flags();
     if incompat.unknown() != 0 {
-        return Err(Error::Volume(ferrix_btrfs::BtrfsError::UnsupportedFeature(
+        return Err(Error::Volume(BtrfsError::UnsupportedFeature(
             incompat.unknown(),
         )));
     }
@@ -369,4 +426,33 @@ fn check_writable(sb: &Superblock<'_>) -> Result<()> {
         return Err(Error::Unsupported(Unsupported::CompatRo(other)));
     }
     Ok(())
+}
+
+/// The device of a volume being reloaded in place, lent to the open that
+/// rereads it.
+struct Borrowed<'a, D>(&'a mut D);
+
+impl<D: WriteDevice> Device for Borrowed<'_, D> {
+    fn read_at(
+        &mut self,
+        physical: u64,
+        buf: &mut [u8],
+        kind: ReadKind,
+    ) -> core::result::Result<(), BtrfsError> {
+        self.0.read_at(physical, buf, kind)
+    }
+}
+
+impl<D: WriteDevice> WriteDevice for Borrowed<'_, D> {
+    fn write_at(&mut self, physical: u64, data: &[u8]) -> Result<()> {
+        self.0.write_at(physical, data)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.0.flush()
+    }
+
+    fn write_durable(&mut self, physical: u64, data: &[u8]) -> Result<()> {
+        self.0.write_durable(physical, data)
+    }
 }

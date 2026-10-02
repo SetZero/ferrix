@@ -184,6 +184,10 @@ pub enum Error {
     /// it holds in memory can no longer be trusted. Nothing of it reached the
     /// disk; [`WriteVolume::abort`] discards it.
     Aborted,
+    /// The volume was reloaded from its last commit after an aborted
+    /// transaction, and takes no more changes; see
+    /// [`WriteVolume::reload_read_only`].
+    ReadOnly,
 }
 
 impl From<BtrfsError> for Error {
@@ -211,6 +215,7 @@ impl fmt::Display for Error {
             Error::NotEmpty => f.write_str("directory is not empty"),
             Error::TooManyLinks => f.write_str("too many links"),
             Error::Aborted => f.write_str("transaction aborted by an earlier failure"),
+            Error::ReadOnly => f.write_str("read-only since a transaction was aborted"),
         }
     }
 }

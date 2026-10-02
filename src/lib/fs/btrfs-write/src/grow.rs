@@ -44,6 +44,10 @@ use crate::{Error, Result, WriteDevice, WriteVolume};
 const DEVICE_RESERVED: u64 = 1024 * 1024;
 /// Chunk sizes are multiples of this.
 const CHUNK_ALIGN: u64 = 1024 * 1024;
+/// The most [`WriteVolume::tree_headroom`] keeps back for one copy of the
+/// trees: a 64 MiB metadata chunk holds the extent and checksum items of
+/// some 60 GiB of data.
+const TREE_HEADROOM: u64 = 64 * 1024 * 1024;
 /// The object id chunk items and device extents name as the chunk tree's
 /// first chunk.
 const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
@@ -87,13 +91,56 @@ impl<D: WriteDevice> WriteVolume<D> {
         holes
     }
 
-    /// Allocate a chunk of `kind`, as large as the device allows up to
-    /// [`Self::chunk_size`], and record it everywhere.
-    pub(crate) fn allocate_chunk(&mut self, kind: Kind) -> Result<()> {
+    /// How many copies of each block a chunk of `kind` holds: two for DUP.
+    fn copies(&self, kind: Kind) -> u64 {
+        if self.profile_for(kind) == 0 { 1 } else { 2 }
+    }
+
+    /// Device space no chunk holds yet, in the whole mebibytes a chunk can
+    /// be made of.
+    fn unallocated(&self) -> u64 {
+        self.device_holes().iter().fold(0u64, |sum, (_, len)| {
+            sum.saturating_add(len - len % CHUNK_ALIGN)
+        })
+    }
+
+    /// Unallocated device space data chunks leave alone, so the trees can
+    /// still grow on a volume full of data: one metadata chunk of at most
+    /// [`TREE_HEADROOM`], in every copy. Without it the data took the last
+    /// of the device, and the next edit that needed a tree node found none
+    /// half-way through, which aborts the transaction; Linux keeps its
+    /// global block reserve for the same reason.
+    fn tree_headroom(&self) -> u64 {
+        let size = self.chunk_size(Kind::Metadata).min(TREE_HEADROOM);
+        size.saturating_mul(self.copies(Kind::Metadata))
+    }
+
+    /// Bytes of file data the volume can still take: the room left in its
+    /// data block groups, and what new data chunks may still be made of.
+    /// What `statfs` reports as available, and what a write is measured
+    /// against before it changes anything.
+    #[must_use]
+    pub fn data_room(&self) -> u64 {
+        let spare = self.unallocated().saturating_sub(self.tree_headroom());
+        let chunks = (spare - spare % CHUNK_ALIGN) / self.copies(Kind::Data);
+        self.space
+            .free_bytes(Kind::Data)
+            .saturating_add(chunks - chunks % CHUNK_ALIGN)
+    }
+
+    /// Where a chunk of `kind` would go, as large as the device allows up to
+    /// [`Self::chunk_size`], changing nothing. A data chunk is kept out of
+    /// [`Self::tree_headroom`]. [`Error::NoSpace`] if there is no room.
+    pub(crate) fn place_chunk(&self, kind: Kind) -> Result<Chunk> {
         let profile = self.profile_for(kind);
-        let copies: u64 = if profile == 0 { 1 } else { 2 };
+        let copies = self.copies(kind);
         let mut holes = self.device_holes();
         let mut size = self.chunk_size(kind);
+        if kind == Kind::Data {
+            let spare = self.unallocated().saturating_sub(self.tree_headroom());
+            size = size.min(spare / copies);
+            size -= size % CHUNK_ALIGN;
+        }
         let mut stripes = Vec::new();
         while stripes.len() < copies as usize {
             let largest = holes
@@ -111,7 +158,7 @@ impl<D: WriteDevice> WriteVolume<D> {
             let _ = holes.remove(at, size);
             stripes.push(at);
         }
-        let chunk = Chunk {
+        Ok(Chunk {
             logical: self.chunks.next_logical().next_multiple_of(CHUNK_ALIGN),
             length: size,
             type_bits: kind.bits() | profile,
@@ -123,7 +170,12 @@ impl<D: WriteDevice> WriteVolume<D> {
                     dev_uuid: self.geometry.dev_uuid,
                 })
                 .collect(),
-        };
+        })
+    }
+
+    /// Make `chunk`, which [`Self::place_chunk`] placed, a block group, and
+    /// record it everywhere.
+    pub(crate) fn add_chunk(&mut self, chunk: &Chunk) -> Result<()> {
         // The free-space item below covers the whole chunk, as Linux's
         // `add_block_group_free_space` writes it, but a stripe placed over
         // the 64 MiB or 256 GiB superblock must still not be allocated there.
@@ -139,7 +191,7 @@ impl<D: WriteDevice> WriteVolume<D> {
         ))?;
         self.chunks.insert(chunk.clone())?;
         self.chunks_changed = true;
-        self.record_chunk(&chunk)
+        self.record_chunk(chunk)
     }
 
     /// Write the items describing a new chunk into the four trees.

@@ -44,6 +44,27 @@
 //! without a word to the mount, until a writeback finds no mapping left that
 //! may: a linker writes its output through one.
 //!
+//! # Room is taken at the write
+//!
+//! Since a write's extents are made at the commit, a volume that has run
+//! out would only find out there, after `write` had said yes. So a write
+//! takes its room when it dirties a page: the mount keeps the bytes its dirty
+//! pages will need (`reserved`) against what the volume can still take
+//! (`room`), and a write past that answers `ENOSPC` -- or the part that fits
+//! -- as on Linux, whose btrfs reserves data space in `write` the same way.
+//! The writeback then measures each run before it changes anything, so a
+//! volume that is full after all answers `ENOSPC` with the pages kept dirty,
+//! rather than half-writing a file into the transaction.
+//!
+//! # After an aborted transaction
+//!
+//! An edit that fails half-way -- a disk error, a volume that contradicts
+//! itself -- aborts the transaction, which nothing may commit. The next use
+//! of the volume reloads it from its last commit and makes the mount
+//! read-only, says so through the `notice` the mount was given, and goes on
+//! answering reads; Linux turns a btrfs mount read-only on an abort too.
+//! What the aborted transaction held is lost, as on Linux.
+//!
 //! # Deleting what is still open
 //!
 //! Unlinking a file that something still holds leaves the inode with an
@@ -62,7 +83,7 @@ use core::fmt;
 use ferrix_btrfs::items::Timespec as BtrfsTime;
 use ferrix_btrfs_write::fs::NewInode;
 use ferrix_btrfs_write::{Error as WriteError, Unsupported, WriteDevice, WriteVolume};
-use ferrix_sync::{Parker, SleepLock, SpinLock};
+use ferrix_sync::{Parker, SleepLock, SleepLockGuard, SpinLock};
 use ferrix_vfs::tmpfs::{PAGE_SIZE, PageSource, Pages, Storage};
 use ferrix_vfs::{
     Clock, DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Result,
@@ -109,6 +130,18 @@ struct Shared<D> {
     /// moved or removed — since the last commit. A log carries one inode's
     /// items and no names, so an `fsync` with this set commits instead.
     structural: SpinLock<bool>,
+    /// Bytes the dirty pages of every inode will take when written back: a
+    /// page each. See "Room is taken at the write".
+    reserved: SpinLock<u64>,
+    /// What the volume could still take the last time it was looked at:
+    /// `WriteVolume::data_room`, kept here so a write need not wait for the
+    /// volume's lock to measure itself against it.
+    room: SpinLock<u64>,
+    /// Set once the volume was reloaded read-only after an aborted
+    /// transaction.
+    read_only: SpinLock<bool>,
+    /// Where the mount says that it went read-only, and why.
+    notice: fn(fmt::Arguments<'_>),
 }
 
 impl<D> fmt::Debug for Shared<D> {
@@ -140,14 +173,19 @@ impl<D: WriteHandle> RwBtrfs<D> {
     /// snapshot, quotas, an unreplayed log — with the reason in the error the
     /// write path gives; `EINVAL` when it is not a volume at all, and `EIO`
     /// when it cannot be read.
+    ///
+    /// `notice` is told, once, if an aborted transaction turns the mount
+    /// read-only: see "After an aborted transaction".
     pub fn mount(
         device: D,
         dev_no: u64,
         storage: Arc<dyn Storage>,
         clock: Arc<dyn Clock>,
         parker: &dyn Parker,
+        notice: fn(fmt::Arguments<'_>),
     ) -> Result<Arc<RwBtrfs<D>>> {
         let volume = WriteVolume::open(device).map_err(mount_errno)?;
+        let room = volume.data_room();
         let shared = Arc::new(Shared {
             volume: SleepLock::new(volume, parker),
             dev_no,
@@ -158,6 +196,10 @@ impl<D: WriteHandle> RwBtrfs<D> {
             evictable: SpinLock::new(Vec::new()),
             pending: SpinLock::new(0),
             structural: SpinLock::new(false),
+            reserved: SpinLock::new(0),
+            room: SpinLock::new(room),
+            read_only: SpinLock::new(false),
+            notice,
         });
         // The open may have evicted orphans left by a crash; commit that
         // before anything else changes, so a second crash has less to redo.
@@ -176,13 +218,83 @@ impl<D: WriteHandle> RwBtrfs<D> {
 }
 
 impl<D: WriteHandle> Shared<D> {
+    /// The volume, under its lock. One whose transaction an earlier edit
+    /// aborted is reloaded read-only from its last commit first: see "After
+    /// an aborted transaction".
+    fn lock(&self) -> SleepLockGuard<'_, WriteVolume<D>> {
+        let mut volume = self.volume.lock();
+        if let Some(cause) = volume.aborted() {
+            match volume.reload_read_only() {
+                Ok(()) => {
+                    *self.read_only.lock() = true;
+                    (self.notice)(format_args!(
+                        "a transaction was aborted ({cause}); read-only from here, \
+                         at the last commit"
+                    ));
+                }
+                // Left aborted: every answer stays EIO.
+                Err(error) => (self.notice)(format_args!(
+                    "a transaction was aborted ({cause}), and the last commit \
+                     cannot be read again ({error})"
+                )),
+            }
+            self.note_room(&volume);
+        }
+        volume
+    }
+
+    /// Remember what the volume can still take, after something used or
+    /// freed room.
+    fn note_room(&self, volume: &WriteVolume<D>) {
+        *self.room.lock() = if volume.is_read_only() {
+            0
+        } else {
+            volume.data_room()
+        };
+    }
+
+    /// Take room for `pages` more dirty pages, or for as many of them as
+    /// fit. Returns how many it took.
+    fn reserve(&self, pages: u64) -> u64 {
+        let room = *self.room.lock();
+        let mut reserved = self.reserved.lock();
+        let fit = room.saturating_sub(*reserved) / PAGE_SIZE;
+        let took = pages.min(fit);
+        *reserved = reserved.saturating_add(took.saturating_mul(PAGE_SIZE));
+        took
+    }
+
+    /// Take room for `pages` dirty pages whether it is there or not: pages
+    /// that are dirty already, as a writeback that failed puts back.
+    fn reserve_anyway(&self, pages: u64) {
+        let mut reserved = self.reserved.lock();
+        *reserved = reserved.saturating_add(pages.saturating_mul(PAGE_SIZE));
+    }
+
+    /// Give back the room of `pages` dirty pages that are no longer dirty.
+    fn release(&self, pages: u64) {
+        let mut reserved = self.reserved.lock();
+        *reserved = reserved.saturating_sub(pages.saturating_mul(PAGE_SIZE));
+    }
+
     /// Run `op` with the volume, translating its error. Evictions queued by
     /// dropped inodes are done first, so they never pile up.
     fn with<T>(
         &self,
         op: impl FnOnce(&mut WriteVolume<D>) -> core::result::Result<T, WriteError>,
     ) -> Result<T> {
-        let mut volume = self.volume.lock();
+        let mut volume = self.lock();
+        self.evict_queued(&mut volume)?;
+        op(&mut volume).map_err(errno)
+    }
+
+    /// Delete the inodes queued by dropped objects with no names left.
+    fn evict_queued(&self, volume: &mut WriteVolume<D>) -> Result<()> {
+        // A read-only volume deletes nothing; its orphans go at the next
+        // writable mount, as a crash's do.
+        if volume.is_read_only() {
+            return Ok(());
+        }
         let queued = core::mem::take(&mut *self.evictable.lock());
         for ino in queued {
             // An inode that gained a name again is no orphan; the write path
@@ -194,7 +306,7 @@ impl<D: WriteHandle> Shared<D> {
                 volume.evict(ino).map_err(errno)?;
             }
         }
-        op(&mut volume).map_err(errno)
+        Ok(())
     }
 
     fn now(&self) -> BtrfsTime {
@@ -206,6 +318,10 @@ impl<D: WriteHandle> Shared<D> {
     }
 
     /// Write back every dirty page of every live inode, then commit.
+    ///
+    /// An inode the volume has no room for keeps its pages dirty and the
+    /// rest are written back and committed all the same, so what fit is
+    /// kept; the answer is then `ENOSPC`.
     fn sync_all(&self) -> Result<()> {
         let live: Vec<Arc<Node<D>>> = self
             .nodes
@@ -213,13 +329,29 @@ impl<D: WriteHandle> Shared<D> {
             .values()
             .filter_map(Weak::upgrade)
             .collect();
-        let mut volume = self.volume.lock();
+        let mut volume = self.lock();
+        // Nothing can be written back or committed any more; the pages stay
+        // in the cache, and saying so at every sync would tell no more than
+        // the notice did.
+        if volume.is_read_only() {
+            return Ok(());
+        }
+        // Files deleted since go first, so the commit frees their room.
+        self.evict_queued(&mut volume)?;
+        let mut full = false;
         for node in &live {
-            node.write_back(&mut volume)?;
+            match node.write_back(&mut volume) {
+                Ok(()) => {}
+                Err(Errno::ENOSPC) => full = true,
+                Err(error) => return Err(error),
+            }
         }
         *self.pending.lock() = 0;
         *self.structural.lock() = false;
-        volume.commit().map_err(errno)
+        let committed = volume.commit().map_err(errno);
+        self.note_room(&volume);
+        committed?;
+        if full { Err(Errno::ENOSPC) } else { Ok(()) }
     }
 
     /// Note that the shape of the tree changed; see `structural`.
@@ -231,7 +363,7 @@ impl<D: WriteHandle> Shared<D> {
     /// [`COMMIT_THRESHOLD`]: before a change to the tree's shape, so what a
     /// loop of them holds in memory stays within the threshold and one more.
     fn commit_if_heavy(&self) -> Result<()> {
-        let heavy = self.volume.lock().dirty_bytes() >= COMMIT_THRESHOLD;
+        let heavy = self.lock().dirty_bytes() >= COMMIT_THRESHOLD;
         if heavy { self.sync_all() } else { Ok(()) }
     }
 }
@@ -350,6 +482,9 @@ impl<D: WriteHandle> Node<D> {
         let store = self.pages.lock().clone();
         let (dirty, held) = {
             let mut dirty = self.dirty.lock();
+            // Every page dirty now took its room; the ones taken out below
+            // give it back, and the ones put back take it again.
+            self.shared.release(dirty.len() as u64);
             // What a shared mapping may have written, which marked nothing:
             // pages the store holds, so reading them takes no fill.
             let (written, mapped) = store
@@ -375,35 +510,103 @@ impl<D: WriteHandle> Node<D> {
             return Ok(());
         };
         let size = self.meta.lock().size;
-        let page = usize::try_from(PAGE_SIZE).map_err(|_| Errno::EIO)?;
-        for (first, count) in runs(&dirty, WRITEBACK_PAGES) {
-            let offset = first.checked_mul(PAGE_SIZE).ok_or(Errno::EIO)?;
+        let written = self.write_runs(volume, &pages, &dirty, size);
+        self.shared.note_room(volume);
+        if let Err((error, first)) = written {
+            // The pages from the run that failed on stay dirty, to be written
+            // when there is room, or to go with the file.
+            let mut still = self.dirty.lock();
+            if still.is_empty() {
+                self.hold();
+            }
+            let before = still.len();
+            still.extend(dirty.range(first..));
+            self.shared
+                .reserve_anyway(still.len().saturating_sub(before) as u64);
+            return Err(error);
+        }
+        self.refresh(volume)
+    }
+
+    /// Write the runs of `dirty` into the volume. A failure answers with the
+    /// first page of the run that failed, which nothing of was written.
+    fn write_runs(
+        &self,
+        volume: &mut WriteVolume<D>,
+        pages: &Arc<dyn Pages>,
+        dirty: &BTreeSet<u64>,
+        size: u64,
+    ) -> core::result::Result<(), (Errno, u64)> {
+        let page = usize::try_from(PAGE_SIZE).map_err(|_| (Errno::EIO, 0))?;
+        for (first, count) in runs(dirty, WRITEBACK_PAGES) {
+            let offset = first.checked_mul(PAGE_SIZE).ok_or((Errno::EIO, first))?;
             if offset >= size {
                 continue;
             }
             let len = count.saturating_mul(page);
             let mut buf = vec![0u8; len];
-            pages.read(offset, &mut buf)?;
+            pages
+                .read(offset, &mut buf)
+                .map_err(|error| (error, first))?;
             // The last page of the file is written up to its size; the bytes
             // after it belong to nothing and the write path zero-fills them.
             let end = offset.saturating_add(len as u64).min(size);
-            let keep = usize::try_from(end.saturating_sub(offset)).map_err(|_| Errno::EIO)?;
+            let keep =
+                usize::try_from(end.saturating_sub(offset)).map_err(|_| (Errno::EIO, first))?;
             buf.truncate(keep);
             volume
                 .write_file(self.ino, offset, &buf, size)
-                .map_err(errno)?;
+                .map_err(|error| (errno(error), first))?;
         }
-        self.refresh(volume)
+        Ok(())
+    }
+
+    /// The part of `data`, to be written at `at`, the volume has room for,
+    /// with the room taken: a page for each page of it that is not dirty
+    /// already. Returns that part and the pages taken; `ENOSPC` if not a
+    /// byte fits.
+    fn take_room<'d>(&self, at: u64, data: &'d [u8]) -> Result<(&'d [u8], u64)> {
+        if data.is_empty() {
+            return Ok((data, 0));
+        }
+        let end = at.saturating_add(data.len() as u64);
+        let first = at / PAGE_SIZE;
+        let last = end.saturating_sub(1) / PAGE_SIZE;
+        let clean: Vec<u64> = {
+            let dirty = self.dirty.lock();
+            (first..=last)
+                .filter(|page| !dirty.contains(page))
+                .collect()
+        };
+        let took = self.shared.reserve(clean.len() as u64);
+        let Some(&short) = clean.get(usize::try_from(took).unwrap_or(usize::MAX)) else {
+            return Ok((data, took));
+        };
+        // Up to the first clean page there was no room for.
+        let fits = short.saturating_mul(PAGE_SIZE).saturating_sub(at);
+        let fits = usize::try_from(fits).unwrap_or(0).min(data.len());
+        if fits == 0 {
+            self.shared.release(took);
+            return Err(Errno::ENOSPC);
+        }
+        Ok((data.get(..fits).unwrap_or(data), took))
     }
 
     /// Commit if the page cache holds more than a transaction should.
+    ///
+    /// A volume that turned out full is not this write's failure: its bytes
+    /// took their room and are in the cache, and whichever pages did not fit
+    /// stay dirty for the next `sync` to report.
     fn maybe_commit(&self, written: usize) -> Result<()> {
         let over = {
             let mut pending = self.shared.pending.lock();
             *pending = pending.saturating_add(written as u64);
             *pending >= COMMIT_THRESHOLD
         };
-        if over { self.shared.sync_all() } else { Ok(()) }
+        match if over { self.shared.sync_all() } else { Ok(()) } {
+            Err(Errno::ENOSPC) => Ok(()),
+            other => other,
+        }
     }
 
     /// Apply `edit` to the volume with this inode's dirty pages written back
@@ -412,7 +615,7 @@ impl<D: WriteHandle> Node<D> {
         &self,
         edit: impl FnOnce(&mut WriteVolume<D>) -> core::result::Result<T, WriteError>,
     ) -> Result<T> {
-        let mut volume = self.shared.volume.lock();
+        let mut volume = self.shared.lock();
         self.write_back(&mut volume)?;
         let out = edit(&mut volume).map_err(errno)?;
         self.refresh(&mut volume)?;
@@ -513,10 +716,20 @@ impl<D: WriteHandle> FileSystem for RwBtrfs<D> {
     }
 
     fn statfs(&self) -> StatFs {
-        let volume = self.shared.volume.lock();
+        let volume = self.shared.lock();
         let block_size = u64::from(volume.sectorsize());
-        let (total, used) = volume.capacity();
-        let free = total.saturating_sub(used) / block_size.max(1);
+        let (total, _) = volume.capacity();
+        // What a write can still take: the volume's room less what dirty
+        // pages have taken of it. Not the device less what is used, which
+        // counted every DUP tree block once and the device space no chunk
+        // can be made of.
+        drop(volume);
+        let room = self
+            .shared
+            .room
+            .lock()
+            .saturating_sub(*self.shared.reserved.lock());
+        let free = room / block_size.max(1);
         StatFs {
             magic: BTRFS_SUPER_MAGIC,
             block_size,
@@ -563,7 +776,7 @@ impl<D: WriteHandle> Inode for Node<D> {
             item.ctime = now;
             volume.write_inode(ino, &item)
         })?;
-        let mut volume = self.shared.volume.lock();
+        let mut volume = self.shared.lock();
         self.refresh(&mut volume)
     }
 
@@ -593,10 +806,15 @@ impl<D: WriteHandle> Inode for Node<D> {
         } else {
             offset
         };
+        if *self.shared.read_only.lock() {
+            return Err(Errno::EROFS);
+        }
         let end = at.checked_add(data.len() as u64).ok_or(Errno::EFBIG)?;
         if end > self.shared.storage.max_file_size() {
             return Err(Errno::EFBIG);
         }
+        let (data, took) = self.take_room(at, data)?;
+        let end = at.saturating_add(data.len() as u64);
         pages.write(at, data)?;
         {
             let mut meta = self.meta.lock();
@@ -612,8 +830,19 @@ impl<D: WriteHandle> Inode for Node<D> {
             if dirty.is_empty() {
                 self.hold();
             }
+            let before = dirty.len();
             for page in first..=last {
                 let _ = dirty.insert(page);
+            }
+            // The room taken was for the pages that were clean when it was
+            // measured; what changed since -- another write dirtied one, a
+            // writeback cleaned one -- is settled here, under the lock that
+            // makes the pages dirty.
+            let added = (dirty.len() - before) as u64;
+            if added > took {
+                self.shared.reserve_anyway(added - took);
+            } else {
+                self.shared.release(took - added);
             }
         }
         self.maybe_commit(data.len())?;
@@ -632,7 +861,12 @@ impl<D: WriteHandle> Inode for Node<D> {
         // back over what the truncation removed.
         pages.resize(len);
         pages.discard_from(len);
-        self.dirty.lock().retain(|&page| page * PAGE_SIZE < len);
+        {
+            let mut dirty = self.dirty.lock();
+            let before = dirty.len();
+            dirty.retain(|&page| page * PAGE_SIZE < len);
+            self.shared.release((before - dirty.len()) as u64);
+        }
         let ino = self.ino;
         let now = self.shared.now();
         self.with_written_back(|volume| {
@@ -681,7 +915,7 @@ impl<D: WriteHandle> Inode for Node<D> {
             }
             Ok(ino)
         })?;
-        let mut volume = self.shared.volume.lock();
+        let mut volume = self.shared.lock();
         self.refresh(&mut volume)?;
         drop(volume);
         Ok(Node::get(&self.shared, ino)? as Arc<dyn Inode>)
@@ -702,7 +936,7 @@ impl<D: WriteHandle> Inode for Node<D> {
         let (dir, ino, now) = (self.ino, target.ino, self.shared.now());
         self.shared
             .with(|volume| volume.link(dir, name, ino, now))?;
-        let mut volume = self.shared.volume.lock();
+        let mut volume = self.shared.lock();
         self.refresh(&mut volume)?;
         target.refresh(&mut volume)
     }
@@ -743,7 +977,7 @@ impl<D: WriteHandle> Inode for Node<D> {
             volume.rename(from, old, to, new, now)?;
             Ok(moved)
         })?;
-        let mut volume = self.shared.volume.lock();
+        let mut volume = self.shared.lock();
         self.refresh(&mut volume)?;
         parent.refresh(&mut volume)?;
         // Whatever was replaced, and whatever moved, may be open somewhere.
@@ -813,7 +1047,7 @@ impl<D: WriteHandle> Inode for Node<D> {
     /// carries no names; Linux falls back the same way.
     fn fsync(&self, data_only: bool) -> Result<()> {
         let _ = data_only;
-        let mut volume = self.shared.volume.lock();
+        let mut volume = self.shared.lock();
         self.write_back(&mut volume)?;
         if *self.shared.structural.lock() {
             *self.shared.pending.lock() = 0;
@@ -861,7 +1095,7 @@ impl<D: WriteHandle> Node<D> {
             let _ = volume.unlink(dir, name, now)?;
             Ok(ino)
         })?;
-        let mut volume = self.shared.volume.lock();
+        let mut volume = self.shared.lock();
         self.refresh(&mut volume)?;
         let live = self.shared.nodes.lock().get(&gone).and_then(Weak::upgrade);
         match live {
@@ -936,7 +1170,7 @@ fn errno(error: WriteError) -> Errno {
         WriteError::TooManyLinks => Errno::EMLINK,
         WriteError::NoSpace => Errno::ENOSPC,
         WriteError::ItemTooLarge => Errno::ENAMETOOLONG,
-        WriteError::Unsupported(_) => Errno::EROFS,
+        WriteError::Unsupported(_) | WriteError::ReadOnly => Errno::EROFS,
         // Damage, a failed write, or a transaction that gave up: the volume
         // is no longer to be trusted, and every answer is EIO.
         _ => Errno::EIO,

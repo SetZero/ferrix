@@ -214,6 +214,7 @@ pub(crate) fn mount_rw(rdev: u64) -> Result<Arc<dyn FileSystem>, Errno> {
         Arc::new(VmoStorage),
         super::clock(),
         &crate::sync::SchedParker,
+        |why| crate::console::println!("  btrfs    {why}"),
     )?;
     Ok(volume as Arc<dyn FileSystem>)
 }

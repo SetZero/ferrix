@@ -129,6 +129,16 @@ impl Clock for Fixed {
     }
 }
 
+/// What mounts have said through their `notice`.
+static NOTICES: Mutex<Vec<std::string::String>> = Mutex::new(Vec::new());
+
+fn notice(what: core::fmt::Arguments<'_>) {
+    NOTICES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(std::format!("{what}"));
+}
+
 fn storage() -> Arc<dyn Storage> {
     Arc::new(HeapStorage::new(1 << 30))
 }
@@ -140,6 +150,7 @@ fn mount(disk: &Disk) -> Arc<RwBtrfs<Disk>> {
         storage(),
         Arc::new(Fixed),
         &SpinParker,
+        notice,
     )
     .expect("the blank volume mounts for writing")
 }
@@ -346,6 +357,7 @@ fn what_a_shared_mapping_writes_is_kept_and_written_back() {
         Arc::new(MappedStorage(HeapStorage::new(1 << 30))),
         Arc::new(Fixed),
         &SpinParker,
+        notice,
     )
     .unwrap();
     let file = make_file(&fs.root(), b"linked", b"");
@@ -533,7 +545,14 @@ fn a_file_unlinked_while_open_stays_readable() {
 #[test]
 fn a_volume_with_a_subvolume_is_not_writable() {
     let disk = Disk::new(SUBVOL);
-    let failed = RwBtrfs::mount(disk, 0x0800_0010, storage(), Arc::new(Fixed), &SpinParker);
+    let failed = RwBtrfs::mount(
+        disk,
+        0x0800_0010,
+        storage(),
+        Arc::new(Fixed),
+        &SpinParker,
+        notice,
+    );
     assert_eq!(
         failed.err(),
         Some(Errno::EROFS),
@@ -549,4 +568,133 @@ fn statfs_says_it_is_btrfs() {
     assert_eq!(stat.magic, crate::BTRFS_SUPER_MAGIC);
     assert_eq!(stat.block_size, 4096);
     assert!(stat.blocks_free > 0 && stat.blocks_free <= stat.blocks);
+}
+
+#[test]
+fn a_full_volume_answers_enospc_and_stays_usable() {
+    // A `dd` into a nearly full /data latched the whole mount into EIO: the
+    // writes went into the page cache, and the commit that made them extents
+    // ran out half-way and aborted. A write must hear ENOSPC itself, and the
+    // volume must go on: what was there reads back, and deleting makes room.
+    let disk = Disk::new(BLANK);
+    let fs = mount(&disk);
+    let root = fs.root();
+    let keep = make_file(&root, b"keep", &[5u8; 10_000]);
+    fs.sync().unwrap();
+    let room = fs.statfs().blocks_available * 4096;
+    let big = root.create(b"big", NewNode::Regular, 0o644).unwrap();
+    let piece = vec![9u8; 100_000];
+    let mut offset = 0u64;
+    let error = loop {
+        match big.write_at(offset, &piece, false) {
+            Ok((n, _)) => offset += n as u64,
+            Err(error) => break error,
+        }
+        assert!(
+            offset <= room,
+            "wrote {offset} bytes, past the {room} statfs offered"
+        );
+    };
+    assert_eq!(error, Errno::ENOSPC);
+    assert!(
+        offset + 4 * 1024 * 1024 >= room,
+        "stopped at {offset} bytes of the {room} statfs offered"
+    );
+    assert_eq!(fs.statfs().blocks_available, 0);
+    // Everything `write` took is kept.
+    fs.sync().unwrap();
+    assert_eq!(big.metadata().size, offset);
+    assert!(read_all(&big).iter().all(|&byte| byte == 9));
+    assert_eq!(read_all(&keep), vec![5u8; 10_000]);
+    root.unlink(b"big").unwrap();
+    drop(big);
+    fs.sync().unwrap();
+    assert!(fs.statfs().blocks_available * 4096 + 4 * 1024 * 1024 >= room);
+    drop(make_file(&root, b"again", &[3u8; 1 << 20]));
+    fs.sync().unwrap();
+    drop((keep, root, fs));
+    let fs = mount(&disk);
+    let again = fs.root().lookup(b"again").unwrap();
+    assert_eq!(read_all(&again), vec![3u8; 1 << 20]);
+    assert!(fs.root().lookup(b"big").is_err());
+}
+
+/// A disk whose writes can be made to fail.
+#[derive(Clone, Debug)]
+struct Failing {
+    disk: Disk,
+    fail: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Device for Failing {
+    fn read_at(&mut self, physical: u64, buf: &mut [u8], kind: ReadKind) -> Result<(), BtrfsError> {
+        self.disk.read_at(physical, buf, kind)
+    }
+}
+
+impl ferrix_btrfs_write::WriteDevice for Failing {
+    fn write_at(&mut self, physical: u64, data: &[u8]) -> ferrix_btrfs_write::Result<()> {
+        if self.fail.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(ferrix_btrfs_write::Error::DeviceWrite { physical });
+        }
+        self.disk.write_at(physical, data)
+    }
+
+    fn flush(&mut self) -> ferrix_btrfs_write::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_aborted_transaction_leaves_the_mount_read_only_at_its_last_commit() {
+    let disk = Disk::new(BLANK);
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let device = Failing {
+        disk: disk.clone(),
+        fail: Arc::clone(&fail),
+    };
+    let fs = RwBtrfs::mount(
+        device,
+        0x0800_0011,
+        storage(),
+        Arc::new(Fixed),
+        &SpinParker,
+        notice,
+    )
+    .unwrap();
+    let root = fs.root();
+    let kept = make_file(&root, b"kept", &[1u8; 50_000]);
+    fs.sync().unwrap();
+    let lost = make_file(&root, b"lost", &[2u8; 50_000]);
+    fail.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(fs.sync(), Err(Errno::EIO), "the commit's write fails");
+    fail.store(false, std::sync::atomic::Ordering::Relaxed);
+    // From here: reads, at the last commit; no changes.
+    assert_eq!(fs.root().lookup(b"kept").map(|_| ()), Ok(()));
+    assert_eq!(read_all(&kept), vec![1u8; 50_000]);
+    assert!(
+        fs.root().lookup(b"lost").is_err(),
+        "the aborted transaction is gone"
+    );
+    assert_eq!(lost.write_at(0, b"more", false).err(), Some(Errno::EROFS));
+    assert_eq!(
+        root.create(b"new", NewNode::Regular, 0o644).err(),
+        Some(Errno::EROFS)
+    );
+    assert_eq!(fs.statfs().blocks_available, 0);
+    assert_eq!(fs.sync(), Ok(()));
+    let said = NOTICES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("device write") && line.contains("read-only")),
+        "the mount said why: {said:?}"
+    );
+    // And the disk holds that last commit.
+    drop((kept, lost, root, fs));
+    let fs = mount(&disk);
+    assert!(fs.root().lookup(b"kept").is_ok());
+    assert!(fs.root().lookup(b"lost").is_err());
 }

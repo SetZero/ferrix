@@ -11,7 +11,11 @@
 //! middle of a file, a truncation, a rename and an unlink.
 //!
 //! Then it syncs, **unmounts, and mounts again**, and only then reads
-//! everything back. That is the point of the check: after the unmount nothing
+//! everything back. Last it fills the volume: one file written until a write
+//! answers `ENOSPC`, which must be the answer -- not `EIO` -- with the
+//! volume still whole afterwards: the sync keeps what was written, the tree
+//! reads back again, and deleting the file makes room for a new one. A dd
+//! into a nearly full /data once latched the whole mount into `EIO`. That is the point of the check: after the unmount nothing
 //! of the tree is in memory, so every byte compared comes off the disk,
 //! through the driver, the block ring, the volume reader and its checksums.
 //! What the guest cannot judge — whether the trees it wrote are the trees
@@ -342,5 +346,70 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         .mount(again, &at)
         .map_err(|_| "the volume could not be mounted again")?;
     verify(&expected, &mut report)?;
+    let filled = fill(&expected)?;
+    crate::console::println!(
+        "  btrfs-rw vdc filled with {filled} bytes until ENOSPC, synced, emptied and written again"
+    );
     Ok(report)
+}
+
+/// Fill the volume until a write answers `ENOSPC`, then require it whole:
+/// what was written survives a sync, the tree reads back, and deleting the
+/// filling file makes room for another. Answers the bytes it took.
+fn fill(expected: &[Expected]) -> Result<u64, &'static str> {
+    const FILL: &[u8] = b"/mnt-rw/fill";
+    const AFTER: &[u8] = b"/mnt-rw/after";
+    let ns = fs::namespace();
+    let ctx = ns.context();
+    make(FILL)?;
+    let inode = ns
+        .resolve(&ctx, None, FILL, true)
+        .and_then(|at| at.inode())
+        .map_err(|_| "the filling file is gone")?;
+    let piece = pattern(17, 0, CHUNK);
+    let mut filled = 0u64;
+    let refused = loop {
+        match inode.write_at(filled, &piece, false) {
+            Ok((written, _)) => filled = filled.saturating_add(written as u64),
+            Err(errno) => break errno,
+        }
+        // The blank fixture is 128 MiB; a volume that never fills is a
+        // reservation that counts nothing.
+        if filled > 256 * 1024 * 1024 {
+            return Err("the volume took more than the disk holds");
+        }
+    };
+    if refused != Errno::ENOSPC {
+        return Err("a write to a full volume answered something other than ENOSPC");
+    }
+    let sync = || {
+        ns.resolve(&ctx, None, MOUNT_POINT, true)
+            .map_err(|_| "the mount point could not be resolved")?
+            .mount
+            .filesystem()
+            .sync()
+            .map_err(|_| "a full volume could not be synced")
+    };
+    sync()?;
+    if inode.metadata().size != filled {
+        return Err("the filling file lost what its writes took");
+    }
+    drop(inode);
+    let mut ignored = Report {
+        files: 0,
+        directories: 0,
+        bytes: 0,
+        skipped: None,
+    };
+    verify(expected, &mut ignored)?;
+    ns.unlink(&ctx, None, FILL)
+        .map_err(|_| "the filling file could not be removed")?;
+    sync()?;
+    write_file(AFTER, &pattern(19, 0, 1024 * 1024))
+        .map_err(|_| "a volume emptied again would not take a new file")?;
+    sync()?;
+    if read_pattern(AFTER)? != (1024 * 1024, crc32c(&pattern(19, 0, 1024 * 1024))) {
+        return Err("the file written after the fill read back wrong");
+    }
+    Ok(filled)
 }

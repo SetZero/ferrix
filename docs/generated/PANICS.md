@@ -2506,10 +2506,12 @@ fixture, an empty volume made by real mkfs.btrfs, as the third virtio-blk disk;
 — files of every size, a hole, a link, a symlink, an overwrite, a truncation, a
 rename and an unlink — syncs, unmounts, mounts again and reads everything back.
 After the unmount nothing is cached, so every byte compared came off the disk.
-Under `ferrix.btrfs=churn` or `=replay`, which only `cargo xtask test-powerfail`
-sets, the same disk is instead rewritten until QEMU is killed, and then mounted
-again — replaying any log the kill left — and every file whose trailer says its
-body was made durable is checked against that trailer.
+Then one file fills the volume until a write answers ENOSPC, and the volume must
+still sync, read back and take a new file once that one is deleted. Under
+`ferrix.btrfs=churn` or `=replay`, which only `cargo xtask test-powerfail` sets,
+the same disk is instead rewritten until QEMU is killed, and then mounted again
+— replaying any log the kill left — and every file whose trailer says its body
+was made durable is checked against that trailer.
 
 1. The mount failed: the disk takes no writes, or the volume is one
    src/lib/fs/btrfs-write will not maintain (a subvolume, quotas), which is
@@ -2522,7 +2524,12 @@ body was made durable is checked against that trailer.
    disk's.
 4. Something removed is still there, or something renamed is not: the directory
    items, the back-references or the orphan bookkeeping disagree.
-5. After a power failure, a file's bytes are not the ones its trailer promised:
+5. Filling the volume ended in something other than ENOSPC, or left it unable to
+   sync or take a new file: src/lib/fs/btrfs-vfs's reservation (rw.rs, "Room is
+   taken at the write") promised room the writeback did not find, or an
+   allocation that ran out aborted the transaction instead of answering ENOSPC
+   before it changed anything.
+6. After a power failure, a file's bytes are not the ones its trailer promised:
    a log or a commit that completed was rolled back, or replay put older extents
    under newer stat data. src/lib/fs/btrfs-write's powerfail tests reproduce
    this on the host, faster.

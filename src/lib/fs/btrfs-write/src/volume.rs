@@ -90,6 +90,10 @@ pub struct WriteVolume<D> {
     pub(crate) growing: bool,
     /// Set by a failed edit; see [`crate::Error::Aborted`].
     pub(crate) aborted: bool,
+    /// The error that set `aborted`, for whoever has to say why.
+    pub(crate) abort_cause: Option<Error>,
+    /// Set by [`WriteVolume::reload_read_only`]: reads go on, edits do not.
+    pub(crate) read_only: bool,
     /// Edits that have succeeded, so an operation can tell whether it failed
     /// before changing anything.
     pub(crate) edits: u64,
@@ -152,20 +156,57 @@ impl<D: WriteDevice> WriteVolume<D> {
         }
     }
 
+    /// Refuse an edit: after a failure that left the transaction half-done,
+    /// and on a volume reloaded read-only after one.
+    pub(crate) const fn check_writable(&self) -> Result<()> {
+        if self.aborted {
+            Err(Error::Aborted)
+        } else if self.read_only {
+            Err(Error::ReadOnly)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Mark the transaction aborted by `cause`, keeping the first cause.
+    pub(crate) fn abort_with(&mut self, cause: Error) {
+        if !self.aborted {
+            self.aborted = true;
+            self.abort_cause = Some(cause);
+        }
+    }
+
+    /// Whether a failed edit has aborted the running transaction, and with
+    /// what error: everything but [`WriteVolume::reload_read_only`] and
+    /// dropping the volume answers [`Error::Aborted`] from then on.
+    #[must_use]
+    pub const fn aborted(&self) -> Option<Error> {
+        if self.aborted { self.abort_cause } else { None }
+    }
+
+    /// Whether the volume was reloaded read-only after an aborted
+    /// transaction.
+    #[must_use]
+    pub const fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     /// Run an edit, marking the transaction aborted if it fails part-way.
     ///
     /// Every edit starts here, between complete edits, which is the one
     /// place a chunk can safely be made; so this is where metadata space is
-    /// topped up.
+    /// topped up. A volume without room for that answers [`Error::NoSpace`]
+    /// before the edit has changed anything, which aborts nothing.
     pub(crate) fn guarded<T>(&mut self, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        self.check_open()?;
-        let result = self.ensure_space(EDIT_RESERVE).and_then(|()| edit(self));
+        self.check_writable()?;
+        self.ensure_space(EDIT_RESERVE)?;
+        let result = edit(self);
         match result {
             Ok(_) => self.edits = self.edits.wrapping_add(1),
             // An answer about the key, given before anything changed: the
             // path was copied, which keeps the tree whole, and nothing else.
             Err(Error::Exists | Error::NotFound) => {}
-            Err(_) => self.aborted = true,
+            Err(error) => self.abort_with(error),
         }
         result
     }
@@ -174,11 +215,13 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// aborted if it fails after any of them succeeded: a half-made name, or
     /// half-written file, is not something to commit.
     pub(crate) fn operation<T>(&mut self, op: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        self.check_open()?;
+        self.check_writable()?;
         let before = self.edits;
         let result = op(self);
-        if result.is_err() && self.edits != before {
-            self.aborted = true;
+        if let Err(error) = result
+            && self.edits != before
+        {
+            self.abort_with(error);
         }
         result
     }
@@ -193,33 +236,57 @@ impl<D: WriteDevice> WriteVolume<D> {
         let want = nodes.saturating_mul(u64::from(self.geometry.nodesize));
         for kind in [Kind::System, Kind::Metadata] {
             if self.space.free_bytes(kind) < want {
-                self.growing = true;
-                let made = self.allocate_chunk(kind);
-                self.growing = false;
-                made?;
+                self.grow(kind)?;
             }
         }
         Ok(())
     }
 
+    /// Make a chunk of `kind`. [`Error::NoSpace`] when the device has no
+    /// room for one, with nothing changed; a failure after the chunk was
+    /// placed leaves it half-recorded, and aborts the transaction.
+    pub(crate) fn grow(&mut self, kind: Kind) -> Result<()> {
+        let placed = self.place_chunk(kind)?;
+        self.growing = true;
+        let made = self.add_chunk(&placed);
+        self.growing = false;
+        if let Err(error) = made {
+            self.abort_with(error);
+        }
+        made
+    }
+
     /// Allocate a data extent of up to `want` bytes and at least `min`,
     /// making a data chunk if no group has room. Returns `(start, len)`.
+    ///
+    /// [`Error::NoSpace`] when neither a group nor the device has room, with
+    /// nothing changed, so it aborts nothing.
     pub fn alloc_data(&mut self, want: u64, min: u64) -> Result<(u64, u64)> {
         let sector = u64::from(self.geometry.sectorsize);
-        self.guarded(|volume| {
-            let extent = match volume.space.alloc_data(want, min, sector) {
-                Err(Error::NoSpace) => {
-                    volume.growing = true;
-                    let made = volume.allocate_chunk(Kind::Data);
-                    volume.growing = false;
-                    made?;
-                    volume.space.alloc_data(want, min, sector)?
-                }
-                other => other?,
-            };
-            volume.refs.touch(extent.0, extent.1, None)?;
-            Ok(extent)
-        })
+        self.check_writable()?;
+        self.ensure_space(EDIT_RESERVE)?;
+        let found = match self.space.alloc_data(want, min, sector) {
+            Err(Error::NoSpace) => {
+                self.grow(Kind::Data)?;
+                self.space.alloc_data(want, min, sector)
+            }
+            other => other,
+        };
+        let extent = match found {
+            Ok(extent) => extent,
+            // Found no room, having taken none.
+            Err(Error::NoSpace) => return Err(Error::NoSpace),
+            Err(error) => {
+                self.abort_with(error);
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.refs.touch(extent.0, extent.1, None) {
+            self.abort_with(error);
+            return Err(error);
+        }
+        self.edits = self.edits.wrapping_add(1);
+        Ok(extent)
     }
 
     pub(crate) fn root(&self, tree: TreeId) -> Result<Root> {

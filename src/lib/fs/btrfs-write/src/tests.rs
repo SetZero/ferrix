@@ -627,7 +627,7 @@ pub(crate) fn grown_over_the_mirror() -> (MemDevice, u64) {
         })
     };
     while covering(&volume).is_none() {
-        volume.allocate_chunk(Kind::Data).unwrap();
+        volume.grow(Kind::Data).unwrap();
     }
     let logical = covering(&volume).unwrap();
     let group = volume.space.group_of(logical).unwrap();

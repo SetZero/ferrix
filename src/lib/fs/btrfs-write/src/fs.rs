@@ -805,6 +805,18 @@ impl<D: WriteDevice> WriteVolume<D> {
         if offset == 0 && end == size && size <= MAX_INLINE && size < sector && size > 0 {
             return self.write_inline(ino, data);
         }
+        // The room is measured before anything changes: a write that ran out
+        // half-way would leave half a file in the transaction, and abort it.
+        // An inline extent, which only a file shorter than a sector has,
+        // takes a sector of its own when it is turned regular below.
+        let unlined = if offset > 0 && item.size > 0 && item.size < sector {
+            sector
+        } else {
+            0
+        };
+        if self.data_room() < end.next_multiple_of(sector) - offset + unlined {
+            return Err(Error::NoSpace);
+        }
         // A write from the start replaces an inline extent outright; one
         // further in must keep its bytes, as a regular extent.
         if offset > 0 {
