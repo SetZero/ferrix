@@ -564,22 +564,40 @@ package FerrixIommuRequirements {
             attribute :>> unit = ("iommu::recorded", "audit::record",
                 "audit::Store::record_at");
         }
-        requirement <'L.iommu.45'> dmarBridgesAreFollowed : ItemLowLevel {
-            attribute :>> statement = "place_dmar shall follow a DMAR device
-                scope's path through the bridges enumeration found, and shall place
-                a sub-hierarchy scope's bridge, and every function below it whose
-                path up to the bridge crosses only PCIe ports, behind the DRHD's
-                unit as the function's own requester ID.";
+        requirement <'L.iommu.45'> requesterIdsFollowTheBridges : ItemLowLevel {
+            attribute :>> statement = "A DMAR scope's path shall be followed through
+                each bridge's secondary bus, and a function shall count as its own
+                requester only if every bridge from it up to its root bus is a PCIe
+                port (root, upstream or downstream): behind a PCIe-to-PCI or
+                conventional bridge, on a bus two bridges claim, or under a loop of
+                bus numbers, it is aliased, never its own.";
             attribute :>> criterion = "Host tests: a path is followed through each
-                bridge's secondary bus; a function behind a root port or a switch
-                is its own requester; one behind a PCIe-to-PCI bridge, on a bus no
-                bridge explains, or under a loop of bus numbers is aliased, never
-                its own. On x86-64 the virtio-rng function behind a PCIe root port
-                is placed behind the unit, 0 functions are unresolved, and its
-                out-of-domain write is faulted.";
+                bridge's secondary bus; a function behind a root port or a switch is
+                its own requester; one named by a path through a PCIe-to-PCI bridge,
+                on a bus two bridges claim, on a bus no bridge explains below a named
+                bridge, or under a loop of bus numbers is not; only Express port
+                types 4, 5 and 6 forward a requester ID; a scope path with an odd
+                byte is not whole.";
             attribute :>> parent = "H.DMA.1";
-            attribute :>> unit = ("iommu::place_dmar", "iommu::learn_bridge",
-                "iommu::Scope::places", "iommu::vtd_unit_for");
+            attribute :>> unit = ("discovery::pci::learn_bridges", "iommu::claims");
+        }
+        requirement <'L.iommu.46'> aFunctionBelowARootPortIsPlaced : ItemLowLevel {
+            attribute :>> statement = "place_dmar shall place a function that a
+                DRHD's endpoint or sub-hierarchy scope reaches, as its own requester,
+                behind that DRHD's unit, and domain_for shall attach a translated
+                domain for it on that unit; a function the scope reaches under an
+                alias, or by a path that is not whole, shall be unresolved and get
+                no domain.";
+            attribute :>> criterion = "On x86-64 under KVM and TCG every PCI
+                function, the virtio-rng and edu below PCIe root ports included, is
+                placed behind the unit with 0 bypassing and 0 unresolved, and the
+                out-of-domain probe's write from the rng below a root port (stream
+                0x100) is faulted by the unit; with domains not following scopes
+                the boot panics on the rng's untranslated DMA, and with placement
+                ignoring sub-hierarchies test-boot fails on 2 bypassing.";
+            attribute :>> parent = "H.DMA.1";
+            attribute :>> unit = ("iommu::place_dmar", "iommu::Scope::places",
+                "iommu::vtd_unit_for", "iommu::learn_bridge", "iommu::bring_up_vtd");
         }
     }
 }

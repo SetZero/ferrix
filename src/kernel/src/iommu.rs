@@ -221,28 +221,32 @@ fn place_dmar(
             if scope.kind != dmar::SCOPE_PCI_ENDPOINT && scope.kind != SCOPE_PCI_SUB_HIERARCHY {
                 continue;
             }
-            let Some(named) =
-                topology::follow_path(function.segment(), scope.start_bus, scope.path(), bridges)
-            else {
+            let named = scope
+                .path_is_whole()
+                .then(|| {
+                    topology::follow_path(
+                        function.segment(),
+                        scope.start_bus,
+                        scope.path(),
+                        bridges,
+                    )
+                })
+                .flatten();
+            let Some(named) = named else {
                 unfollowed = true;
                 continue;
             };
-            let own = named == function
-                || (scope.kind == SCOPE_PCI_SUB_HIERARCHY
-                    && match topology::behind(function, named, bridges) {
-                        topology::Behind::Own => true,
-                        topology::Behind::Aliased => {
-                            unfollowed = true;
-                            false
-                        }
-                        topology::Behind::No => false,
-                    });
-            if own {
-                return behind(
-                    units,
-                    unit.register_base,
-                    u32::from(function.requester_id()),
-                );
+            let hierarchy = scope.kind == SCOPE_PCI_SUB_HIERARCHY;
+            match claims(hierarchy, named, function, bridges) {
+                topology::Behind::Own => {
+                    return behind(
+                        units,
+                        unit.register_base,
+                        u32::from(function.requester_id()),
+                    );
+                }
+                topology::Behind::Aliased => unfollowed = true,
+                topology::Behind::No => {}
             }
         }
     }
@@ -250,6 +254,31 @@ fn place_dmar(
         Behind::Unresolved
     } else {
         Behind::Nothing
+    }
+}
+
+/// Whether a scope naming `named` -- a sub-hierarchy if `hierarchy`, an
+/// endpoint otherwise -- puts `function` behind its unit as `function`'s own
+/// requester ID: `function` is `named` or, for a sub-hierarchy, below it,
+/// and every bridge from `function` up to its root bus forwards requester
+/// IDs unchanged (`topology::own_to_root`). [`topology::Behind::Aliased`]
+/// for a function the scope reaches whose DMA arrives under a bridge's
+/// alias: never given a domain, since a second function behind the same
+/// bridge would share it.
+fn claims(
+    hierarchy: bool,
+    named: Address,
+    function: Address,
+    bridges: &[Bridge],
+) -> topology::Behind {
+    let reached = named == function
+        || (hierarchy && topology::behind(function, named, bridges) != topology::Behind::No);
+    if !reached {
+        topology::Behind::No
+    } else if topology::own_to_root(function, bridges) {
+        topology::Behind::Own
+    } else {
+        topology::Behind::Aliased
     }
 }
 
@@ -924,9 +953,7 @@ impl Scope {
         ) else {
             return false;
         };
-        named == function
-            || (self.hierarchy
-                && topology::behind(function, named, bridges) == topology::Behind::Own)
+        claims(self.hierarchy, named, function, bridges) == topology::Behind::Own
     }
 }
 
@@ -1005,7 +1032,8 @@ fn bring_up_vtd(table: &dmar::Dmar<'_>, programmed: &mut Programmed, report: &mu
                     // Single-hop endpoints are in `behind` already.
                     let longer_path =
                         scope.kind == dmar::SCOPE_PCI_ENDPOINT && scope.endpoint().is_none();
-                    if !hierarchy && !longer_path {
+                    // A path with an odd byte names nothing (`place_dmar`).
+                    if !hierarchy && !longer_path || !scope.path_is_whole() {
                         continue;
                     }
                     let kept = Scope {
@@ -1133,19 +1161,23 @@ pub(crate) fn domain_for(function: Address) -> Domain {
 /// followed through the bridges enumeration found, which a function below a
 /// root port is examined after (`discovery::pci`).
 fn vtd_unit_for(programmed: &'static Programmed, function: Address) -> Option<&'static vtd::Unit> {
+    let bridges = BRIDGES.lock();
+    // A single-hop endpoint on a bus behind an aliasing bridge is refused
+    // as a longer path through one is (`claims`).
     let named = programmed
         .behind
         .iter()
         .find(|(address, _)| *address == function)
+        .filter(|_| topology::own_to_root(function, &bridges))
         .map(|&(_, index)| index);
     let index = named.or_else(|| {
-        let bridges = BRIDGES.lock();
         programmed
             .scopes
             .iter()
             .find(|(scope, _)| scope.places(function, &bridges))
             .map(|&(_, index)| index)
     })?;
+    drop(bridges);
     programmed.vtd.get(index)
 }
 

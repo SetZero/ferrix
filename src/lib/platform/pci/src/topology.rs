@@ -103,15 +103,10 @@ pub fn behind(function: Address, top: Address, bridges: &[Bridge]) -> Behind {
     }
     let mut bus = function.bus();
     for _ in 0..=u8::MAX as usize {
-        let Some(above) = bridges
-            .iter()
-            .find(|bridge| bridge.address.segment() == top.segment() && bridge.secondary == bus)
-        else {
-            return Behind::Aliased;
+        let above = match above(top.segment(), bus, bridges) {
+            Above::One(above) if above.forwards_requester => above,
+            Above::One(_) | Above::None | Above::Ambiguous => return Behind::Aliased,
         };
-        if !above.forwards_requester {
-            return Behind::Aliased;
-        }
         if above.address == top {
             return Behind::Own;
         }
@@ -120,9 +115,54 @@ pub fn behind(function: Address, top: Address, bridges: &[Bridge]) -> Behind {
     Behind::Aliased
 }
 
+/// The bridge directly above `bus` on `segment`.
+enum Above {
+    /// None: `bus` is a root bus, or one no bridge explains.
+    None,
+    /// Exactly one.
+    One(Bridge),
+    /// Two bridges claim it, as firmware that numbered them wrong could.
+    Ambiguous,
+}
+
+/// The bridge whose secondary bus is `bus`.
+fn above(segment: u16, bus: u8, bridges: &[Bridge]) -> Above {
+    let mut found = bridges
+        .iter()
+        .filter(|bridge| bridge.address.segment() == segment && bridge.secondary == bus);
+    match (found.next(), found.next()) {
+        (None, _) => Above::None,
+        (Some(&bridge), None) => Above::One(bridge),
+        (Some(_), Some(_)) => Above::Ambiguous,
+    }
+}
+
+/// Whether `function`'s DMA reaches its root bus carrying its own requester
+/// ID: every bridge above it is a PCIe port, up to a bus no bridge has
+/// behind it.
+///
+/// What an IOMMU description naming `function` by a path, a sub-hierarchy or
+/// an endpoint on its root bus alike, must also satisfy before a domain is
+/// built for that ID: a function behind a PCIe-to-PCI or conventional
+/// bridge arrives as the bridge's alias, and two such functions would share
+/// a domain. A bus two bridges claim, and a loop of bus numbers that does
+/// not end in 256 steps, are not its own.
+#[must_use]
+pub fn own_to_root(function: Address, bridges: &[Bridge]) -> bool {
+    let mut bus = function.bus();
+    for _ in 0..=u8::MAX as usize {
+        match above(function.segment(), bus, bridges) {
+            Above::None => return true,
+            Above::One(bridge) if bridge.forwards_requester => bus = bridge.address.bus(),
+            Above::One(_) | Above::Ambiguous => return false,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Behind, Bridge, behind, follow_path};
+    use super::{Behind, Bridge, behind, follow_path, own_to_root};
     use crate::Address;
 
     fn at(bus: u8, device: u8, function: u8) -> Address {
@@ -229,6 +269,42 @@ mod tests {
         );
     }
 
+    /// An endpoint named by a path through a PCIe-to-PCI bridge is never its
+    /// own requester: the bridge puts its alias on what it forwards, and two
+    /// such endpoints would share one domain.
+    ///
+    /// Verifies: L.iommu.45
+    #[test]
+    fn an_endpoint_behind_a_pcie_to_pci_bridge_is_never_its_own() {
+        let bridges = machine();
+        // 0:2.0 (root port) -> 1:0.0 (PCIe-to-PCI) -> bus 2.
+        let named = follow_path(0, 0, [(2, 0), (0, 0), (3, 0)], &bridges);
+        assert_eq!(named, Some(at(2, 3, 0)));
+        assert!(!own_to_root(at(2, 3, 0), &bridges));
+        assert!(!own_to_root(at(2, 4, 0), &bridges));
+        // Behind the root port alone, and behind a switch, it is.
+        assert!(own_to_root(at(1, 0, 0), &bridges));
+        assert!(own_to_root(at(5, 0, 0), &bridges));
+        // On the root bus nothing is above it.
+        assert!(own_to_root(at(0, 3, 0), &bridges));
+    }
+
+    /// Two bridges claiming one secondary bus leave what is on it aliased.
+    ///
+    /// Verifies: L.iommu.45
+    #[test]
+    fn a_bus_two_bridges_claim_is_never_its_own() {
+        let mut bridges = machine().to_vec();
+        bridges.push(Bridge {
+            address: at(0, 7, 0),
+            secondary: 3,
+            subordinate: 5,
+            forwards_requester: true,
+        });
+        assert!(!own_to_root(at(3, 0, 0), &bridges));
+        assert_eq!(behind(at(3, 0, 0), at(0, 2, 1), &bridges), Behind::Aliased);
+    }
+
     /// Verifies: L.iommu.45
     #[test]
     fn a_bus_no_bridge_explains_is_never_taken_for_the_function_s_own() {
@@ -263,5 +339,6 @@ mod tests {
             },
         ];
         assert_eq!(behind(at(3, 1, 0), at(0, 2, 0), &bridges), Behind::Aliased);
+        assert!(!own_to_root(at(3, 1, 0), &bridges));
     }
 }

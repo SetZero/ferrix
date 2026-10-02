@@ -2242,11 +2242,13 @@ fn a_bad_structure_or_scope_length_ends_its_walk() {
         "an odd byte is not a hop"
     );
     assert_eq!(scopes[0].endpoint(), None, "and not a single hop either");
+    assert!(!scopes[0].path_is_whole(), "and the path is not whole");
     assert_eq!(
         scopes[1].endpoint(),
         None,
         "two hops need configuration space"
     );
+    assert!(scopes[1].path_is_whole(), "two whole hops");
 }
 
 #[test]

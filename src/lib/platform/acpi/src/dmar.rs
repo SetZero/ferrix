@@ -268,6 +268,14 @@ impl<'a> DeviceScope<'a> {
         })
     }
 
+    /// Whether the path is a whole number of hops, at least one. A path with
+    /// a trailing odd byte is malformed: [`DeviceScope::path`] would drop
+    /// the byte and name the bridge above what firmware meant.
+    #[must_use]
+    pub const fn path_is_whole(&self) -> bool {
+        !self.path.is_empty() && self.path.len() % 2 == 0
+    }
+
     /// `(bus, device, function)` when the path is a single hop, which names a
     /// function on the start bus. `None` for a longer path, whose later hops
     /// are on buses only configuration space can name.
