@@ -28,8 +28,9 @@ use crate::seat::{Action, Seat};
 use crate::select::Selector;
 use crate::state::Slot;
 
-/// A drag with the mouse: `bindm = SUPER, mouse:272, movewindow`, or a
-/// press on a window's border with `general:resize_on_border` on.
+/// A drag with the mouse: `bindm = SUPER, mouse:272, movewindow`, a press
+/// on a window's border with `general:resize_on_border` on, or a client's
+/// own `xdg_toplevel.move` or `resize`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Drag {
     /// Which window is being dragged.
@@ -40,13 +41,26 @@ pub struct Drag {
     /// one. A `bindm` grabs no edge and resizes about the window's origin,
     /// which is [`Corner::NONE`].
     pub corner: Corner,
-    /// Whether a press on a border started it rather than a bind, which is
-    /// what says the button release ends it -- a bind ends when its own key
-    /// goes up, and there is no key here.
-    pub border: bool,
+    /// What started it, which is what says how it ends.
+    pub began: Began,
     /// Where the pointer was when it started, and where it was last seen: a
     /// drag is carried on by the distance since the last look.
     pub from: (i64, i64),
+}
+
+/// What started a [`Drag`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Began {
+    /// A `bindm`, which ends when its own key goes up.
+    Bind,
+    /// A press on a border, which ends when the left button comes up. The
+    /// client saw neither, so the release is swallowed too.
+    Border,
+    /// The client, from a press it was sent on its title bar or edge. It
+    /// ends when the last button comes up, and the release goes on to the
+    /// client: it saw the press, and an X client's server keeps the button
+    /// grabbed until it sees the release.
+    Client,
 }
 
 /// Everything a dispatcher may reach besides the layout.
@@ -398,7 +412,7 @@ fn mouse(argument: &str, state: &mut State, around: &mut Around<'_>) -> bool {
         window,
         resizing,
         corner: Corner::NONE,
-        border: false,
+        began: Began::Bind,
         from,
     });
     true
@@ -429,6 +443,16 @@ pub fn grab_border(
 ) -> Vec<Action> {
     let mut kept = Vec::with_capacity(actions.len());
     for action in actions {
+        // A client's drag ends with the last button up, and the client is
+        // told about the release.
+        if let Action::Button { pressed: false, .. } = action
+            && drag.is_some_and(|held| held.began == Began::Client)
+            && !seat.buttons_held()
+        {
+            *drag = None;
+            kept.push(action);
+            continue;
+        }
         let Action::Button {
             button: BTN_LEFT,
             pressed,
@@ -456,16 +480,64 @@ pub fn grab_border(
                 window,
                 resizing: true,
                 corner,
-                border: true,
+                began: Began::Border,
                 from,
             });
-        } else if drag.is_some_and(|held| held.border) {
+        } else if drag.is_some_and(|held| held.began == Began::Border) {
             *drag = None;
         } else {
             kept.push(action);
         }
     }
     kept
+}
+
+/// Start the drag a client asked for with `xdg_toplevel.move` (`edges` 0)
+/// or `resize`, and give whether one started.
+///
+/// Only a floating window is dragged: a tiled one has no rectangle of its
+/// own, and floating it because its title bar was pressed would take it
+/// out of the tiling on every click. Nor does one start without a button
+/// held, as nothing would end it, nor while another drag is on --
+/// Hyprland's `onXDGMoveRequest` asks the same of its drag controller.
+pub fn client_drag(
+    window: WindowId,
+    edges: u32,
+    state: &State,
+    seat: &Seat,
+    drag: &mut Option<Drag>,
+) -> bool {
+    if drag.is_some() || !seat.buttons_held() || !state.is_floating(window) {
+        return false;
+    }
+    let fullscreen = state
+        .workspace_of(window)
+        .and_then(|workspace| state.fullscreen(workspace))
+        .is_some_and(|(id, _)| id == window);
+    if fullscreen {
+        return false;
+    }
+    // `xdg_toplevel.resize_edge`'s bits: top 1, bottom 2, left 4, right 8.
+    let corner = Corner {
+        top: edges & 1 != 0,
+        bottom: edges & 2 != 0,
+        left: edges & 4 != 0,
+        right: edges & 8 != 0,
+    };
+    let (x, y) = seat.pointer();
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the pointer is held inside the screen, which is far inside i64"
+    )]
+    let from = (x as i64, y as i64);
+    *drag = Some(Drag {
+        window,
+        resizing: edges != 0,
+        corner,
+        began: Began::Client,
+        from,
+    });
+    true
 }
 
 /// Carry a drag on: the pointer has moved to `(x, y)`.
@@ -749,12 +821,14 @@ fn pid_of(window: WindowId, around: &Around<'_>) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    //! What a press on a border does, and what it leaves for the client.
+    //! What a press on a border does, what a client's own drag does, and
+    //! what each leaves for the client.
 
     use compositor_config::NoSources;
     use compositor_layout::{Corner, Monitor, MonitorId, Rect, State, WindowId};
 
-    use super::{Action, Drag, Seat, grab_border};
+    use super::{Action, Began, Drag, Seat, client_drag, dragged, grab_border};
+    use crate::seat::Input;
 
     /// `BTN_LEFT`, as the seat reports it.
     const LEFT: u32 = 0x110;
@@ -813,7 +887,7 @@ mod tests {
                     left: true,
                     ..Corner::NONE
                 },
-                border: true,
+                began: Began::Border,
                 from: (508, 400),
             })
         );
@@ -849,6 +923,72 @@ mod tests {
         let mut drag = None;
         let kept = grab_border(vec![pressed(true)], &state, &seat, &mut drag);
         assert_eq!(kept, [pressed(true)]);
+        assert_eq!(drag, None);
+    }
+
+    /// The seat with the left button down, as the client's press left it.
+    fn press(seat: &mut Seat, down: bool) -> Vec<Action> {
+        seat.input(Input::Button {
+            button: LEFT,
+            pressed: down,
+        })
+    }
+
+    /// A floating window's own `move` follows the pointer until the button
+    /// comes up, and the release reaches the client, which saw the press.
+    #[test]
+    fn a_floating_window_is_moved_by_its_own_request_until_the_release() {
+        let (mut state, mut seat) = ready(ON);
+        let _ = state.focus_window(WindowId(2)).unwrap();
+        let _ = state.dispatch_str("setfloating", "").unwrap();
+        let _moved = seat.warp(700.0, 300.0);
+        let _ = press(&mut seat, true);
+        let mut drag = None;
+
+        assert!(client_drag(WindowId(2), 0, &state, &seat, &mut drag));
+        assert_eq!(
+            drag.map(|held| (held.began, held.resizing, held.from)),
+            Some((Began::Client, false, (700, 300)))
+        );
+        assert!(dragged(drag.as_mut().unwrap(), &mut state, (740, 320)));
+
+        let up = press(&mut seat, false);
+        let kept = grab_border(up.clone(), &state, &seat, &mut drag);
+        assert_eq!(kept, up, "the release went on to the client");
+        assert_eq!(drag, None);
+    }
+
+    /// A `resize` pulls the edges it names.
+    #[test]
+    fn a_resize_request_pulls_its_edges() {
+        let (mut state, mut seat) = ready(ON);
+        let _ = state.focus_window(WindowId(2)).unwrap();
+        let _ = state.dispatch_str("setfloating", "").unwrap();
+        let _ = press(&mut seat, true);
+        let mut drag = None;
+        // `bottom_right`.
+        assert!(client_drag(WindowId(2), 10, &state, &seat, &mut drag));
+        let held = drag.unwrap();
+        assert!(held.resizing);
+        assert_eq!(
+            held.corner,
+            Corner {
+                right: true,
+                bottom: true,
+                ..Corner::NONE
+            }
+        );
+    }
+
+    /// A tiled window, or a request with no button held, starts nothing.
+    #[test]
+    fn a_tiled_window_or_a_released_button_starts_no_drag() {
+        let (state, mut seat) = ready(ON);
+        let mut drag = None;
+        let _ = press(&mut seat, true);
+        assert!(!client_drag(WindowId(1), 0, &state, &seat, &mut drag));
+        let _ = press(&mut seat, false);
+        assert!(!client_drag(WindowId(2), 0, &state, &seat, &mut drag));
         assert_eq!(drag, None);
     }
 }

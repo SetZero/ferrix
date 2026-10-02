@@ -475,6 +475,15 @@ pub enum Event {
         /// Whether it asked to be fullscreen.
         fullscreen: bool,
     },
+    /// A window asked to be moved or resized by the pointer
+    /// (`xdg_toplevel.move` and `resize`): a press on its own title bar or
+    /// edge, handed to the compositor.
+    ToplevelDragAsked {
+        /// The `xdg_toplevel`.
+        toplevel: ObjectId,
+        /// The `xdg_toplevel.resize_edge` pulled, `NONE` for a move.
+        edges: u32,
+    },
     /// The client destroyed a pool's object. Its memory lives on while
     /// buffers cut from it do ([`Client::pool_in_use`](super::Client::pool_in_use)).
     PoolRetired {

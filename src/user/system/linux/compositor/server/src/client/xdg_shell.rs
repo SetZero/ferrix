@@ -329,10 +329,36 @@ impl Client {
                     fullscreen,
                 });
             }
-            // `show_window_menu`, `move`, `resize` and `set_minimized` ask
-            // for things a tiling compositor does not do. The protocol says
-            // a compositor may ignore each, and Hyprland ignores the first
-            // three for a tiled window.
+            // `move` and `resize`: the client was pressed on its own title
+            // bar or edge and hands the drag to the compositor. Whether one
+            // starts is the loop's, which knows the buttons and whether the
+            // window floats; the edges are checked here, as the protocol
+            // makes a wrong one an error.
+            xdg_toplevel::request::MOVE | xdg_toplevel::request::RESIZE => {
+                let edges = if opcode == xdg_toplevel::request::MOVE {
+                    xdg_toplevel::resize_edge::NONE
+                } else {
+                    let edges = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
+                    if !matches!(edges, 1 | 2 | 4..=6 | 8..=10) {
+                        self.fail(Fatal::Interface {
+                            object: sender,
+                            code: xdg_toplevel::error::INVALID_RESIZE_EDGE,
+                            text: format!("a resize edge of {edges}"),
+                        });
+                        return;
+                    }
+                    edges
+                };
+                if self.toplevels.contains_key(&sender) {
+                    self.events.push(Event::ToplevelDragAsked {
+                        toplevel: sender,
+                        edges,
+                    });
+                }
+            }
+            // `show_window_menu` and `set_minimized` ask for things a tiling
+            // compositor does not do. The protocol says a compositor may
+            // ignore each, and Hyprland ignores both.
             _ => {}
         }
     }

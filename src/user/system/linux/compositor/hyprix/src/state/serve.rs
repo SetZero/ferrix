@@ -85,6 +85,9 @@ struct Effects {
     /// `set_fullscreen`/`set_maximized` state each one is in, acted on once
     /// the client's own borrow is over.
     asked_states: Vec<(WindowId, bool, bool)>,
+    /// The windows that asked to be moved (edges 0) or resized by the
+    /// pointer in this pass, with the edges pulled.
+    asked_drags: Vec<(WindowId, u32)>,
     /// Whether this client has just become a bar, which is owed the windows
     /// there already are before the roundtrip it sent after binding comes
     /// back.
@@ -558,6 +561,13 @@ impl Compositor<'_> {
                     effects.asked_states.push((*window, maximized, fullscreen));
                 }
             }
+            // A press on a window's own title bar or edge, handed to the
+            // compositor to drag with.
+            Event::ToplevelDragAsked { toplevel, edges } => {
+                if let Some((_, window)) = slot.windows.iter().find(|(top, _)| *top == toplevel) {
+                    effects.asked_drags.push((*window, edges));
+                }
+            }
             // A modal dialog is one the application will not let you
             // look past, so it floats: Hyprland's own `windowrule =
             // float, xdg_dialog` says the same thing by hand, and this
@@ -750,6 +760,7 @@ impl Compositor<'_> {
             modals,
             closed,
             asked_states,
+            asked_drags,
             bound_manager,
             fresh_popups,
             locking,
@@ -821,6 +832,15 @@ impl Compositor<'_> {
         changed |= self.close_windows(index, closed);
         changed |= self.set_states(asked_states);
         changed |= self.float_modals(modals);
+        for (window, edges) in asked_drags {
+            if crate::act::client_drag(window, edges, &self.state, &self.seat, &mut self.drag) {
+                (self.report)(&format!(
+                    "hyprix: window {} is dragged by its own {}",
+                    window.0,
+                    if edges == 0 { "move" } else { "resize" }
+                ));
+            }
+        }
         self.paste(index, wanted);
         changed
     }
