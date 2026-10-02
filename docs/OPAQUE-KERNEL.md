@@ -1340,3 +1340,667 @@ To repeat: `~/.local/share/ferrix/sel4/` on nazuna (`fetch.sh`, `build.sh`,
 `run.sh`, `series.sh`, `summarize.py`, the patch to sel4bench's `apps/ipc`,
 and every run's log). The sources are sel4bench-manifest 80add415, with seL4
 at c6ce4d2a.
+
+### 9.7 Step 4's design: the direct switch and the fast path (draft for the consultant)
+
+Nothing here is built. This is the design §9.5 step 4 sends to the
+certification consultant before any code, and the consultant's verdict
+decides whether the target of §9.6 can be reached at all. It is written
+against branch `ipc-step1` (1bae58cbf, with its four conditions met) and
+against steps 2 and 3 as §9.5 describes them; part 5 says what of those must
+land first. The customer's answers of 2026-10-02 (§9.5's end) stand: the
+gated figure is the matched one, blocking native calls may destroy the
+vector registers, and a fast path is wanted if the consultant accepts this
+design.
+
+**Why a fast path at all.** seL4's own fast path saves it only 35 ns a
+direction on nazuna (§9.6: 510 ns a round trip without it, 440 ns with it),
+because seL4's general path is already short. Ferrix's is not: after steps 2
+and 3 the general 0x1013 is guessed at 0.45 to 0.65 us a direction, against
+the 90 ns of software the target leaves (§9.6). The gap is the general
+system call machinery itself: the dispatch, the wait queue, the wake's
+placement, the run queue's pick, the way out. No amount of squeezing gets a
+general path written for every call down to seL4's. So the fast path is the
+only route to the target, and the question is how to make a second way
+through 0x1013 that can be argued equal to the first.
+
+**The principle: compose, do not copy.** The fast path is not a second
+implementation of the call's logic. It calls the general path's own
+functions wherever one exists: `channel_in` for the handle and its rights
+(with its Spectre clamp), `AddressSpace::install` for the space and the
+barrier, `switch_user_state`, `carry_in_call`, `note_running`, `arm_timer`,
+the stub's own entry and exit. What it adds is three pieces, each small and
+each with its own evidence:
+1. `RunQueue::hand_over`, which replaces the pick when nothing else could be
+   picked, host-tested equal to the general sequence (part 1);
+2. the *park*, a one-task record on a channel half with a reply cell in the
+   task, and the commit that fills it (parts 2 and 3);
+3. the frame tail, which moves the reply into the four return registers
+   (part 2).
+
+Everything else the fast path does is a test, and a failed test runs the
+general path from the call's first instruction, with nothing changed.
+
+#### Part 1: the direct switch
+
+**When it applies.** All of these, decided under this processor's run-queue
+lock:
+- the task to switch to is *asleep at home* here: state 2 of `wake_with`'s
+  list on `ipc-step1` (blocked, switched out, detached from the fair class,
+  holding both its slots), with its home processor this one;
+- the caller is this processor's `current`, and is blocking;
+- after `wake_sleepers(now)`, as `choose_next` calls it first, the fair class
+  holds nothing but the caller: `waiting() == 0`.
+
+The last condition is stricter than §9.5's "nothing runnable here more
+urgent", on purpose. To decide "more urgent" is to run the EEVDF pick, which
+is what the direct switch exists to skip. With nothing else queued, the pick
+can only choose the woken task, so skipping it changes no decision. The
+other two conditions §9.5 named then need no test of their own:
+- *Affinity* is implied by "home is this processor": a task's home is
+  always in its affinity (`set_cpu` is only ever given an allowed processor,
+  and affinity is fixed after construction, as the consultant's (d) on step
+  1 records).
+- *The caller's slice* does not matter when nothing waits: `arm_timer` arms
+  no slice end with nothing waiting, and the general pick would choose the
+  woken task whatever was left of the caller's request.
+- *The job's quota* for processor time is a weight (H.SCHED.3), not a cap.
+  There is no throttled state to test. What must be kept is the accounting,
+  below.
+
+**What it skips.** Everything between the wake and the pick that the general
+path does because it cannot know the woken task will run next:
+- the wake's placement (`wake_with`, `wake_onto` or `wake_at_home`, their
+  second lock and their loop), `kick_after_wake`, the resched flag and the
+  timer's re-arm for the wake;
+- the wait queue's push and pop of the caller, with their `Arc` clones;
+- `schedule_from` and `pick_and_switch`'s general branches, and the pick
+  itself: the woken task is never filed in the fair tree and picked back out.
+
+**What it keeps, by calling it.** The tail of `choose_next` after the pick is
+split out as one function, `switch_chosen`, and both `choose_next` and the
+direct switch call it. It does, in this order: the switch count,
+`carry_in_call`, `queue.previous` and `queue.current`, `note_running`,
+`set_idle`, `exec_start`, `arm_timer(now)`, `note_switch`,
+`swap_address_space` and `switch_user_state`. Neither task of a direct
+switch is the idle task, which the direct switch asserts, so `set_idle`
+writes "not idle", and step 2 makes that write a no-op when nothing changes.
+`finish_switch` is the general one.
+
+**The EEVDF accounting.** The general path makes, in this order: the
+reader's insert while the writer still runs (`insert`, which charges the
+running task first, joins the job's load, sets the effective weight and
+enqueues with the reader's saved lag, scaled against the load that includes
+the writer); then at the writer's block, `account`, the writer set blocked
+(leaving its job's load), `detach_current` (its lag saved against an
+average that includes the reader), and `pick_next`. The direct switch's
+`hand_over(now)` is defined as exactly that sequence with every clock read
+equal to `now`, on a queue whose tree is empty:
+- the two tasks' vruntime, deadline and lag, the queue's load, sum and
+  average, and its slice come out bit for bit as the composed calls leave
+  them;
+- the jobs' loads move as they do: the woken task joins before the caller
+  leaves, so the transient is the general path's;
+- `follow_group_share` runs inside `account` as it does now.
+
+A host test in `src/lib/kernel/sched` checks the equality: random queue
+states with one running entity and an empty tree, random weights, lags at
+and past the clamp, `now` at wrapping boundaries, each run through
+`hand_over` and through the composed calls, and every field compared. Its
+control changes one field of `hand_over`'s result.
+
+**H.SCHED.2's bound** is about tasks waiting in a queue. The direct switch
+never runs while one waits, so it passes nobody over and the bound is
+untouched. A task that arrives while two programs trade the processor this
+way is inserted by its waker under the run-queue lock, and the next trip's
+test of `waiting()` sees it and declines. The arrival's waker also kicks
+this processor as it does today, and the kick is taken the moment either
+program is back in user mode. So an arrival waits at most one trip longer
+than it would on the general path. H.SCHED.1 and H.SCHED.4 follow the same
+way.
+
+**Not in step 4: the direct switch from general channel wakes.** §9.5 said
+every channel call would gain, including one that carries handles. That
+needs a woken task the waker holds for its own coming block, runnable but in
+no queue: a new state every waker, stealer, balancer and `has_work` would
+have to know. The fast path needs none of that, because it decides and
+switches inside one hold of the run-queue lock. It is left for a step 4b,
+reviewed on its own, and the target does not need it.
+
+#### Part 2: the fast path for 0x1013
+
+**Where it is entered.** At the top of `ferrix_syscall_entry`, the Rust
+function x86-64's `SYSCALL` stub calls once it has pushed the frame. It
+comes before `filter_system_call`, `answer_here` and the interrupt enable.
+It returns into the stub's own exit, so entry and exit hardening (`swapgs`,
+the stack switch, the register clearing, `VERW` where the plan has it) are
+the stub's and nothing is duplicated. AArch64, ARMv7-A and the `int $0x80`
+entry have no fast path.
+
+**Interrupts are masked from entry to `sysret`**, as `SFMASK` left them: the
+caller's entry, the commit, the switch, and the peer's tail up to its own
+`sysret`. Nothing in it loops or waits, so the masked span is bounded by
+its straight-line length (part 6).
+
+**It waits on no lock.** Every lock it takes is taken with `try_lock`. A
+lock that is held is a failed test, and the general path runs. That is the
+whole of its lock-order argument: a code path that never waits cannot close
+a cycle. It holds at most three at once, taken in a fixed order: the
+channel's half of side A, the half of side B, then this processor's run
+queue. The handle table's lock is taken and released before them.
+
+**The park.** Both sides of a trip block in 0x1013's read, and the peer's
+words can only go into its frame if the peer will resume somewhere that
+returns them. So a 0x1013 reader on the fast path *parks*:
+- `Half` gains `parked: Option<Arc<Task>>`, under its inbox lock: the one
+  task blocked in 0x1013 reading that end through the fast path.
+- `Task` gains a reply cell: a length and three words, and whether it is
+  full. Only the commit (below) fills it, and only the parked task empties
+  it.
+- A task parks only while its end's inbox is empty, with nothing else
+  parked there, and sets itself blocked under the same hold of the lock.
+- A parked task's continuation, wherever it is woken from, is: if the reply
+  cell is full, take it and leave by the frame tail; otherwise un-park
+  (clear the record under its half's lock if it still names this task) and
+  carry on exactly where `receive_words` carries on after `wait_trusting`
+  returns, with interrupts on: `must_leave`, then the loop. The general
+  answer then leaves by the general way out.
+
+A park is a field, not a list, so it never allocates (F-23).
+
+**The general path gains one test.** `Endpoint::write`, `write_small` and
+`Endpoint::drop` take the half's parked record under the inbox lock they
+already hold, and wake that task after they let the lock go, beside the
+wait queue's `wake_all_with`. A close stores `closed` first, then takes the
+reader's half's lock to take the record, which is condition 1's order on
+step 1. With the fast path off, or on AArch64 and ARMv7-A, nothing ever
+parks, the record is always empty, and the general path behaves as step 1's.
+
+**The two halves.** 0x1013 is a send and then a receive, so the fast path is
+two halves, each of which commits or declines on its own:
+- *The send half* delivers to a parked peer and switches to it directly. If
+  any of its tests fails, `send_words` runs as on the general path.
+- *The receive half* parks the caller. If any of its tests fails,
+  `receive_words` runs as on the general path. After a send half that
+  committed, the receive half's tests have already passed under the same
+  locks, so the two commit together.
+
+The receive half alone serves a receive-only call, and a call whose send
+half declined. Without it, one trip that fell back would leave both sides
+waiting in the general way, and no later trip could find a parked peer
+again. With it, the first trip that parks puts both sides back on the fast
+path.
+
+**The tests, in order.** "Test" means the fast path declines when it fails.
+The letters are used by parts 3 and 6.
+
+*Before any lock:*
+- **T1** The fast path is on (the boot switch, part 6), the entry is the
+  native `SYSCALL` and the number is 0x1013.
+- **T2** The caller's process is not *filtered*: no seccomp filter and no
+  tracer. A new core flag on `Process`, set one way by the personality when a
+  filter is attached or a tracer attaches, and inherited as the filter is
+  (`docs/SECCOMP.md`: a filtered process's native calls are filtered too).
+  The fast path runs before the filter, so without T2 it would bypass it.
+- **T3** The count is at most 24 bytes, or is `WRITE_READ_NOTHING`.
+
+*Under the handle table's lock:*
+- **T4** The handle names a channel endpoint, and **T5** it has READ, and
+  WRITE when sending. Both are `channel_in`, the general function, whose
+  refusal ends the fast path before anything else happens.
+
+*Under the two halves' locks:*
+- **T6** The caller's own inbox is empty. Otherwise the general path answers
+  at once with what waits.
+- **T7** Nothing is parked on the caller's half.
+- **T8** The caller's peer end is not closed, read under the caller's half's
+  lock as condition 1 requires.
+- **T9** (send half) A task is parked on the peer's half.
+- **T10** (send half) The peer's half has no observers and no wait queue
+  waiters. Otherwise the general path would trigger `READABLE` on them and
+  wake them, and the fast path, whose message never enters the inbox, would
+  not.
+
+*Under this processor's run-queue lock (send half):*
+- **T11** The parked peer's home is this processor.
+- **T12** After `wake_sleepers(now)`, nothing waits in the fair class.
+- **T13** The last look: neither the caller nor the peer has the *end* bit
+  of step 2's pending-work word set, the bit posted for every task whose
+  `must_leave` would answer true (a kill, another thread's `execve`).
+
+*Asserted, not tested.* Three conditions follow from the others and from
+the park's invariants. A test that cannot fail cannot have a control that
+fires, so these stop the machine instead, each with a new FX code, and each
+with a control that breaks the invariant from elsewhere:
+- **A1** At the commit the peer is asleep at home (`asleep_at_home`). A
+  parked task that has been woken is runnable, so it is queued here (T12
+  fails) or running or queued on another processor (T11 fails).
+- **A2** The peer's inbox is empty and its end is open. A record is set
+  only while the inbox is empty, and any writer that fills it takes the
+  record under the same lock. An end with a parked reader is held open by
+  that reader's `Arc`.
+- **A3** The preemption count is zero at the switch: FX-0503's own check,
+  called from the direct switch as `schedule_from` calls it.
+
+**The commit**, when every test has passed and with all three locks still
+held, cannot fail:
+1. The message's words go into the peer's reply cell, the bytes past the
+   count zeroed as `Small::of` zeroes them. The peer's record is cleared.
+2. The peer is set runnable (it joins its job's load), then the caller is set
+   blocked (it leaves its job's load) and parked on its own half: that is
+   `wait_trusting`'s state, with the record in place of the list.
+3. The two halves' locks are let go.
+4. `hand_over(now)`, then `switch_chosen` and `switch_to`, with the run-queue
+   lock handed over to the peer's side as `choose_next` hands it over.
+
+The receive half alone commits the caller's park and blocked state under its
+own half's lock, then makes the last look at `must_leave` after a `SeqCst`
+fence, which is `wait_trusting`'s ordering as condition 1 has it, and
+blocks through the general `schedule()`.
+
+**The frame tail**, on the peer's side, after `finish_switch`:
+1. The reply cell is moved into the peer's own frame: the count into RAX and
+   the words into RSI, RDX and R10, the registers `Outcome::ReturnWords`
+   writes. No other register is touched.
+2. With interrupts still masked, it looks at the peer's pending-work word,
+   this processor's resched flag and the regroup word. If any is set, it
+   runs what the general way out runs: `regroup_current`, `call_left` and the
+   return path's `needs_attention`. Otherwise it lowers `IN_CALL` and returns
+   to the stub's exit.
+
+**The reply cell, not the frame, is what the commit writes.** §9.5 said the
+words go straight into the peer's saved frame. They go into the peer's own
+record instead, and the peer moves them into its frame. The cost is four
+stores. In return, no task writes another task's kernel stack. And both
+continuations, the frame tail and the general one, read the same cell, so a
+peer woken some other way never finds its frame half-written.
+
+**What the fast path does not do.** It does not allocate, queue a message,
+touch the wait queue, trigger an observer, write an audit record or call
+the filter. Each is either something the general path does not do for a
+call that succeeds (an audit record is written for a refused call only,
+`record_call`), or the subject of a test that declines (T2, T10).
+
+#### Part 3: the task states and who may touch them
+
+The states of a task that makes 0x1013, with the lock or atomic that orders
+each transition. States 1 to 3 are step 1's (`wake_with` on `ipc-step1`). P
+is the park.
+
+| State | What holds | Who may change it, under what |
+|---|---|---|
+| R: running | `current` here, runnable | itself; a kill, signal or `execve` posts a bit and wakes (a no-op) and interrupts it |
+| P1: parking | record set and blocked under one hold of its half's lock; still `current` | a writer or close takes the record and wakes it (state 1 wake: runnable again, under the run-queue lock); only its home's `choose_next` or the direct switch takes it off the processor |
+| P2: parked | state 2 and the record: switched out, detached, holding both slots | a fast commit (both half locks and the home's run-queue lock); a writer or close (half lock, then the wake under the run-queue lock, which may move it by `wake_onto` under both queues' locks, lower first); a kill or `execve` (bit, then the wake under the run-queue lock); a signal (the same wake: the continuation finds no reply and `must_leave` false, and waits again in the general way) |
+| H: handed | reply full, runnable, record clear: exists only inside the commit, with the run-queue lock held until the peer runs | nobody: every waker needs that lock |
+| W: woken | runnable, queued somewhere, reply empty, record maybe still set | its queue's lock as for any runnable task; a deliverer finds it not asleep at home and declines (T11, T12, or A1) |
+| C: continuing | running in its continuation | itself: takes the reply, or un-parks under its half's lock |
+| 3: filed elsewhere | sleep slot out | nobody here: a fast park files no deadline, so a parked task is never in it |
+
+**Why no wake is lost**, waker by waker. This is the ordering argument of
+step 1's condition 1, applied to the two new states:
+- *A message* from a general writer. The record and the blocked state are
+  written under the half's inbox lock, and the writer reads the record under
+  the same lock. Either the writer came first, and T6 sees its message, or it
+  comes after, and finds the record and wakes a task that is blocked.
+- *A close.* It stores `closed`, then takes the record under the reader's
+  half's lock. Either T8 sees `closed`, or the close finds the record.
+- *A kill or an `execve`* during a full trip. The poster sets the end bit,
+  then calls `sched::wake`, which takes the target's home run-queue lock
+  even when the target runs (`wake_at_home` today). The fast path's last look
+  (T13) and the caller's blocked state are both under that lock. If the
+  poster's wake came first, its bit happens before T13 and T13 declines. If
+  it comes after, it finds the caller in P2 and wakes it. No fence is needed
+  because the lock orders both. This needs step 2's rule that every poster
+  sets the bit before it wakes; part 5 lists it.
+- *A kill or an `execve`* during the receive half alone. The caller blocks
+  through the general `schedule()`, so the order is `wait_trusting`'s: the
+  blocked state, a `SeqCst` fence, the last look, paired with the fence
+  before the poster's wake, as condition 1 has it.
+- *A signal* ends no native wait (step 1). It wakes a parked task, which
+  finds no reply, finds `must_leave` false and waits again in the general
+  way. Its handler runs at the call's way out, as on the general path.
+
+**Lock order.** New edges: the half of side A, then side B, then the run
+queue. All three are taken by `try_lock` and never waited on, so no new
+cycle exists. The general path keeps its order. Writers and closes let the
+half lock go before they wake, as today, so they take no new nesting.
+
+#### Part 4: speculation
+
+The direct switch makes the barrier decision by calling the function that
+makes it on the general path. `switch_chosen` calls `swap_address_space`,
+which calls `AddressSpace::install(replacing)`. That reads the outgoing
+space's domain as it leaves (`left_space`), names the incoming one
+(`entering_space`), writes `CR3`, and in `entered_space` compares with
+`LAST_DOMAIN`. It then issues `IBPB` and the refill, or, inside one domain,
+the refill alone (§9.3a, A2). There is no second copy of the rule to drift.
+It follows that:
+- no `IBPB` is skipped outside one domain;
+- the fast path has no domain condition, and is correct between programs of
+  different domains too. It is only slower there, by the 230 ns of §9.6;
+- `forget_root`, `leaving_domain` and `serve_wanted_barrier` are untouched.
+  A grace period waiting for this processor's IPI waits at most the masked
+  span of part 6, which is shorter than the general path's own switch
+  spans with a barrier in them.
+
+The handle lookup is `channel_in`, so its index clamp is the general one.
+When os-35's lazy TLB replaces `install` with `switch_here` (§9.3b, F6), the
+direct switch follows, because it calls whatever `choose_next`'s tail calls.
+
+The equivalence check (part 6) counts the decisions: the same trips run on
+both paths must give the same `barrier_decisions_on`, `switch_barriers_on`
+and `refills_in_domain_on`, in a domain and across two.
+
+#### Part 5: vector state, FS and GS, and what must land first
+
+**Vector state, under the contract of step 3** (the customer's yes, 2026-10-02).
+Both tasks of a direct switch are blocked in 0x1013 by construction, so the
+contract covers both. The caller's vector registers are not saved, only its
+`MXCSR` and x87 control word. The peer's are reset (`XRSTOR` of an empty
+header) before its `sysret`, keeping its own `MXCSR` and control word. None of
+the caller's vector state reaches the peer. This is `switch_user_state` as
+step 3 changes it, called from `switch_chosen`, not a fast path variant. A
+task preempted anywhere else is saved and restored in full, as today.
+
+**FS and GS, under step 3.** The bases are kept in the task, written only by
+`arch_prctl` and the switch, and the switch writes each only when the two
+tasks' values differ. Native programs have no segment selectors or TLS
+descriptors, so the switch skips those when both tasks' are null. FSGSBASE
+stays off (§9.6).
+
+**What the fast path assumes, and so what must land first:**
+- *Step 1*, with its conditions: the state list, the Sync wake, condition 1's
+  ordering, and `Small::of`'s zero tail.
+- *Step 2's pending-work word*, with two rows the fast path relies on: every
+  poster sets its bit before it calls `sched::wake` on the target, and an
+  end bit is set for every task for which `must_leave` would answer true.
+  Without these rows, T13 has no meaning.
+- *Step 2's lighter `PreemptSpinLock`*, with a `try_lock` that keeps
+  FX-0503's bookkeeping (the count raised, the site recorded) and leaves
+  `may_block()` meaning what it means now. The fast path blocks with
+  interrupts masked, as every switch does inside `schedule`. It calls no
+  wait that requires `may_block()`, nothing that allocates, and nothing that
+  waits for a grace period, and FX-0503's check at the switch stays.
+- *Step 2's `current()` by borrow*, with its argument against reaping. The
+  fast path reads the running task once, from the processor's record.
+- *Step 3's vector contract and FS and GS in the task*, for the budget. The
+  fast path is correct without them, because it calls `switch_user_state`,
+  whatever that does; it is only too slow.
+- Not needed: PCIDs (nazuna has none, §9.6), step 2's `IDLE` and
+  `effective_weight` changes (budget only), and step 4b.
+
+#### Part 6: the evidence
+
+**What is argued, and what is not.** This is a tested equivalence argument,
+not a proof. seL4's fast path is covered by its refinement proof: the
+fast path's C is proved to implement the same abstract specification as the
+slow path. Ferrix has no such specification and no proof. What it has:
+- the composition principle, so most of what the fast path does is the
+  general path's own code, verified by that code's own checks;
+- `hand_over`'s host-tested equality;
+- for every test the fast path adds, a case that makes it fail and a
+  negative control that shows the case would catch its removal;
+- the same observable results from the same programs on both paths.
+
+**The criterion.** For deterministic cases, the results must be identical:
+return codes, return words, message order, and the order of closes and ends.
+For cases where a waker races the trip (a kill, a close, a signal during the
+wait), the general path itself has more than one correct result, depending
+on timing. A message may be read before an end or left unread, for example.
+There the criterion is refinement: every result the fast path gives must be
+one the general path can give. The check states the allowed set for each
+racing case.
+
+**The boot switch.** `ferrix.fastpath=off` turns the fast path off.
+`ferrix.fastpath=on` asks for the default explicitly. The option is read as
+`ferrix.checks` is, from the loader's command line and then the device
+tree's `bootargs`. Stage 9 prints one line either way, `ipc fast path for
+channel_write_read: on` or `off`, and with any other value says it was
+ignored. The kernel keeps counters: trips taken, parks, and declines per
+test, T1 to T13. The equivalence check and `ipc-bench` print them, so every
+figure says which path it measured. A `domain-call` figure counts only if
+at least 99.9% of its trips took the fast path.
+
+**The equivalence check.** A native program pair, `ipc-equiv`, is run by
+stage 9 on every architecture. On AArch64 and ARMv7-A it shows the general
+path unchanged, and every fast path counter zero. It prints one transcript
+line per case. The gate boots x86-64 twice, once with the fast path on and
+once with it off, and the two transcripts must be identical but for the
+counter lines and the racing cases, which must be in their allowed sets.
+The cases:
+1. Echo of every length from 0 to 24 bytes: the words and the zero tail.
+2. A receive-only first call, then 1,000 trips carrying sequence numbers:
+   the order.
+3. A message already waiting on the caller's end (T6).
+4. Two threads of one process reading one end (T7).
+5. The peer end closed before the call (T8), during the wait, and before the
+   reply, by another thread of the peer's process.
+6. A kill of the waiting process, of the peer during a trip, and an
+   `execve` by another thread of the waiting process.
+7. A signal with a handler during the wait: the wait goes on, and the
+   handler runs at the way out.
+8. A port observing the peer's end, and an `object_wait_one` waiter on it
+   (T10): the packet and the wake.
+9. The peer pinned to another processor (T11), at two processors.
+10. A spinner of equal weight pinned to the trip's processor (T12): its share
+    within H.SCHED.2's bound on both paths.
+11. A filtered process, with a filter that refuses 0x1013 and one that
+    allows it (T2).
+12. A count of 25, a closed handle, a VMO handle, and a handle without WRITE
+    or without READ (T3 to T5), with the `RIGHTS` audit records counted.
+13. The trips in one domain and across two, with the barrier counters of
+    part 4.
+14. An end posted in T13's window (below).
+
+**One negative control per test.** Each test the fast path adds is replaced
+by `true`, one at a time, and the check must stop the boot on its own
+message:
+- T2: the refusing filter's case answers success;
+- T3: the count of 25 answers success with 24 bytes delivered;
+- T6: the waiting message is not the answer;
+- T7: one of the two readers is never woken within the stated bound;
+- T8: a receive-only call after the close stays blocked past the bound;
+- T10: the observer's packet is missing;
+- T11: the peer reports a processor its affinity does not allow;
+- T12: the spinner's share falls below H.SCHED.2's bound;
+- T13: the process ended in the window stays blocked past the bound;
+- the reply's zero tail: step 1's control, re-run on the fast path;
+- A1 and A2: a record planted by the check, naming a running task or set
+  beside a full inbox, stops the machine with its FX code;
+- `hand_over`: the host test's own control.
+
+T1 is the switch itself; its evidence is the two boots. T4 and T9 are
+structural: an `Option` or a `Result` the code must match, and "true" does
+not compile. T5 is `channel_in`'s, shared with the general path and
+controlled by that path's own rights check.
+
+**T13's window** is a few nanoseconds between the caller's entry and its
+last look, and no program can aim a kill at it. The check uses a hook in the
+fast path: a function pointer that only stage 9's check sets and clears,
+called at that point when it is set, which posts an end to the caller. With
+the hook unset it costs one load. Part 9 asks whether a hook in the item is
+acceptable.
+
+**Coverage.** The check must reach every branch of the fast path, which the
+decline counters show: each one is at least 1 with the fast path on. The
+fast path's statements and decisions are carried into the coverage evidence
+as the rest of the item's are (F-10, F-13), x86-64 only. On AArch64 and
+ARMv7-A the record's branches in the general writers are unreachable, and
+are argued in `coverage-argued-*.json`. Every low-level requirement of 0x1013
+is verified on both paths, and a test that ran only one path does not count
+for the other.
+
+**`ipc-bench` both ways**, back to back on the same host load: `call` and
+`domain-call` with the fast path on and off, with the counters, and against
+seL4 as §9.5 has it.
+
+**The residual risk, plainly.**
+- *An effect not listed.* The tests are derived from a list of everything
+  the general path does for this call: lookup, rights, audit, filter, send,
+  observers, wakes, wait, read, accounting, the way out. An effect of the
+  general path missing from that list is a difference that no case looks
+  for. Review is the only defence; the list is part 2's.
+- *An interleaving not exercised.* The racing cases sample races, and do
+  not enumerate them. The ordering arguments of part 3 are arguments, and
+  the check shows only that they are not obviously wrong.
+- *`hand_over`'s test samples states.* It covers the boundaries the code
+  has, but it is not exhaustive.
+- *Dependence on rows elsewhere.* Step 1's state list and step 2's poster
+  rule are what part 3 stands on. A later change to either must re-open
+  this design. Each of the three documents names the others.
+- *One architecture's register map.* The frame tail writes x86-64's four
+  registers. That is checked by case 1 and by step 1's register check.
+- *The hook.* T13's control needs code in the item that only a check uses.
+
+#### Part 7: the cycle budget
+
+Per direction, at the guest TSC's 4,400 MHz (1 ns is 4.4 ticks). The
+address-space switch is §9.6's measured 130 ns, the refill's 20 ns included,
+and both kernels pay it. The rest is an estimate from the code on
+`ipc-step1` and the costs §9.5 measured, to be checked by the timing build's
+ablations once step 4 is built.
+
+| Piece | ns (estimate) |
+|---|---|
+| `SYSCALL`, `swapgs`, stack switch and frame push; frame pop, `swapgs`, `SYSRET` | 20–25 |
+| T1 to T3, and the running task by borrow | 2–3 |
+| the handle lookup: the table's lock, the index, type and rights, the endpoint's `Arc` clone | 8–12 |
+| two half locks and the run queue's, taken and let go | 8–12 |
+| T6 to T13 under them: about 15 loads and compares | 3–5 |
+| the commit: the reply cell, the record, two state swaps with their job-load updates | 8–12 |
+| `hand_over` and `switch_chosen`'s bookkeeping: the clock read, the charge, the placement arithmetic, `note_running`, `carry_in_call` | 12–18 |
+| `switch_to` and the entry stack | 3–5 |
+| user state: the FS base when it differs, the vector reset, `MXCSR` and control word | 12–20 |
+| the frame tail | 2–3 |
+| **software, total** | **80–115** |
+| the address-space switch (measured) | 130 |
+| **one direction** | **210–245** |
+
+Against seL4's 220 ns a direction, that is between 5% under and 11% over:
+inside step 5's gate of 1.10, but not yet "as good or better" at its upper
+end. Where the time goes, and what step 5 can take:
+- *The locked operations:* about 14 a direction (four locks, the `Arc`, the
+  state swaps, the job loads). Two tasks of one job could fold their two
+  job-load updates into none, but the transient differs from the general
+  path's, so that needs its own argument. A lookup without the table's lock,
+  and a park that holds the task without an `Arc`, are step 5 items too.
+- *The clock read:* `rdtsc` is about 10 ns. The design reads the clock once
+  a direction, in `hand_over`, and every later use takes that `now`.
+- *The vector reset:* `XRSTOR` of an empty header is cheap when the
+  processor's init tracking already shows the state clean. That is measured,
+  not assumed.
+- *ERAPS in place of the refill* (§9.6) would take 20 ns a direction off the
+  switch. That is what brings the upper end under seL4. It needs its own
+  consultant review, already queued for step 5.
+
+#### Part 8: requirements and documents
+
+**Requirement rows** (names only; ids are reserved before they are written):
+- *H, direct switch:* a switch made without the run queue's pick leaves
+  every scheduling quantity as the pick would, and is made only when the
+  pick could choose nothing else.
+- *H, fast path:* every result of 0x1013 answered by the fast path is a
+  result the general path gives in the same circumstances, and the fast
+  path bypasses no filter, audit record or barrier.
+- *L.sched:* `hand_over` equals the general sequence on a queue with nothing
+  waiting (host test).
+- *L.sched:* the direct switch runs only with the woken task asleep at home
+  on this processor and nothing waiting after `wake_sleepers`.
+- *L.sched:* the direct switch's tail is `choose_next`'s, through
+  `switch_chosen`.
+- *L.object:* a park record is set only with an empty inbox, the task
+  blocked, under its half's lock. It is cleared by the commit that delivers
+  to it, by a writer or close, or by the task before it leaves the call.
+- *L.object:* a general writer or close that finds a record wakes its task
+  after letting the lock go.
+- *L.object:* a parked task's continuation takes its reply, or carries on as
+  `receive_words` does after its wait.
+- *L.object:* the reply's bytes past the count are zero.
+- *L.x86_64:* the fast path is entered only from the `SYSCALL` entry, for
+  0x1013, with the switch on and the process not filtered. It runs with
+  interrupts masked and waits on no lock.
+- *L.x86_64:* a declined fast path has changed nothing.
+- *L.x86_64:* the frame tail writes RAX, RSI, RDX and R10 from the reply
+  cell and no other register, and leaves by the general way out when any
+  work is pending.
+- *L.object or L.syscall:* the filtered flag is set one way and inherited.
+- *L.x86_64:* `ferrix.fastpath` turns the fast path off, and the boot says
+  which path it runs.
+- *Reused, not new:* H.TRAP.17 and L.object.113 with L.x86_64.126, since
+  the barrier goes through `install`; H.SCHED.1 to H.SCHED.4; L.object.126
+  to 130 and L.sched.5 to 8 (step 1); step 3's vector-contract row.
+
+**Documents.**
+- *SPECULATION.md* §3: no row changes. The *program → program* row gains a
+  sentence: every switch, the direct one included, decides its barrier in
+  `AddressSpace::install`. If ERAPS is accepted later, that row changes then.
+- *MEMORY-AND-TIMING:* a §2.2f for the fast path. The span it masks
+  interrupts for has no loop and no wait. Measured, it is the one-direction
+  time, about 0.25 us in a domain and 0.5 us across two, where `IBPB` adds
+  230 ns. It is no WCET claim, as §2.1 says of the rest. §2.2c gains the
+  fast path figures and which path each one ran.
+- *FINDINGS, F-23:* the fast path and the park allocate nothing (NOALLOC at
+  each site, counted by the gate as now). A parked reader is on no list, so
+  the recheck `wait_trusting` keeps for a task it could not list does not
+  arise there. No new finding is expected; the consultant may open one.
+- *The Security Target:* no new SFR, and FDP_IFC.1 and FDP_IFF.1 unchanged.
+  ADV_ARC's non-bypassability argument gains the fast path: a second way
+  through one call that bypasses no filter (T2), no audit (it answers only
+  calls that write no record) and no barrier (part 4). ADV_TDS describes it
+  as a module of the channel subsystem. ATE names the equivalence check as
+  the test of both paths. VULNERABILITY-ANALYSIS gains an entry, because a
+  second path is where a bypass is looked for first.
+
+#### Part 9: questions for the consultant
+
+1. Is a tested second implementation, built by composing the general path's
+   functions with three new pieces, enough for DAL C and EAL5+, with part
+   6's residual risk stated? If not, the plan stops at step 3 plus a direct
+   switch, and §9.6's target is out of reach.
+2. Is refinement (every fast result is a general result) the right criterion
+   for racing wakers, with identical transcripts for the rest?
+3. The commit writes the peer's reply cell, and the peer writes its own
+   frame. Does the consultant want the frame written by the waker instead,
+   as seL4 does and §9.5 said?
+4. Is the stricter condition, nothing waiting at all, accepted in place of
+   "nothing more urgent", with affinity, the slice and the quota argued away
+   as part 1 does?
+5. Is "every lock taken with `try_lock`, none waited on" accepted as the
+   fast path's lock-order argument, with up to three locks held at once?
+6. Is a check-only hook inside the item acceptable for T13's control, or
+   should that case be statistical, with a decline count above zero as its
+   evidence?
+7. Are the structural tests (T4, T9) and the shared one (T5) accepted
+   without controls of their own, and the asserted invariants A1 and A2
+   with planted-state controls, A3 being FX-0503's own check?
+8. In the certified configuration, should the fast path be on by default, as
+   measured, or off, with on as an option the integrator takes and the
+   Safety Manual describes?
+9. Can step 4b, the direct switch from general channel wakes, leave step 4,
+   to be reviewed on its own or not built?
+10. Is the filtered flag acceptable as a one-way downward interface, like
+    `leave_speculation_domain`, set by the personality for seccomp and for a
+    tracer?
+11. Should step 5's candidates that touch this design (folding the job-load
+    updates, a lookup without the table's lock, a park without an `Arc`)
+    each come back as a design first?
+12. The upper end of part 7 meets "as good or better" only with ERAPS. Should
+    ERAPS's review come with step 4's code, or stay in step 5?
+13. Is the general writers' record on AArch64 and ARMv7-A, never set there,
+    acceptable as argued coverage, or should those architectures not compile
+    it at all?
+
+**Points.** §9.5 gave step 4 23 to 37 points. This design costs more, for
+the park (without it the fast path cannot keep both sides on it) and for the
+controls:
+
+| Piece | Points |
+|---|---|
+| this design, and its revision after the review | 3–5 |
+| `hand_over`, its host test and control; `switch_chosen` split out | 5–8 |
+| the park: record, reply cell, continuation, the general writers' wake | 4–6 |
+| the fast path: entry, T1 to T13, the commit, the frame tail, the filtered flag, the boot switch and line | 6–9 |
+| `ipc-equiv`, its 14 cases, both boots in the gate, the counters, the T13 hook | 6–9 |
+| thirteen controls, coverage carried, rows and documents | 5–8 |
+| **total** | **29–45** |
