@@ -299,12 +299,16 @@ mapped, their frames held and charged to no job. devmgr starts no driver again
 after one that died before publishing, or once a device's restart budget is
 spent, so a device keeps at most two drivers' pins that way. An explicit rebind
 of a device whose drivers die before publishing keeps one more driver's pins
-each time, up to the element's own cap: once a device's quarantine holds
-133120 pages (520 MiB, two drivers' worst case), a new pin for it is refused
-with `QUARANTINE_FULL` and the device stops working until a driver of it is
-accepted or the element restarts. The integrator shall not rebind such a
-device in a loop, and shall treat `QUARANTINE_FULL` as a device that has
-failed. (Finding F-38.)
+each time, up to the element's own bound: each device has a pin budget `B`
+(`object/pin.rs`, `docs/NVIDIA.md` §12.2), 66560 pages (260 MiB, one driver's
+worst case) unless devmgr sets another, and a new pin is refused with
+`LIMIT_REACHED` when the device's live pins would pass `B`, and with
+`QUARANTINE_FULL` when its quarantined, kept and live pages would pass `2B`.
+The device then stops working until a driver of it is accepted or the element
+restarts. Only devmgr holds `SET_LIMIT` on a device, and a budget raised above
+the default counts against the element's ceiling of a quarter of RAM. The
+integrator shall not rebind such a device in a loop, and shall treat
+`QUARANTINE_FULL` as a device that has failed. (Finding F-38; NVIDIA N0f.)
 
 ---
 

@@ -644,6 +644,25 @@ per dword (128 bytes), which `device_config_write` reads and sets only under
 the lock and prints from after it is dropped. A refused write allocates
 nothing.
 
+### 2.2g The pin quarantine's lock (`object::pin::QUARANTINE`)
+
+A spin lock over the list of quarantined pins and the pages raised pin
+budgets hold of the ceiling. Since NVIDIA's N0f it is also the lock every
+device's pin budget and its three counts -- `live`, `quarantined`, `kept`,
+kept on the device's domain -- are read and changed under
+(`L.object.118`–`120`). It is a leaf: nothing is mapped, unpinned,
+allocated, waited for or locked under it. A pin's reservation
+(`object::pin::reserve`) and its give-back, a closed pin's move to `kept`,
+a release's count per entry and `device_set_limit`'s test and store are each
+a handful of loads and stores under it, with no walk: the pin path no
+longer walks the quarantine list to count a device's pages, as the cap did
+before. What still walks the list is the release, once, to take a device's
+entries off it -- a pass over every quarantined pin on the machine, which
+the budgets bound at twice each device's budget in pages, with no
+allocation; the unpins and the frames' release come after the lock is
+dropped. A quarantined pin's own record is allocated with the pin, outside
+the lock (finding F-23), so a death allocates nothing.
+
 ### 2.3 What is missing, per standard
 
 * **DO-178C DAL C** does not require WCET as such, but does require that

@@ -60,11 +60,14 @@ handles: [job (first only), device 0, device 0 again, ..., image 0 ...
   given no job otherwise, and `process_create` needs one.
 
 * **The devices** are every node `device::devices()` publishes, in that order,
-  each as two handles. The first has `DEVICE_RIGHTS` (`TRANSFER | MANAGE`) and
-  is the handle the driver will be given in START, unchanged. The second stays
+  each as two handles. The first has `DEVICE_RIGHTS | SET_LIMIT`
+  (`TRANSFER | MANAGE | SET_LIMIT`) and is the handle the driver will be
+  given in START, narrowed to exactly `DEVICE_RIGHTS`. The second stays
   with `devmgr` for the quiesce in §4, because a handle given away is gone. It
-  has `DEVICE_RIGHTS | DUPLICATE`, so a driver started again after a death
-  gets a duplicate of it and `devmgr` still has one for the next quiesce.
+  has `DEVICE_RIGHTS | SET_LIMIT | DUPLICATE`, so a driver started again after
+  a death gets a duplicate of it, narrowed the same way, and `devmgr` still
+  has one for the next quiesce. `SET_LIMIT` is for the device's pin budget
+  (§3.1), which is `devmgr`'s and never a driver's.
   `device_info` (0x1049) on either says what the device is.
 * **The drivers** are every program in one fixed initramfs directory,
   `/lib/drivers/`, in the order of `/lib/drivers/MANIFEST`, one name per
@@ -112,8 +115,10 @@ a driver's death or of its restart (§4), printed the same way.
    its register windows in the blocks; a second, smaller table matches those:
    `TREE_STM32_HDMI`, the DK board's HDMI output, is a card driven by `ltdc`
    (`docs/DISPLAY.md` §6).
-2. Devices of one kind are named in PCI order — `vda`, `vdb`, … for disks, as
-   `docs/BLOCK-RING.md` §6.1 decides — so names are stable on a given machine.
+2. Each device keeps the kernel's default pin budget, 66560 pages, unless
+   its kind's rule says otherwise (§3.1). Devices of one kind are named in
+   PCI order — `vda`, `vdb`, … for disks, as `docs/BLOCK-RING.md` §6.1
+   decides — so names are stable on a given machine.
 3. For each match, in that order:
    * `block_ring_create` (0x1048) on the device: the driver's end of the
      ring's control channel. For a device whose subsystem has no ring yet,
@@ -151,6 +156,41 @@ PUBLISHED  kernel -> devmgr, 16 bytes
    the kernel's patience for REPORT: a driver that never publishes holds
    `devmgr` there, and the boot fails saying so. A driver whose start fails
    outright counts as failed.
+
+### 3.1 Pin budgets
+
+A device's pin budget bounds what its drivers' pins hold: a pin past the
+budget is refused `LIMIT_REACHED`, and one that would take the device's
+quarantined, kept and live pages past twice it `QUARANTINE_FULL`
+(`docs/NVIDIA.md` §12.2, `src/kernel/src/object/pin.rs`). The budget is the
+node's, and survives every driver's death and `devmgr`'s own restart.
+`devmgr` sets it with `device_set_limit` (0x1057), which needs `SET_LIMIT`,
+before the driver starts: the kernel refuses a change under live pins.
+
+| Kind | Budget |
+|---|---|
+| disk, network, display, input, sound, port, host, engine, gadget | the kernel's default, 66560 pages (one driver's worst case); not set |
+| GPU under `nvrm` (NVIDIA's N1b, not yet in the table) | `max(ceiling / 2, 1 GiB)`, cut to the room |
+
+The GPU's rule (`ferrix_devmgr_proto::budget`, the customer's decision of
+2026-10-02) reads the ceiling and the room with `device_get_limit` (0x1058):
+the ceiling is a quarter of RAM, on twice every raised budget, and the room
+what other devices' raised budgets leave. It wants an eighth of RAM and at
+least 1 GiB; when twice that is more than the room, the floor yields and the
+budget is half the room. Every outcome is a line, and a GPU that cannot have
+enough is not started -- there is no fallback to the default:
+
+```
+devmgr   gpu 01:00.0: pin budget 1024 MiB (an eighth of RAM, at least 1 GiB)
+devmgr   gpu 01:00.0: pin budget 512 MiB, cut from 1024 MiB: the 1 GiB floor yields to the kernel's ceiling (4096 MiB of RAM)
+devmgr   gpu 01:00.0 not started: its pin budget of 128 MiB is under the 256 MiB nvrm needs
+devmgr   gpu 01:00.0 not started: the kernel refused its pin budget of 512 MiB (past the ceiling)
+```
+
+256 MiB is `NVRM_MIN_PIN_PAGES`, until NVIDIA's N1d measures what `nvrm`
+needs. The last line is for a `NO_MEMORY` from `device_set_limit`, when
+another device took room between the read and the set. `devmgr` has no GPU
+kind yet, so the rule is host-tested and not yet called.
 
 ## 4. When a driver dies
 

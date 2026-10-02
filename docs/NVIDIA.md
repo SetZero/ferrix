@@ -422,11 +422,11 @@ Ferrix code.
   unsupported.
 * **How much is pinned.** GSP boot pins the firmware image and its logs,
   some tens of MiB. After that, every Vulkan or CUDA allocation in system
-  memory is pinned too, which can reach gigabytes. The pin quarantine's cap
-  (`QUARANTINE_CAP_PAGES`, about 520 MiB, set for a 256 MiB largest driver
-  pin; `src/kernel/src/object/pin.rs`) has to become a per-driver budget the
-  driver declares (N0f). Until then, a crash of a busy `nvrm` would be
-  refused new pins until the next HELLO.
+  memory is pinned too, which can reach gigabytes. Since N0f the pins are
+  bounded by a per-device budget devmgr sets (`src/kernel/src/object/pin.rs`,
+  §12.2): an eighth of RAM and at least 1 GiB for `nvrm`, in place of the
+  quarantine's fixed cap of about 520 MiB, which a crash of a busy `nvrm`
+  would have filled before its successor could pin GSP's firmware.
 * **Client pages.** `os_lock_user_pages` pins a *client's* pages. This
   happens for `NV01_MEMORY_SYSTEM_OS_DESCRIPTOR`, which GL and Vulkan use
   for imported host memory, and CUDA for `cudaHostRegister`. It becomes a
