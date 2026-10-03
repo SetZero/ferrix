@@ -160,18 +160,20 @@ register, in bring-up order, with a boot check that it did.
 **`main.rs` is in the item, and it is the composition root.** The manifest
 puts it in the `item` ring as bring-up, and nothing about that is changed
 here. But it is also where the load is put together with the item. Since
-2026-09-26 the gate reads its calls into the load -- 38 modules -- and
-records them under `composition_root` in the manifest rather than in the
-debt register: ratcheted the same way, filed against no finding. Of the 38,
-21 are the load's own boot self-checks (`fs::check`, `net::check`,
-`syscall::check` and eighteen more verification files, `fs::kmem_check`
-since F-37), and 17 are product
-modules: registration (`syscall::launch`, `syscall::linux`,
-`syscall::deliver`, `platform::st::stm32mp1`, `fs`, and since W-5 `block_ring`,
-`net_ring`, `render` and `input`), the load's subsystems brought up in order
-(`fs::root_disk`, `fs::data_disk`, `net`, `syscall::time`, `display`), and
-the pieces `main.rs`'s own boot checks drive a program through
-(`syscall::image`, `syscall::exec`, `fs::cgroupfs`).
+2026-09-26 the gate reads its calls into the load -- 27 modules on
+2026-10-03 -- and records them under `composition_root` in the manifest
+rather than in the debt register: ratcheted the same way, filed against no
+finding. Of the 27, 7 are the load's own boot self-checks (`fs::check`,
+`net::check`, `fs::btrfs_write_check`, `fs::btrfs_powerfail`,
+`fs::mmap_check`, `fs::procfs::check` and
+`interfaces::block_ring::driver_check`), and 20 are product modules:
+registration (`syscall::launch`, `syscall::linux`, `syscall::deliver`,
+`syscall::seccomp`, `platform::st::stm32mp1`,
+`platform::google::gs201::usb`, `fs`, `fs::procfs`, and since W-5
+`block_ring`, `net_ring`, `render`, `input`, `audio` and `logctl`), and the
+load's subsystems brought up in order (`fs::root_disk`, `fs::data_disk`,
+`fs::home_disk`, `net`, `syscall::time`, `display`). The manifest's list is
+the authority; this sentence is recounted from it.
 
 That is a judgement an assessor has to accept, and it is only as good as the
 claim that those edges carry composition and no item logic. It is plausible
@@ -319,7 +321,7 @@ visible instead of letting "Ferrix is certified" absorb it.
 
 The boundary above is a claim about dependencies, so the gate measures it.
 Today the item contains **no upward references** -- no place where a ring
-names something in a ring above it -- beside the composition root's 38 (§2).
+names something in a ring above it -- beside the composition root's 27 (§2).
 When the audit began it had 94, in 28 files, by today's measure; each was
 recorded in the manifest against a finding id and analysed in
 [FINDINGS.md](FINDINGS.md), and each finding closed when the build said so.

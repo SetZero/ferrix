@@ -138,6 +138,16 @@
       ],
       "dropped": "2a's carry from 90a4757d6 dropped no anchor.",
       "what": "Measure the new code and test or argue what a passing run leaves: sched/borrow.rs (RunningSlot, current_ptr, running, with_current, current_arc, the audit and its sites), sched/borrow_check.rs (the stage-5 check), and in sched/mod.rs set_current, audit_here, the switch's and the interrupt exit's audits, current(), regroup_current and set_current_group as rewritten, and sched/work.rs's with_running, which now borrows."
+    },
+    {
+      "landing": "the home disk: fs::home_disk mounted at /home beside /data, its flush and commit (branch home-disk)",
+      "architectures": [
+        "x86_64",
+        "aarch64",
+        "armv7a"
+      ],
+      "dropped": "Carried onto main with 0 anchors dropped as unmeasured.",
+      "what": "Measure main.rs's two new calls of fs::home_disk::mount, after each fs::data_disk::mount in bring-up: no coverage run attaches a home disk, so a run reaches the calls but not a mount behind them; test-shell's K7 boots, `cargo xtask run` and `run-compositor` attach one."
     }
   ]
 }

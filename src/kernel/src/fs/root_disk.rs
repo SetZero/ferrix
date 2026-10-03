@@ -16,7 +16,8 @@
 //! The root disk is the btrfs disk labelled [`LABEL`], from the fourth
 //! virtio-blk function, `vdd`, on: by label rather than by position, as
 //! Linux's `root=LABEL=`, so another disk beside it (`/data`,
-//! [`super::data_disk`]) is never mistaken for it. `cargo xtask run` and
+//! [`super::data_disk`], or `/home`, [`super::home_disk`]) is never mistaken
+//! for it. `cargo xtask run` and
 //! `run-compositor` attach `build/root.img`, a 1 GiB volume made from the
 //! `root` fixture the first time and kept after that; the test boots do not
 //! attach it, and without it — or with `ferrix.root=tmpfs` on the command
@@ -47,10 +48,10 @@
 //! Under `ferrix.devmgr=init` (`docs/INIT.md` §7.3, L12) the disk's driver
 //! does not exist until pid 1 has started `devmgr`, so pid 1 starts on the
 //! tmpfs and the switch comes after it: [`switch_after_devmgr`] waits for
-//! `devmgr`'s REPORT, switches, mounts the data disk, and tells pid 1 where
-//! `/` is (`init::notify_root`). Pid 1 is moved onto the volume by the
-//! switch itself: its root and working directory become the volume's in the
-//! step that publishes [`process_context`], under pid 1's own filesystem
+//! `devmgr`'s REPORT, switches, mounts the data and home disks, and tells
+//! pid 1 where `/` is (`init::notify_root`). Pid 1 is moved onto the volume
+//! by the switch itself: its root and working directory become the volume's
+//! in the step that publishes [`process_context`], under pid 1's own filesystem
 //! lock, which every thread sharing its context shares and every fork of it
 //! takes. This is the one process the kernel re-roots, once. What pid 1 has
 //! open keeps the root it was opened under, as after a `chroot`, and pid 1
@@ -337,6 +338,9 @@ fn commit_forever(_: usize) {
         if fs::data_disk::sync().is_err() {
             println!("  data     the periodic commit of /data failed");
         }
+        if fs::home_disk::sync().is_err() {
+            println!("  home     the periodic commit of /home failed");
+        }
     }
 }
 
@@ -377,6 +381,7 @@ fn after_devmgr(_: usize) {
     }
     switch();
     fs::data_disk::mount();
+    fs::home_disk::mount();
     let switched = ROOT.get().is_some();
     if switched && let Err(problem) = check_pid1_moved() {
         crate::panic::fatal!(

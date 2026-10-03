@@ -51,11 +51,15 @@ what `cargo xtask run` boots with as `/`, and the label is how the kernel
 tells it from any other btrfs disk. The system alone is tens of megabytes,
 which 128 MiB of DUP metadata and single data cannot hold with room to work.
 
+`home.img.packed` is an empty 8 GiB volume labelled `ferrix-home`, with UUIDs
+of its own: the disk `cargo xtask run` keeps the users' files on, at `/home`,
+which `--reset-root` leaves alone. The kernel tells it apart by its label.
+
 Usage:
     python3 tools/common/gen/gen-btrfs-fixtures.py [--only NAME ...]
 
 `--only` rebuilds just the named images (`none`, `zlib`, `lzo`, `zstd`,
-`default-subvol`, `blank`, `dup`, `root`), leaving the others' committed bytes
+`default-subvol`, `blank`, `dup`, `root`, `home`), leaving the others' committed bytes
 alone.
 """
 
@@ -80,6 +84,11 @@ ROOT = "root"
 IMAGE_SIZE = 128 * 1024 * 1024
 ROOT_SIZE = 1024 * 1024 * 1024
 ROOT_LABEL = "ferrix-root"
+HOME = "home"
+HOME_SIZE = 8 * 1024 * 1024 * 1024
+HOME_LABEL = "ferrix-home"
+HOME_FS_UUID = "0f3c3a5e-2222-4222-8333-444455556666"
+HOME_DEVICE_UUID = "0f3c3a5e-bbbb-4bbb-8ccc-ddddeeeeffff"
 BLOCK = 4096
 FS_UUID = "0f3c3a5e-1111-4222-8333-444455556666"
 DEVICE_UUID = "0f3c3a5e-aaaa-4bbb-8ccc-ddddeeeeffff"
@@ -192,13 +201,14 @@ def make_default_subvol_image(source: pathlib.Path, image: pathlib.Path) -> None
     ], check=True)
 
 
-def make_blank_image(image: pathlib.Path, size: int = IMAGE_SIZE, label: str = "") -> None:
+def make_blank_image(image: pathlib.Path, size: int = IMAGE_SIZE, label: str = "",
+                     uuids: tuple[str, str] = (FS_UUID, DEVICE_UUID)) -> None:
     with open(image, "wb") as f:
         f.truncate(size)
     # No profile or feature flags: the defaults are the point.
     subprocess.run([
         "mkfs.btrfs", "-q", "--nodesize", str(BLOCK),
-        "-U", FS_UUID, "--device-uuid", DEVICE_UUID,
+        "-U", uuids[0], "--device-uuid", uuids[1],
         *(["-L", label] if label else []), str(image),
     ], check=True)
 
@@ -241,7 +251,7 @@ def main() -> int:
     if shutil.which("mkfs.btrfs") is None:
         print("mkfs.btrfs is not installed (btrfs-progs)", file=sys.stderr)
         return 1
-    names = VARIANTS + (DEFAULT_SUBVOL, BLANK, DUP, ROOT)
+    names = VARIANTS + (DEFAULT_SUBVOL, BLANK, DUP, ROOT, HOME)
     only = sys.argv[2:] if sys.argv[1:2] == ["--only"] else list(names)
     if len(sys.argv) > 1 and sys.argv[1] != "--only" or not only or set(only) - set(names):
         print(f"usage: {sys.argv[0]} [--only NAME ...], NAME in {', '.join(names)}",
@@ -318,6 +328,16 @@ def main() -> int:
                 return 1
             (OUTPUT / f"{ROOT}.img.packed").write_bytes(packed)
             print(f"{ROOT}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
+        if HOME in only:
+            image = pathlib.Path(scratch) / f"{HOME}.img"
+            make_blank_image(image, HOME_SIZE, HOME_LABEL, (HOME_FS_UUID, HOME_DEVICE_UUID))
+            packed = pack(image)
+            if len(packed) > BUDGET:
+                print(f"{HOME}: packed image is {len(packed)} bytes, over {BUDGET}",
+                      file=sys.stderr)
+                return 1
+            (OUTPUT / f"{HOME}.img.packed").write_bytes(packed)
+            print(f"{HOME}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
     return 0
 
 

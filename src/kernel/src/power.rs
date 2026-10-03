@@ -43,13 +43,13 @@ use crate::panic::{catalog, fatal};
 /// stops.
 #[derive(Debug)]
 pub(crate) struct Flush {
-    /// Where it is mounted, as the log names it: `/`, `/data`.
+    /// Where it is mounted, as the log names it: `/`, `/data`, `/home`.
     pub(crate) mount: &'static str,
     /// Commit it. Nothing mounted there is nothing to commit, and `Ok`.
     pub(crate) commit: fn() -> Result<(), Errno>,
 }
 
-/// Every registered [`Flush`]. Four is two more than the kernel registers.
+/// Every registered [`Flush`]. Four is one more than the kernel registers.
 static FLUSHES: Hooks<Flush, 4> = Hooks::new();
 
 /// Commit `flush` before the machine stops, after every flush registered
@@ -142,9 +142,9 @@ pub(crate) fn init(view: &BootView<'_>) {
     }
 }
 
-/// Commit every registered [`Flush`]: on this kernel `/` and `/data`, the
-/// root disk's last half-minute, which its committer has not reached yet, and
-/// the data disk, which has none.
+/// Commit every registered [`Flush`]: on this kernel `/`, `/data` and
+/// `/home`, the last half-minute of each, which the root's committer has not
+/// reached yet.
 ///
 /// Before the machine stops, whoever stops it: [`finish`] when init has
 /// exited, and `reboot(2)` when a program asks, so that a program calling it

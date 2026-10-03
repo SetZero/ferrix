@@ -701,6 +701,7 @@ fn check_btrfs_write() {
     if !checks::run() {
         fs::root_disk::switch();
         fs::data_disk::mount();
+        fs::home_disk::mount();
         return;
     }
     let report = match fs::btrfs_write_check::run() {
@@ -727,6 +728,7 @@ fn check_btrfs_write() {
     // interactive boot brought one, and then a data disk into that `/`.
     fs::root_disk::switch();
     fs::data_disk::mount();
+    fs::home_disk::mount();
 }
 
 /// Stage 10's discovery: run every finder in precedence order, reserving the

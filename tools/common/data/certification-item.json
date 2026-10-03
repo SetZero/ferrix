@@ -402,6 +402,7 @@
       "fs::btrfs_write_check",
       "fs::check",
       "fs::data_disk",
+      "fs::home_disk",
       "fs::mmap_check",
       "fs::procfs",
       "fs::procfs::check",

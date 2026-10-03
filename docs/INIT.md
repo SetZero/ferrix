@@ -751,13 +751,14 @@ reverse dependency order, each unit by its own `KillMode=`. Then init:
 
 1. writes `cgroup.kill` in every cgroup left beside `init.scope`, deepest
    first, and waits for each to report `populated 0`;
-2. calls `sync`, remounts `/` and `/data` read-only, and unmounts the rest in
-   reverse order;
+2. calls `sync`, remounts `/`, `/data` and `/home` read-only, and unmounts
+   the rest in reverse order;
 3. calls `reboot(2)`.
 
 Each remount of step 2 is checked by a write after it, which must be
 refused with `EROFS`; init then says `/ is read-only` (and the same for
-`/data`), and `test-init` requires both lines. Until 2026-09-28 the kernel
+`/data` and `/home`, each that is mounted), and `test-init` requires the
+lines for the disks its boot has. Until 2026-09-28 the kernel
 refused `MS_REMOUNT` and init only said so (finding F-53, closed by
 `docs/NAMESPACES.md`'s N1).
 
@@ -765,7 +766,8 @@ A process in no service does not survive step 1: it is in some cgroup, and
 every cgroup but init's is killed. The cgroup tree is what makes "stop
 everything" mean everything.
 
-`reboot(2)` commits `/` and `/data` before it acts (**K7**, built in L3), as
+`reboot(2)` commits `/`, `/data` and `/home` before it acts (**K7**, built in
+L3; `/home` since 2026-10-03), as
 `power::finish` does, so a program calling it directly cannot lose a btrfs
 transaction either. Init's own `sync` in step 2 then leaves it nothing to
 commit.
@@ -846,7 +848,7 @@ outside init as well:
 | K3 | `process_give(pid, handle)`: a parent installs one handle in its own child that has not yet called `execve`; `process_bootstrap()` returns that handle once, to the child. **Done 2026-09-26**, kernel half of L8 | any Linux program that starts a native-aware one | 2 |
 | K4 | `port_fd(port)`: a descriptor readable while the port has packets. **Done 2026-09-26**, kernel half of L8 | hyprix and the terminal, once they use a native service | 3 |
 | K6 | Read a process's exit status and signal from its handle (in the reserved `0x1032..0x1037`). **Done 2026-09-26**, kernel half of L8 | `devmgr` reports each driver's own status since L11 | 1 |
-| K7 | `reboot(2)` syncs `/` and `/data` first, as `power::finish` does. **Done in L3** | any program calling it | 1 |
+| K7 | `reboot(2)` syncs `/`, `/data` and `/home` first, as `power::finish` does. **Done in L3**, `/home` 2026-10-03 | any program calling it | 1 |
 
 Together that is 11 points. None of the six changes the ABI of an existing
 call. Version 1's K1 (jobs inherited by `fork`) and K5 (a signal to every
@@ -1200,9 +1202,10 @@ host tests by default, as it runs the compositor's.
   after every wake, not only those that raised `EPOLLPRI`. The read at offset
   0 is what clears the event, and a process spawned and gone between two
   waits leaves no event behind.
-* **`Power`** is §8.2's steps 2 and 3: `sync`, `/` and `/data` remounted
-  read-only (refused with `EINVAL` today, and said), the rest unmounted in
-  reverse order, and `reboot(2)`, which commits both disks anyway (K7).
+* **`Power`** is §8.2's steps 2 and 3: `sync`, `/`, `/data` and `/home`
+  remounted read-only (refused with `EINVAL` today, and said), the rest
+  unmounted in reverse order, and `reboot(2)`, which commits each disk anyway
+  (K7).
   `SIGTERM` or `SIGINT` to pid 1 is `Request::Poweroff` from a client that
   gets no answer. `Route`, `Refuse` and `Reply` wait for L6 and L8.
 * **`getty TTY`** calls `setsid` (an `EPERM` is ignored), opens the

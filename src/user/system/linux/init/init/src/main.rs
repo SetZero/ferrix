@@ -326,6 +326,7 @@ impl Init {
         // `/` is settled already when the kernel started devmgr itself: the
         // audit record's reader starts now, and otherwise once it is.
         if !awaiting_root {
+            make_homes();
             init.start_audit();
         }
         Ok(init)
@@ -943,6 +944,7 @@ impl Init {
         } else {
             say("/ stays in memory");
         }
+        make_homes();
         self.start_audit();
         if std::mem::take(&mut self.awaiting_root) {
             self.queue.push_back(Event::Boot);
@@ -1324,6 +1326,43 @@ fn owner(pid: u32) -> Option<u32> {
     line.split_whitespace().nth(1)?.parse().ok()
 }
 
+/// Each account's home under `/home` that is not there, made empty, its
+/// own and private: `0700`, with the account's uid and gid.
+///
+/// `/home` is the home disk when the machine has one, which starts empty
+/// and is kept when the root is made again (`cargo xtask run
+/// --reset-root`); the system's archive carries the homes, but onto the
+/// root, where the disk's mount hides them. A home that is there is left as
+/// it is, so this does nothing on a boot without the disk. Done once `/` is
+/// settled, before any unit runs as an account.
+fn make_homes() {
+    use std::os::unix::fs::{DirBuilderExt, chown};
+    let passwd = fs::read_to_string("/etc/passwd").unwrap_or_default();
+    for line in passwd.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        let [name, _, uid, gid, _, home, ..] = fields.as_slice() else {
+            continue;
+        };
+        let (Ok(uid), Ok(gid)) = (uid.parse::<u32>(), gid.parse::<u32>()) else {
+            continue;
+        };
+        let Some(rest) = home.strip_prefix("/home/") else {
+            continue;
+        };
+        if rest.is_empty() || rest.contains('/') || fs::symlink_metadata(home).is_ok() {
+            continue;
+        }
+        let made = fs::DirBuilder::new()
+            .mode(0o700)
+            .create(home)
+            .and_then(|()| chown(home, Some(uid), Some(gid)));
+        match made {
+            Ok(()) => say(&format!("made {name}'s home {home}")),
+            Err(error) => say(&format!("{name}'s home {home} could not be made: {error}")),
+        }
+    }
+}
+
 /// A tmpfs on `/run`, and the runtime unit directory in it.
 fn mount_run() {
     let _ = fs::create_dir("/run");
@@ -1474,9 +1513,10 @@ fn read_only_probe(target: &str) -> String {
 }
 
 /// §8.2's steps 2 and 3: `sync`, the rest unmounted in reverse order, the
-/// audit record read a last time onto the volume, `sync` again, `/` and
-/// `/data` read-only, and `reboot(2)`. A remount the kernel refuses is said
-/// and passed over: `reboot(2)` commits `/` and `/data` itself (K7).
+/// audit record read a last time onto the volume, `sync` again, `/`,
+/// `/data` and `/home` read-only, and `reboot(2)`. A remount the kernel
+/// refuses is said and passed over: `reboot(2)` commits all three itself
+/// (K7).
 ///
 /// The audit record's last read is as late as a write to `/` can be, so
 /// that as little as possible is made after it: what is, the kernel prints
@@ -1490,7 +1530,7 @@ fn power(action: PowerAction, audit: Option<&mut audit::Reader>) -> ! {
         .collect();
     let mut kept = Vec::new();
     for target in targets.iter().rev() {
-        if matches!(*target, "/" | "/data") {
+        if matches!(*target, "/" | "/data" | "/home") {
             continue;
         }
         let Ok(path) = CString::new(*target) else {
@@ -1510,7 +1550,7 @@ fn power(action: PowerAction, audit: Option<&mut audit::Reader>) -> ! {
         }
     }
     sys::sync();
-    for target in ["/", "/data"] {
+    for target in ["/", "/data", "/home"] {
         if !targets.contains(&target) {
             continue;
         }

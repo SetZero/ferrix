@@ -277,7 +277,7 @@ nothing cycles.
   copy of it shares, the one piece of mount state they share -- so every
   bind of it refuses writes, or takes them again, as `SB_RDONLY` does on
   Linux; no other filesystem option exists to change. A remount to
-  read-only writes the filesystem out first, as `umount2` does, so a btrfs `/` or `/data` remounted read-only
+  read-only writes the filesystem out first, as `umount2` does, so a btrfs `/`, `/data` or `/home` remounted read-only
   at shutdown (`docs/INIT.md` §8.2, step 2, refused `EINVAL` until now) is
   committed and then refuses writes through that mount. Linux refuses a
   read-only remount while files are open for writing (`EBUSY`); nothing
@@ -1027,7 +1027,7 @@ it:
 * **Before N5.** A namespace's end writes out each filesystem whose last
   mount it drops, as a final unmount does on Linux. `Namespace`'s `Drop`
   disconnects its mounts and writes nothing, and btrfs commits on its own
-  only `/` and `/data`, so a disk mounted inside a namespace alone loses
+  only `/`, `/data` and `/home`, so a disk mounted inside a namespace alone loses
   what it wrote since its last commit when the namespace ends (F-53's
   class, as N2's B2 was). Not reachable today: only root mounts a disk, and
   every path that does -- bubblewrap's binds, the stage 12 disk -- shares

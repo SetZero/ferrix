@@ -42,6 +42,7 @@ pub(crate) mod epoll_check;
 pub(crate) mod eventfd;
 pub(crate) mod eventfd_check;
 pub(crate) mod exec_check;
+pub(crate) mod home_disk;
 pub(crate) mod inotify;
 pub(crate) mod kmem_check;
 pub(crate) mod memfd_check;
@@ -105,10 +106,16 @@ static ROOT_FLUSH: Flush = Flush {
     commit: root_disk::sync,
 };
 
-/// `/data`'s, which has no committer of its own.
+/// `/data`'s, which the root's committer also commits.
 static DATA_FLUSH: Flush = Flush {
     mount: "/data",
     commit: data_disk::sync,
+};
+
+/// `/home`'s, which the root's committer also commits.
+static HOME_FLUSH: Flush = Flush {
+    mount: "/home",
+    commit: home_disk::sync,
 };
 
 /// Register what the certified item reaches the filesystem through, which it
@@ -118,7 +125,7 @@ static DATA_FLUSH: Flush = Flush {
 ///
 /// Called once from `main.rs`, before anything is mounted to commit and
 /// before `devmgr` is started. A disk that is never mounted commits nothing,
-/// so both flushes are registered on every machine.
+/// so all three flushes are registered on every machine.
 ///
 /// # Errors
 ///
@@ -127,6 +134,7 @@ static DATA_FLUSH: Flush = Flush {
 pub(crate) fn install() -> Result<(), Full> {
     crate::power::register_flush(&ROOT_FLUSH)?;
     crate::power::register_flush(&DATA_FLUSH)?;
+    crate::power::register_flush(&HOME_FLUSH)?;
     crate::discovery::devmgr::register_reader(read_from_root);
     cgroupfs::install()?;
     portfd::install()

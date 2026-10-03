@@ -1,8 +1,8 @@
 //! A data disk: a btrfs volume at `/data`.
 //!
-//! Any btrfs disk from the fourth virtio-blk function on that is not the
-//! root disk ([`super::root_disk`], which is told apart by its label) is a
-//! data disk, and the first one is mounted writable at `/data` — inside the
+//! Any btrfs disk from the fourth virtio-blk function on that is neither the
+//! root disk ([`super::root_disk`]) nor the home disk ([`super::home_disk`]),
+//! each told apart by its label, is a data disk, and the first one is mounted writable at `/data` — inside the
 //! `/` processes see, so under a btrfs root it is `/sysroot/data` in the
 //! kernel's own tree. What the disk is for is its attacher's business: a
 //! test's own volume under QEMU's `snapshot=on`, say, which the guest may
@@ -41,7 +41,11 @@ pub(crate) fn mount() {
     let Some((index, rdev)) = (FIRST..END)
         .map(|index| (index, makedev(VIRTIO_BLK_MAJOR, index * 16)))
         .filter(|&(_, rdev)| fs::devfs::block_device(rdev).is_some())
-        .find(|&(_, rdev)| root_disk::root_rdev() != Some(rdev) && !root_disk::is_root(rdev))
+        .find(|&(_, rdev)| {
+            root_disk::root_rdev() != Some(rdev)
+                && !root_disk::is_root(rdev)
+                && !fs::home_disk::is_home(rdev)
+        })
     else {
         return;
     };
