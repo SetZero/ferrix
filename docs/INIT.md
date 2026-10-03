@@ -497,8 +497,10 @@ svc scope --slice user-1000.slice --unit session-1.scope --pid 4242
 
 Init makes the cgroup, moves the pids into it (C2) and supervises it from
 then on like a service it did not start. A scope has no `ExecStart=`, is
-stopped by signal and `cgroup.kill`, and is removed once empty. `getty`
-creates `session-N.scope` for the login it runs. hyprix creates
+stopped by signal and `cgroup.kill`, and is removed once empty. `login`
+creates `session-N.scope` under `user-<uid>.slice` for the session it
+starts, while it is still root (`docs/AUTH.md` §6.2; `getty --login` execs
+it). hyprix creates
 `app-<name>-<n>.scope` for each program it starts, so `svc status` answers
 which window a runaway process came from, and `svc stop` closes all of it.
 

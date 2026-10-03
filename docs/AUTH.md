@@ -801,12 +801,31 @@ be opened by any method.
   screen and on standard error: "no password is set for ferrix: run
   `passwd` first". The customer's `SUPER+L` then does nothing visible
   instead of locking them out (decision 4).
-* **The console.** `login` (phase 2) finds the account has no credential.
-  Only on a **local console**, the kind named by `FirstPassword=local` (the
-  getty's `TTYPath=`, `/dev/console`, never a `pts`), it offers to set one:
-  "ferrix has no password. Choose one now:". This is the first password,
-  set by the person with the machine in front of them. It is the same
-  physical-presence assumption `A.PHYSICAL` already makes.
+* **The console.** `login` finds the account has no credential. **Built
+  2026-10-03 (P2.3; the certification consultant's OK IF, ledger line 303).**
+  `authd`, not `login`, decides whether the caller is at a **local
+  console**: under a `FirstPassword=local` policy (`login`'s), asked by
+  root (`Callers=root`), it reads the caller's `/proc/<pid>/stat` and
+  takes it as local only if the controlling terminal's `tty_nr` is the
+  console's, **5:1, which Ferrix encodes as 1281** (`test-init` reads it
+  back on the target), and only if the same pid's real and effective uid
+  are still 0, read from `/proc/<pid>/status` around it. A pty's session
+  reads 0, as no terminal does; an unreadable file or a pid that is gone is
+  not local either (`authd/src/local.rs`). Then it says "ferrix has no
+  password. Choose one now:", asks for it twice, refuses an empty one or
+  two that differ, stores it, audits `result=first-password` with the
+  `tty_nr` it saw, and answers ACCEPTED: the person is in with the password
+  they just chose. **Only a person's account** is offered one: a uid from
+  `PERSON_UID_FIRST` (1000) to below `PERSON_UID_END` (60001) and a shell
+  that is not `nologin` or `false` (`authd/src/accounts.rs`); root, `auth`
+  and every system account get "no password is set", audited
+  `no-credential,not-a-persons-account`. **What 5:1 is on each target**:
+  in QEMU, the serial port, which is whoever holds QEMU's standard input or
+  its socket; on the DK1, its UART over the ST-LINK's USB; on the Pixel 7,
+  the CDC-ACM console over USB. A serial console that is reachable over a
+  network counts as local under this rule. That is acceptable only because
+  of the physical-presence assumption `A.PHYSICAL` already makes, which
+  holds the machine's console to be in the room with its owner.
 * **ssh** never offers a first password. Until a credential exists it is key
   only, as today.
 * **root** has no record on a fresh image, so it is locked: nobody logs in
@@ -832,7 +851,8 @@ channel. Every client is `ferrix`'s; `sshdt` and `udhcpc`, which must stay
 root, are units of `graphical.target` instead of `exec-once` lines. The
 kernel gives a pseudoterminal's slave to the process that opened
 `/dev/ptmx`, as devpts does, so a terminal works as a user. Not built
-yet: the session's own scope, `login`, and
+yet: the graphical session's own scope (`login` gives a console session
+one, P2.3), and
 the other desktops, which still run as root. The grant hyprix unlocks on
 (P2.5, §3.7) was built the same evening. **P1.5 landed the same day**
 (the certification consultant's OK IF, ledger line 295): every desktop
@@ -854,12 +874,25 @@ as root unless something gives it the devices.
 
 ### 6.2 What it takes
 
-1. **`login` on the console** (P2.3). getty execs `/bin/login` instead of
-   the shell (`src/user/system/linux/init/getty/src/main.rs:78-84`). `login` runs the `login`
-   conversation. On ACCEPTED it does `initgroups`, `setresgid` and
-   `setresuid`, asks init for `session-N.scope` under `user-<uid>.slice`
-   (`svc scope`, `docs/INIT.md` §5.6), and execs the account's shell. The
-   first-password offer of §5.4 lives here.
+1. **`login` on the console** (P2.3, **built 2026-10-03**). `getty
+   --login` execs `/bin/login` (`src/user/system/linux/auth/login`, Ferrix's own,
+   in busybox's place) instead of root's shell; an image chooses it, and
+   the gate images keep the root shell as their automatic login (decision
+   8). `login` asks for a name and runs the `login` conversation, so
+   `authd` alone decides, and offers a first password (§5.4). On ACCEPTED,
+   still root, it asks init for `session-N.scope` under `user-<uid>.slice`
+   (`N` counted from 1 at every boot under `flock` in `/run/ferrix/login`).
+   An init that refuses is said on the console and in `login`'s line, and
+   the login goes on without a scope, so **nothing may rely on the scope
+   yet**: P2.7's ending of a session must not, until a refused scope stops
+   the login (the consultant's F6). Then `setgroups` from `/etc/group`,
+   `setresgid`, `setresuid`, each checked, and every id and the groups read
+   back with `getresuid`, `getresgid` and `getgroups`; a mismatch execs
+   nothing (F3). A `nologin` or `false` shell is refused. The environment is
+   cleared to `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, and getty's `TERM`
+   if it is a plain terminfo name (F7), and the shell runs as a login shell
+   in the account's home. Three wrong passwords end `login`, and getty
+   starts it again.
 2. **A session manager, `sessiond`** (P2.4): root, a unit, the one owner of
    **seat0** (the machine's screens, keyboard, pointer and sound). It is
    logind's device half and seatd's whole job, and no more:
@@ -976,7 +1009,7 @@ phase 1. hyprlock does not change when phase 2 moves the session to
 | L10 | hyprix under init (`docs/INIT.md` §13, already planned) | init | | `test-compositor` under init | (6) |
 | P2.1 | K-B: procfs honours `PR_SET_DUMPABLE` (set-id `execve` and id changes clear it since 2026-09-30) | kernel | | kernel gate | 2 |
 | P2.2 | K-C: zero socket, pipe and tty buffers when freed | kernel | | kernel gate | 1 |
-| P2.3 | `login`, and getty execs it. First password on a local console. `test-init` gains a stage: log in as `ferrix`, a wrong password refused, `id` says 1000, the session's scope is `user-1000.slice/session-1.scope`. | auth, init | P1 | `test-init --arch all` | 5 |
+| P2.3 | `login`, and getty execs it. First password on a local console. `test-init` gains a stage: log in as `ferrix`, a wrong password refused, `id` says 1000, the session's scope is `user-1000.slice/session-1.scope`. **Built 2026-10-03** (§6.2; `getty --login` is per image) | auth, init | P1 | `test-init --arch all` | 5 |
 | P2.4 | `sessiond`: seat0, device descriptors by `SCM_RIGHTS`, starts hyprix as the account in its scope, ends the session with its compositor. **Built 2026-10-03 for `--everything`** (§6.1), all but the scope: the session stays in `hyprix.service`'s cgroup; `test-compositor --boot everything-desktop` runs it as uid 1000 | session (new) | L10, P0 | `test-compositor` as uid 1000 | 10 |
 | P2.5 | hyprix: devices from `sessiond`, the seat channel and grants (§3.7), a new locker taking over a dead lock, `misc:lock_grace`. **Built 2026-10-03**: the devices, then the grants, the takeover and `lock_grace` (§3.7; the consultant's OK IF, ledger line 299); `test-compositor --boot hyprlock-session` | compositor | P2.4, P1.3 | `test-compositor`, `test-hyprlock` | 6 |
 | P2.6 | `su`, set-uid root, the wheel rule | auth | P1 | `test-vfs` (it already becomes `ferrix` with `su`) | 3 |
@@ -1148,6 +1181,7 @@ it was put to the customer.
 | P1.2 `src/lib/proto/auth-proto` | on `main` with this section: the records of §3.3, `Secret`, the `auth_proto` fuzz target |
 | P1.3 `authd`, P1.4 `passwd` and `authctl` | on `main` with this row (`src/user/system/linux/auth/`): 28 host tests, one of them over a real socket, and `test-auth` on all three architectures |
 | P1.6 `cargo xtask test-auth` | on `main` with this row (`tools/common/xtask/src/auth.rs`): passes on x86-64, AArch64 and ARMv7-A, and each of `--sabotage accept-any`, `tell-unknown`, `let-anyone-name` and `no-throttle` fails on its own line |
+| P2.3 `login` | 2026-10-03: `/bin/login`, `getty --login`, `FirstPassword=local` decided by `authd` from the caller's `tty_nr` (1281, the console's) for a person's account only (§5.4, §6.2; the consultant's OK IF, ledger line 303). `test-init --arch all`'s `login` stage: no first password with no controlling terminal, the first password at the console, every id 1000 in `user-1000.slice/session-1.scope`, a wrong password refused, `session-2.scope` |
 | P2.5 the seat's grant | 2026-10-03: `authd` offers `ferrix.auth.seat`, `sessiond` arms each lock and relays its grant on descriptor 4, hyprix lets a session's lock go only on it, a dead lock may be taken over, `misc:lock_grace` capped (§3.7, ledger line 299). `--boot hyprlock-session` and three negative controls. Not closed: killing hyprix restarts a fresh desktop until `login` (P2.3, P2.7) |
 | hyprix's lock holder | 2026-10-03: only the holder unlocks, on its own lock object, and nobody once it has died (§1's lock row; the consultant's OK IF, ledger line 296); seven host tests, and negative controls in `~/.local/share/ferrix/logs/lock-orphan/` |
 | P1.5 hyprlock's backend | on `main` with this row (2026-10-03): `/bin/hyprlock` talks to `authd` through `src/user/system/linux/auth/client` (`hyprlock/src/auth.rs`), and every desktop image carries `authd` beside hyprlock (`tools/common/xtask/src/compositor/desktop.rs`), with a seed only where `--auth-seed` asks (the certification consultant's OK IF, ledger line 295). `test-compositor --boot hyprlock` locks, refuses a wrong password and takes the right one through `authd`; `--boot hyprlock-unset` refuses to lock an account with no password (decision 4) |

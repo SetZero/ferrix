@@ -594,3 +594,117 @@ fn records_out_of_turn_end_the_conversation() {
         .handle(&mut conversation, &Record::Status { account: "" }, m.now_ms);
     assert!(after.is_empty(), "nothing after the end");
 }
+
+/// A machine whose engine takes every caller to be at the console, or none.
+fn at_console(name: &str, console: bool) -> Machine {
+    let mut m = Machine::new(name);
+    let engine = std::mem::replace(
+        &mut m.engine,
+        Engine::new(Paths::under(&m.root), Hasher::fixed(FLOOR), [9; 32]),
+    );
+    m.engine = engine.with_local(if console {
+        |_| Some(crate::local::CONSOLE)
+    } else {
+        |_| Some(0)
+    });
+    m
+}
+
+/// `login`'s caller: getty's, root, on the console.
+const GETTY: Peer = Peer { pid: 7, uid: 0 };
+
+#[test]
+fn login_on_the_console_offers_a_first_password_and_lets_them_in() {
+    let mut m = at_console("first-password", true);
+    let outs = m.converse(GETTY, "login", "ferrix", &["chosen", "chosen"]);
+    assert!(
+        outs.iter()
+            .any(|out| out.reply
+                == Reply::Info("ferrix has no password. Choose one now:".to_owned())),
+        "{outs:?}"
+    );
+    assert_eq!(outs.last().cloned(), Some(accepted("ferrix", 1000)));
+    assert!(m.audit().contains("result=first-password"));
+    // The password is the account's now: it is asked for, and taken.
+    assert_eq!(
+        m.verdict(GETTY, "login", "ferrix", &["chosen"]),
+        accepted("ferrix", 1000)
+    );
+    assert!(matches!(
+        m.verdict(GETTY, "login", "ferrix", &["guess"]).reply,
+        Reply::Failed { .. }
+    ));
+}
+
+#[test]
+fn a_first_password_is_typed_twice_and_never_empty() {
+    let mut m = at_console("first-password-twice", true);
+    assert!(matches!(
+        m.verdict(GETTY, "login", "ferrix", &["one", "two"]).reply,
+        Reply::Failed { ref text, .. } if text.contains("did not match")
+    ));
+    assert!(matches!(
+        m.verdict(GETTY, "login", "ferrix", &[""]).reply,
+        Reply::Failed { ref text, .. } if text.contains("empty")
+    ));
+    // Neither was kept: the offer stands.
+    assert_eq!(
+        m.verdict(GETTY, "login", "ferrix", &["chosen", "chosen"]),
+        accepted("ferrix", 1000)
+    );
+}
+
+#[test]
+fn off_the_console_no_password_is_still_no_password() {
+    let mut m = at_console("first-password-pty", false);
+    assert_eq!(
+        m.verdict(GETTY, "login", "ferrix", &[]).reply,
+        Reply::Unavailable("no password is set for ferrix".to_owned())
+    );
+    assert!(m.audit().contains("why=no-credential,tty_nr=0"));
+}
+
+/// F1: root, `auth`, and a person's account whose shell refuses logins are
+/// never offered a first password, even at the console.
+#[test]
+fn root_and_the_systems_accounts_get_no_first_password() {
+    let mut m = at_console("first-password-who", true);
+    std::fs::write(
+        m.root.join("etc/passwd"),
+        "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/home/ferrix:/bin/sh\n\
+         auth:x:90:90::/:/sbin/nologin\nshut:x:1002:1002::/:/sbin/nologin\n",
+    )
+    .unwrap();
+    for account in ["root", "auth", "shut"] {
+        assert_eq!(
+            m.verdict(GETTY, "login", account, &[]).reply,
+            Reply::Unavailable(format!("no password is set for {account}")),
+            "{account}"
+        );
+    }
+    assert!(m.audit().contains("not-a-persons-account"));
+    assert_eq!(
+        m.verdict(GETTY, "login", "ferrix", &["chosen", "chosen"]),
+        accepted("ferrix", 1000)
+    );
+}
+
+#[test]
+fn only_a_first_password_service_and_only_root_get_the_offer() {
+    let mut m = at_console("first-password-service", true);
+    // `gate` is `Account=any` with no `FirstPassword=`.
+    assert_eq!(
+        m.verdict(GETTY, "gate", "ferrix", &[]).reply,
+        Reply::Unavailable("no password is set for ferrix".to_owned())
+    );
+    // A user at the console cannot use `login` at all (`Callers=root`), and
+    // hyprlock, whose caller is the user, is never offered one.
+    assert!(matches!(
+        m.verdict(FERRIX, "login", "ferrix", &[]).reply,
+        Reply::Unavailable(_)
+    ));
+    assert_eq!(
+        m.verdict(FERRIX, "hyprlock", "", &[]).reply,
+        Reply::Unavailable("no password is set for ferrix".to_owned())
+    );
+}

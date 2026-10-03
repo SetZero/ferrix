@@ -1,11 +1,15 @@
-//! `/sbin/getty TTY`: give a terminal a session and a shell (`docs/INIT.md`
-//! §4.4, §8.1).
+//! `/sbin/getty [--login] TTY`: give a terminal a session and a login or a
+//! shell (`docs/INIT.md` §4.4, §8.1).
 //!
 //! It leads a session of its own, opens the terminal and makes it that
 //! session's controlling terminal, taking it from any session that still
-//! holds it, and puts it on standard input, output and error. Then it
-//! becomes the shell, as a login shell: there is no `login` yet, so the
-//! terminal's session is the shell's.
+//! holds it, and puts it on standard input, output and error.
+//!
+//! With `--login` it then becomes `/bin/login`, which asks who is there and
+//! checks it with `authd` (`docs/AUTH.md` §6.2). Without it, it becomes
+//! root's shell, as a login shell: that is an automatic login as root, which
+//! decision 8 of `docs/AUTH.md` lets an image choose, and which the gate
+//! images do, since every one of them types at that shell.
 //!
 //! `TTY` is a name under `/dev` (`console`, `ttyS0`) or a path. The shell
 //! is `$SHELL`, or `/bin/sh`.
@@ -35,9 +39,17 @@ fn fail(what: &str, error: &io::Error) -> ! {
     std::process::exit(1)
 }
 
+/// What `--login` execs.
+const LOGIN: &str = "/bin/login";
+
 fn main() {
-    let Some(name) = std::env::args_os().nth(1) else {
-        fail("usage", &io::Error::other("getty TTY"));
+    let mut arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let login = arguments.first().is_some_and(|first| first == "--login");
+    if login {
+        let _ = arguments.remove(0);
+    }
+    let Some(name) = arguments.first().cloned() else {
+        fail("usage", &io::Error::other("getty [--login] TTY"));
     };
     let path = terminal(&name);
 
@@ -75,6 +87,10 @@ fn main() {
     let _ = writeln!(out, "\nFerrix {} on {}\n", hostname.trim(), path.display());
     drop(out);
 
+    if login {
+        let error = Command::new(LOGIN).exec();
+        fail(&format!("starting {LOGIN}"), &error);
+    }
     let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/sh"));
     let base = Path::new(&shell)
         .file_name()

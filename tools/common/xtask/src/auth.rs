@@ -122,6 +122,7 @@ pub(crate) struct Built {
     authd: PathBuf,
     passwd: PathBuf,
     authctl: PathBuf,
+    login: PathBuf,
 }
 
 /// Build `src/user/system/linux/auth/` for `arch`, sabotaged as `sabotage` when one is
@@ -153,6 +154,7 @@ pub(crate) fn built(arch: Arch, sabotage: Option<&str>) -> Result<Option<Built>>
         authd: release.join("authd"),
         passwd: release.join("passwd"),
         authctl: release.join("authctl"),
+        login: release.join("login"),
     };
     let mut build = crate::builds::Build::cargo(
         format!("cargo build (auth) --target {target}"),
@@ -168,6 +170,7 @@ pub(crate) fn built(arch: Arch, sabotage: Option<&str>) -> Result<Option<Built>>
         .output(&built.authd)
         .output(&built.passwd)
         .output(&built.authctl)
+        .output(&built.login)
         .run()?;
     Ok(Some(built))
 }
@@ -212,6 +215,8 @@ pub(crate) fn carried(arch: Arch, sabotage: Option<&str>) -> Result<Vec<File>> {
         file("sbin/authd".to_owned(), 0o755, read(&built.authd)?),
         file("bin/passwd".to_owned(), 0o755, read(&built.passwd)?),
         file("bin/authctl".to_owned(), 0o755, read(&built.authctl)?),
+        // Ferrix's own, in busybox's place (`docs/AUTH.md` §6.2).
+        file("bin/login".to_owned(), 0o755, read(&built.login)?),
     ];
     for (name, bytes) in shipped(SERVICES)? {
         files.push(file(
@@ -231,12 +236,13 @@ pub(crate) fn carried(arch: Arch, sabotage: Option<&str>) -> Result<Vec<File>> {
     Ok(files)
 }
 
-/// What `cargo xtask run --auth-seed ACCOUNT` adds to the image init boots:
-/// authd with its units and policies, the seeds, and an `/etc/passwd` and
-/// `/etc/group` with root, `ferrix` and `auth`, which that image has none of
-/// otherwise. Nothing without a seed asked for.
+/// What `cargo xtask run --auth-seed ACCOUNT` or `--login` adds to the image
+/// init boots: authd with its units and policies, the seeds, an
+/// `/etc/passwd` and `/etc/group` with root, `ferrix` and `auth`, which that
+/// image has none of otherwise, and with `--login` the getty's drop-in.
+/// Nothing when neither was asked for.
 pub(crate) fn with_seeds(arch: Arch, args: &Args) -> Result<Vec<File>> {
-    if args.auth_seeds.is_empty() && args.auth_seed_files.is_empty() {
+    if args.auth_seeds.is_empty() && args.auth_seed_files.is_empty() && !args.login {
         return Ok(Vec::new());
     }
     let mut files = carried(arch, None)?;
@@ -253,8 +259,23 @@ pub(crate) fn with_seeds(arch: Arch, args: &Args) -> Result<Vec<File>> {
             content: Content::Bytes(text.into_bytes()),
         });
     }
+    if args.login {
+        // `ExecStart=` emptied, then getty with `--login`: the console asks
+        // who is there instead of opening root's shell.
+        files.push(File {
+            path: "etc/ferrix/units/getty@.service.d/login.conf".to_owned(),
+            mode: 0o644,
+            content: Content::Bytes(LOGIN_DROP_IN.as_bytes().to_vec()),
+        });
+    }
     Ok(files)
 }
+
+/// `run --login`'s drop-in for every getty.
+const LOGIN_DROP_IN: &str = "# Carried by `cargo xtask run --login` (docs/AUTH.md §6.2).\n\
+                             [Service]\n\
+                             ExecStart=\n\
+                             ExecStart=/sbin/getty --login %i\n";
 
 /// The seeds `--auth-seed` and `--auth-seed-file` ask for, as carried files.
 pub(crate) fn seeds(args: &Args) -> Result<Vec<File>> {

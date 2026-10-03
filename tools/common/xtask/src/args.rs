@@ -142,6 +142,11 @@ pub(crate) struct Args {
     /// of the two (`crate::everything`). The network and the hypervisor a
     /// watched boot has already.
     pub(crate) everything: bool,
+    /// `--login`: `run`'s getty asks who is there with `/bin/login`
+    /// instead of starting root's shell (`docs/AUTH.md` §6.2), and the image
+    /// carries `authd` for it. A person's account with no password chooses
+    /// one at the console the first time (§5.4).
+    pub(crate) login: bool,
     /// `--session`: `flash --compositor`'s desktop runs as the user
     /// `ferrix` through `sessiond`, as `run-compositor --everything`'s does
     /// (`crate::session`): `--config`'s dotfiles seed the home disk once,
@@ -636,6 +641,15 @@ impl Args {
 
     /// Parse an iterator of arguments, `cargo xtask` and the command name
     /// having already been stripped by the caller.
+    /// A flag that only turns something on: `--chrome`, `--login`.
+    fn switch(&mut self, flag: &str) {
+        match flag {
+            "--chrome" => self.chrome = true,
+            "--login" => self.login = true,
+            _ => {}
+        }
+    }
+
     pub(crate) fn parse(raw: impl Iterator<Item = String>) -> Result<Self> {
         let mut args = Args {
             smp: 4,
@@ -666,7 +680,7 @@ impl Args {
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
                 "--no-dotfiles" | "--session" => args.dotfiles(&item),
-                "--chrome" => args.chrome = true,
+                "--chrome" | "--login" => args.switch(&item),
                 "--everything" => args.everything(),
                 "--forward" => {
                     let raw = value(&mut items, "--forward")?;

@@ -323,10 +323,11 @@ const WANTED: [&str; 13] = [
 
 /// Who the test's user is: root, and `ferrix`, whom `su` becomes to be
 /// refused what only root may do.
-const PASSWD: &str = "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/:/bin/sh\n";
+const PASSWD: &str = "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/:/bin/sh\n\
+                      auth:x:90:90:authd:/var/lib/ferrix/auth:/sbin/nologin\n";
 
 /// Their groups.
-const GROUP: &str = "root:x:0:\nferrix:x:1000:\n";
+const GROUP: &str = "root:x:0:\nferrix:x:1000:\nauth:x:90:\n";
 
 /// The three programs of `src/user/system/linux/init/` for one architecture.
 #[derive(Debug)]
@@ -624,7 +625,9 @@ fn test_files(shell: &[u8], busybox: &[u8], dirclient: &[u8]) -> Vec<File> {
         mode: 0o755,
         content: Content::Bytes(busybox.to_vec()),
     });
-    for applet in ["su", "nc", "mkdir"] {
+    // `cat` and `setsid` for the `login` stage: `/proc/self/*` read back, and
+    // a `login` with no controlling terminal.
+    for applet in ["su", "nc", "mkdir", "cat", "setsid"] {
         files.push(File {
             path: format!("bin/{applet}"),
             mode: 0o777,
@@ -670,6 +673,9 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
         .transpose()?
         .unwrap_or_default();
     files.extend(test_files(&shell, &busybox, &dirclient));
+    // authd, `/bin/login` and the `login` service, with no password for
+    // anyone: the `login` stage sets ferrix's first one at the console.
+    files.extend(crate::auth::carried(arch, None)?);
     // L9's gate as designed: real sshd under socket activation, where
     // `sshdt` is built, which is x86-64 alone.
     let sshd = arch == Arch::X86_64;
@@ -850,10 +856,195 @@ fn after_stage_one(at: &mut Watching<'_>, failures: &mut Vec<String>, sshd: bool
     directory(at, failures)?;
     devmgr_by_init(at, failures)?;
     audit_read_back(at, failures)?;
+    login(at, failures)?;
     if sshd {
         sshd_activated(at, failures)?;
     }
     power_off(at, failures)
+}
+
+/// ferrix's first password, chosen at the console by the `login` stage.
+const FIRST_PASSWORD: &str = "chosen at the console";
+
+/// What `/proc/self/status` says of a process whose ids are all ferrix's.
+const FERRIX_IDS: &str = "Uid:\t1000\t1000\t1000\t1000";
+
+/// The `login` stage (`docs/AUTH.md` P2.3): from root's shell on the
+/// console, `/bin/login` against `authd`.
+///
+/// First the console's own `tty_nr`, read back, so the number `authd` takes
+/// for the console is the target's and not only Linux's formula. Then, with
+/// no controlling terminal (`setsid`), `login ferrix` is not offered a first
+/// password -- the certification consultant's F4, before any is set. Then at
+/// the console it is: chosen, typed twice, and the shell that follows is
+/// ferrix's in every id and in `session-1.scope`. Last, a wrong password is
+/// refused and the chosen one lets ferrix in again, in `session-2.scope`.
+fn login(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    at.redact(FIRST_PASSWORD);
+    match ask(
+        at,
+        "m=login; echo \"$m-tty $(cat /proc/self/stat)\"\n",
+        "login-tty ",
+    )? {
+        Some(line) => {
+            let tty_nr = line.rsplit_once(')').and_then(|(_, rest)| {
+                rest.split_ascii_whitespace()
+                    .nth(4)
+                    .and_then(|field| field.parse::<u32>().ok())
+            });
+            if tty_nr == Some(CONSOLE_TTY_NR) {
+                println!("  the console's tty_nr, read on the target: {CONSOLE_TTY_NR} (5:1)");
+            } else {
+                failures.push(format!(
+                    "the console's tty_nr is {tty_nr:?}, not {CONSOLE_TTY_NR}: `{}`",
+                    line.trim()
+                ));
+            }
+        }
+        None => failures.push("the console's /proc/self/stat was never read".into()),
+    }
+    // busybox's `setsid` has no `-w`: it forks, and `login` goes on in a
+    // session of its own while the shell carries on, so its answer is waited
+    // for as a line.
+    let before = at.after().len();
+    at.type_in(b"setsid login ferrix </dev/null\n")?;
+    let deadline = Instant::now() + PATIENCE;
+    let _ = at.read_more(deadline, |lines| {
+        lines.get(before..).unwrap_or_default().iter().any(|line| {
+            line.contains("login: no password is set for ferrix") || line.contains("Choose one now")
+        })
+    })?;
+    let since = at.after().get(before..).unwrap_or_default().to_vec();
+    if has(&since, "Choose one now") || !has(&since, "login: no password is set for ferrix") {
+        failures.push(
+            "login with no controlling terminal was not refused with `no password is set`: a first \
+             password was offered off the console"
+                .into(),
+        );
+    } else {
+        println!("  login: with no controlling terminal, ferrix was not offered a first password");
+    }
+    // At the console: the offer, the password twice, the session.
+    let first = log_in(
+        at,
+        failures,
+        &[FIRST_PASSWORD, FIRST_PASSWORD],
+        "session-1.scope",
+        Some("ferrix has no password. Choose one now:"),
+    )?;
+    if first && !has(at.after(), "first-password,tty_nr=1281") {
+        failures.push(
+            "authd's audit did not record the first password and the console's tty_nr".into(),
+        );
+    }
+    // A wrong password, then the chosen one.
+    let _ = log_in(
+        at,
+        failures,
+        &["a wrong guess", FIRST_PASSWORD],
+        "session-2.scope",
+        None,
+    )?;
+    Ok(())
+}
+
+/// `login ferrix` at the console, the `answers` typed blind one after the
+/// other (a prompt has no newline, so it is never a line to wait for), and
+/// the shell that follows checked and left: whether it ran as ferrix in
+/// `scope`.
+fn log_in(
+    at: &mut Watching<'_>,
+    failures: &mut Vec<String>,
+    answers: &[&str],
+    scope: &str,
+    offer: Option<&str>,
+) -> Result<bool> {
+    let before = at.after().len();
+    at.type_in(b"login ferrix\n")?;
+    if let Some(offer) = offer {
+        let deadline = Instant::now() + PATIENCE;
+        let offered = at.read_more(deadline, |lines| {
+            lines
+                .get(before..)
+                .unwrap_or_default()
+                .iter()
+                .any(|line| line.contains(offer))
+        })?;
+        if !offered {
+            failures.push(format!("login at the console did not say `{offer}`"));
+            return Ok(false);
+        }
+    }
+    for answer in answers {
+        thread::sleep(Duration::from_secs(2));
+        let mut keys = answer.as_bytes().to_vec();
+        keys.push(b'\n');
+        at.type_in(&keys)?;
+        if *answer != FIRST_PASSWORD {
+            // A refusal is held for the policy's two seconds.
+            let deadline = Instant::now() + PATIENCE;
+            let refused = at.read_more(deadline, |lines| {
+                lines
+                    .get(before..)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|line| line.contains("Login incorrect"))
+            })?;
+            if !refused {
+                failures.push(
+                    "a wrong password at login was not refused with `Login incorrect`".into(),
+                );
+                return Ok(false);
+            }
+        }
+    }
+    let deadline = Instant::now() + PATIENCE;
+    let wanted = format!("login: ferrix in user-1000.slice/{scope}");
+    let _ = at.read_more(deadline, |lines| {
+        lines
+            .get(before..)
+            .unwrap_or_default()
+            .iter()
+            .any(|line| line.contains(&wanted))
+    })?;
+    if !has(at.after().get(before..).unwrap_or_default(), &wanted) {
+        failures.push(format!("login at the console never said `{wanted}`"));
+        return Ok(false);
+    }
+    let shell = at.after().len();
+    let _ = ask(
+        at,
+        "cat /proc/self/status /proc/self/cgroup; m=login; echo \"$m-user\"\n",
+        "login-user",
+    )?;
+    let said = at.after().get(shell..).unwrap_or_default().to_vec();
+    let mut good = true;
+    if !has(&said, FERRIX_IDS) {
+        failures.push(format!(
+            "the shell login started is not ferrix's in every id (`{FERRIX_IDS}`)"
+        ));
+        good = false;
+    }
+    if !has(&said, &format!("user-1000.slice/{scope}")) {
+        failures.push(format!(
+            "the shell login started is not in user-1000.slice/{scope}"
+        ));
+        good = false;
+    }
+    match ask(
+        at,
+        "exit\nm=login; echo \"$m-back $(cat /proc/self/status)\"\n",
+        "login-back",
+    )? {
+        Some(_) => {}
+        None => failures.push("the shell login started did not exit back to root's".into()),
+    }
+    if good {
+        println!(
+            "  login: ferrix logged in at the console, every id 1000, in user-1000.slice/{scope}"
+        );
+    }
+    Ok(good)
 }
 
 /// `svc audit` and what it prints, one record a line.

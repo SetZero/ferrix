@@ -20,6 +20,7 @@
 mod accounts;
 mod audit;
 mod engine;
+mod local;
 mod password;
 mod paths;
 mod phantom;

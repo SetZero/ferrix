@@ -37,6 +37,7 @@ use ferrix_auth_proto::{Record, Secret, method};
 
 use crate::accounts::{self, Account};
 use crate::audit::{Audit, say};
+use crate::local;
 use crate::password::{Checked, Hasher};
 use crate::paths::Paths;
 use crate::phantom::Phantoms;
@@ -78,6 +79,8 @@ pub(crate) enum Reply {
         text: String,
     },
     Unavailable(String),
+    /// Something to show before the next prompt.
+    Info(String),
     State {
         credential: bool,
         methods: u32,
@@ -102,6 +105,7 @@ impl Reply {
                 text,
             },
             Reply::Unavailable(text) => Record::Unavailable(text),
+            Reply::Info(text) => Record::Info(text),
             Reply::State {
                 credential,
                 methods,
@@ -197,6 +201,9 @@ pub(crate) struct Engine {
     armed: Option<Armed>,
     /// Grants made and not yet sent down the seat channel.
     grants: Vec<Armed>,
+    /// The controlling terminal's `tty_nr` of the root process `pid`
+    /// ([`local::root_terminal`]); a test gives its own.
+    local: fn(i32) -> Option<u32>,
 }
 
 /// A lock that may be granted, or the grant for it.
@@ -243,7 +250,15 @@ impl Engine {
             phantoms: Phantoms::new(phantom_key),
             armed: None,
             grants: Vec::new(),
+            local: local::root_terminal,
         }
+    }
+
+    /// The same, with `local` reading a pid's terminal.
+    #[cfg(test)]
+    pub(crate) fn with_local(mut self, local: fn(i32) -> Option<u32>) -> Engine {
+        self.local = local;
+        self
     }
 
     /// `sessiond`'s ARM, from the seat channel only: the lock `epoch` of
@@ -419,17 +434,13 @@ impl Engine {
                         target.name
                     ));
                 }
-                Ok(None) => {
-                    self.log(peer, service, &target.name, "unavailable", "no-credential");
-                    return over(format!("no password is set for {}", target.name));
-                }
+                Ok(None) => return self.first_password(peer, policy, target),
                 Ok(Some(credential)) if credential.locked.is_some() => {
                     self.log(peer, service, &target.name, "unavailable", "locked");
                     return over(format!("{} is locked", target.name));
                 }
                 Ok(Some(credential)) if credential.password.is_none() => {
-                    self.log(peer, service, &target.name, "unavailable", "no-credential");
-                    return over(format!("no password is set for {}", target.name));
+                    return self.first_password(peer, policy, target);
                 }
                 Ok(Some(_)) => {}
             }
@@ -453,6 +464,61 @@ impl Engine {
                 prompt("Current password: "),
             ),
         }
+    }
+
+    /// An account with no credential (`docs/AUTH.md` §5.4): no password is
+    /// never "any password". Under a `FirstPassword=local` policy, asked by
+    /// root from a process whose controlling terminal is the console --
+    /// read here from `/proc`, never taken from the caller -- the person may
+    /// choose one now, typed twice, and is then let in with it. Anything
+    /// else, a pty and ssh among it, is refused as before.
+    ///
+    /// Only a person's account is offered one (the certification
+    /// consultant's F1): never root, whose record is absent so that nobody
+    /// logs in as root by password, and never a system account such as
+    /// `auth`, nor one whose shell is `nologin` or `false`. The audit line
+    /// says which terminal was seen.
+    fn first_password(&mut self, peer: Peer, policy: Policy, target: Target) -> (Step, Vec<Out>) {
+        let terminal = (peer.uid == 0 && policy.first_password_local)
+            .then(|| (self.local)(peer.pid))
+            .flatten();
+        let persons = target.account.as_ref().is_some_and(Account::is_a_persons);
+        let offered = policy.first_password_local
+            && peer.uid == 0
+            && persons
+            && terminal == Some(local::CONSOLE);
+        let seen = terminal.map_or_else(|| "none".to_owned(), |nr| nr.to_string());
+        if !offered {
+            let why = if persons {
+                format!("no-credential,tty_nr={seen}")
+            } else {
+                "no-credential,not-a-persons-account".to_owned()
+            };
+            self.log(peer, &policy.service, &target.name, "unavailable", &why);
+            return (
+                Step::Over,
+                Out::now(Reply::Unavailable(format!(
+                    "no password is set for {}",
+                    target.name
+                ))),
+            );
+        }
+        self.log(
+            peer,
+            &policy.service,
+            &target.name,
+            "offered",
+            &format!("first-password,tty_nr={seen}"),
+        );
+        let mut outs = Out::now(Reply::Info(format!(
+            "{} has no password. Choose one now:",
+            target.name
+        )));
+        outs.extend(Out::now(Reply::Prompt {
+            visible: false,
+            text: "New password: ".to_owned(),
+        }));
+        (Step::New { policy, target }, outs)
     }
 
     /// Who `account` names, under `rule`, for `peer`.
@@ -725,7 +791,14 @@ impl Engine {
             ));
         }
         let _ = self.store.set_tally(&account.name, Tally::default());
-        self.log(peer, &policy.service, &account.name, "changed", "");
+        // A password chosen where none was is the first; through `passwd`
+        // it is a change.
+        let result = if policy.purpose == Purpose::Authenticate {
+            "first-password"
+        } else {
+            "changed"
+        };
+        self.log(peer, &policy.service, &account.name, result, "");
         Out::now(Reply::Accepted {
             uid: account.uid,
             account: account.name,

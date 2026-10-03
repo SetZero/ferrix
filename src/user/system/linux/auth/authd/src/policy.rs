@@ -57,6 +57,9 @@ pub(crate) struct Policy {
     pub(crate) fail_delay: Duration,
     /// Whether an acceptance is told to the seat's owner (phase 2).
     pub(crate) grant_seat: bool,
+    /// `FirstPassword=local`: an account with no credential may choose one
+    /// here, from the console alone (`docs/AUTH.md` §5.4).
+    pub(crate) first_password_local: bool,
 }
 
 /// Read `service`'s policy from `layers`, lowest first. Warnings about keys
@@ -114,6 +117,7 @@ fn interpret(service: &str, document: &Document, warn: &mut dyn FnMut(String)) -
         purpose: Purpose::Authenticate,
         fail_delay: Duration::from_secs(2),
         grant_seat: false,
+        first_password_local: false,
     };
     let known = [
         "Description",
@@ -176,6 +180,11 @@ fn interpret(service: &str, document: &Document, warn: &mut dyn FnMut(String)) -
         None | Some("") => {}
         Some("seat") => policy.grant_seat = true,
         Some(other) => bad(warn, "Grant", other),
+    }
+    match last(document, "FirstPassword") {
+        None | Some("" | "no") => {}
+        Some("local") => policy.first_password_local = true,
+        Some(other) => bad(warn, "FirstPassword", other),
     }
     policy
 }

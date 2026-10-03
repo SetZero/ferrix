@@ -1,0 +1,19 @@
+[package]
+name = "login"
+description = "/bin/login: a person logs in on the console, through authd (docs/AUTH.md §6.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Declarations only: flock, setgroups, setresgid, setresuid and their
+# read-backs are the C library std already links.
+libc = "0.2.189"
+ferrix-auth-client = { path = "../client" }
+# The init's control socket, for the session's scope (docs/INIT.md §5.6).
+ferrix-svc-proto = { path = "../../../../../lib/init/svc-proto" }
+
+[lints]
+workspace = true

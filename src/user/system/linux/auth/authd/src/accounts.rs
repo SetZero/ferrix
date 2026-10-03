@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-/// One `/etc/passwd` line's name, uid and gid.
+/// One `/etc/passwd` line's name, uid, gid and shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Account {
     /// The login name.
@@ -12,6 +12,28 @@ pub(crate) struct Account {
     pub(crate) uid: u32,
     /// The primary gid.
     pub(crate) gid: u32,
+    /// The login shell.
+    pub(crate) shell: String,
+}
+
+/// The first uid of a person's account, as `login.defs`' `UID_MIN`; below
+/// it are root and the system's own accounts, `auth` among them.
+pub(crate) const PERSON_UID_FIRST: u32 = 1000;
+
+/// The first uid past a person's, as `UID_MAX` plus one; `nobody` and the
+/// overflow id (65534) are past it.
+pub(crate) const PERSON_UID_END: u32 = 60_001;
+
+impl Account {
+    /// Whether it is a person's, who may log in: a uid in the range and a
+    /// shell that is not `nologin` or `false`. Root and the system's
+    /// accounts are never one (`docs/AUTH.md` §5.4).
+    pub(crate) fn is_a_persons(&self) -> bool {
+        let shell = self.shell.rsplit('/').next().unwrap_or_default();
+        (PERSON_UID_FIRST..PERSON_UID_END).contains(&self.uid)
+            && !self.shell.is_empty()
+            && !matches!(shell, "nologin" | "false")
+    }
 }
 
 /// Every account in the file at `path`; none when it cannot be read. A line
@@ -35,6 +57,7 @@ fn parse(line: &str) -> Option<Account> {
         name: name.to_owned(),
         uid: fields.get(2)?.parse().ok()?,
         gid: fields.get(3)?.parse().ok()?,
+        shell: (*fields.get(6)?).to_owned(),
     })
 }
 
@@ -60,6 +83,7 @@ mod tests {
                 name: "ferrix".to_owned(),
                 uid: 1000,
                 gid: 1000,
+                shell: "/bin/zsh".to_owned(),
             })
         );
         for bad in [
@@ -71,5 +95,21 @@ mod tests {
         ] {
             assert_eq!(parse(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_persons_account_is_in_the_range_and_has_a_shell() {
+        let persons = |line: &str| parse(line).is_some_and(|a| a.is_a_persons());
+        assert!(persons("ferrix:x:1000:1000::/home/ferrix:/bin/zsh"));
+        assert!(persons("last:x:60000:60000::/:/bin/sh"));
+        assert!(!persons("root:x:0:0:root:/:/bin/sh"));
+        assert!(!persons(
+            "auth:x:90:90:authd:/var/lib/ferrix/auth:/sbin/nologin"
+        ));
+        assert!(!persons("svc:x:999:999::/:/bin/sh"));
+        assert!(!persons("nobody:x:65534:65534::/:/bin/sh"));
+        assert!(!persons("locked:x:1001:1001::/:/sbin/nologin"));
+        assert!(!persons("locked:x:1001:1001::/:/bin/false"));
+        assert!(!persons("empty:x:1001:1001::/:"));
     }
 }
