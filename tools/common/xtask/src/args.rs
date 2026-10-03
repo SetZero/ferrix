@@ -372,6 +372,11 @@ pub(crate) struct Args {
     /// `--scale <N>`: the compositor's scale for the screen, 1 when not
     /// given: a phone's 1080x2400 at 1 is text a few millimetres high.
     pub(crate) scale: Option<String>,
+    /// `--bar-zoom <N>`: `flash --session`'s waybar this many times its
+    /// size: the lengths in the carried waybar style and configuration
+    /// multiplied, so that a desktop's bar reads on a phone
+    /// ([`crate::session::zoom_bar`]).
+    pub(crate) bar_zoom: Option<f64>,
     /// `--fps <N>`: how many frames a second of a video `wallpapers` keeps.
     ///
     /// A wallpaper that moves is its frames, so this is a size as much as a
@@ -532,6 +537,17 @@ impl Args {
         }
     }
 
+    /// `--scale` and `--bar-zoom`: the screen's scale, and the bar's on it.
+    fn scales(&mut self, flag: &str, raw: &str) -> Result<()> {
+        let factor = scale(flag, raw)?;
+        if flag == "--scale" {
+            self.scale = Some(raw.to_owned());
+        } else {
+            self.bar_zoom = Some(factor);
+        }
+        Ok(())
+    }
+
     /// `--reset-root`, `--reset-flash`, `--tmpfs-root`, `--btrfs-root` and
     /// `--persistent`: where `/` is for the boot, what of what the machine
     /// keeps starts over, and whether `/data` is kept too.
@@ -667,7 +683,7 @@ impl Args {
                 "--from" => args.from = Some(value(&mut items, "--from")?),
                 "--plan" => args.plan = Some(value(&mut items, "--plan")?),
                 "--size" => args.size = Some(dimensions(&value(&mut items, "--size")?, "--size")?),
-                "--scale" => args.scale = Some(scale(&value(&mut items, "--scale")?)?),
+                "--scale" | "--bar-zoom" => args.scales(&item, &value(&mut items, &item)?)?,
                 "--video-size" => {
                     let raw = value(&mut items, "--video-size")?;
                     args.video_size = Some(dimensions(&raw, "--video-size")?);
@@ -792,14 +808,13 @@ fn dimensions(raw: &str, key: &str) -> Result<(u32, u32)> {
 
 /// A monitor scale as `hyprland.conf` writes it: a number above 0 and at
 /// most 8, kept as it was typed so `2` stays `2` in the `monitor =` line.
-fn scale(raw: &str) -> Result<String> {
+fn scale(flag: &str, raw: &str) -> Result<f64> {
     raw.parse::<f64>()
         .ok()
         .filter(|scale| *scale > 0.0 && *scale <= 8.0)
-        .map(|_| raw.to_owned())
         .ok_or_else(|| {
             Error::new(format!(
-                "--scale wants a number above 0 and at most 8, got `{raw}`"
+                "{flag} wants a number above 0 and at most 8, got `{raw}`"
             ))
         })
 }
@@ -1058,6 +1073,12 @@ mod tests {
     fn everything_turns_on_every_feature_of_a_watched_desktop() {
         let args = parse(&["flash", "--compositor", "--session"]).unwrap();
         assert!(args.session && args.compositor && !args.everything);
+        let args = parse(&["flash", "--session", "--bar-zoom", "3", "--scale", "2"]).unwrap();
+        assert_eq!(
+            (args.bar_zoom, args.scale.as_deref()),
+            (Some(3.0), Some("2"))
+        );
+        assert!(parse(&["flash", "--bar-zoom", "0"]).is_err());
         let args = parse(&["run-compositor", "--everything"]).unwrap();
         assert!(args.everything && args.chrome && args.clipboard && args.release);
         assert!(args.gl && args.display);

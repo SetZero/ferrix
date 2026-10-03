@@ -3,7 +3,7 @@
 # loader wrapping a kernel and initramfs whose init is the compositor.
 #
 # Usage: tools/vendor/google/pixel7/build-desktop.sh <out-dir> [scale] [--chrome] [--dotfiles]
-#            [--push] [--reset-home]
+#            [--bar-zoom=N] [--push] [--reset-home]
 #
 #   out-dir   a new directory; the stage and desktop.Image are written there
 #   scale     the monitor's scale, 2 when not given: 1080x2400 at 1 is text
@@ -17,6 +17,11 @@
 #             desktop runs as the user ferrix (`flash --compositor --session`)
 #             and the dotfiles seed its home once, so what is changed there
 #             on the phone is kept across new desktops
+#   --bar-zoom=N  with --dotfiles, waybar N times the size the PC's files
+#             give it, 3 when not given: the bar is drawn at scale 1, so
+#             a monitor's bar on the phone's screen is a few millimetres
+#             high. It is what the home is seeded with, so a change to it
+#             reaches a phone that has a home.img only with --reset-home
 #   --push    copy desktop.Image to /data/local/tmp/ferrix-vm/ on the phone,
 #             where the app boots it in place of ferrix.Image, and stops
 #             the app updating it from GitHub's releases until asked to;
@@ -34,15 +39,16 @@
 # CARGO_TARGET_DIR defaults to one of this worktree's own: two worktrees
 # sharing one build each other's xtask.
 set -eu
-out=${1:?usage: build-desktop.sh <out-dir> [scale] [--chrome] [--dotfiles] [--push] [--reset-home]}
+out=${1:?usage: build-desktop.sh <out-dir> [scale] [--chrome] [--dotfiles] [--bar-zoom=N] [--push] [--reset-home]}
 shift
-scale=2 push= chrome= dotfiles= reset_home=
+scale=2 push= chrome= dotfiles= reset_home= bar_zoom=3
 for arg in "$@"; do
     case $arg in
         --push) push=1 ;;
         --chrome) chrome=--chrome ;;
         --dotfiles) dotfiles=1 ;;
         --reset-home) reset_home=1 ;;
+        --bar-zoom=*) bar_zoom=${arg#--bar-zoom=} ;;
         *) scale=$arg ;;
     esac
 done
@@ -56,7 +62,7 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd)
 cd "$root"
 if [ -n "$dotfiles" ]; then
-    set -- --session --config "$HOME/.config/hypr/hyprland.conf"
+    set -- --session --config "$HOME/.config/hypr/hyprland.conf" --bar-zoom "$bar_zoom"
 else
     set --
 fi

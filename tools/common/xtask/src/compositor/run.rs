@@ -453,6 +453,10 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
             crate::session::USER
         );
         let config = crate::session::for_session(&config, &mut carried.ports, host.as_deref());
+        if let Some(by) = args.bar_zoom {
+            crate::session::zoom_bar(&mut carried.ports, by);
+            println!("  session: waybar {by} times its size");
+        }
         let scale = args.scale.as_deref().unwrap_or("1");
         format!(
             "{config}# The board's screen, over the configuration's own monitor lines \

@@ -183,6 +183,107 @@ fn unit(name: &str, kind: &str, description: &str, command: &str) -> [File; 2] {
     ]
 }
 
+/// The waybar configuration's members that are lengths in pixels.
+const BAR_LENGTHS: [&str; 4] = ["height", "width", "spacing", "icon-size"];
+
+/// `--bar-zoom`: the carried waybar `by` times its size. Every `px` length in
+/// its `style.css`, and the [`BAR_LENGTHS`] its configuration gives, are
+/// multiplied; the host's own files are not touched, only what the image
+/// seeds the home with. Ferrix's waybar draws at the output's scale 1, so a
+/// desktop's bar on a phone is as many pixels as on a monitor a third as
+/// dense: this is what makes it read there.
+pub(crate) fn zoom_bar(ports: &mut [File], by: f64) {
+    for file in ports {
+        let Content::Bytes(bytes) = &file.content else {
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        let zoomed = if file.path.ends_with(".config/waybar/style.css") {
+            zoom_style(text, by)
+        } else if [".config/waybar/config", ".config/waybar/config.jsonc"]
+            .iter()
+            .any(|name| file.path.ends_with(name))
+        {
+            zoom_config(text, by)
+        } else {
+            continue;
+        };
+        file.content = Content::Bytes(zoomed.into_bytes());
+    }
+}
+
+/// `style` with every `<number>px` `by` times as long.
+fn zoom_style(style: &str, by: f64) -> String {
+    let mut out = String::with_capacity(style.len());
+    let mut rest = style;
+    while let Some(at) = rest.find(|c: char| c.is_ascii_digit() || c == '.') {
+        let (before, from) = rest.split_at(at);
+        out.push_str(before);
+        let end = from
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(from.len());
+        let (number, after) = from.split_at(end);
+        // A digit inside a word -- `h1`, a colour's `#1e1e2e` -- is not a
+        // length.
+        let in_word = before
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '#');
+        match number.parse::<f64>() {
+            Ok(value) if !in_word && after.starts_with("px") => out.push_str(&length(value * by)),
+            _ => out.push_str(number),
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `config` with each [`BAR_LENGTHS`] member's number `by` times as large.
+fn zoom_config(config: &str, by: f64) -> String {
+    let mut out = config.to_owned();
+    for name in BAR_LENGTHS {
+        let key = format!("\"{name}\"");
+        let mut zoomed = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some((before, after)) = rest.split_once(&key) {
+            zoomed.push_str(before);
+            zoomed.push_str(&key);
+            rest = after;
+            let Some(value) = after.trim_start().strip_prefix(':') else {
+                continue;
+            };
+            let value = value.trim_start();
+            let end = value
+                .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+                .unwrap_or(value.len());
+            let (number, tail) = value.split_at(end);
+            if let Ok(number) = number.parse::<f64>() {
+                // What lay between the key and the number, kept as written.
+                let gap = after.len() - value.len();
+                zoomed.push_str(after.get(..gap).unwrap_or_default());
+                zoomed.push_str(&length(number * by));
+                rest = tail;
+            }
+        }
+        zoomed.push_str(rest);
+        out = zoomed;
+    }
+    out
+}
+
+/// A length as CSS and JSON write one: whole when it is.
+fn length(value: f64) -> String {
+    let rounded = (value * 100.0).round() / 100.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{rounded}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +384,42 @@ mod tests {
                 |file| file.path == "etc/ferrix/units/graphical.target.wants/data-home.service"
             )
         );
+    }
+    #[test]
+    fn the_bar_is_zoomed_in_the_image_and_nowhere_else() {
+        let style = "* { font-size: 15px; min-height: 0; }\n\
+                     #clock { margin: 4px -2px; padding: 0 2.5px; color: #1e1e2e; }\n\
+                     h1 { border: 1px solid; }\n";
+        let config = "{\n    // \"height\": 40 in a comment is zoomed too\n    \
+                      \"height\": 40,\n    \"spacing\" : 6,\n    \"tray\": { \"icon-size\": 18 },\n    \
+                      \"format\": \"{:%H:%M}\"\n}\n";
+        let mut ports = vec![
+            File {
+                path: "etc/skel/.config/waybar/style.css".to_owned(),
+                mode: 0o644,
+                content: Content::Bytes(style.as_bytes().to_vec()),
+            },
+            File {
+                path: "etc/skel/.config/waybar/config.jsonc".to_owned(),
+                mode: 0o644,
+                content: Content::Bytes(config.as_bytes().to_vec()),
+            },
+            File {
+                path: "etc/skel/.config/foot/foot.ini".to_owned(),
+                mode: 0o644,
+                content: Content::Bytes(b"pad=4px\n".to_vec()),
+            },
+        ];
+        zoom_bar(&mut ports, 3.0);
+        assert_eq!(
+            bytes(&ports[0]),
+            "* { font-size: 45px; min-height: 0; }\n\
+             #clock { margin: 12px -6px; padding: 0 7.5px; color: #1e1e2e; }\n\
+             h1 { border: 3px solid; }\n"
+        );
+        let zoomed = bytes(&ports[1]);
+        assert!(zoomed.contains("\"height\": 120,") && zoomed.contains("\"spacing\" : 18,"));
+        assert!(zoomed.contains("\"icon-size\": 54 }") && zoomed.contains("{:%H:%M}"));
+        assert_eq!(bytes(&ports[2]), "pad=4px\n");
     }
 }
