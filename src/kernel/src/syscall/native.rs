@@ -108,6 +108,11 @@ struct Buffer {
     count: u64,
 }
 
+/// The buffer at `at` of `count` elements, from two registers.
+const fn buffer(at: u64, count: u64) -> Buffer {
+    Buffer { at, count }
+}
+
 /// The call a native number names, or `None` for one outside the range or in
 /// a gap.
 ///
@@ -154,7 +159,7 @@ impl Served {
 /// of these calls makes a channel for a driver, not the path a driver's work
 /// takes. A `Once` per call, as [`crate::hooks`] keeps them: written at
 /// bring-up, read without a lock.
-static SERVED: [Served; 10] = [
+static SERVED: [Served; 15] = [
     Served::new(NativeCall::BlockRingCreate),
     Served::new(NativeCall::NetRingCreate),
     Served::new(NativeCall::DisplayControlCreate),
@@ -165,6 +170,11 @@ static SERVED: [Served; 10] = [
     Served::new(NativeCall::JobForCgroup),
     Served::new(NativeCall::ProcessGive),
     Served::new(NativeCall::PortFd),
+    Served::new(NativeCall::ChardevControlCreate),
+    Served::new(NativeCall::ChardevReply),
+    Served::new(NativeCall::ChardevCopyIn),
+    Served::new(NativeCall::ChardevCopyOut),
+    Served::new(NativeCall::ChardevFile),
 ];
 
 /// Answer `call` with `handler`. Called from `main.rs`'s `register_load`, by
@@ -376,7 +386,8 @@ fn record_call(
             | NativeCall::RenderControlCreate
             | NativeCall::InputControlCreate
             | NativeCall::SoundControlCreate
-            | NativeCall::LogControlCreate,
+            | NativeCall::LogControlCreate
+            | NativeCall::ChardevControlCreate,
             Ok(given),
         ) => (audit::CONTROL, named(*given as u64), [number, 0, 0]),
         _ => return,
@@ -409,47 +420,19 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         NativeCall::ChannelWrite => channel_write(
             process,
             handle(a[0]),
-            Buffer {
-                at: a[1],
-                count: a[2],
-            },
-            Buffer {
-                at: a[3],
-                count: a[4],
-            },
+            buffer(a[1], a[2]),
+            buffer(a[3], a[4]),
         ),
         NativeCall::ChannelRead => channel_read(
             process,
             handle(a[0]),
-            Buffer {
-                at: a[1],
-                count: a[2],
-            },
-            Buffer {
-                at: a[3],
-                count: a[4],
-            },
+            buffer(a[1], a[2]),
+            buffer(a[3], a[4]),
             a[5],
         ),
         NativeCall::VmoCreate => vmo_create(process, a[0]),
-        NativeCall::VmoRead => vmo_read(
-            process,
-            handle(a[0]),
-            Buffer {
-                at: a[1],
-                count: a[2],
-            },
-            a[3],
-        ),
-        NativeCall::VmoWrite => vmo_write(
-            process,
-            handle(a[0]),
-            Buffer {
-                at: a[1],
-                count: a[2],
-            },
-            a[3],
-        ),
+        NativeCall::VmoRead => vmo_read(process, handle(a[0]), buffer(a[1], a[2]), a[3]),
+        NativeCall::VmoWrite => vmo_write(process, handle(a[0]), buffer(a[1], a[2]), a[3]),
         NativeCall::VmoGetSize => vmo_get_size(process, handle(a[0]), a[1]),
         NativeCall::ObjectWaitOne => object_wait_one(caller, handle(a[0]), a[1], a[2], a[3]),
         // A program makes this call through `dispatch_write_read`, which
@@ -473,7 +456,12 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         | NativeCall::LogControlCreate
         | NativeCall::JobForCgroup
         | NativeCall::ProcessGive
-        | NativeCall::PortFd => served(call, caller, &a),
+        | NativeCall::PortFd
+        | NativeCall::ChardevControlCreate
+        | NativeCall::ChardevReply
+        | NativeCall::ChardevCopyIn
+        | NativeCall::ChardevCopyOut
+        | NativeCall::ChardevFile => served(call, caller, &a),
         NativeCall::DevmgrStart => crate::discovery::devmgr::devmgr_start(caller, &a),
         NativeCall::AuditRead => audit_read(process, handle(a[0]), a[1], a[2], a[3], a[4]),
         NativeCall::ProcessBootstrap => process_bootstrap(process),

@@ -73,6 +73,48 @@ void nvos_pages_free(struct nvos_pages *);
 /* device.rs: the GPU, once nvrm attaches its handle. */
 NV_STATUS nvos_device_attach(NvU32 handle);
 NV_STATUS nvos_interrupt_start(NvU32 index, void (*handler)(void *), void *argument);
+
+/* The attached device, for nvrm's probe (device.rs's DeviceDesc). */
+#define NVOS_APERTURES 16
+#define NVOS_APERTURE_PREFETCHABLE 0x1
+struct nvos_device_desc {
+    NvU32 location;     /* segment 31:16, bus 15:8, devfn 7:0 */
+    NvU32 class_code;   /* base 23:16, subclass 15:8 */
+    NvU16 vendor;
+    NvU16 device;
+    NvU32 vectors;
+    NvU32 apertures;
+    NvU8 bar[NVOS_APERTURES];
+    NvU8 flags[NVOS_APERTURES];
+    NvU64 phys[NVOS_APERTURES];
+    NvU64 len[NVOS_APERTURES];
+};
+NV_STATUS nvos_device_describe(struct nvos_device_desc *out);
+
+/* thread.rs: a detached thread, for the chardev dispatcher's workers. */
+NvBool nvos_thread_spawn(void (*run)(void *), void *argument);
+
+/* chardev.rs: the request bridge to the kernel's chardev core (N1e). */
+struct nvos_request {
+    NvU64 id;
+    NvU64 file;
+    NvU32 op;           /* 1 open, 2 ioctl, 3 release */
+    NvU32 minor;
+    NvU32 pid;
+    NvU32 euid;
+    NvU32 egid;
+    NvU32 cmd;
+    NvU64 arg;
+};
+#define NVOS_REQUEST_OPEN    1
+#define NVOS_REQUEST_IOCTL   2
+#define NVOS_REQUEST_RELEASE 3
+NV_STATUS nvos_chardev_start(const NvU16 *minors, NvU32 count);
+NV_STATUS nvos_chardev_next(struct nvos_request *out);
+int nvos_chardev_reply(NvU64 id, int status, NvS64 value);
+int nvos_chardev_copy_in(NvU64 id, void *to, NvU64 from, NvU32 length);
+int nvos_chardev_copy_out(NvU64 id, NvU64 to, const void *from, NvU32 length);
+NvS64 nvos_chardev_file(NvU64 id, int fd);
 void nvos_isr_enter_leave(NvBool entering);
 
 /* client.rs: the client the calling thread serves a request for. */
@@ -84,9 +126,11 @@ typedef struct nvos_client {
     int (*copy_in)(void *context, void *to, NvU64 from, NvU32 length);
     int (*copy_out)(void *context, NvU64 to, const void *from, NvU32 length);
     void *context;
+    NvS64 (*resolve_fd)(void *context, int fd);
 } nvos_client_t;
 NvBool nvos_client_enter(const nvos_client_t *);
 void nvos_client_leave(void);
+NvS64 nvos_client_resolve_fd(int fd);
 
 /* os.rs and log.rs. */
 void *nvos_read_whole_file(const char *path, NvU64 *size);

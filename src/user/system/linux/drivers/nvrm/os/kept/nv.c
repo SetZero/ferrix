@@ -185,6 +185,35 @@ nv_linux_state_t *find_pci(NvU32 domain, NvU8 bus, NvU8 slot, NvU8 function)
     return nvl;
 }
 
+/*
+ * Ferrix: NVIDIA's nv_linux_add_device_locked, for nv-pci.c's probe. The
+ * GPU gets the next minor number and joins the list find_pci walks.
+ */
+void nv_linux_add_device(nv_linux_state_t *nvl)
+{
+    nv_linux_state_t *last;
+    NvU32 minor = 0;
+
+    LOCK_NV_LINUX_DEVICES();
+    nvl->next = NULL;
+    if (nv_linux_devices == NULL)
+    {
+        nv_linux_devices = nvl;
+    }
+    else
+    {
+        for (last = nv_linux_devices; ; last = last->next)
+        {
+            minor++;
+            if (last->next == NULL)
+                break;
+        }
+        last->next = nvl;
+    }
+    nvl->minor_num = minor;
+    UNLOCK_NV_LINUX_DEVICES();
+}
+
 /* ------------------------------------------------------------------------
  * Module start and stop. NVIDIA's nvidia_init_module, nv_module_init and
  * nv_module_state_init, less what needs a GPU or Linux: procfs, the
@@ -294,6 +323,70 @@ void nvrm_module_exit(void)
     nv_module_sp = NULL;
 }
 
+/* Whether a probed GPU has RM's id `gpu_id`. */
+static NvBool nv_gpu_id_known(NvU32 gpu_id)
+{
+    nv_linux_state_t *nvl;
+    NvBool found = NV_FALSE;
+
+    LOCK_NV_LINUX_DEVICES();
+    for (nvl = nv_linux_devices; nvl != NULL; nvl = nvl->next)
+    {
+        if (NV_STATE_PTR(nvl)->gpu_id == gpu_id)
+        {
+            found = NV_TRUE;
+            break;
+        }
+    }
+    UNLOCK_NV_LINUX_DEVICES();
+    return found;
+}
+
+/*
+ * The GPU's device file, /dev/nvidia<minor>. NVIDIA's nvidia_open, less the
+ * open-completion wait and nv_open_device's start: nvrm starts each GPU at
+ * probe (os/kept/nv-pci.c), so an open only finds it and takes a reference.
+ * NULL for a minor no GPU has.
+ */
+nv_linux_file_private_t *nvrm_open_gpu(NvU32 minor)
+{
+    nv_linux_state_t *nvl;
+    nv_linux_file_private_t *nvlfp;
+
+    LOCK_NV_LINUX_DEVICES();
+    for (nvl = nv_linux_devices; nvl != NULL; nvl = nvl->next)
+        if (nvl->minor_num == minor)
+            break;
+    UNLOCK_NV_LINUX_DEVICES();
+    if (nvl == NULL || !(NV_STATE_PTR(nvl)->flags & NV_FLAG_OPEN))
+        return NULL;
+
+    nvlfp = nv_alloc_file_private();
+    if (nvlfp == NULL)
+        return NULL;
+    if (nv_kmem_cache_alloc_stack(&nvlfp->sp) != 0)
+    {
+        nv_free_file_private(nvlfp);
+        return NULL;
+    }
+
+    nvos_sema_down(&nvl->ldata_lock);
+    nvlfp->nvptr = nvl;
+    atomic64_inc(&nvl->usage_count);
+    nvos_sema_up(&nvl->ldata_lock);
+
+    nvlfp->open_rc = 0;
+    nvlfp->adapter_status = NV_OK;
+
+    nvos_mutex_lock(&nv_open_files_lock);
+    nvlfp->fd = nv_next_fd++;
+    nvlfp->next_open = nv_open_files;
+    nv_open_files = nvlfp;
+    nvos_mutex_unlock(&nv_open_files_lock);
+
+    return nvlfp;
+}
+
 /* ------------------------------------------------------------------------
  * The control device. NVIDIA's nvidia_ctl_open and nvidia_ctl_close, with
  * the struct file replaced by the file identity nvrm hands out.
@@ -371,7 +464,9 @@ void nvrm_close(nv_linux_file_private_t *nvlfp)
     nv_forget_open_file(nvlfp);
 
     nvos_sema_down(&nvl->ldata_lock);
-    if (atomic64_dec_and_test(&nvl->usage_count))
+    /* A GPU stays started (and NV_FLAG_OPEN) for nvrm's life; the control
+     * device is open while any file of it is. */
+    if (atomic64_dec_and_test(&nvl->usage_count) && (nv->flags & NV_FLAG_CONTROL))
     {
         nv->flags &= ~NV_FLAG_OPEN;
     }
@@ -480,6 +575,10 @@ out:
     UNLOCK_NV_LINUX_DEVICES();
     return rc;
 }
+
+/* Ferrix: set to say each refused ioctl and each RM call that failed (N1e
+ * bring-up); off by default. */
+int nvrm_trace_ioctls = 0;
 
 int nvrm_ioctl(nv_linux_file_private_t *nvlfp, unsigned int cmd, void *i_arg)
 {
@@ -619,13 +718,14 @@ int nvrm_ioctl(nv_linux_file_private_t *nvlfp, unsigned int cmd, void *i_arg)
             }
 
             /*
-             * Ferrix: nvidia_dev_get() opens the GPU, which comes at N1d.
-             * Until then any GPU id but 0 is refused, as Linux refuses an
-             * id no probed GPU has.
+             * Ferrix: NVIDIA's nvidia_dev_get() looks each id up and opens
+             * its GPU. nvrm's GPUs are started at probe (os/kept/nv-pci.c),
+             * as a persistence-mode GPU is on Linux, so the lookup is all
+             * that is left: an id no probed GPU has is refused.
              */
             for (i = 0; i < num_arg_gpus; i++)
             {
-                if (((NvU32 *)arg_copy)[i] != 0)
+                if (!nv_gpu_id_known(((NvU32 *)arg_copy)[i]))
                 {
                     nvos_sema_up(&nvl->ldata_lock);
                     status = -EINVAL;
@@ -682,8 +782,35 @@ int nvrm_ioctl(nv_linux_file_private_t *nvlfp, unsigned int cmd, void *i_arg)
             break;
         }
 
-        case NV_ESC_QUERY_DEVICE_INTR:
         case NV_ESC_NUMA_INFO:
+        {
+            /* NVIDIA's, with NUMA never on: no GPU memory is onlined as a
+             * NUMA node on Ferrix. */
+            nv_ioctl_numa_info_t *api = arg_copy;
+
+            if ((nv->flags & NV_FLAG_CONTROL) != 0)
+            {
+                status = -EINVAL;
+                goto done;
+            }
+            if (arg_size != sizeof(nv_ioctl_numa_info_t))
+            {
+                status = -EINVAL;
+                goto done;
+            }
+            rmStatus = rm_get_gpu_numa_info(sp, nv, api);
+            if (rmStatus != NV_OK)
+            {
+                status = -EBUSY;
+                goto done;
+            }
+            api->status = NV_IOCTL_NUMA_STATUS_DISABLED;
+            api->use_auto_online = NV_FALSE;
+            api->memblock_size = nv_ctl_device.numa_memblock_size;
+            break;
+        }
+
+        case NV_ESC_QUERY_DEVICE_INTR:
         case NV_ESC_SET_NUMA_STATUS:
         case NV_ESC_EXPORT_TO_DMABUF_FD:
         {
@@ -696,6 +823,22 @@ int nvrm_ioctl(nv_linux_file_private_t *nvlfp, unsigned int cmd, void *i_arg)
             rmStatus = rm_ioctl(sp, nv, &nvlfp->nvfp, arg_cmd, arg_copy, arg_size);
             status = ((rmStatus == NV_OK) ? 0 : -EINVAL);
             break;
+    }
+
+    /*
+     * Ferrix (N1e bring-up): say each refused escape, and each RM call
+     * whose own status (NVOS21/NVOS54's last word) is not NV_OK, with its
+     * command or class.
+     */
+    if (nvrm_trace_ioctls && arg_copy != NULL)
+    {
+        const NvU32 *words = arg_copy;
+        NvU32 rm_status = (arg_size >= 32) ? words[7] : 0;
+        if (status != 0 || rm_status != 0)
+            nvrm_say("ioctl esc 0x%x size %zu on %s: rc %d, words 0x%x 0x%x 0x%x 0x%x, status 0x%x\n",
+                     arg_cmd, arg_size, (nv->flags & NV_FLAG_CONTROL) ? "ctl" : "gpu",
+                     status, (arg_size >= 16) ? words[0] : 0, (arg_size >= 16) ? words[1] : 0,
+                     (arg_size >= 16) ? words[2] : 0, (arg_size >= 16) ? words[3] : 0, rm_status);
     }
 
 done:
@@ -783,12 +926,22 @@ NV_STATUS NV_API_CALL nv_alloc_pages(
         return NV_ERR_NO_MEMORY;
     }
 
-    status = nvos_pages_alloc(page_count, NV_FALSE, addresses, &mapped, &at->pages);
+    /*
+     * Ferrix: a contiguous request asks ferrix-nvos for one run, which
+     * writes its first address only; each page's follows from it. The check
+     * below still holds the run to it.
+     */
+    status = nvos_pages_alloc(page_count, contiguous, addresses, &mapped, &at->pages);
     if (status != NV_OK)
     {
         free(addresses);
         nvos_free_alloc(at);
         return status;
+    }
+    if (contiguous)
+    {
+        for (i = 1; i < page_count; i++)
+            addresses[i] = addresses[0] + ((NvU64)i << PAGE_SHIFT);
     }
 
     for (i = 0; i < page_count; i++)
@@ -1262,6 +1415,14 @@ nv_file_private_t* NV_API_CALL nv_get_file_private(
 )
 {
     nv_linux_file_private_t *nvlfp;
+    /* Ferrix: the client's descriptor, resolved to the identity the kernel's
+     * chardev core gave the file (N1e), which nvrm's dispatcher made the
+     * file's fd; nvrm-link-test's descriptors are identities already. */
+    NvS64 identity = nvos_client_resolve_fd(fd);
+
+    if (identity < 0)
+        return NULL;
+    fd = (NvS32)identity;
 
     nvos_mutex_lock(&nv_open_files_lock);
     for (nvlfp = nv_open_files; nvlfp != NULL; nvlfp = nvlfp->next_open)
@@ -1287,6 +1448,19 @@ void NV_API_CALL nv_put_file_private(
 )
 {
     /* Nothing was referenced: files live until nvrm_close. */
+}
+
+/*
+ * NVIDIA's nv_is_gpu_accessible: whether the calling process has this GPU
+ * open. nvrm serves only requests on its own nodes, and a GPU's ioctls
+ * reach RM only through a file of /dev/nvidia<N>, so a GPU some file holds
+ * open is accessible to the request that reached it.
+ */
+NvBool NV_API_CALL nv_is_gpu_accessible(nv_state_t *nv)
+{
+    nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
+
+    return atomic64_read(&nvl->usage_count) != 0;
 }
 
 /* NVIDIA's nv_match_gpu_os_info: whether a file is this GPU's. */

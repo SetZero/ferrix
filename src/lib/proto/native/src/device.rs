@@ -350,6 +350,19 @@ impl<S: Syscall> Device<S> {
         self.ring(nr::SOUND_CONTROL_CREATE)
     }
 
+    /// Make the chardev control channel for this device and answer the
+    /// driver's end of it, which carries no `TRANSFER` or `DUPLICATE`
+    /// (`docs/NVIDIA.md` §4.4): HELLO on it lists the minors of major 195
+    /// the driver serves, and REQUESTs come back ([`crate::chardev`]).
+    ///
+    /// # Errors
+    ///
+    /// `ALREADY_BOUND` when the device has one, `ACCESS_DENIED` for a device
+    /// whose interrupts are not isolated, and whatever the call said.
+    pub fn chardev_control(&self) -> Result<Channel<S>, Error> {
+        self.ring(nr::CHARDEV_CONTROL_CREATE)
+    }
+
     /// Make a log control channel for this device and answer the driver's
     /// end of it: the kernel log, read with `ferrix_logctl`'s READ and
     /// answered with DATA from the oldest byte the log still keeps. The claim

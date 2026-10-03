@@ -29,6 +29,7 @@ use ferrix_native_abi::types::{
 
 use crate::call::{Raw, Syscall};
 use crate::channel::{self, Channel, ReadError, Received};
+use crate::chardev;
 use crate::device::{Device, Interrupt, IoMapping, Limit};
 use crate::error::{Error, decode, decode_handle};
 use crate::handle::{Deadline, Object, OwnedHandle, rights_register};
@@ -1123,6 +1124,11 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.render_control();
     let _ = device.input_control();
     let _ = device.sound_control();
+    let _ = device.chardev_control();
+    let _ = chardev::reply(&channel, 1, 0, 0);
+    let _ = chardev::copy_in(&channel, 1, 0, &mut []);
+    let _ = chardev::copy_out(&channel, 1, 0, &[]);
+    let _ = chardev::file(&channel, 1, 3);
     let _ = device.log_control();
     let _ = device.info();
     let _ = device.quiesce();

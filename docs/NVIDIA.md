@@ -765,10 +765,11 @@ certification consultant reviews each one before landing, as usual.
 `request_copy_*` and `request_pin` widen what a driver can do. A driver can
 now read and write a client's memory and pin it, but only for a request
 that client made to that driver's own device file, and only while the
-client waits. They are new findings to be argued in
-`docs/certification/FINDINGS.md`: the threat is a compromised `nvrm`
-reading a client of its own. Linux has the same exposure, because the RM
-there runs in ring 0.
+client waits. This is a designed exposure with a stated bound, not a defect,
+so it is argued in `docs/certification/VULNERABILITY-ANALYSIS.md` (V-10, and
+V-11 for the 0666 nodes' parser surface), not in FINDINGS: the threat is a
+compromised `nvrm` reading a client of its own. Linux has the same
+exposure, because the RM there runs in ring 0.
 
 **Tests.** The GPU is shared and is not in CI, so the gates are xtask
 commands run on nazuna:
@@ -1447,6 +1448,66 @@ and took the recommended answer for D2, D3 and D5.
     `usr/lib/ferrix/nvrm-core`, which xtask writes because it depends on
     `nvrm`'s build. After that comes the first boot on the 3060 and GSP
     boot.
+
+* **2026-10-03 — N1d: GSP boot on the RTX 3060** (branch `nvidia-n1d`).
+  Outside the item.
+  * **`cargo xtask run-nvidia`** (N0e) boots Ferrix in libvirt's
+    `ferrix-3060`. It refuses to start while a domain sharing the card runs
+    or while `01:00.0` is not on `vfio-pci`, and it needs the patched QEMU
+    at `/usr/local/lib/ferrix/qemu` (installed as root on 2026-10-03, with
+    three local AppArmor rules for that directory). The domain has VT-d
+    with `intremap='on'` on a split interrupt controller, the card behind a
+    root port, the three fixture disks and the NVIDIA volume as `vdd`, the
+    serial port over TCP, and the card's option ROM off: with a monitor on
+    the card, OVMF's GOP put a boot framebuffer in BAR1, which the kernel
+    keeps for its console and so withheld from `nvrm`. The boot's
+    self-checks are skipped there (`ferrix.checks=skip`; they are
+    `test-boot`'s evidence), since a timing check flakes at two vCPUs on a
+    loaded host. Each boot ends with the domain destroyed.
+  * **First boot**: `nvrm: device_isolation 0x3: interrupts isolated (bit 1),
+    DMA translated` for the card at guest `02:00.0` (F-57's first-boot
+    record), RM's core loaded from the volume, and `NV_PMC_BOOT_0`
+    `0xb76000a1`.
+  * **`os/kept/nv-pci.c`** keeps the subset of NVIDIA's `nv_pci_probe` and
+    `nv_start_device` that applies: the legacy check, BAR0, the state's
+    identity, the locks, `rm_is_supported_device`, `rm_init_private_state`,
+    the BARs placed by number, the firmware request, the device list, the
+    one MSI vector through `nvos_interrupt_start`, then `rm_init_adapter`.
+    `glue/dma.c` maps DMA as identity, since nvos pins each page at its own
+    physical address. **`rm_init_adapter` succeeds**: FWSEC, the booter and
+    GSP-RM run on the card.
+  * **Contiguous memory.** RM asks for physically contiguous system memory
+    (the booter's ucode, among others). Ferrix commits a VMO's pages one at
+    a time, so nvos retries a contiguous request until its pins follow each
+    other (interim; up to 8 attempts were seen). The kernel's
+    `PIN_CONTIGUOUS` replaces it (design OK IF, ledger 293, D1–D10 owed).
+
+* **2026-10-03 — N1e and N1f: `/dev/nvidia*`, and `nvidia-smi`** (branch
+  `nvidia-n1d`).
+  * **The chardev core** (`src/kernel/src/interfaces/chardev`, load ring;
+    design OK IF, ledger 294) forwards open, ioctl and release on major
+    195's nodes to `nvrm` undecoded, as §4.4 designs it.
+    `src/lib/proto/chardevctl` carries HELLO, READY and REQUEST, and the
+    kernel names the nodes. Five native calls, `0x105A` to `0x105E`: the
+    control, the reply, the two copies and `chardev_file`, the §4.4
+    `request_file`, which NVML's `NV_ESC_REGISTER_FD` needs. mmap and poll
+    are not forwarded yet.
+  * **`nvrm`** says HELLO with `nvidiactl` and `nvidia0` once the GPU has
+    started, and serves each ioctl on a thread of its own as the client
+    the request names (`glue/chardev.c`, `nvos/src/chardev.rs`).
+  * **`nvidia-smi` from the volume exits 0** and lists "NVIDIA GeForce RTX
+    3060", 12288 MiB, driver 580.173.02, CUDA 13.0; `nvidia-smi -L` gives
+    its UUID. This is N1's exit.
+  * **Landed ahead of its conditions**, as N0 did, at the customer's word
+    (the consultant's verdict, ledger 297): the item gains only the five
+    call numbers and their `SERVED` rows, and the core does nothing on any
+    image but `run-nvidia`'s. A reply arriving while a copy is in flight
+    was found in that review and fixed before landing: the program's call
+    returns only once no copy for it is running (L1). **Owed** before N2
+    lands, or before `nvrm` goes into any other image (BACKLOG): ledger
+    294's N10, N12, N13 (plus a control for L1) and N15's remainder, N5's
+    switch when fault windows land, ledger 293's D1–D10, and a
+    `test-nvidia-smi` gate.
 
 ## 11. CUDA (N5)
 

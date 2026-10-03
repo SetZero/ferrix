@@ -40,6 +40,7 @@
 
 pub mod call;
 pub mod channel;
+pub mod chardev;
 pub mod device;
 pub mod error;
 pub mod handle;
