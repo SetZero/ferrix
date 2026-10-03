@@ -71,7 +71,8 @@ for after Steam runs.
 
 * **The source** is a fork of yserver under the customer's GitHub account
   (decision 1, §8), branched from the 1.6.0 tag (`0d00e81`) and pinned by
-  commit. Ferrix's changes are commits on the fork, starting with
+  commit; upstream's `master` was merged into it on 2026-10-03 (`3875be0`,
+  86 commits past 1.6.0). Ferrix's changes are commits on the fork, starting with
   `YSERVER_ALLOW_NO_INPUT`, and the Wayland backend is added there.
   `tools/common/fetch/fetch-yserver.sh` fetches the pinned commit and builds it,
   and writes the commit beside the volume's image. `cargo xtask` refuses an
