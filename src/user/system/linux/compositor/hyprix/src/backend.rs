@@ -194,6 +194,8 @@ pub struct Headless {
     height: u32,
     bytes: Vec<u8>,
     frames: u32,
+    /// How many more frames it refuses to show.
+    refusing: u32,
 }
 
 impl Headless {
@@ -206,7 +208,16 @@ impl Headless {
             height,
             bytes,
             frames: 0,
+            refusing: 0,
         }
+    }
+
+    /// The same screen, refusing its first `frames` frames as a card whose
+    /// driver did not answer in time does.
+    #[must_use]
+    pub const fn refusing(mut self, frames: u32) -> Self {
+        self.refusing = frames;
+        self
     }
 
     /// How many frames have been shown.
@@ -234,6 +245,13 @@ impl Backend for Headless {
     }
 
     fn present(&mut self, _drawn: &compositor_render::Damage) -> io::Result<()> {
+        if self.refusing > 0 {
+            self.refusing -= 1;
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the card did not answer in time",
+            ));
+        }
         self.frames = self.frames.saturating_add(1);
         Ok(())
     }

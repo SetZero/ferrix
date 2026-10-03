@@ -451,7 +451,9 @@ impl<'r> Compositor<'r> {
             report(&format!("hyprix: monitor = {value}: {why}"));
         }
         let backends: Vec<Box<dyn Backend>> = match options.headless {
-            Some((width, height)) => vec![Box::new(Headless::new(width, height))],
+            Some((width, height)) => vec![Box::new(
+                Headless::new(width, height).refusing(options.refuse_flips),
+            )],
             None => open_screens(&rules)?,
         };
         let screens = Screen::all(backends, &rules, options.renderer, report)?;
@@ -2532,6 +2534,8 @@ struct Screen {
     plane: crate::plane::Plane,
     /// Whether its card's going has been said since it last came back.
     said_gone: bool,
+    /// Whether a dropped frame has been said since it last showed one.
+    said_dropped: bool,
 }
 
 impl Screen {
@@ -2544,6 +2548,25 @@ impl Screen {
             ));
             self.said_gone = true;
         }
+    }
+
+    /// Give up the frame the card could not draw or show, for `why`.
+    ///
+    /// A driver that answers late -- a host too busy to run the GPU for the
+    /// kernel's five seconds -- is not one that has gone, and the clients
+    /// are still good: on 2026-10-03 one such stall ended the compositor,
+    /// and every window went with it. What the card missed is drawn again,
+    /// so the watch forgets what it saw and the next frame is a whole one.
+    /// Said once a stall, not once a frame.
+    fn drop_frame(&mut self, why: &str, report: &mut dyn FnMut(&str)) {
+        if !self.said_dropped {
+            report(&format!(
+                "hyprix: {}: dropped a frame: {why}; drawing the whole next one",
+                self.name
+            ));
+            self.said_dropped = true;
+        }
+        self.watch = crate::damage::Watch::default();
     }
 
     /// Put the frame where a reader of this screen's pixels will find it.
@@ -2657,6 +2680,7 @@ impl Screen {
                 watch: crate::damage::Watch::default(),
                 plane: crate::plane::Plane::default(),
                 said_gone: false,
+                said_dropped: false,
             });
         }
         if screens.is_empty() {

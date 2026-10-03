@@ -186,9 +186,18 @@ impl Compositor<'_> {
         // on VNC a read of the whole screen back. Clients told their frame
         // was done before it draw their next one meanwhile; told after it,
         // a video's frames missed one compositor frame in three.
+        // A card that refused or timed out is a frame lost, not a screen:
+        // a driver that has gone is the backend's to find, and one that is
+        // only slow answers the next frame.
         for (which, damage) in std::mem::take(&mut drew.flips) {
             if let Some(screen) = self.screens.get_mut(which) {
-                crate::frame::flip(screen.backend.as_mut(), &damage)?;
+                match crate::frame::flip(screen.backend.as_mut(), &damage) {
+                    Ok(()) => screen.said_dropped = false,
+                    Err(why) => {
+                        screen.drop_frame(&why, self.report);
+                        self.owed = true;
+                    }
+                }
             }
         }
         self.count_frame(began.elapsed(), &drew);
@@ -556,7 +565,12 @@ impl Compositor<'_> {
                 screen.watch = crate::damage::Watch::default();
                 self.owed = true;
             }
-            Err(why) => return Err(why),
+            // Anything else this frame could not draw is the frame's, and
+            // the next is drawn whole, as after a flip the card refused.
+            Err(why) => {
+                screen.drop_frame(&why, self.report);
+                self.owed = true;
+            }
         }
         Ok(())
     }

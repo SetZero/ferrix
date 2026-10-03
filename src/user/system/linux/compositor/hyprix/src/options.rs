@@ -27,6 +27,10 @@ pub struct Options {
     pub instance: Option<String>,
     /// What draws the frame.
     pub renderer: Renderer,
+    /// How many of its first frames a headless screen refuses to show, as
+    /// a card whose driver timed out does: what a test of the compositor
+    /// riding a stalled driver out asks for. Not a command-line option.
+    pub refuse_flips: u32,
 }
 
 /// What draws the frame: `--renderer`.
@@ -58,6 +62,7 @@ impl Default for Options {
             deadline: None,
             instance: None,
             renderer: Renderer::Auto,
+            refuse_flips: 0,
         }
     }
 }

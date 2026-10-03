@@ -127,6 +127,18 @@ fn run_configured(
     renderer: Renderer,
     lines: &str,
 ) -> Result<(Vec<u8>, String), String> {
+    run_refusing(name, patterns, renderer, lines, 0)
+}
+
+/// The same, on a screen that refuses its first `refused` frames as a card
+/// whose driver timed out does.
+fn run_refusing(
+    name: &str,
+    patterns: &[(Pattern, &str, Shape)],
+    renderer: Renderer,
+    lines: &str,
+    refused: u32,
+) -> Result<(Vec<u8>, String), String> {
     let work = workspace(name);
     let socket = work.join("wayland");
     let frames = work.join("frames");
@@ -144,6 +156,7 @@ fn run_configured(
         deadline: Some(8000),
         config: Some(config),
         renderer,
+        refuse_flips: refused,
         ..Options::default()
     };
 
@@ -384,6 +397,30 @@ fn two_clients_are_tiled_and_drawn_exactly_as_the_renderer_says() {
 /// real clients' buffers named by their connection, moved as textures under
 /// each frame's damage over a run of frames, fetched back for the screen and
 /// dumped where a screenshot would read them.
+/// A card that does not answer in time loses frames, not the desktop: on
+/// 2026-10-03 a host too busy to run the GPU for five seconds made a flip
+/// time out, the compositor ended on it, and every window went with it.
+/// Here the screen refuses the first frames, and the two clients are still
+/// drawn, exactly, once it answers again.
+#[test]
+fn a_card_that_times_out_drops_frames_and_keeps_the_clients() {
+    let patterns = [
+        (Pattern::Checkerboard, "one", Shape::Window),
+        (Pattern::Gradient, "two", Shape::Window),
+    ];
+    let (frame, report) = run_refusing("refused", &patterns, Renderer::Software, "", 5)
+        .expect("the compositor rode the refused frames out");
+    assert!(
+        report.contains("most 2") && !report.contains("failed"),
+        "both clients should have kept their windows: {report}"
+    );
+    let (differing, first) = compare(&frame, &expected());
+    assert_eq!(
+        differing, 0,
+        "the frame after the refused ones is not the whole one; first difference {first:?}"
+    );
+}
+
 #[test]
 fn the_same_frame_is_drawn_on_a_gpu() {
     let shaped = [

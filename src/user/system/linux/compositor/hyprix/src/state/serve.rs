@@ -586,11 +586,16 @@ impl Compositor<'_> {
             Event::ToplevelCreated { toplevel, .. } => {
                 let window = WindowId(u64::from(self.next_window));
                 self.next_window = self.next_window.saturating_add(1);
-                slot.windows.push((toplevel, window));
-                let _ = self
-                    .state
-                    .open_window(window)
-                    .map_err(|error| format!("placing a window: {error:?}"))?;
+                // A window with nowhere to go -- no monitor while a card
+                // is coming back -- is that window's trouble, not every
+                // other client's: it stays out of the layout, and its
+                // client goes on.
+                match self.state.open_window(window) {
+                    Ok(_) => slot.windows.push((toplevel, window)),
+                    Err(error) => (self.report)(&format!(
+                        "hyprix: a client's window could not be placed: {error:?}"
+                    )),
+                }
                 effects.changed = true;
             }
             Event::SurfaceCommitted { surface, change } => {
