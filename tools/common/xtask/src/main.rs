@@ -79,6 +79,7 @@ mod cargo;
 mod check;
 mod chrome;
 mod claude_code;
+mod components;
 // A Unix socket is the clipboard port's far end.
 #[cfg(unix)]
 mod clipboard;
@@ -218,7 +219,7 @@ COMMANDS:
     test-kaslr    Boot the image twice and require the loader to have put the kernel somewhere new
     test-shell    Boot with a static busybox built in and require its script's output; again with it
                   started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
-    test-apps     Boot once with every app in src/user/apps that has [[smoke]] checks, and require each
+    test-apps     Boot once with every app (src/user/apps, ferrousli/apps) that has [[smoke]] checks, and require each
                   check's line
     test-pkg      Boot with pkg, the package manager, and require it to install, run and remove the stat
                   service, and to refuse a changed package, a missing dependency and a needed removal
@@ -328,11 +329,13 @@ COMMANDS:
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     uutils        Build uutils/coreutils against ferrousli (x86_64), the utilities replacing busybox's
     ports         Build the libraries ported onto ferrousli that apps build against (x86_64: libcxx, zlib; Arm: zlib); the ported programs are apps
-    apps          List the apps in src/user/apps, each checked against its app.toml (docs/APPS.md)
+    apps          List the apps in src/user/apps and ferrousli/apps, each checked against its app.toml (docs/APPS.md)
     check-apps    check's steps for the apps alone: each app's formatting, clippy, tests and folder
     build-apps    Build every app's package, or --app's, for --arch: scripts too, which run and
                   run-compositor never start, and take the last of
     new-app       Write a new app's folder: --app NAME, --abi native (the default) or linux
+    components    The parts of the tree in repositories of their own (components.toml): each checkout against its pin
+    pin-components  Pin every clean component checkout that moved past its pin, once its commit is pushed
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
@@ -558,6 +561,21 @@ fn builds_execute(args: &Args) -> Result<()> {
     builds::execute(std::path::Path::new(plan)).map(|_| ())
 }
 
+/// The command `args` name, with the parts of the tree that live in
+/// repositories of their own at their pins first: before anything reaches
+/// for them, and before `--arch all` starts children that would each clone
+/// them (`crate::components`).
+fn command_of(args: &Args) -> Result<&str> {
+    let Some(command) = args.command.as_deref() else {
+        println!("{USAGE}");
+        return Err(Error::new("no command given"));
+    };
+    if !matches!(command, "components" | "pin-components") {
+        components::ensure()?;
+    }
+    Ok(command)
+}
+
 fn run() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1))?;
     // Every kernel and image this run builds, whichever command builds it:
@@ -570,10 +588,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let Some(command) = args.command.as_deref() else {
-        println!("{USAGE}");
-        return Err(Error::new("no command given"));
-    };
+    let command = command_of(&args)?;
 
     // `--arch all` of a command whose architectures are independent: one
     // child an architecture, all at once (`crate::parallel`).

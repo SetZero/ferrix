@@ -1,0 +1,29 @@
+# The parts of the tree that live in repositories of their own: where each is
+# checked out, where it comes from, and the commit this tree is tested with.
+# A section without a `commit` is still part of this repository.
+#
+# Every `cargo xtask` command clones a missing component and moves a clean
+# checkout that is behind its pin; `cargo xtask components` shows each one,
+# and `cargo xtask pin-components` records a pushed commit here. See
+# tools/common/xtask/src/components.rs.
+
+# The C library Linux programs are built against, and the programs ported
+# onto it (its apps/).
+[ferrousli]
+path = "src/user/system/linux/ferrousli"
+repo = "https://github.com/ferrix-os/ferrousli"
+
+# The shell.
+[zinc]
+path = "src/user/system/linux/zinc"
+repo = "https://github.com/ferrix-os/zinc"
+
+# The Pixel 7's desktop build, release packaging, monitor and Android app.
+[pixel7]
+path = "tools/vendor/google/pixel7"
+repo = "https://github.com/ferrix-os/pixel7"
+
+# The website, served at https://ferrix-os.github.io/.
+[website]
+path = "docs/website"
+repo = "https://github.com/ferrix-os/ferrix-os.github.io"

@@ -1,0 +1,519 @@
+//! The parts of the tree that live in repositories of their own.
+//!
+//! `components.toml` at the root names each one: the path it is checked out
+//! at, the repository, and the commit this tree is built and gated with. The
+//! path is the one the component had when it was part of this repository, so
+//! nothing that reaches it -- a Makefile's `../../ferrousli`, an app's
+//! `build.sh`, the code below -- has to know it moved. It is the arrangement
+//! seL4's `repo` manifests and Fuchsia's `jiri` have, for the reason they have
+//! it: the component's own history and review, and one commit here saying
+//! which of its commits everything else was tested against.
+//!
+//! A component without a `commit` is still in this tree, at its path, and
+//! there is nothing to fetch.
+//!
+//! Every command checks first that each pinned component is there, and
+//! clones the missing ones ([`ensure`]), so a fresh clone or worktree builds
+//! with no extra step. The clone borrows its objects from a mirror under
+//! `~/.local/share/ferrix/components` (or `$FERRIX_COMPONENTS`), which makes
+//! a checkout in a new worktree a matter of seconds. A checkout that is
+//! that is clean and behind its pin is moved to it; one with work of its own
+//! -- other commits, or uncommitted changes -- is used as it is and never
+//! moved. `cargo xtask components` says which each one is, and
+//! `pin-components` writes the commit of every clean checkout that moved
+//! past its pin back to the manifest.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use crate::paths::workspace_root;
+use crate::{Error, Result};
+
+/// The manifest, at the root of the tree.
+pub(crate) const MANIFEST: &str = "components.toml";
+
+/// One component, as the manifest describes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Component {
+    /// The `[section]` name.
+    pub(crate) name: String,
+    /// Where it is checked out, relative to the root.
+    pub(crate) path: String,
+    /// Where it is fetched from.
+    pub(crate) repo: String,
+    /// The commit this tree is tested against; `None` while it is still part
+    /// of this repository.
+    pub(crate) commit: Option<String>,
+}
+
+/// What a checkout is, against its pin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum State {
+    /// Still part of this repository.
+    InTree,
+    /// Not checked out.
+    Missing,
+    /// At the pinned commit.
+    AtPin,
+    /// At an ancestor of the pin, with nothing of its own uncommitted.
+    Behind(String),
+    /// Anywhere else, or with uncommitted changes: somebody's work, used as
+    /// it is and never moved.
+    Own {
+        /// Its `HEAD`.
+        head: String,
+        /// Whether `git status` shows changes.
+        dirty: bool,
+    },
+}
+
+/// Read a manifest's text.
+///
+/// The format is the subset of TOML the manifest needs: `[name]` sections
+/// holding `path`, `repo` and an optional `commit`, each a double-quoted
+/// string, and `#` comments. Anything else is an error rather than ignored,
+/// so a typo cannot quietly unpin a component.
+///
+/// # Errors
+///
+/// On a line outside that subset, a key outside a section, a section
+/// without `path` or `repo`, or a name or path given twice.
+pub(crate) fn parse(text: &str) -> Result<Vec<Component>> {
+    let mut components: Vec<Component> = Vec::new();
+    for (number, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        let at = || format!("{MANIFEST}:{}", number + 1);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            let name = name.trim();
+            if name.is_empty() || components.iter().any(|known| known.name == name) {
+                return Err(Error::new(format!(
+                    "{}: `[{name}]` is empty or given twice",
+                    at()
+                )));
+            }
+            components.push(Component {
+                name: name.to_owned(),
+                ..Component::default()
+            });
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(Error::new(format!("{}: expected `key = \"value\"`", at())));
+        };
+        let value = value
+            .trim()
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+            .filter(|value| !value.contains('"'))
+            .ok_or_else(|| Error::new(format!("{}: the value is not one quoted string", at())))?;
+        let Some(component) = components.last_mut() else {
+            return Err(Error::new(format!(
+                "{}: `{}` comes before any [section]",
+                at(),
+                key.trim()
+            )));
+        };
+        match key.trim() {
+            "path" => value.clone_into(&mut component.path),
+            "repo" => value.clone_into(&mut component.repo),
+            "commit" => component.commit = Some(value.to_owned()),
+            other => return Err(Error::new(format!("{}: unknown key `{other}`", at()))),
+        }
+    }
+    for (index, component) in components.iter().enumerate() {
+        if component.path.is_empty() || component.repo.is_empty() {
+            return Err(Error::new(format!(
+                "{MANIFEST}: [{}] needs both `path` and `repo`",
+                component.name
+            )));
+        }
+        if let Some(commit) = &component.commit
+            && (commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(Error::new(format!(
+                "{MANIFEST}: [{}] commit `{commit}` is not a full 40-digit hash",
+                component.name
+            )));
+        }
+        if components
+            .iter()
+            .take(index)
+            .any(|other| other.path == component.path)
+        {
+            return Err(Error::new(format!(
+                "{MANIFEST}: [{}] is checked out where another component is",
+                component.name
+            )));
+        }
+    }
+    Ok(components)
+}
+
+/// The tree's manifest; no components when there is none.
+///
+/// # Errors
+///
+/// When it is there and cannot be read or parsed.
+pub(crate) fn manifest() -> Result<Vec<Component>> {
+    let path = workspace_root().join(MANIFEST);
+    match fs::read_to_string(&path) {
+        Ok(text) => parse(&text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(Error::new(format!("{}: {error}", path.display()))),
+    }
+}
+
+/// Where a component is checked out.
+pub(crate) fn checkout(component: &Component) -> PathBuf {
+    workspace_root().join(&component.path)
+}
+
+/// Bring every pinned component to its pin: clone the missing ones and
+/// move the clean ones that are behind it. A checkout with work of its own is
+/// left as it is.
+///
+/// # Errors
+///
+/// When the manifest is unreadable, or a clone or checkout fails.
+pub(crate) fn ensure() -> Result<()> {
+    sync(&manifest()?)
+}
+
+/// `cargo xtask components` and `pin-components`.
+///
+/// # Errors
+///
+/// When the manifest cannot be read, or a git command fails.
+pub(crate) fn command(command: &str) -> Result<()> {
+    let components = manifest()?;
+    if components.is_empty() {
+        println!("no {MANIFEST}, or no components in it");
+        return Ok(());
+    }
+    if command == "pin-components" {
+        pin(&components)?;
+    }
+    for component in manifest()? {
+        println!(
+            "{:<12} {:<44} {}",
+            component.name,
+            component.path,
+            describe(&state(&component)?)
+        );
+    }
+    Ok(())
+}
+
+/// One line about a state, for `cargo xtask components`.
+fn describe(state: &State) -> String {
+    match state {
+        State::InTree => "in this tree".to_owned(),
+        State::Missing => "not checked out (any command clones it)".to_owned(),
+        State::AtPin => "at the pin".to_owned(),
+        State::Behind(head) => format!("behind the pin, at {} (any command moves it)", short(head)),
+        State::Own { head, dirty } => format!(
+            "at {}{}: somebody's work, used as it is",
+            short(head),
+            if *dirty {
+                " with uncommitted changes"
+            } else {
+                ", not the pin"
+            }
+        ),
+    }
+}
+
+/// The first twelve digits of a hash.
+fn short(commit: &str) -> &str {
+    commit.get(..12).unwrap_or(commit)
+}
+
+/// What a component's checkout is, against its pin.
+///
+/// # Errors
+///
+/// When git cannot read a checkout that is there.
+pub(crate) fn state(component: &Component) -> Result<State> {
+    let Some(pin) = &component.commit else {
+        return Ok(State::InTree);
+    };
+    let dir = checkout(component);
+    if !dir.exists() {
+        return Ok(State::Missing);
+    }
+    let head = git(&dir, &["rev-parse", "HEAD"])?;
+    let dirty = !git(&dir, &["status", "--porcelain"])?.is_empty();
+    if !dirty && head != *pin && !has_commit(&dir, pin) {
+        // A pin moved past what this checkout has fetched: fetch, so that a
+        // checkout that is only behind is not taken for somebody's work.
+        let _ = git(&dir, &["fetch", "--quiet", "origin"])?;
+    }
+    if !dirty && head == *pin {
+        return Ok(State::AtPin);
+    }
+    if !dirty && is_ancestor(&dir, &head, pin) {
+        return Ok(State::Behind(head));
+    }
+    Ok(State::Own { head, dirty })
+}
+
+/// Move every checkout that is behind its pin, or missing, to the pin.
+fn sync(components: &[Component]) -> Result<()> {
+    for component in components {
+        match state(component)? {
+            State::Missing => fetch(component)?,
+            State::Behind(_) => {
+                let pin = component.commit.as_deref().unwrap_or_default();
+                println!("components: moving {} to {}", component.name, short(pin));
+                let _ = git(
+                    &checkout(component),
+                    &["checkout", "--quiet", "--detach", pin],
+                )?;
+            }
+            State::InTree | State::AtPin | State::Own { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+/// Write the commit of every clean checkout that is past its pin to the
+/// manifest, as long as its repository has that commit: a pin nobody else
+/// can fetch would break every other checkout of this tree.
+fn pin(components: &[Component]) -> Result<()> {
+    let path = workspace_root().join(MANIFEST);
+    let mut text = fs::read_to_string(&path)
+        .map_err(|error| Error::new(format!("{}: {error}", path.display())))?;
+    for component in components {
+        let State::Own { head, dirty: false } = state(component)? else {
+            continue;
+        };
+        let pin = component.commit.as_deref().unwrap_or_default();
+        let dir = checkout(component);
+        let _ = git(&dir, &["fetch", "--quiet", "origin"])?;
+        if git(&dir, &["branch", "--remotes", "--contains", &head])?.is_empty() {
+            return Err(Error::new(format!(
+                "{}: {} is on no branch of {}; push it before pinning it",
+                component.name,
+                short(&head),
+                component.repo
+            )));
+        }
+        text = repin(&text, &component.name, pin, &head)?;
+        println!(
+            "{}: pinned {} (was {})",
+            component.name,
+            short(&head),
+            short(pin)
+        );
+    }
+    fs::write(&path, text).map_err(|error| Error::new(format!("{}: {error}", path.display())))
+}
+
+/// The manifest's text with one component's commit replaced, the rest of it
+/// -- comments, order, spacing -- as it was.
+fn repin(text: &str, name: &str, old: &str, new: &str) -> Result<String> {
+    let mut section = String::new();
+    let mut done = false;
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(inner) = trimmed
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            inner.trim().clone_into(&mut section);
+        }
+        if section == name && trimmed.starts_with("commit") && trimmed.contains(old) && !done {
+            lines.push(line.replacen(old, new, 1));
+            done = true;
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    if !done {
+        return Err(Error::new(format!(
+            "{MANIFEST}: no commit line in [{name}] to replace"
+        )));
+    }
+    let mut joined = lines.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    Ok(joined)
+}
+
+/// Clone a component at its pin, borrowing objects from the mirror.
+fn fetch(component: &Component) -> Result<()> {
+    let pin = component.commit.as_deref().unwrap_or_default();
+    let dir = checkout(component);
+    let mirror = mirror(component)?;
+    println!(
+        "components: cloning {} at {} into {}",
+        component.name,
+        short(pin),
+        component.path
+    );
+    let parent = dir.parent().unwrap_or(&dir);
+    fs::create_dir_all(parent)
+        .map_err(|error| Error::new(format!("{}: {error}", parent.display())))?;
+    let reference = mirror.to_string_lossy().into_owned();
+    let target = dir.to_string_lossy().into_owned();
+    let _ = git(
+        parent,
+        &[
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            "--reference",
+            &reference,
+            &component.repo,
+            &target,
+        ],
+    )?;
+    if !has_commit(&dir, pin) {
+        let _ = git(&dir, &["fetch", "--quiet", "origin", pin])?;
+    }
+    let _ = git(&dir, &["checkout", "--quiet", "--detach", pin])?;
+    Ok(())
+}
+
+/// The bare mirror a component's clones borrow from, made or brought up to
+/// date with the pin.
+fn mirror(component: &Component) -> Result<PathBuf> {
+    let root = match std::env::var_os("FERRIX_COMPONENTS") {
+        Some(dir) => PathBuf::from(dir),
+        None => std::env::home_dir()
+            .ok_or_else(|| Error::new("no home directory for the components' mirrors"))?
+            .join(".local/share/ferrix/components"),
+    };
+    let mirror = root.join(format!("{}.git", component.name));
+    let pin = component.commit.as_deref().unwrap_or_default();
+    if !mirror.exists() {
+        fs::create_dir_all(&root)
+            .map_err(|error| Error::new(format!("{}: {error}", root.display())))?;
+        let target = mirror.to_string_lossy().into_owned();
+        let _ = git(
+            &root,
+            &["clone", "--quiet", "--mirror", &component.repo, &target],
+        )?;
+    } else if !has_commit(&mirror, pin) {
+        let _ = git(&mirror, &["fetch", "--quiet", "--prune", "origin"])?;
+    }
+    Ok(mirror)
+}
+
+/// Whether a repository has a commit.
+fn has_commit(dir: &Path, commit: &str) -> bool {
+    git(dir, &["cat-file", "-e", &format!("{commit}^{{commit}}")]).is_ok()
+}
+
+/// Whether `ancestor` is `descendant` or behind it.
+fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> bool {
+    has_commit(dir, descendant)
+        && Command::new("git")
+            .current_dir(dir)
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+}
+
+/// `git` in `dir`, its output trimmed.
+fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| {
+            Error::new(format!("`git {}` would not start: {error}", args.join(" ")))
+        })?;
+    if !output.status.success() {
+        return Err(Error::new(format!(
+            "`git {}` in {} failed\n  {}",
+            args.join(" "),
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PIN: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn reads_sections_and_comments() {
+        let text = format!(
+            "# the libc\n[ferrousli]\npath = \"src/a\"\nrepo = \"https://x/a\"\ncommit = \"{PIN}\"\n\n[zinc]\npath = \"src/b\"\nrepo = \"https://x/b\"\n"
+        );
+        let components = parse(&text).unwrap();
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].commit.as_deref(), Some(PIN));
+        assert_eq!(components[1].commit, None, "no commit: still in this tree");
+        assert_eq!(components[1].path, "src/b");
+    }
+
+    #[test]
+    fn refuses_what_could_quietly_unpin() {
+        let base = "[a]\npath = \"p\"\nrepo = \"r\"\n";
+        for (bad, why) in [
+            (format!("{base}comit = \"{PIN}\"\n"), "unknown key"),
+            (format!("{base}commit = {PIN}\n"), "unquoted"),
+            (
+                format!("{base}commit = \"{}\"\n", PIN.get(..12).unwrap_or_default()),
+                "short hash",
+            ),
+            ("path = \"p\"\n".to_owned(), "key before a section"),
+            ("[a]\npath = \"p\"\n".to_owned(), "no repo"),
+            (
+                format!("{base}[a]\npath = \"q\"\nrepo = \"r\"\n"),
+                "name twice",
+            ),
+            (
+                format!("{base}[b]\npath = \"p\"\nrepo = \"r\"\n"),
+                "path twice",
+            ),
+        ] {
+            assert!(parse(&bad).is_err(), "{why} was accepted");
+        }
+    }
+
+    #[test]
+    fn repin_changes_only_its_own_section() {
+        let other = "fedcba9876543210fedcba9876543210fedcba98";
+        let text = format!(
+            "# keep\n[a]\npath = \"p\"\nrepo = \"r\"\ncommit = \"{PIN}\"\n[b]\npath = \"q\"\nrepo = \"r\"\ncommit = \"{PIN}\"\n"
+        );
+        let out = repin(&text, "b", PIN, other).unwrap();
+        let parsed = parse(&out).unwrap();
+        assert_eq!(parsed[0].commit.as_deref(), Some(PIN));
+        assert_eq!(parsed[1].commit.as_deref(), Some(other));
+        assert!(out.starts_with("# keep\n") && out.ends_with('\n'));
+        assert!(repin(&text, "c", PIN, other).is_err());
+    }
+
+    #[test]
+    fn the_trees_own_manifest_parses() {
+        let components = manifest().unwrap();
+        for component in &components {
+            assert!(
+                !component.path.starts_with('/') && !component.path.contains(".."),
+                "[{}] is checked out outside the tree",
+                component.name
+            );
+        }
+    }
+}

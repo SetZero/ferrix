@@ -143,7 +143,8 @@ An app never has to grow the SDK to make a system call.
 
 1. **An app changes only its folder.** Adding one is adding a folder;
    deleting the folder removes it. `cargo xtask check` fails when a file
-   outside `src/user/apps/<name>/` names that path.
+   outside the app's folder names that path -- in this tree, and for a
+   program ported onto ferrousli also in ferrousli's repository.
 2. **No `asm!` in an app.** The assembly allow-list and the unsafe and panic
    audits are the system's, and they never learn an app's name. An app's
    `unsafe` is its system calls, each with a `SAFETY:` comment, which the
@@ -158,8 +159,13 @@ An app never has to grow the SDK to make a system call.
 
 ## 5. What xtask does, by discovery
 
-`tools/common/xtask/src/apps.rs` reads `src/user/apps/*/app.toml`, and nothing
-in xtask names an app's folder. A system test that boots a program an app
+`tools/common/xtask/src/apps.rs` reads `src/user/apps/*/app.toml` and
+`src/user/system/linux/ferrousli/apps/*/app.toml`, and nothing in xtask names
+an app's folder. The second place holds the programs ported onto ferrousli
+(alsa-lib, alsa-utils, btop, curl, foot, git, sshdt, vkgears) and statd:
+they build with ferrousli's `tools/ports/`, so they live in its repository
+(`components.toml`; the customer's decision of 2026-10-03).
+A system test that boots a program an app
 is asks for the app by name (`apps::taken`): test-net's curl and git,
 test-audio's ALSA, test-foot's foot, test-vkgears' vkgears, test-init's
 sshdt, test-badapple's player.

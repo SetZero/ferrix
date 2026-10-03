@@ -34,8 +34,8 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # ferrousli's port toolkit: pinned downloads, the release library, and the
 # compilers that build against it. It reads `--arch <name>` first.
 set -- --arch "$1"
-# shellcheck source=../../system/linux/ferrousli/tools/ports/common.sh
-. "$here/../../system/linux/ferrousli/tools/ports/common.sh"
+# shellcheck source=../../tools/ports/common.sh
+. "$here/../../tools/ports/common.sh"
 # One build of curl at a time: every checkout's shares its work directory.
 lock_port curl
 

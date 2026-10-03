@@ -26,6 +26,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "check-apps",
     "check-docs",
     "gate-rows",
+    "components",
+    "pin-components",
 ];
 
 /// `check`, or one of its steps run alone, by the command's name.
@@ -41,6 +43,7 @@ pub(crate) fn command(name: &str, args: &Args) -> Result<()> {
         "check-apps" => apps(),
         "check-docs" => docs(),
         "gate-rows" => crate::gate_rows::run(args),
+        "components" | "pin-components" => crate::components::command(name),
         _ => run(args),
     }
 }
@@ -676,7 +679,7 @@ fn userland(root: &std::path::Path) -> Result<()> {
     media(root)
 }
 
-/// The gates of every app under `src/user/apps/`, found by their manifests
+/// The gates of every app under `src/user/apps/` and ferrousli's `apps/`, found by their manifests
 /// (`docs/APPS.md` §5): nothing here names one. Each is a workspace of its
 /// own, so the host steps above never reach it.
 fn apps() -> Result<()> {

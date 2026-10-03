@@ -1,7 +1,8 @@
-//! Apps: optional programs, each a folder of its own under `src/user/apps/`
-//! (`docs/APPS.md`).
+//! Apps: optional programs, each a folder of its own under `src/user/apps/`,
+//! or, for a program ported onto ferrousli and built with its ports, under
+//! ferrousli's `apps/` (`docs/APPS.md`).
 //!
-//! Nothing here names an app. Every folder in [`PLACE`] is one, described by
+//! Nothing here names an app. Every folder in [`PLACES`] is one, described by
 //! its `app.toml`, which `ferrix-pkg` reads; this module builds each into a
 //! package, installs packages into the images a person runs, gates each in
 //! `check`, and boots them all once in `test-apps`. Adding an app is adding a
@@ -25,8 +26,18 @@ use crate::args::Args;
 use crate::paths::{self, Arch};
 use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, shell, zinc};
 
-/// Where apps are, from the workspace's root.
+/// Where a new app goes, from the workspace's root.
 pub(crate) const PLACE: &str = "src/user/apps";
+
+/// Where apps are, from the workspace's root: [`PLACE`], and the programs
+/// ported onto ferrousli, which live in its repository beside the ports
+/// they build with (`components.toml`).
+pub(crate) const PLACES: &[&str] = &[PLACE, "src/user/system/linux/ferrousli/apps"];
+
+/// [`PLACES`], for a message.
+fn places() -> String {
+    PLACES.join(" or ")
+}
 
 /// An app's manifest, in its folder.
 const MANIFEST: &str = "app.toml";
@@ -87,13 +98,39 @@ impl App {
 ///
 /// # Errors
 ///
-/// A folder in [`PLACE`] without an `app.toml`, a manifest that does not
-/// read, or one whose name is not its folder's.
+/// A folder in [`PLACES`] without an `app.toml`, a manifest that does not
+/// read, or one whose name is not its folder's, or two apps of one name.
 pub(crate) fn discover() -> Result<Vec<App>> {
-    let place = paths::workspace_root().join(PLACE);
-    let Ok(entries) = fs::read_dir(&place) else {
-        return Ok(Vec::new());
-    };
+    let mut apps: Vec<App> = Vec::new();
+    for place in PLACES {
+        let place = paths::workspace_root().join(place);
+        let Ok(entries) = fs::read_dir(&place) else {
+            continue;
+        };
+        apps.extend(discover_in(&place, entries)?);
+    }
+    if let Some(twice) = apps
+        .iter()
+        .enumerate()
+        .find(|(index, app)| {
+            apps.iter()
+                .take(*index)
+                .any(|other| other.name() == app.name())
+        })
+        .map(|(_, app)| app)
+    {
+        return Err(Error::new(format!(
+            "two apps are named `{}`, in {}: one name is one app",
+            twice.name(),
+            places()
+        )));
+    }
+    apps.sort_by(|a, b| a.name().cmp(b.name()));
+    Ok(in_build_order(apps))
+}
+
+/// The apps in one of [`PLACES`].
+fn discover_in(place: &Path, entries: fs::ReadDir) -> Result<Vec<App>> {
     let mut apps = Vec::new();
     for entry in entries {
         let dir = entry
@@ -105,8 +142,9 @@ pub(crate) fn discover() -> Result<Vec<App>> {
         let path = dir.join(MANIFEST);
         let text = fs::read_to_string(&path).map_err(|error| {
             Error::new(format!(
-                "{}: {error}; every folder in {PLACE} is an app, described by its {MANIFEST}",
-                path.display()
+                "{}: {error}; every folder in {} is an app, described by its {MANIFEST}",
+                path.display(),
+                places()
             ))
         })?;
         let recipe = manifest::recipe(&text)
@@ -124,8 +162,7 @@ pub(crate) fn discover() -> Result<Vec<App>> {
         }
         apps.push(App { dir, recipe });
     }
-    apps.sort_by(|a, b| a.name().cmp(b.name()));
-    Ok(in_build_order(apps))
+    Ok(apps)
 }
 
 /// `apps` with each after the apps it depends on, and otherwise in the
@@ -160,7 +197,7 @@ pub(crate) fn folder(name: &str) -> Result<PathBuf> {
         .into_iter()
         .find(|app| app.name() == name)
         .map(|app| app.dir)
-        .ok_or_else(|| Error::new(format!("there is no app `{name}` in {PLACE}")))
+        .ok_or_else(|| Error::new(format!("there is no app `{name}` in {}", places())))
 }
 
 /// The package of the app `name` for `arch`, built now, or `None` for an
@@ -174,7 +211,7 @@ pub(crate) fn built_package(name: &str, arch: Arch, release: bool) -> Result<Opt
     let app = discover()?
         .into_iter()
         .find(|app| app.name() == name)
-        .ok_or_else(|| Error::new(format!("there is no app `{name}` in {PLACE}")))?;
+        .ok_or_else(|| Error::new(format!("there is no app `{name}` in {}", places())))?;
     package(&app, arch, release, Fresh::Always)
 }
 
@@ -198,11 +235,11 @@ pub(crate) fn list() -> Result<()> {
             package.description
         );
     }
-    println!("{} apps in {PLACE}", apps.len());
+    println!("{} apps in {}", apps.len(), places());
     Ok(())
 }
 
-/// Every `--app` names a folder in [`PLACE`].
+/// Every `--app` names a folder in [`PLACES`].
 fn every_app_named_is_one(apps: &[App], args: &Args) -> Result<()> {
     match args
         .apps
@@ -210,7 +247,8 @@ fn every_app_named_is_one(apps: &[App], args: &Args) -> Result<()> {
         .find(|name| !apps.iter().any(|app| app.name() == name.as_str()))
     {
         Some(unknown) => Err(Error::new(format!(
-            "--app {unknown}: there is no {PLACE}/{unknown}"
+            "--app {unknown}: there is no app of that name in {}",
+            places()
         ))),
         None => Ok(()),
     }
@@ -318,7 +356,7 @@ pub(crate) fn taken(arch: Arch, names: &[&str]) -> Result<Vec<ports::File>> {
         let app = apps
             .iter()
             .find(|app| app.name() == *name)
-            .ok_or_else(|| Error::new(format!("there is no app `{name}` in {PLACE}")))?;
+            .ok_or_else(|| Error::new(format!("there is no app `{name}` in {}", places())))?;
         if let Some(path) = package(app, arch, false, Fresh::UnlessScript)? {
             packages.push(read(&path)?);
         }
@@ -717,12 +755,48 @@ fn cargo_in(app: &App, arguments: &[&str]) -> Command {
     command
 }
 
-/// Rule 1: nothing outside `app`'s folder names it.
+/// Rule 1: nothing outside `app`'s folder names it -- in this tree, or in
+/// the component's repository an app ported onto ferrousli lives in.
 pub(crate) fn stays_in_its_folder(app: &App) -> Result<()> {
-    let folder = format!("{PLACE}/{}", app.name());
+    let root = paths::workspace_root();
+    let relative = |base: &Path| {
+        app.dir
+            .strip_prefix(base)
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .map_err(|_| {
+                Error::new(format!(
+                    "{} is outside {}",
+                    app.dir.display(),
+                    base.display()
+                ))
+            })
+    };
+    names_only_itself(&root, &relative(&root)?)?;
+    let toplevel = Command::new("git")
+        .current_dir(&app.dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|error| Error::new(format!("could not run git rev-parse: {error}")))?;
+    let toplevel = PathBuf::from(String::from_utf8_lossy(&toplevel.stdout).trim());
+    if toplevel.as_os_str().is_empty() || same_dir(&toplevel, &root) {
+        return Ok(());
+    }
+    names_only_itself(&toplevel, &relative(&toplevel)?)
+}
+
+/// Whether two paths are one directory, however each is spelled.
+fn same_dir(one: &Path, other: &Path) -> bool {
+    match (one.canonicalize(), other.canonicalize()) {
+        (Ok(one), Ok(other)) => one == other,
+        _ => one == other,
+    }
+}
+
+/// `git grep` in `repository` for `folder` outside `folder`.
+fn names_only_itself(repository: &Path, folder: &str) -> Result<()> {
     let output = Command::new("git")
-        .current_dir(paths::workspace_root())
-        .args(["grep", "--untracked", "-l", "-F", &folder, "--", "."])
+        .current_dir(repository)
+        .args(["grep", "--untracked", "-l", "-F", folder, "--", "."])
         .arg(format!(":(exclude){folder}"))
         .output()
         .map_err(|error| Error::new(format!("could not run git grep: {error}")))?;
