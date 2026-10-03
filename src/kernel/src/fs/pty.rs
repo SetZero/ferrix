@@ -89,6 +89,11 @@ pub(crate) const PTS_INO: u64 = 1 << 38;
 pub(crate) struct Pty {
     /// Its number: `TIOCGPTN`'s answer and the slave's name.
     pub(crate) number: u32,
+    /// Whose the slave is: the filesystem user and group of the process
+    /// that opened `/dev/ptmx`, as Linux's devpts gives them, so a terminal
+    /// a user's program makes is one that user may open. Root's for a pair
+    /// the kernel makes for itself.
+    owner: (u32, u32),
     state: SpinLock<State>,
     /// Woken when either side has something to read, or an end has gone.
     changed: Arc<WaitQueue>,
@@ -153,12 +158,19 @@ pub(crate) fn pair(number: u32) -> Option<Arc<Pty>> {
 /// `ENOSPC` when every number is taken, which is what Linux answers when its
 /// pseudoterminal limit is reached.
 pub(crate) fn open_master() -> VfsResult<Arc<MasterFile>> {
+    // Taken before the pairs' lock, so it nests no lock of the process's.
+    let owner = process::current().map_or((0, 0), |opener| {
+        opener.with_credentials(|credentials| {
+            (credentials.user.filesystem, credentials.group.filesystem)
+        })
+    });
     let mut pairs = PAIRS.lock();
     let number = (0..MAX_PAIRS)
         .find(|number| !pairs.contains_key(number))
         .ok_or(Errno::ENOSPC)?;
     let pty = Arc::new(Pty {
         number,
+        owner,
         state: SpinLock::new(State {
             discipline: Discipline::new(),
             output: VecDeque::new(),
@@ -528,7 +540,9 @@ impl Inode for MasterFile {
 
 impl Inode for SlaveFile {
     fn metadata(&self) -> Metadata {
-        slave_metadata(self.pty.number)
+        // Its own pair's owner: once the master closes, the number may be
+        // gone or another pair's.
+        slave_metadata_owned(self.pty.number, self.pty.owner)
     }
 
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
@@ -637,16 +651,24 @@ impl Inode for SlaveFile {
     }
 }
 
-/// A slave node's metadata.
+/// A slave node's metadata, its owner the process that opened its master's:
+/// for `/dev/pts/<number>`, the pair that has the number now.
 pub(crate) fn slave_metadata(number: u32) -> Metadata {
+    slave_metadata_owned(number, pair(number).map_or((0, 0), |pty| pty.owner))
+}
+
+/// A slave's metadata, owned by `(uid, gid)`.
+fn slave_metadata_owned(number: u32, (uid, gid): (u32, u32)) -> Metadata {
     Metadata {
         ino: SLAVE_INO_BASE + u64::from(number),
         kind: FileType::CharDevice,
         // What Linux's devpts gives a slave: the owner's to read and write,
-        // and the `tty` group's to write. Ferrix has no groups, so it is the
-        // mode without them.
+        // and the `tty` group's to write. Ferrix has no `tty` group, so the
+        // group is the opener's.
         permissions: 0o620,
         nlink: 1,
+        uid,
+        gid,
         rdev: makedev(SLAVE_MAJOR, number),
         block_size: 4096,
         ..blank()
