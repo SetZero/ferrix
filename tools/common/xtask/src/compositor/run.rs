@@ -283,6 +283,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // enumerated.
     let args = &Args {
         net: !args.no_net,
+        session_user: args.everything.then(|| crate::session::USER.to_owned()),
         ..crate::ssh::checked(&args)
     };
     let programs = Programs::build(arch)?;
@@ -295,6 +296,23 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // `--size` pins it.
     let follow = args.size.is_none();
     let (config, mut carried) = desktop(arch, config, size, follow, Backdrop::Any, args)?;
+    // `--everything` runs as its user, through `sessiond` (customer,
+    // 2026-10-03): what has to stay root becomes init's, and the dotfiles
+    // seed the user's home.
+    let config = if args.session_user.is_some() {
+        println!(
+            "  session: the desktop runs as {}, started by sessiond",
+            crate::session::USER
+        );
+        let host = args
+            .config
+            .as_deref()
+            .filter(|_| args.everything)
+            .and_then(|path| std::fs::read_to_string(path).ok());
+        crate::session::for_session(&config, &mut carried.ports, host.as_deref())
+    } else {
+        config
+    };
     // A monitor of this machine's for the screen, so that a configuration
     // naming its monitors by description finds this one (`crate::edid`).
     // Only the EDID's name for itself is taken: the screen keeps the modes

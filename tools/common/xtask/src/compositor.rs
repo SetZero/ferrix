@@ -155,6 +155,10 @@ const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
 const VDAGENT_PATH: &str = "bin/vdagent";
+
+/// Where `sessiond` goes: seat0's owner, which starts the `--everything`
+/// desktop as its user (`crate::session`).
+pub(crate) const SESSIOND_PATH: &str = "bin/sessiond";
 /// hypridle, and the `loginctl` that reaches it (`src/user/system/linux/compositor/hypridle`).
 const HYPRIDLE_PATH: &str = "bin/hypridle";
 const LOGINCTL_PATH: &str = "bin/loginctl";
@@ -194,6 +198,8 @@ struct Programs {
     reboot: PathBuf,
     /// `vdagent`, which joins the host's clipboard to this one.
     vdagent: PathBuf,
+    /// `sessiond`, which starts a session as its user (`crate::session`).
+    sessiond: PathBuf,
 }
 
 impl Programs {
@@ -214,11 +220,12 @@ impl Programs {
             loginctl: build(arch, "compositor-hypridle", "loginctl")?,
             reboot: build(arch, "compositor-reboot", "reboot")?,
             vdagent: build(arch, "compositor-vdagent", "vdagent")?,
+            sessiond: build(arch, "compositor-sessiond", "sessiond")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 13] {
+    fn carried(&self) -> [(&'static str, &Path); 14] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -233,6 +240,7 @@ impl Programs {
             (LOGINCTL_PATH, self.loginctl.as_path()),
             (REBOOT_PATH, self.reboot.as_path()),
             (VDAGENT_PATH, self.vdagent.as_path()),
+            (SESSIOND_PATH, self.sessiond.as_path()),
         ]
     }
 }

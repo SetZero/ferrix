@@ -129,6 +129,7 @@ mod seat;
 mod selfhost;
 mod sem;
 mod serial;
+mod session;
 mod sha256;
 mod shell;
 mod shm;

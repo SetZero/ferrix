@@ -752,6 +752,24 @@ be opened by any method.
 
 ### 6.1 Where it stands
 
+**2026-10-03:** the customer decided that `run-compositor --everything`
+runs as `ferrix`, and P2.4 and the device half of P2.5 are built for it
+(`src/user/system/linux/compositor/sessiond`, `.../seat`,
+`tools/common/xtask/src/session.rs`). `hyprix.service` runs `sessiond
+--user ferrix -- /bin/hyprix ...`; `sessiond` stays root, makes
+`/run/user/1000`, seeds `/home/ferrix` from `/etc/skel` once, and starts
+hyprix as `ferrix` with one end of a socket pair as descriptor 3. hyprix
+opens every card, render node and `event*` node through it, and `sessiond`
+opens only those, by name, and hands the descriptor over with
+`SCM_RIGHTS`; the nodes stay `0660 root`, and no path reaches the
+channel. Every client is `ferrix`'s; `sshdt` and `udhcpc`, which must stay
+root, are units of `graphical.target` instead of `exec-once` lines. The
+kernel gives a pseudoterminal's slave to the process that opened
+`/dev/ptmx`, as devpts does, so a terminal works as a user. Not built
+yet: the session's own scope, `login`, the grant hyprlock unlocks on, and
+the other desktops, which still run as root. The text below is the plan
+as it was written before that.
+
 hyprix is linked into the kernel as its init (`tools/common/xtask/src/compositor.rs:1239`),
 so it and every program it starts are uid 0. It opens the card and the
 `event*` nodes itself, and it can because they are `0660 root`
@@ -886,8 +904,8 @@ phase 1. hyprlock does not change when phase 2 moves the session to
 | P2.1 | K-B: procfs honours `PR_SET_DUMPABLE` (set-id `execve` and id changes clear it since 2026-09-30) | kernel | | kernel gate | 2 |
 | P2.2 | K-C: zero socket, pipe and tty buffers when freed | kernel | | kernel gate | 1 |
 | P2.3 | `login`, and getty execs it. First password on a local console. `test-init` gains a stage: log in as `ferrix`, a wrong password refused, `id` says 1000, the session's scope is `user-1000.slice/session-1.scope`. | auth, init | P1 | `test-init --arch all` | 5 |
-| P2.4 | `sessiond`: seat0, device descriptors by `SCM_RIGHTS`, starts hyprix as the account in its scope, ends the session with its compositor | session (new) | L10, P0 | `test-compositor` as uid 1000 | 10 |
-| P2.5 | hyprix: devices from `sessiond`, the seat channel and grants (§3.7), a new locker taking over a dead lock, `misc:lock_grace` | compositor | P2.4, P1.3 | `test-compositor`, `test-hyprlock` | 6 |
+| P2.4 | `sessiond`: seat0, device descriptors by `SCM_RIGHTS`, starts hyprix as the account in its scope, ends the session with its compositor. **Built 2026-10-03 for `--everything`** (§6.1), all but the scope: the session stays in `hyprix.service`'s cgroup; `test-compositor --boot everything-desktop` runs it as uid 1000 | session (new) | L10, P0 | `test-compositor` as uid 1000 | 10 |
+| P2.5 | hyprix: devices from `sessiond`, the seat channel and grants (§3.7), a new locker taking over a dead lock, `misc:lock_grace`. **Devices built 2026-10-03**; the grants, the locker and `lock_grace` wait for P1.5 (the `hyprlock` branch) | compositor | P2.4, P1.3 | `test-compositor`, `test-hyprlock` | 6 |
 | P2.6 | `su`, set-uid root, the wheel rule | auth | P1 | `test-vfs` (it already becomes `ferrix` with `su`) | 3 |
 | P2.7 | Adversary controls in the gates. A client that calls `unlock_and_destroy` with no grant leaves the screen locked. A client that kills hyprix lands at `login`, not on a desktop. A uid-1000 program cannot read `/var/lib/ferrix/auth`. Each has a sabotage that must make it fail. | auth, compositor | P2.4, P2.5 | `test-compositor`, `test-auth` | 4 |
 

@@ -744,6 +744,19 @@ the PulseAudio-protocol server Chrome plays through
 for, since every device a boot does not need is one fewer on the bus, and
 several of them exist to assert exactly what a machine enumerates.
 
+**`--everything` runs as the user `ferrix`** (uid 1000), not as root
+([`docs/AUTH.md`](AUTH.md) §6.1). `sessiond`, which stays root, starts the
+compositor as `ferrix` and hands it the screen and the input devices, so
+every window, terminal, Chrome and Steam is `ferrix`'s, with `HOME` at
+`/home/ferrix` on the home disk and `XDG_RUNTIME_DIR` at `/run/user/1000`.
+Your `~/.config/{hypr,waybar,fuzzel}` are copied into `/home/ferrix/.config`
+the first time only, so what you change there inside Ferrix is kept; a file
+your configuration names by its host path, such as a script in
+`~/.local/bin`, is put back at that path at every start. `ssh` still logs in
+as root, and `hyprctl` run as root finds the session's socket under
+`/run/user`. The ssh server and the DHCP client are init's units rather than
+the desktop's programs, since they need root.
+
 The same shape for `run`, which boots a program of your choosing rather than
 the compositor -- here `src/user/system/linux/compositor/blank`, and `--init ferrousli` or a path
 to a busybox for a shell instead:

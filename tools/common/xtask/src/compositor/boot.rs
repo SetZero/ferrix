@@ -516,6 +516,7 @@ pub(super) fn build_parts(
         &["--config", &config_path, "--instance", INSTANCE],
         carried_too.zinc.is_some(),
         carried_too.pulsed.as_deref(),
+        args.session_user.as_deref(),
     )?;
     for (path, program) in programs.carried() {
         // The desktop's `reboot` takes the name from init's link to `svc`,

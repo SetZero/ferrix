@@ -477,13 +477,33 @@ pub(crate) fn desktop_files(
     arguments: &[&str],
     shell: bool,
     pulsed: Option<&[u8]>,
+    session_user: Option<&str>,
 ) -> Result<Vec<File>> {
     let mut files = carried(arch)?;
     if files.is_empty() {
         return Err(Error::new(format!("init is not built for {arch}")));
     }
-    let mut command = vec!["/bin/hyprix".to_owned()];
+    // With a session user, `sessiond` starts the compositor as that user
+    // and hands it seat0's devices (`crate::session`); it sets the user's
+    // own `HOME`.
+    let mut command = match session_user {
+        Some(user) => vec![
+            "/bin/sessiond".to_owned(),
+            "--user".to_owned(),
+            exec_word(user),
+            "--".to_owned(),
+            "/bin/hyprix".to_owned(),
+        ],
+        None => vec!["/bin/hyprix".to_owned()],
+    };
     command.extend(arguments.iter().map(|word| exec_word(word)));
+    let home = if session_user.is_some() {
+        ""
+    } else {
+        "# Root's home, which the kernel gave hyprix as pid 1 and a unit with\n\
+         # no User= is not given; the clients find ~/.config through it.\n\
+         Environment=HOME=/\n"
+    };
     let unit = format!(
         "# The compositor, a service of graphical.target (docs/INIT.md, L10).\n\
          [Unit]\n\
@@ -491,9 +511,7 @@ pub(crate) fn desktop_files(
          \n\
          [Service]\n\
          ExecStart={}\n\
-         # Root's home, which the kernel gave hyprix as pid 1 and a unit with\n\
-         # no User= is not given; the clients find ~/.config through it.\n\
-         Environment=HOME=/\n\
+         {home}\
          {}\
          Restart=on-failure\n\
          StandardOutput=console\n\

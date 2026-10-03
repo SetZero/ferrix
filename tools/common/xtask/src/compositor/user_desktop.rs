@@ -227,6 +227,11 @@ fn drive_fuzzel_user(
 /// open a window, `/bin/foot` being term; `SUPER RETURN`, appended, must
 /// start `/bin/term`; and `/bin/vdagent`, appended, must have been started.
 ///
+/// The desktop runs as `run-compositor --everything`'s does, as the user
+/// `ferrix` (`crate::session`): `sessiond` must say it started the session
+/// as uid 1000 and hyprix that its devices came from it, so the screen, the
+/// keys QEMU types and the terminal's pseudoterminal are all the user's.
+///
 /// Skips, and says why, on a machine with no `~/.config/hypr/hyprland.conf`:
 /// the fix has nothing of the customer's to carry there.
 pub(super) fn test_everything_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
@@ -236,7 +241,11 @@ pub(super) fn test_everything_desktop(arch: Arch, programs: &Programs, args: &Ar
         );
         return Ok(());
     };
-    let (image, kernel) = judged_image(arch, programs, &config, carried, Some(&edid), args)?;
+    let session = Args {
+        session_user: Some(crate::session::USER.to_owned()),
+        ..args.clone()
+    };
+    let (image, kernel) = judged_image(arch, programs, &config, carried, Some(&edid), &session)?;
     let port = free_port()?;
     let mut qemu_args = args.clone();
     qemu_args.display = true;
@@ -250,6 +259,7 @@ pub(super) fn test_everything_desktop(arch: Arch, programs: &Programs, args: &Ar
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
     judge_still_running(arch, &said)?;
+    judge_session(arch, &said)?;
     println!(
         "  {arch}: the --everything desktop carried the user's real hyprland.conf: waybar drew, \
          and a terminal was a key away"
@@ -313,7 +323,36 @@ fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried, Strin
          bind = , F11, exec, /bin/hyprctl clients\n",
         config.trim_end()
     );
+    // As the user, as `run-compositor --everything` runs it.
+    let mut carried = carried;
+    let host = std::fs::read_to_string(conf_path).ok();
+    let config = crate::session::for_session(&config, &mut carried.ports, host.as_deref());
     Ok(Some((config, carried, edid.argument)))
+}
+
+/// Whether the desktop ran as its user: `sessiond` said it started the
+/// session as `ferrix`, uid 1000, and hyprix that seat0's devices came from
+/// `sessiond`.
+fn judge_session(arch: Arch, said: &[String]) -> Result<()> {
+    let wanted = [
+        format!(
+            "sessiond: seat0's session for {} (uid 1000)",
+            crate::session::USER
+        ),
+        "hyprix: seat0's devices come from sessiond".to_owned(),
+    ];
+    for line in wanted {
+        if !said.iter().any(|said| said.contains(&line)) {
+            return Err(Error::new(format!(
+                "{arch}: the desktop did not run as its user: nothing said `{line}`"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: the desktop ran as {}, its devices handed over by sessiond",
+        crate::session::USER
+    );
+    Ok(())
 }
 
 /// Presses `F12` (`hyprctl layers`) until waybar's bar is listed, screendumps

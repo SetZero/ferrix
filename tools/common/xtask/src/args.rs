@@ -174,6 +174,10 @@ pub(crate) struct Args {
     /// (`crate::init_file`). `run` and `run-compositor` attach
     /// `build/home.img` beside their root instead.
     pub(crate) home_image: Option<std::path::PathBuf>,
+    /// The account a desktop's session runs as, through `sessiond`: set by
+    /// `run-compositor --everything` (`crate::session`), and `None` for a
+    /// compositor that runs as root, as every judged desktop does.
+    pub(crate) session_user: Option<String>,
     /// `--seeds`, how many power failures `test-powerfail` makes.
     pub(crate) seeds: u64,
     /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`,
