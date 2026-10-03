@@ -431,6 +431,23 @@ pub(crate) fn window_command_with_profile(arch: Arch, page: &str, profile: &str)
     )
 }
 
+/// `/bin/xdg-open` on a desktop with Chrome: what it is given, opened in
+/// Chrome. Claude Code signs in by running `$BROWSER` or else `xdg-open`
+/// with the sign-in address, and the desktop had neither. The command is
+/// the desktop's own window command with `profile`, the one its Chrome was
+/// started with, so a running Chrome is handed the address and opens it as
+/// a tab rather than a second browser starting on the same profile.
+pub(crate) fn opener(arch: Arch, profile: &str) -> crate::ports::File {
+    let command = window_command_with_profile(arch, r#""$@""#, profile);
+    crate::ports::File {
+        path: "bin/xdg-open".to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(
+            format!("#!/bin/sh\nexec env {WINDOW_HOME} {command}\n").into_bytes(),
+        ),
+    }
+}
+
 /// The links the image carries into the volume `arch`'s browser is on.
 pub(crate) const fn links(arch: Arch) -> &'static [(&'static str, &'static str)] {
     if matches!(arch, Arch::AArch64) {
@@ -733,6 +750,28 @@ mod tests {
         assert_eq!(quoted[1], format!("--user-agent={USER_AGENT}"));
         // Ferrix by name, and the words a site looking for Linux looks for.
         assert!(USER_AGENT.contains("(X11; Ferrix; not Linux x86_64)"));
+    }
+
+    /// The opener hands Chrome the address as one word, `&`s and all, with
+    /// the profile it is given: run here with `printf` for Chrome.
+    #[test]
+    fn the_opener_hands_chrome_the_address_whole() {
+        let file = opener(Arch::X86_64, "/data/home/chrome");
+        assert_eq!((file.path.as_str(), file.mode), ("bin/xdg-open", 0o755));
+        let crate::ports::Content::Bytes(bytes) = file.content else {
+            panic!("the opener is a script");
+        };
+        let script = String::from_utf8(bytes).expect("UTF-8");
+        assert!(script.starts_with("#!/bin/sh\nexec env HOME=/dev/shm "));
+        assert!(script.contains(" --user-data-dir=/data/home/chrome "));
+        let script = script.replace("/data/chrome-window/chrome", "printf '%s\\n'");
+        let address = "https://claude.com/cai/oauth/authorize?code=true&scope=a+b&state=x y";
+        let output = std::process::Command::new("sh")
+            .args(["-c", &script, "xdg-open", address])
+            .output()
+            .expect("sh runs");
+        let printed = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(printed.lines().last(), Some(address), "{printed}");
     }
 
     #[test]

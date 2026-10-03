@@ -132,6 +132,9 @@ pub(super) fn desktop(
         carried.ports.extend(links);
         carried.ports.extend(crate::chrome::window_files());
         carried.ports.push(crate::chrome::desktop_policy());
+        carried
+            .ports
+            .push(crate::chrome::opener(arch, chrome_profile(args)));
         if args.everything {
             carry_everything(arch, args, &mut carried);
         }
@@ -318,6 +321,16 @@ fn rustc_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
     crate::rustc::files(&links)
 }
 
+/// The profile the desktop's Chrome is started with: on the volume that is
+/// kept under `--persistent`, and in `/dev/shm` otherwise.
+fn chrome_profile(args: &Args) -> &'static str {
+    if args.persistent {
+        crate::persistent::CHROME_PROFILE
+    } else {
+        "/dev/shm/chrome"
+    }
+}
+
 /// What `run-compositor --chrome` adds to the desktop's configuration:
 /// Chrome's environment, a window as the desktop starts, and SUPER+B for
 /// another. Under `--persistent` its profile is on the volume that is kept.
@@ -325,15 +338,14 @@ pub(super) fn with_chrome(config: String, args: &Args, arch: Arch) -> String {
     if !args.chrome {
         return config;
     }
-    let profile = if args.persistent {
-        crate::persistent::CHROME_PROFILE
-    } else {
-        "/dev/shm/chrome"
-    };
     let command = format!(
         "{} {}",
         crate::chrome::WINDOW_HOME,
-        crate::chrome::window_command_with_profile(arch, crate::start_page::URL, profile)
+        crate::chrome::window_command_with_profile(
+            arch,
+            crate::start_page::URL,
+            chrome_profile(args)
+        )
     );
     format!(
         "{config}\n# Added by `cargo xtask run-compositor --chrome`.\n{}{}exec-once = {command}\n\
