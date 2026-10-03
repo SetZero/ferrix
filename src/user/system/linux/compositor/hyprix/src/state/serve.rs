@@ -101,7 +101,7 @@ struct Effects {
     /// The lock surfaces made, with the screen each covers.
     covered: Vec<(ObjectId, ObjectId, usize)>,
     /// The lock given up, and whether it was asked for.
-    unlocking: Option<bool>,
+    unlocking: Option<(ObjectId, bool)>,
 }
 
 impl Compositor<'_> {
@@ -514,7 +514,7 @@ impl Compositor<'_> {
                 surface,
                 output,
             } => effects.covered.push((lock_surface, surface, output)),
-            Event::SessionUnlocked { asked } => effects.unlocking = Some(asked),
+            Event::SessionUnlocked { lock, asked } => effects.unlocking = Some((lock, asked)),
             // A screenshot: the screens are the loop's, not this
             // client's, so both halves are carried out there.
             Event::ScreencopyWanted {

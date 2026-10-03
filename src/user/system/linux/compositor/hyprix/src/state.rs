@@ -24,6 +24,8 @@ use crate::seat::Seat;
 
 mod draw;
 mod serve;
+#[cfg(test)]
+mod tests;
 
 /// One connection: the protocol side, the socket, and the memory it shared.
 #[derive(Debug)]
@@ -1345,7 +1347,7 @@ impl<'r> Compositor<'r> {
         // `ext-session-lock-v1` is most explicit about: an unlocked
         // session is not what a crash is allowed to produce.
         if let Some(held) = self.lock.as_mut()
-            && held.client == index
+            && held.held_by(index)
         {
             held.orphaned = true;
             held.surfaces.clear();
@@ -1386,8 +1388,8 @@ impl<'r> Compositor<'r> {
             },
         );
         self.focus.renumber(&places);
-        // The clipboard, the lock and the input method hold a client the
-        // same way and move the same way.
+        // The clipboard and the input method hold a client the same way and
+        // move the same way; the lock fails closed instead (`Lock::renumber`).
         self.clipboard.renumber(&places);
         // A drag whose *source* went is a drag with nothing on it: the
         // target is told to leave and the drag ends.
@@ -1400,11 +1402,7 @@ impl<'r> Compositor<'r> {
             changed = true;
         }
         if let Some(held) = self.lock.as_mut() {
-            held.client = places
-                .get(held.client)
-                .copied()
-                .flatten()
-                .unwrap_or(held.client);
+            held.renumber(&places);
         }
         if let Some(held) = self.method.as_mut() {
             match places.get(held.client).copied().flatten() {
@@ -3408,8 +3406,12 @@ pub(crate) fn as_seen<'a>(
 /// the first frame.
 #[derive(Clone, Debug, Default)]
 struct Lock {
-    /// Which connection holds it.
+    /// Which connection holds it. Meaningless once [`Lock::orphaned`]: the
+    /// place a dead client held is soon another client's.
     client: usize,
+    /// The `ext_session_lock_v1` it was taken with, the one object that may
+    /// unlock it.
+    object: ObjectId,
     /// The lock surface for each screen: its `ext_session_lock_surface_v1`
     /// and the `wl_surface` under it.
     surfaces: BTreeMap<usize, (ObjectId, ObjectId)>,
@@ -3419,6 +3421,29 @@ struct Lock {
     /// a lock whose program died must not become an unlocked session, which
     /// is the one thing the protocol is most explicit about.
     orphaned: bool,
+}
+
+impl Lock {
+    /// Whether the connection at `index` is the one holding it: never, once
+    /// that connection has gone, whoever comes to sit at its place.
+    fn held_by(&self, index: usize) -> bool {
+        !self.orphaned && self.client == index
+    }
+
+    /// Moves the holder to its place once the clients that went are taken
+    /// out ([`renumbered`]). A holder with no place has gone: the lock is
+    /// then held by nobody and shows nothing, whether or not the loop saw
+    /// the client go first, so the guarantee does not rest on the order the
+    /// loop does things in.
+    fn renumber(&mut self, places: &[Option<usize>]) {
+        match places.get(self.client).copied().flatten() {
+            Some(at) if !self.orphaned => self.client = at,
+            _ => {
+                self.orphaned = true;
+                self.surfaces.clear();
+            }
+        }
+    }
 }
 
 /// A screenshot, waiting for the part of the loop that has the screens.
@@ -5105,7 +5130,7 @@ fn lock_changed(
     screens: &[Screen],
     locking: Option<ObjectId>,
     covered: &[(ObjectId, ObjectId, usize)],
-    unlocking: Option<bool>,
+    unlocking: Option<(ObjectId, bool)>,
     report: &mut dyn FnMut(&str),
 ) -> bool {
     let mut changed = false;
@@ -5121,6 +5146,7 @@ fn lock_changed(
         } else {
             *lock = Some(Lock {
                 client: index,
+                object,
                 ..Lock::default()
             });
             report("hyprix: the session is locked");
@@ -5133,7 +5159,7 @@ fn lock_changed(
         let Some(held) = lock.as_mut() else {
             continue;
         };
-        if held.client != index {
+        if !held.held_by(index) {
             continue;
         }
         let _ = held.surfaces.insert(*output, (*lock_surface, *surface));
@@ -5151,7 +5177,7 @@ fn lock_changed(
     // screen shows what the client drew and nothing of what was there.
     if let Some(held) = lock.as_mut()
         && !held.told
-        && held.client == index
+        && held.held_by(index)
         && !screens.is_empty()
         && (0..screens.len()).all(|screen| held.surfaces.contains_key(&screen))
     {
@@ -5164,8 +5190,10 @@ fn lock_changed(
             screens.len()
         ));
     }
-    if let Some(asked) = unlocking
-        && lock.as_ref().is_some_and(|held| held.client == index)
+    if let Some((object, asked)) = unlocking
+        && lock
+            .as_ref()
+            .is_some_and(|held| held.held_by(index) && held.object == object)
     {
         *lock = None;
         changed = true;

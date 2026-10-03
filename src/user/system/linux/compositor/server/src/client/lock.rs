@@ -107,10 +107,16 @@ impl Client {
                     output: which,
                 });
             }
-            request::UNLOCK_AND_DESTROY => {
+            // Only the lock this client still holds: a lock the compositor
+            // refused was let go of when it was told `finished`, and unlocking
+            // it says nothing about the screen.
+            request::UNLOCK_AND_DESTROY if self.lock == Some(sender) => {
                 self.lock = None;
                 self.lock_surfaces.clear();
-                self.events.push(Event::SessionUnlocked { asked: true });
+                self.events.push(Event::SessionUnlocked {
+                    lock: sender,
+                    asked: true,
+                });
             }
             // Destroying a lock that is still held is the error the
             // protocol names, because it would leave the screen locked with
@@ -168,6 +174,11 @@ impl Client {
     /// second program asking while one is held -- and the client is then to
     /// destroy the object and stop.
     pub fn session_lock_refused(&mut self, lock: ObjectId) {
+        // The client holds nothing now: its `destroy` is the answer the
+        // protocol asks for, not the error of destroying a held lock.
+        if self.lock == Some(lock) {
+            self.lock = None;
+        }
         let _ = self
             .out
             .write(lock, ext_session_lock_v1::event::FINISHED, &[], &[]);

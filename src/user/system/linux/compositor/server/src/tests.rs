@@ -5346,3 +5346,103 @@ fn a_toplevel_and_a_popup_each_say_where_their_window_is() {
     assert_eq!(client.window_geometry(ObjectId(9)), Some((24, 12, 50, 20)));
     assert_eq!(client.window_geometry(ObjectId(13)), None, "no xdg role");
 }
+
+// -- ext-session-lock-v1 -----------------------------------------------------
+
+/// A connection with `ext_session_lock_manager_v1` bound at 15, and a lock
+/// asked for on 20.
+fn locking_client() -> Client {
+    use compositor_protocol::session_lock;
+    let mut globals = globals();
+    assert!(
+        globals
+            .add(
+                &session_lock::EXT_SESSION_LOCK_MANAGER_V1,
+                1,
+                Role::SessionLockManager,
+            )
+            .is_some()
+    );
+    let mut client = Client::new(globals);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 5, "ext_session_lock_manager_v1", 1, 15));
+    bytes.extend(request(
+        15,
+        session_lock::ext_session_lock_manager_v1::request::LOCK,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(20))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client
+            .take_events()
+            .contains(&Event::SessionLocked { lock: ObjectId(20) })
+    );
+    let _ = client.take_outgoing();
+    client
+}
+
+/// `unlock_and_destroy` on lock 20.
+fn unlock_20() -> Vec<u8> {
+    request(
+        20,
+        compositor_protocol::session_lock::ext_session_lock_v1::request::UNLOCK_AND_DESTROY,
+        &[],
+        &[],
+    )
+}
+
+/// The unlocks among a client's events.
+fn unlocks(client: &mut Client) -> Vec<Event> {
+    client
+        .take_events()
+        .into_iter()
+        .filter(|event| matches!(event, Event::SessionUnlocked { .. }))
+        .collect()
+}
+
+/// The holder's unlock names the lock it was asked on, which is how the
+/// compositor tells it from anyone else's (`docs/AUTH.md` §3.7).
+#[test]
+fn an_unlock_names_the_lock_it_lets_go() {
+    let mut client = locking_client();
+    let bytes = unlock_20();
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert_eq!(
+        unlocks(&mut client),
+        [Event::SessionUnlocked {
+            lock: ObjectId(20),
+            asked: true,
+        }]
+    );
+}
+
+/// A lock the compositor refused is let go of when `finished` is sent: its
+/// `unlock_and_destroy` unlocks nothing.
+#[test]
+fn a_refused_lock_unlocks_nothing() {
+    let mut client = locking_client();
+    client.session_lock_refused(ObjectId(20));
+    let bytes = unlock_20();
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert_eq!(unlocks(&mut client), []);
+}
+
+/// And its `destroy` is the answer the protocol asks for after `finished`,
+/// not `invalid_destroy`.
+#[test]
+fn a_refused_lock_may_be_destroyed() {
+    let mut client = locking_client();
+    client.session_lock_refused(ObjectId(20));
+    let bytes = request(
+        20,
+        compositor_protocol::session_lock::ext_session_lock_v1::request::DESTROY,
+        &[],
+        &[],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+}

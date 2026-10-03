@@ -333,6 +333,9 @@ pub enum Event {
     /// windows again, and one whose client died leaves it locked with
     /// nothing drawn on it, which is what the protocol requires.
     SessionUnlocked {
+        /// The `ext_session_lock_v1` it was asked on: only the lock the
+        /// compositor gave this client may be unlocked, never one it refused.
+        lock: ObjectId,
         /// Whether the client asked, rather than having gone.
         asked: bool,
     },
