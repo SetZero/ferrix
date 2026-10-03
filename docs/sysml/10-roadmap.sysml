@@ -732,8 +732,11 @@ package FerrixRoadmap {
              * passes the boot test on the host. It fixed the writable
              * btrfs's write offset and dirty-inode lifetime, made MAP_FIXED
              * one step under a per-space layout lock, and added
-             * /proc/sys/vm/overcommit_memory. Owed: the other two
-             * architectures, the programs the other tests boot (musl std,
+             * /proc/sys/vm/overcommit_memory. On Arm hardware since
+             * 2026-10-03: on a Pixel 7, the phone's own desktop image in
+             * crosvm runs `cargo xtask build --arch aarch64` from an AArch64
+             * toolchain volume, and `test-selfhost --arch aarch64 --volume`
+             * boots the image it made. Owed: ARMv7-A, the programs the other tests boot (musl std,
              * a C compiler for ferrousli, the compositor's crates), and the
              * whole matrix on the guest's images. */
     }

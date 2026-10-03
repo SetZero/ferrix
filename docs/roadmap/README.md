@@ -31,7 +31,8 @@ The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
   second-pass effects are left. waybar, fuzzel and hypridle, rewritten in
   Rust, run the customer's own config on `run-compositor --everything`;
   hyprlock is parked on a branch.
-- **Stage 20:** Ferrix builds its own x86-64 image.
+- **Stage 20:** Ferrix builds its own x86-64 image, and since 2026-10-03 its
+  own AArch64 image on Arm hardware: inside Ferrix on a Pixel 7, in crosvm.
 - **Stage 22 (Steam):** sound plays through `/dev/snd` and a PulseAudio-protocol
   server, Chrome plays video with sound, 32-bit x86 programs run, and Valve's
   `steamcmd` logs in to Steam. The Steam client draws its sign-in window

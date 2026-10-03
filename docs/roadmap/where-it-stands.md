@@ -210,6 +210,12 @@ Stage 20, self-hosting, has its first step: Ferrix builds its own x86-64
 image. `cargo xtask test-selfhost` runs the same `cargo xtask build` a person
 runs on a Linux host inside Ferrix, with Cargo, from the tree and its vendored
 crates on a btrfs volume, and the image it made passes the boot test.
+Since 2026-10-03 it does so on Arm hardware too: on a Pixel 7, the phone's own
+desktop image boots in crosvm with pid 1 a script on the toolchain's volume,
+Ferrix builds its AArch64 image there in about nine minutes, and
+`cargo xtask test-selfhost --arch aarch64 --volume` finds the volume a clean
+btrfs and boots the image to the end of its self-checks
+(`tools/vendor/google/pixel7/selfhost.sh`).
 
 Dynamic linking is done: Debian's glibc busybox runs on its own `ld-linux`,
 and on ferrousli's loader and `libc.so.6` in glibc's place, on all three

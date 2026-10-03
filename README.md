@@ -85,7 +85,9 @@ cargo xtask test-boot --arch all
 ```
 
 Other tests compile a program with an unmodified `rustc` inside Ferrix and boot
-an x86-64 image built inside Ferrix. The [guide](docs/GUIDE.md#proof-you-can-run)
+an x86-64 image built inside Ferrix. On 2026-10-03 Ferrix also built its own
+AArch64 image inside Ferrix on a Pixel 7, in the phone's own virtual machine,
+and that image passed the boot test. The [guide](docs/GUIDE.md#proof-you-can-run)
 has the commands and serial output. These tests demonstrate specific working
 paths; they are not a claim that every Linux app works.
 

@@ -236,6 +236,24 @@ guest powers off, `btrfs check` judges the volume, `btrfs restore` takes the
 image out, and the boot test boots it. The build boot's serial log is kept in
 `build/x86_64/selfhost/build-serial.log`.
 
+On Arm the build runs on a Pixel 7 (2026-10-03). `FERRIX_SYSROOT_ARCH=arm64
+tools/common/fetch/fetch-rustc-sysroot.sh` makes the toolchain for an AArch64
+host, and `tools/vendor/google/pixel7/selfhost.sh stage`, `push`, `run` and
+`pull` put it on a volume with the tree and its vendored crates, boot the
+phone's own `desktop.Image` in crosvm with `ferrix.init=/data/selfhost/init`,
+which runs `cargo xtask build --arch aarch64`, and bring the volume back.
+`cargo xtask test-selfhost --arch aarch64 --volume <img>` then judges it as
+above: `btrfs check`, the image taken out, the boot test:
+
+```
+SELFHOST-BEGIN uptime 7.19 jobs 2
+cargo 1.97.1 (c980f4866 2026-06-30)
+  image /data/src/build/aarch64/ferrix.img (74 KiB loader, 125609 KiB kernel, 22345 KiB initramfs)
+SELFHOST-STATUS 0 uptime 546.14
+...
+  aarch64: the image Ferrix built booted
+```
+
 `--net` gives the guest a virtio-net card whose other end is `xtask`'s own
 gateway on a loopback UDP socket: the guest is `10.0.2.15`, `10.0.2.2` is the
 host, `10.0.2.3` forwards DNS to the host's resolver, and TCP and UDP to

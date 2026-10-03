@@ -10,6 +10,7 @@ Cargo workspace and the gates.
 | `helper.py` | The helper on the PC that the app's Boot button and the monitor ask to boot the phone |
 | `build-desktop.sh` | Builds the VM's desktop, `desktop.Image`, and with `--push` puts it on the phone |
 | `package-release.py` | Packs a desktop for a GitHub release, where the app's updates find it |
+| `selfhost.sh` | Ferrix building Ferrix on the phone: stage 20's self-hosting test on Arm hardware (below, "Building Ferrix on the phone") |
 | `monitor/` | The desktop monitor, "Pixel 7 · Ferrix": Tauri 2, a Cargo workspace of its own (`monitor/README.md`) |
 
 The loader these boot, and the phone's state, are in `src/boot/vendor/google/pixel7`
@@ -300,3 +301,37 @@ adb shell am start -n dev.ferrix.launcher/.MainActivity --es releases http://127
 The app reads the extra as it starts, hence the `force-stop`, and keeps it
 until it is given an empty one (`--es releases ''`), which puts it back on
 GitHub. Then "Check now".
+
+## Building Ferrix on the phone
+
+Stage 20's self-hosting test on Arm hardware: Ferrix compiles Ferrix inside
+the phone's VM, and the image it makes is booted and judged on the PC. It
+first passed on 2026-10-03 (`docs/roadmap/stage-20-self-hosting.md`).
+
+```sh
+FERRIX_SYSROOT_ARCH=arm64 tools/common/fetch/fetch-rustc-sysroot.sh   # once
+tools/vendor/google/pixel7/selfhost.sh stage    # toolchain, tree, vendored crates, init
+tools/vendor/google/pixel7/selfhost.sh push     # to /data/local/tmp/ferrix-vm/selfhost.img
+tools/vendor/google/pixel7/selfhost.sh run      # boots; status shows the serial log
+tools/vendor/google/pixel7/selfhost.sh pull     # after SELFHOST-STATUS and the power-off
+cargo xtask test-selfhost --arch aarch64 --volume ~/.local/share/ferrix/selfhost-arm64/selfhost.img
+```
+
+No image is made for the test. `run` stops any VM the app started and boots
+the phone's own `desktop.Image` with three blank disks and the volume, so the
+volume is `vdd` and Ferrix mounts it at `/data`, and with
+`-p "ferrix.checks=skip ferrix.init=/data/selfhost/init"`, which the loader
+passes to the kernel. pid 1 is then a script on the volume that links the
+paths gcc names into `/data` and runs `cargo xtask build --arch aarch64`;
+the Chromium desktop's own links already put glibc's loader and libraries
+there. No screen or input is attached. The guest has 5 GiB and four
+processors and builds at two jobs (`FERRIX_SELFHOST_MEMORY`, `_CPUS`,
+`_JOBS`): Ferrix keeps a btrfs file's pages in memory, and the phone has
+7.6 GiB.
+
+The USB link to the phone drops now and then, more often under long
+transfers: a single `adb pull` of the volume never got past 30%. The script
+moves the volume in checksummed gzip pieces, sends a piece again when it does
+not arrive whole, and runs the phone's long steps detached, so a drop cannot
+end them; a command it runs answers with its own status, not adb's.
+
