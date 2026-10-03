@@ -1376,6 +1376,58 @@ To repeat: `~/.local/share/ferrix/sel4/` on nazuna (`fetch.sh`, `build.sh`,
 and every run's log). The sources are sel4bench-manifest 80add415, with seL4
 at c6ce4d2a.
 
+### 9.6a Redox measured on nazuna (2026-10-03)
+
+The customer asked how Ferrix compares with Redox, the other Rust OS whose
+services run as user-space servers. Redox publishes no round-trip figure,
+only its base system call (116 cycles), so it was measured here, the way
+seL4 was: the gate's QEMU and KVM, the gate's CPU model with `+rdtscp` and
+`+rdctl-no`, one virtual processor pinned to host core 11, and
+`lfence; rdtsc; lfence` around each sample. The guest TSC runs at 4,400 MHz.
+Each figure is the p50 of 5 repeats of 20,000 samples after 2,000 warm-up
+iterations, the median over four boots, alternated with runs on the host.
+
+The image is Redox OS 0.9.0, server variant, from static.redox-os.org
+(`redox_server_x86_64_2026-10-02_541_harddrive.img.zst`, sha256 `2d57daaf…`),
+with kernel 0.5.12 (`16282036`) as shipped. One benchmark program, `rbench`,
+built for `x86_64-unknown-redox` against relibc, was added to the image with
+the `redoxfs` host tool.
+
+| What one sample is | Redox | Ferrix, `main` a305c35c3 | Linux, the host, native |
+|---|---|---|---|
+| An unknown system call answering `ENOSYS` | 29 ns (129 ticks, batched) | about 275 ns (`bench-ipc`'s floor) | 37 ns |
+| A request and its answer between two processes | 1,965 ns: one `SYS_WRITE` to a user-space scheme daemon (2,025 ns by `SYS_CALL`) | 2,556 ns: `channel_write_read` in one domain | 2,105 ns: a pipe ping-pong |
+| The same through the kernel alone | 1,475 ns: a pipe ping-pong | — | — |
+| A 4 KiB read through the block driver | 80 us p50, 109 us p90: a raw read of the virtio-blk scheme | 300 to 844 us: the block ring (§0) | 59 us: `O_DIRECT` on the NVMe |
+| A 4 KiB read of a file | 19 us cached, 147 us cold (redoxfs) | not measured | 135 ns cached |
+
+**What the comparison is worth.**
+- *Redox runs with no speculative-execution defence at all.* Its kernel was
+  disassembled: no write to `SPEC_CTRL` or `PRED_CMD`, so no IBRS, IBPB or
+  STIBP; no return-stack refill; no `VERW`; no retpolines. Ferrix's figure
+  has every defence of §9.6's matched configuration. So Redox's lead in the
+  round trip is partly the defences it does not have.
+- *Its round trip is the general path.* A scheme request is queued, the
+  daemon takes it with one call and answers with another, and the caller is
+  woken through the scheduler. Redox has no direct switch and no register
+  fast path. Steps 2 to 4 aim at 440 ns, about 4.5 times faster than Redox,
+  with every defence on.
+- *Block I/O is where Redox is ahead,* 4 to 10 times, and nothing in §9.5 to
+  §9.8 changes that: Ferrix's 4 KiB read is dominated by the block ring's
+  copies and its four commands in flight, not by the round trip. The BACKLOG
+  row "Block I/O faster than Redox" takes Redox's 80 us as the figure to
+  beat.
+- *The disks are not identical.* Redox does not drive the modern-only
+  virtio-blk device the gate uses (`disable-legacy=on`), so it ran on the
+  transitional one. Both systems' disk reads reach QEMU and the host's page
+  cache (QEMU's default writeback cache), not the NVMe media.
+- *The host was shared.* Load was 9 to 26. A boot with core 11's SMT sibling
+  44% busy ran about 30% slower; it is the top of each range in the logs.
+
+To repeat: `~/.local/share/ferrix/redox-bench/` on nazuna (`rbench/` and its
+`build.sh`, `run.py`, `linux.sh`, `series.sh`, `summarize.py`, and every
+run's log with its command, load and sibling-busy figures in `.meta`).
+
 ### 9.7 Step 4's design: the direct switch and the fast path (draft for the consultant)
 
 **Reviewed (2026-10-02): OK to build IF, with eleven conditions.** The
