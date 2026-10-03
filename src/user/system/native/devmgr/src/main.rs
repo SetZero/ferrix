@@ -15,10 +15,12 @@
 #![no_std]
 #![no_main]
 
+use core::fmt::{self, Write as _};
 use core::time::Duration;
 
 use ferrix_blkring::control::{Block, CONTROL_RIGHTS, DEVICE_RIGHTS, Message as Ring, Start};
 use ferrix_blkring::identity::DiskName;
+use ferrix_devmgr_proto::gpu::{self, HandOver, SetRefused, Unanswered};
 use ferrix_devmgr_proto::{
     ANSWER_BUSY, ANSWER_DONE, ANSWER_FAILED, ANSWER_NO_DEVICE, BUS_PCI, BUS_PLATFORM,
     DEVICES_MAX_BYTES, DevicesView, Message, NAME_BYTES, SHORT_BYTES,
@@ -27,9 +29,9 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{
-    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, PROCESS_EXITED,
-    PROCESS_KILLED, ProcessStatus, TREE_GS201_DWC3, TREE_STM32_GPU, TREE_STM32_HDMI,
-    TREE_STM32_USBH,
+    CHANNEL_MAX_HANDLES, DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo,
+    PROCESS_EXITED, PROCESS_KILLED, ProcessStatus, TREE_GS201_DWC3, TREE_STM32_GPU,
+    TREE_STM32_HDMI, TREE_STM32_USBH,
 };
 use ferrix_netring::control::{
     CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
@@ -37,7 +39,7 @@ use ferrix_netring::control::{
 };
 use ferrix_restart::{Decision, Ended, Exit, Policy, Restart, Signal};
 use ferrix_rt::native::channel::{self, Channel, ReadError};
-use ferrix_rt::native::device::Device;
+use ferrix_rt::native::device::{Device, Limit};
 use ferrix_rt::native::error::Error;
 use ferrix_rt::native::handle::{Deadline, Object, OwnedHandle};
 use ferrix_rt::native::job::Job;
@@ -73,6 +75,49 @@ const VIRTIO_SND_IDS: [u16; 1] = [0x1059];
 /// virtio-console's modern PCI device id and its transitional one, which is
 /// the pair `docs/CLIPBOARD.md` §3.1 names.
 const VIRTIO_CONSOLE_IDS: [u16; 2] = [0x1043, 0x1003];
+
+/// NVIDIA's PCI vendor: a GPU of its, of class 03 (a display controller),
+/// is driven by `nvrm`, NVIDIA's own resource manager hosted in a ring-3
+/// process (`docs/NVIDIA.md` §4.1).
+const NVIDIA_VENDOR: u16 = 0x10DE;
+/// The PCI base class of a display controller, in bits 23:16 of
+/// `DeviceInfo::class`.
+const DISPLAY_CLASS: u8 = 0x03;
+
+/// QEMU's `pci-testdev` (Red Hat's vendor 0x1B36, device 0x0005): the test
+/// device `cargo xtask test-nvrm` hands `nvrm` in place of a GPU, since QEMU
+/// emulates no NVIDIA function and lets no device's vendor be overridden.
+/// Like the GPU it sits on a VT-d unit and has a 64-bit BAR of gigabytes.
+/// It is matched only to the driver image `nvrm-test`, which only that
+/// gate's image carries, so no other boot starts anything on it.
+const TEST_GPU_VENDOR: u16 = 0x1B36;
+const TEST_GPU_IDS: [u16; 1] = [0x0005];
+
+/// How a PCI function that is not virtio is matched.
+#[derive(Clone, Copy)]
+enum PciMatch {
+    /// Any function of the vendor whose base class is this.
+    Class(u8),
+    /// The vendor's functions with these device ids.
+    Devices(&'static [u16]),
+}
+
+/// The PCI functions that are not virtio transports: which driver, by name
+/// in the initramfs, drives which, and as which kind.
+const PCI_DRIVERS: [(u16, PciMatch, &[u8], Kind); 2] = [
+    (
+        NVIDIA_VENDOR,
+        PciMatch::Class(DISPLAY_CLASS),
+        b"nvrm",
+        Kind::Gpu,
+    ),
+    (
+        TEST_GPU_VENDOR,
+        PciMatch::Devices(&TEST_GPU_IDS),
+        b"nvrm-test",
+        Kind::Gpu,
+    ),
+];
 
 /// Which kind of ring a driver serves its device over. The two rings are
 /// separate protocols with separate kernel ends, and the only thing devmgr
@@ -111,6 +156,14 @@ enum Kind {
     /// it serves comes from the kernel's log through its own device's
     /// capability, so it publishes nothing and is taken at its word.
     Gadget,
+    /// `docs/NVIDIA.md` §4.1: a GPU running firmware of its own, driven by
+    /// `nvrm`, a ferrousli program. Handed only once its isolated-interrupts
+    /// mark is set, its interrupts are isolated and its pin budget is set
+    /// ([`hand_over_gpu`]); then its device and START as a port's driver is.
+    /// It publishes nothing yet (the forwarding core is NVIDIA's N1e), so it
+    /// is taken at its word, and it is not started again when it dies until
+    /// `nvrm` can tear down a GSP it did not boot (N2).
+    Gpu,
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -138,6 +191,8 @@ enum Plan {
     Engine,
     /// A USB device controller's function.
     Gadget,
+    /// A GPU, driven by the program named.
+    Gpu(&'static str),
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
@@ -348,30 +403,21 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             // A device nobody drives: both handles close here.
             continue;
         };
-        // Only a disk is named here, and only disks are counted, so a net
-        // driver between two disks does not shift the second one's letter.
-        let plan = match kind {
-            Kind::Block => {
-                let Some(name) = DiskName::for_index(disks) else {
-                    failed += 1;
-                    continue;
-                };
-                disks += 1;
-                Plan::Block(name)
-            }
-            Kind::Net => Plan::Net,
-            Kind::Display => Plan::Display,
-            Kind::Input => Plan::Input,
-            Kind::Sound => Plan::Sound,
-            Kind::Port => Plan::Port,
-            Kind::Host => Plan::Host,
-            Kind::Engine => Plan::Engine,
-            Kind::Gadget => Plan::Gadget,
+        let Some(plan) = plan_for(kind, &info, &mut disks) else {
+            failed += 1;
+            continue;
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
             continue;
         };
+        // A GPU is handed over only once marked, isolated and budgeted,
+        // through the handle devmgr keeps, which alone has `SET_LIMIT`. One
+        // that is not stays unstarted, with its line, and counts as failed.
+        if matches!(plan, Plan::Gpu(_)) && !hand_over_gpu(&keep, &info) {
+            failed += 1;
+            continue;
+        }
         match start(&job, device, image, &info, plan, &port, u64::from(count)) {
             Ok((job, process, bootstrap)) => {
                 // A bus host says when the devices plugged in at boot are
@@ -390,12 +436,14 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 // waiting for any of them would wait for ever and the kill
                 // below would count a working driver failed. It is started
                 // and taken at its word.
-                let published =
-                    if matches!(kind, Kind::Port | Kind::Host | Kind::Engine | Kind::Gadget) {
-                        true
-                    } else {
-                        await_published(channel, &port, info.location, u64::from(count), &mut inbox)
-                    };
+                let published = if matches!(
+                    kind,
+                    Kind::Port | Kind::Host | Kind::Engine | Kind::Gadget | Kind::Gpu
+                ) {
+                    true
+                } else {
+                    await_published(channel, &port, info.location, u64::from(count), &mut inbox)
+                };
                 if published {
                     let _ = channel.write(
                         &Message::Bound {
@@ -423,7 +471,15 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 });
                 count += 1;
             }
-            Err(()) => failed += 1,
+            Err(()) => {
+                if let Plan::Gpu(program) = plan {
+                    say(format_args!(
+                        "devmgr   gpu {} not started: {program} could not be started",
+                        gpu::Place(info.location)
+                    ));
+                }
+                failed += 1;
+            }
         }
     }
 
@@ -435,6 +491,30 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
         images: &given.images,
     };
     serve(channel, &port, &mut started, &drivers, &mut inbox)
+}
+
+/// How a driver of `kind` is started on the device `info` describes, or
+/// `None` when there are no more disk names.
+///
+/// Only a disk is named here, and only disks are counted, so a net driver
+/// between two disks does not shift the second one's letter.
+fn plan_for(kind: Kind, info: &DeviceInfo, disks: &mut u32) -> Option<Plan> {
+    Some(match kind {
+        Kind::Block => {
+            let name = DiskName::for_index(*disks)?;
+            *disks += 1;
+            Plan::Block(name)
+        }
+        Kind::Net => Plan::Net,
+        Kind::Display => Plan::Display,
+        Kind::Input => Plan::Input,
+        Kind::Sound => Plan::Sound,
+        Kind::Port => Plan::Port,
+        Kind::Host => Plan::Host,
+        Kind::Engine => Plan::Engine,
+        Kind::Gadget => Plan::Gadget,
+        Kind::Gpu => Plan::Gpu(gpu_program(info)),
+    })
 }
 
 /// REPORT: every driver that published counts as started, and every one
@@ -473,7 +553,10 @@ fn announce_drivers(
     names: &[[u8; NAME_BYTES]; MAX_DRIVERS],
     count: usize,
 ) {
-    let pci = DRIVERS.iter().map(|(_, _, name, _)| (*name, BUS_PCI));
+    let pci = DRIVERS
+        .iter()
+        .map(|(_, _, name, _)| (*name, BUS_PCI))
+        .chain(PCI_DRIVERS.iter().map(|(_, _, name, _)| (*name, BUS_PCI)));
     let platform = TREE_DRIVERS
         .iter()
         .map(|(_, name, _)| (*name, BUS_PLATFORM));
@@ -876,6 +959,12 @@ fn launch_again(
     else {
         return false;
     };
+    // A GPU is handed over again, as at boot: the mark stays set, and the
+    // budget is set again under no live pins, since the dead driver's are
+    // quarantined, not live.
+    if matches!(entry.plan, Plan::Gpu(_)) && !hand_over_gpu(&entry.device, &entry.info) {
+        return false;
+    }
     let Ok(device) = entry.device.duplicate(Requested::Exactly(DEVICE_RIGHTS)) else {
         return false;
     };
@@ -894,8 +983,10 @@ fn launch_again(
     entry.process = process;
     entry.dead = false;
     entry.quiesced = false;
-    let published = matches!(entry.kind, Kind::Port | Kind::Host | Kind::Gadget)
-        || await_published(channel, port, entry.location, key, inbox);
+    let published = matches!(
+        entry.kind,
+        Kind::Port | Kind::Host | Kind::Gadget | Kind::Gpu
+    ) || await_published(channel, port, entry.location, key, inbox);
     if published {
         entry.published = true;
         let _ = channel.write(
@@ -932,6 +1023,12 @@ fn driver_for<'a>(
             .iter()
             .find(|(binding, _, _)| *binding == info.device_id)
             .map(|(_, wanted, kind)| (wanted, kind))?,
+        _ if info.location != DEVICE_NOT_PCI => PCI_DRIVERS
+            .iter()
+            .find(|(vendor, matched, _, _)| {
+                *vendor == info.vendor_id && pci_matches(*matched, info)
+            })
+            .map(|(_, _, wanted, kind)| (wanted, kind))?,
         _ => return None,
     };
     let driver = image_index(names, drivers, wanted)?;
@@ -978,6 +1075,122 @@ fn start(
         Plan::Host => start_plain(job, device, image, info, port, key, "usbhid"),
         Plan::Engine => start_plain(job, device, image, info, port, key, "gc400"),
         Plan::Gadget => start_plain(job, device, image, info, port, key, "usbdev"),
+        Plan::Gpu(program) => start_plain(job, device, image, info, port, key, program),
+    }
+}
+
+/// Whether a PCI function that is not virtio is the one `matched` names.
+fn pci_matches(matched: PciMatch, info: &DeviceInfo) -> bool {
+    match matched {
+        PciMatch::Class(base) => (info.class >> 16) as u8 == base,
+        PciMatch::Devices(ids) => ids.contains(&info.device_id),
+    }
+}
+
+/// The program a GPU's table entry named: `nvrm` for NVIDIA's, and
+/// `nvrm-test` for the test device.
+fn gpu_program(info: &DeviceInfo) -> &'static str {
+    if info.vendor_id == NVIDIA_VENDOR {
+        "nvrm"
+    } else {
+        "nvrm-test"
+    }
+}
+
+/// The calls [`gpu::hand_over`] makes, on the device handle devmgr keeps,
+/// which has `SET_LIMIT`.
+struct GpuNode<'a>(&'a Device<Kernel>);
+
+impl gpu::Node for GpuNode<'_> {
+    fn mark(&self) -> Result<(), Unanswered> {
+        self.0
+            .set_limit(Limit::IsolatedInterrupts, 1)
+            .map_err(|_| Unanswered)
+    }
+
+    fn isolation(&self) -> Result<u64, Unanswered> {
+        self.0.isolation().map_err(|_| Unanswered)
+    }
+
+    fn ceiling(&self) -> Result<u64, Unanswered> {
+        self.0
+            .limit(Limit::PinCeiling)
+            .map(|pages| pages as u64)
+            .map_err(|_| Unanswered)
+    }
+
+    fn room(&self) -> Result<u64, Unanswered> {
+        self.0
+            .limit(Limit::PinRoom)
+            .map(|pages| pages as u64)
+            .map_err(|_| Unanswered)
+    }
+
+    fn set_budget(&self, pages: u64) -> Result<(), SetRefused> {
+        let pages = usize::try_from(pages).map_err(|_| SetRefused::PastCeiling)?;
+        self.0
+            .set_limit(Limit::PinPages, pages)
+            .map_err(|error| match error {
+                Error::NoMemory => SetRefused::PastCeiling,
+                _ => SetRefused::Other,
+            })
+    }
+}
+
+/// Hand the GPU `keep` names over to its driver, or say why not
+/// (`docs/NVIDIA.md` §12.2 and §12.3): its isolated-interrupts mark, then its
+/// isolation, then its pin budget, each said in its line on the console.
+/// `true` when the driver may be started.
+fn hand_over_gpu(keep: &Device<Kernel>, info: &DeviceInfo) -> bool {
+    let outcome = gpu::hand_over(&GpuNode(keep));
+    say(format_args!("{}", outcome.line(info.location)));
+    if let HandOver::Start { budget, .. } = outcome {
+        say(format_args!("{}", budget.line(info.location)));
+    }
+    outcome.starts()
+}
+
+/// A line on standard error, which a native process has open on the
+/// console: how devmgr's own decisions reach the boot log, since the kernel
+/// prints only what the bootstrap protocol carries.
+fn say(arguments: fmt::Arguments<'_>) {
+    let mut line = Line::default();
+    let _ = line.write_fmt(arguments);
+    let _ = line.write_str("\n");
+    let _ = ferrix_rt::linux::write(2, line.as_bytes());
+}
+
+/// A line of devmgr's, cut at its buffer's end.
+struct Line {
+    bytes: [u8; 256],
+    len: usize,
+}
+
+impl Default for Line {
+    fn default() -> Line {
+        Line {
+            bytes: [0; 256],
+            len: 0,
+        }
+    }
+}
+
+impl Line {
+    fn as_bytes(&self) -> &[u8] {
+        self.bytes.get(..self.len).unwrap_or_default()
+    }
+}
+
+impl fmt::Write for Line {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        for &byte in text.as_bytes() {
+            let Some(slot) = self.bytes.get_mut(self.len) else {
+                return Err(fmt::Error);
+            };
+            *slot = byte;
+            self.len += 1;
+        }
+        Ok(())
     }
 }
 
