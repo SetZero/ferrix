@@ -114,7 +114,12 @@ a driver's death or of its restart (§4), printed the same way.
    `DEVICE_TREE_BLOCKS` and the binding's number in place of a PCI identity,
    its register windows in the blocks; a second, smaller table matches those:
    `TREE_STM32_HDMI`, the DK board's HDMI output, is a card driven by `ltdc`
-   (`docs/DISPLAY.md` §6).
+   (`docs/DISPLAY.md` §6). A third matches PCI functions that are not virtio
+   transports: vendor `0x10DE` with base class `03`, an NVIDIA display
+   controller, is a GPU driven by `nvrm` (NVIDIA's N1b, §3.2); and QEMU's
+   `pci-testdev` (`1B36:0005`) is a GPU driven by `nvrm-test`, an image only
+   `cargo xtask test-nvrm` puts in the driver directory, since QEMU emulates
+   no NVIDIA function.
 2. Each device keeps the kernel's default pin budget, 66560 pages, unless
    its kind's rule says otherwise (§3.1). Devices of one kind are named in
    PCI order — `vda`, `vdb`, … for disks, as `docs/BLOCK-RING.md` §6.1
@@ -170,7 +175,7 @@ before the driver starts: the kernel refuses a change under live pins.
 | Kind | Budget |
 |---|---|
 | disk, network, display, input, sound, port, host, engine, gadget | the kernel's default, 66560 pages (one driver's worst case); not set |
-| GPU under `nvrm` (NVIDIA's N1b, not yet in the table) | `max(ceiling / 2, 1 GiB)`, cut to the room |
+| GPU under `nvrm` (NVIDIA's N1b, §3.2) | `max(ceiling / 2, 1 GiB)`, cut to the room |
 
 The GPU's rule (`ferrix_devmgr_proto::budget`, the customer's decision of
 2026-10-02) reads the ceiling and the room with `device_get_limit` (0x1058):
@@ -189,8 +194,70 @@ devmgr   gpu 01:00.0 not started: the kernel refused its pin budget of 512 MiB (
 
 256 MiB is `NVRM_MIN_PIN_PAGES`, until NVIDIA's N1d measures what `nvrm`
 needs. The last line is for a `NO_MEMORY` from `device_set_limit`, when
-another device took room between the read and the set. `devmgr` has no GPU
-kind yet, so the rule is host-tested and not yet called.
+another device took room between the read and the set; any other refusal
+of the budget is `… not started: the kernel refused its pin budget of 512
+MiB`. The `Gpu` kind applies the rule as the last step of its hand-over
+(§3.2).
+
+### 3.2 The `Gpu` kind
+
+A GPU runs firmware of its own, NVIDIA's GSP, which is not its driver's to
+vouch for, and its driver pins more than any other. So `devmgr` hands one to
+`nvrm` only once three things hold, in this order, each through the device
+handle it keeps, which alone has `SET_LIMIT` (`ferrix_devmgr_proto::gpu`,
+host-tested):
+
+1. **The mark.** `device_set_limit(DEVICE_LIMIT_ISOLATED_INTERRUPTS, 1)`,
+   set-once (`docs/NVIDIA.md` §12.3). From then on the kernel refuses the
+   device vectors and pins whenever the machine's interrupts are not
+   isolated, whatever `devmgr` decides next. A refused mark stops the
+   launch: `devmgr   gpu 01:00.0 not started: the kernel refused its
+   isolated-interrupts mark`.
+2. **Isolation.** `device_isolation` must have bit 1, interrupts isolated.
+   Without it the GPU is not handed over at all, and the budget is not
+   raised: `devmgr   gpu 01:00.0 not started: its interrupts are not
+   isolated (device_isolation 0x0)`. This is where F-57's closure is
+   verified for the `ferrix-3060` domain at N1's first boot.
+3. **The budget**, as §3.1 says, set before the driver starts.
+
+A GPU handed over is said in two lines, then started as a port's driver is,
+with its device and START over the bootstrap channel:
+
+```
+devmgr   gpu 01:00.0: marked for isolated interrupts, device_isolation 0x2 (interrupts isolated); handing it to nvrm
+devmgr   gpu 01:00.0: pin budget 1024 MiB (an eighth of RAM, at least 1 GiB)
+```
+
+A GPU not handed over counts as failed in REPORT; its device handles are
+closed and the node stays unstarted. A GPU publishes nothing yet (the
+forwarding core is NVIDIA's N1e), so it is taken at its word as an engine
+is, and it is not started again when it dies (§4) until `nvrm` can tear
+down a GSP it did not boot (NVIDIA's N2). A BIND of it runs the whole
+hand-over again.
+
+**How `devmgr` says it.** The kernel prints only what the bootstrap
+protocol carries, and the hand-over's lines are `devmgr`'s own decisions.
+So `devmgr` writes them to standard error, which every process has open on
+the console from its start, as `gc400` writes its findings; nothing in the
+kernel changed for it.
+
+**Starting a ferrousli program.** `nvrm` is a static Linux-personality
+program, linked against ferrousli, because RM needs threads, futexes and
+clocks (`docs/NVIDIA.md` §4.1). `devmgr` starts it as it starts every
+driver -- `process_create` from the image the kernel read out of the
+initramfs, in a job of its own, and `process_start` with its bootstrap
+channel -- so the job, the process handle, the death watch and §5's
+image-as-memory rule hold for it unchanged. A native start gives a program
+its bootstrap handle and an empty stack, so `nvrm`'s entry
+(`src/user/system/linux/drivers/nvrm/src/start.c`) builds the `argc`,
+`argv`, environment and auxiliary vector ferrousli's `__libc_start_main`
+reads, and calls it as `crt1.o` would. From `main` on it is an ordinary
+ferrousli program that also makes native calls.
+
+`cargo xtask test-nvrm` (x86-64, KVM and TCG) boots the three outcomes
+QEMU can show: handed over at 4 GiB, refused for a budget too small at
+512 MiB, and refused for interrupts not isolated on a VT-d unit with
+`intremap=off`.
 
 ## 4. When a driver dies
 
@@ -279,8 +346,8 @@ Each core gives a dead driver's quarantined pins back only once it has
 accepted the next driver's HELLO, which that driver sends after resetting
 the device (`object::pin::quarantine_release`). Every other kind is not
 started again: the serial port (`vport`) has no core to wait for, and the
-USB host (`usbhid`), the GPU engine (`gc400`) and the gadget (`usbdev`) stay
-quiesced after their driver dies. `devmgr` itself stays fatal until the
+USB host (`usbhid`), the GPU engine (`gc400`), the gadget (`usbdev`) and a GPU
+under `nvrm` (§3.2) stay quiesced after their driver dies. `devmgr` itself stays fatal until the
 kernel can offer a new `devmgr` the devices again (`docs/INIT.md` L12).
 
 It began as a bug. With no restart, `kill -9` of the `gpu` driver under the

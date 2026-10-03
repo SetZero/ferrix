@@ -396,13 +396,21 @@ Rejected alternatives:
 * a kernel driver: refused by 2026-09-13, and 13 MB of C in ring 0.
 
 **How it starts.** devmgr gains a match for vendor `0x10de`, class `03`.
-It starts `nvrm` through the personality's exec path rather than
-`process_create`, because a ferrousli program needs `argv` and `auxv` on
-its stack. devmgr then gives it the device and control handles on its
-bootstrap channel, as START gives them to the other drivers. This is a new
-driver kind, `Gpu`. Like `Engine` (gc400), it is not restarted at first.
-Restart comes at N2, once `nvrm` can tear down a GSP that it did not boot
-(R2).
+This is a new driver kind, `Gpu`. Like `Engine` (gc400), it is not
+restarted at first. Restart comes at N2, once `nvrm` can tear down a GSP
+that it did not boot (R2). devmgr hands the device over only after its
+isolated-interrupts mark, its isolation and its pin budget
+(`docs/DEVMGR.md` §3.2), then gives it the device handle on its bootstrap
+channel, as START gives it to the other drivers; the control handle of the
+forwarding core comes with N1e.
+
+This design first said devmgr would start `nvrm` through the personality's
+exec path rather than `process_create`, because a ferrousli program needs
+`argv` and `auxv` on its stack. N1b built it the other way round (§10,
+2026-10-03): devmgr starts `nvrm` with `process_create` like every other
+driver, which keeps its job, its process handle, its death watch and the
+image-as-memory rule (`docs/DEVMGR.md` §5), and `nvrm`'s own entry builds
+the stack ferrousli expects.
 
 ### 4.2 The OS layer
 
@@ -1218,6 +1226,74 @@ and took the recommended answer for D2, D3 and D5.
   * **Not done.** No gate attaches the volume yet; N1f's
     `test-nvidia-smi` will. The volume has no 32-bit libraries, which
     N4's 32-bit games may want.
+* **2026-10-03 — N1b: the `nvrm` skeleton, and devmgr's `Gpu` kind**
+  (branch `nvidia-n1b`). Outside the certified item: devmgr, its proto
+  crate, `nvrm` and xtask only, no kernel file.
+  * **devmgr** matches vendor `0x10de` class `03` to `nvrm`, and QEMU's
+    `pci-testdev` (`1b36:0005`) to `nvrm-test`, an image only the gate's
+    driver directory carries. QEMU emulates no NVIDIA function and lets no
+    device's vendor be overridden (`pci-testdev` and `edu` have no such
+    property; `vfio-pci`'s needs a host device), so the test device stands
+    in, and is matched only by that image's presence. `edu` was not used:
+    stage 10's check W7 leaves it refused until reboot.
+  * **The hand-over**, `ferrix_devmgr_proto::gpu::hand_over`, host-tested
+    with a fake device for every outcome and its order: the mark first
+    (obligation b: `isolation::launch`, a refused mark fails the launch),
+    then `device_isolation` bit 1 (obligation c: the launch is refused
+    without it, after the mark and before any budget is raised), then
+    `GpuBudget::plan` and `device_set_limit` before the start (obligation
+    a: Whole or Cut starts; TooSmall, Refused (`NO_MEMORY`) and any other
+    refusal fail the launch, each with its line, with no fallback).
+  * **devmgr's lines reach the boot log** through standard error, which
+    every process has open on the console from its start, as `gc400`'s do.
+    No kernel change.
+  * **`nvrm`** is C against ferrousli (`src/user/system/linux/drivers/nvrm/`),
+    1.4 MB static. devmgr starts it with `process_create`, not the
+    personality's exec path that §4.1 first said: a native start gives the
+    bootstrap handle and an empty stack, and `nvrm`'s entry (`src/start.c`)
+    builds `argc`, `argv`, an empty environment and the auxiliary vector
+    (program headers, `AT_RANDOM` from `getrandom`, page size, name), then
+    calls ferrousli's `__libc_start_main`. The job, the process handle, the
+    death watch and the image-as-memory rule stay devmgr's as for every
+    driver; no vDSO is mapped, so ferrousli makes those calls itself.
+    `nvrm` reads START and its device from bootstrap, prints the device,
+    `device_isolation` and refuses the device itself without bit 1 (the
+    second guard), its budget and mark, its apertures whole, the vendor and
+    device through the configuration window, BAR0's first register
+    (`NV_PMC_BOOT_0` on an NVIDIA device), runs and joins a thread, and
+    sleeps.
+  * **The gate**, `cargo xtask test-nvrm`, boots three outcomes on the
+    patched QEMU, each judged by its lines (recorded transcripts in
+    `tools/common/xtask/src/nvrm/tests.rs`):
+    * handed over, 4 GiB: `devmgr   gpu 00:04.0: marked for isolated
+      interrupts, device_isolation 0x2 …`, `… pin budget 488 MiB, cut from
+      1024 MiB …`, and `nvrm: device_isolation 0x3: interrupts isolated
+      (bit 1), DMA translated`, `nvrm: pin budget 124928 pages (488 MiB)`,
+      … `nvrm: skeleton up on 00:04.0; idle`;
+    * refused, 512 MiB: `devmgr   gpu 00:04.0 not started: its pin budget
+      of 42 MiB is under the 256 MiB nvrm needs`, no `nvrm` line, REPORT
+      `1 failed`;
+    * refused, `intel-iommu,intremap=off`: `devmgr   gpu 00:04.0 not
+      started: its interrupts are not isolated (device_isolation 0x0)`, no
+      `nvrm` line, REPORT `1 failed`. AArch64 and ARMv7-A would refuse the
+      same way (bit 1 is never set there), but `nvrm` is x86-64 only, so
+      their boots carry no image to match.
+    It passes under KVM and TCG. A host test holds `nvrm`'s C header to the
+    native ABI's numbers.
+  * **Found for N1c.** An image whose `nvrm` was linked with its debug
+    information (10 MB, twice in the driver directory) stopped stage 10:
+    "a driver the manifest names is not in the image" (FX-1006), with every
+    file unpacked. The cause was not traced: the kernel reads every driver
+    whole into its own memory before devmgr starts, and maps any failure of
+    that read to this sentence, and `process_create` takes images up to
+    16 MiB. `nvrm` is now linked with `--strip-debug` and boots, but with
+    RM's 13 MB core linked in it will be near those limits; N1c must find
+    which one it was (the log is kept in
+    `~/.local/share/ferrix/nvidia-n1b-logs/`).
+  * **Left for N1c**: the OS layer (§4.2) and the kept C, threads and
+    timers on ferrousli (one thread ran here), `interrupt_create` and
+    `vmo_pin` under the mark, and `nvrm` in `run-nvidia`'s image for the
+    `ferrix-3060` domain, where its first boot shows bit 1 for real.
 
 ## 11. CUDA (N5)
 
