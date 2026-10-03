@@ -52,6 +52,13 @@ fn serve() -> io::Result<()> {
     // A socket a previous run left is in the way of the bind.
     let _ = std::fs::remove_file(&path);
     let mut listener = UnixListener::bind(&path)?;
+    // The desktop's session runs as its user, and connecting needs write
+    // permission on the socket: every local program may play, as with
+    // PulseAudio's system-wide mode.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))?;
+    }
     let mut playback = Playback::open(|config| config.period)?;
     let config = playback.config();
     let latency =
