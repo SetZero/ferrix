@@ -11,8 +11,8 @@
 //! fallback to the default.
 //!
 //! Pure functions of what `device_get_limit` answers, tested on the host.
-//! `devmgr` has no `Gpu` kind yet (NVIDIA's N1b adds it), so nothing calls
-//! [`GpuBudget::plan`] on a machine yet.
+//! `devmgr`'s `Gpu` kind calls [`GpuBudget::plan`] through
+//! [`crate::gpu::hand_over`] before it starts `nvrm` (NVIDIA's N1b).
 
 use core::fmt;
 

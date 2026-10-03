@@ -13,9 +13,8 @@
 //! and the line says why.
 //!
 //! A pure function of what `device_set_limit` answered, tested on the host.
-//! `devmgr` has no `Gpu` kind yet (NVIDIA's N1b adds it, with
-//! [`crate::budget::GpuBudget`]), so nothing calls [`launch`] on a machine
-//! yet.
+//! `devmgr`'s `Gpu` kind calls [`launch`] through [`crate::gpu::hand_over`],
+//! first, before the isolation check and the budget (NVIDIA's N1b).
 
 use core::fmt;
 

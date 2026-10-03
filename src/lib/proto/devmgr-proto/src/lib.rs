@@ -47,6 +47,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
+pub mod gpu;
 pub mod isolation;
 
 /// DEVICES' message type.
@@ -462,3 +463,6 @@ mod budget_tests;
 
 #[cfg(test)]
 mod isolation_tests;
+
+#[cfg(test)]
+mod gpu_tests;
