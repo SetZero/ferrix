@@ -198,8 +198,11 @@ pub(super) fn start_counting() {
              per-CPU record"
         );
     }
-    install_library_hooks();
     COUNTING.store(true, Ordering::Release);
+    // After the store, not before (the consultant's advisory on 875b66f3b):
+    // from here a library lock that goes through the hooks is counted at
+    // both ends, as a kernel lock is.
+    install_library_hooks();
 }
 
 /// Whether the count is kept yet. `Relaxed`: the flag orders nothing, and
@@ -297,17 +300,24 @@ static HOOKS: ferrix_sync::PreemptHooks = ferrix_sync::PreemptHooks {
 /// convoyed all four processors of a desktop, on a dentry and then on the
 /// btrfs root's metadata, for minutes at a time.
 ///
-/// Once, from [`start_counting`], just before the count is kept: until
-/// then both halves do nothing anyway, so the libraries' locks are matched
-/// exactly as the kernel's own `Preempt` locks are.
+/// Once, from [`start_counting`], just after the count starts to be kept, so
+/// that every hooked `disable` from then on raises the count its `enable`
+/// lowers. Installed before the store, a lock taken between the two would
+/// have raised nothing and been lowered after. The other order has the
+/// mirror of that gap -- a library guard taken before the install and let go
+/// after it -- and what keeps both empty is when this runs: `kmain` starts
+/// the scheduler before `fs::init` makes the first VFS or btrfs lock, so no
+/// library guard exists yet. The kernel's own locks rest on the same
+/// condition for the store itself: no guard is held across the count's
+/// start.
 fn install_library_hooks() {
     // SAFETY: (SHARED) `HOOKS` are `Preempt`'s own `disable` and `enable`,
     // which keep `PreemptControl`'s promises (see its `unsafe impl`), and a
     // `'static` published once. They are installed by `start_counting`,
-    // once, while neither half does anything yet: a library lock taken
-    // before is released through an `enable` that, like its `disable`, does
-    // nothing, under the same condition the kernel's own locks rely on --
-    // that no guard is held across the count's start.
+    // once, just after the count starts to be kept, and before the first
+    // library lock exists (`fs::init` runs after the scheduler starts), so
+    // no library guard is alive across the install, as `install_preempt_hooks`
+    // asks.
     let installed = unsafe { ferrix_sync::install_preempt_hooks(&HOOKS) };
     debug_assert!(installed, "the library hooks are installed once");
 }
