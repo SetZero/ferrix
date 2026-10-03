@@ -563,6 +563,13 @@ as a connection to a `.socket` is, and forwards the end in CONNECT. From then
 on the two talk directly; init is out of the path. A name nobody offers, or
 that the unit does not declare, gets REFUSED.
 
+The first pair a shipped image uses (2026-10-03, `docs/AUTH.md` §3.7):
+`auth.service` says `Offers=ferrix.auth.seat`, and a session's
+`hyprix.service` says `Uses=ferrix.auth.seat`. There the unit's own process
+is `sessiond`, which takes the bootstrap and relays to the compositor it
+starts as the user: a bootstrap belongs to the process init spawned and is
+sealed at `execve`, so a child cannot take it.
+
 Four things follow:
 
 * **The unit files are the policy.** What a service can reach is what its unit

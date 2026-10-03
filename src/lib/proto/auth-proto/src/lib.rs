@@ -116,6 +116,20 @@ pub enum Record<'a> {
     },
     /// Let the seat's lock go, audited. Only root may.
     UnlockSeat,
+    /// The seat's current lock, from `sessiond` on the `ferrix.auth.seat`
+    /// channel (`docs/AUTH.md` §3.7): the next accepted conversation of a
+    /// `Grant=seat` service for `uid` grants it. Never taken from the socket.
+    Arm {
+        /// The session's user.
+        uid: u32,
+        /// The lock's number, which the compositor gave it.
+        epoch: u64,
+    },
+    /// That lock went without a grant: grant nothing for it.
+    Disarm {
+        /// The lock's number.
+        epoch: u64,
+    },
     /// Ask the person something.
     Prompt {
         /// Whether what they type may be shown: false for a password.
@@ -143,6 +157,18 @@ pub enum Record<'a> {
     },
     /// No verdict could be had: no such service, no credential, no store.
     Unavailable(&'a str),
+    /// The armed lock may go: `uid` showed who they are to a `Grant=seat`
+    /// service, or root asked with `authctl unlock-seat`. Sent only on the
+    /// seat channel.
+    Grant {
+        /// The session's user, whom the lock is for.
+        uid: u32,
+        /// The lock's number, as it was armed.
+        epoch: u64,
+    },
+    /// `authd` took the seat channel's client: grants can come now. The
+    /// first record down a new seat channel.
+    SeatReady,
     /// What an account has, the answer to STATUS.
     State {
         /// Whether any credential is set.
@@ -209,6 +235,8 @@ mod kind {
     pub(super) const STATUS: u8 = 4;
     pub(super) const RESET: u8 = 5;
     pub(super) const UNLOCK_SEAT: u8 = 6;
+    pub(super) const ARM: u8 = 7;
+    pub(super) const DISARM: u8 = 8;
     pub(super) const PROMPT: u8 = 32;
     pub(super) const INFO: u8 = 33;
     pub(super) const ERROR: u8 = 34;
@@ -216,6 +244,8 @@ mod kind {
     pub(super) const FAILED: u8 = 36;
     pub(super) const UNAVAILABLE: u8 = 37;
     pub(super) const STATE: u8 = 38;
+    pub(super) const GRANT: u8 = 39;
+    pub(super) const SEAT_READY: u8 = 40;
 }
 
 /// What a string field may hold.
@@ -381,6 +411,16 @@ impl<'a> Record<'a> {
                 account: r.string(Alphabet::Account)?,
             },
             kind::UNLOCK_SEAT => Record::UnlockSeat,
+            kind::ARM => Record::Arm {
+                uid: r.u32()?,
+                epoch: r.u64()?,
+            },
+            kind::DISARM => Record::Disarm { epoch: r.u64()? },
+            kind::SEAT_READY => Record::SeatReady,
+            kind::GRANT => Record::Grant {
+                uid: r.u32()?,
+                epoch: r.u64()?,
+            },
             kind::PROMPT => Record::Prompt {
                 visible: r.flag()?,
                 text: r.string(Alphabet::Text)?,
@@ -437,7 +477,7 @@ impl<'a> Record<'a> {
                 w.string(method, Alphabet::Name)?;
             }
             Record::Respond(Response(secret)) => w.bytes(secret, MAX_SECRET)?,
-            Record::Cancel | Record::UnlockSeat => {}
+            Record::Cancel | Record::UnlockSeat | Record::SeatReady => {}
             Record::Status { account } | Record::Reset { account } => {
                 w.string(account, Alphabet::Account)?;
             }
@@ -452,6 +492,11 @@ impl<'a> Record<'a> {
                 w.put(&uid.to_le_bytes())?;
                 w.string(account, Alphabet::Account)?;
             }
+            Record::Arm { uid, epoch } | Record::Grant { uid, epoch } => {
+                w.put(&uid.to_le_bytes())?;
+                w.put(&epoch.to_le_bytes())?;
+            }
+            Record::Disarm { epoch } => w.put(&epoch.to_le_bytes())?,
             Record::Failed {
                 retry_after_ms,
                 text,
@@ -484,6 +529,10 @@ impl<'a> Record<'a> {
             Record::Status { .. } => kind::STATUS,
             Record::Reset { .. } => kind::RESET,
             Record::UnlockSeat => kind::UNLOCK_SEAT,
+            Record::Arm { .. } => kind::ARM,
+            Record::Disarm { .. } => kind::DISARM,
+            Record::Grant { .. } => kind::GRANT,
+            Record::SeatReady => kind::SEAT_READY,
             Record::Prompt { .. } => kind::PROMPT,
             Record::Info(_) => kind::INFO,
             Record::Error(_) => kind::ERROR,

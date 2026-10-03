@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ferrix_auth_proto::{Record, Response, method};
 
-use crate::engine::{Conversation, Engine, FAILED, Out, Peer, Reply};
+use crate::engine::{Armed, Conversation, Engine, FAILED, Out, Peer, Reply};
 use crate::password::{FLOOR, Hasher};
 use crate::paths::Paths;
 use crate::store::{Credential, Store};
@@ -423,17 +423,154 @@ fn a_sha512_crypt_seed_is_rehashed_as_argon2id_at_its_first_success() {
     );
 }
 
+/// The lock `sessiond` armed for ferrix's session, as [`Armed`].
+const LOCK: Armed = Armed {
+    uid: 1000,
+    epoch: 5,
+};
+
+/// A machine where ferrix's password is `mine` and ferrix's lock 5 is up.
+fn armed(name: &str) -> Machine {
+    let mut m = Machine::new(name);
+    m.set("ferrix", 1000, "mine");
+    m.engine.arm(LOCK.uid, LOCK.epoch);
+    m
+}
+
 #[test]
-fn unlock_seat_is_root_only_and_waits_for_phase_2() {
-    let mut m = Machine::new("seat");
+fn hyprlocks_acceptance_grants_the_armed_lock_once() {
+    let mut m = armed("grant");
+    assert_eq!(
+        m.verdict(FERRIX, "hyprlock", "", &["mine"]),
+        accepted("ferrix", 1000)
+    );
+    assert_eq!(m.engine.take_grants(), [LOCK]);
+    assert!(m.audit().contains("result=granted"));
+    assert!(m.audit().contains("seat-epoch=5"));
+    // Used up: a second acceptance grants nothing until the next lock.
+    assert_eq!(
+        m.verdict(FERRIX, "hyprlock", "", &["mine"]),
+        accepted("ferrix", 1000)
+    );
+    assert_eq!(m.engine.take_grants(), []);
+}
+
+#[test]
+fn a_wrong_password_grants_nothing() {
+    let mut m = armed("grant-wrong");
+    let _ = m.verdict(FERRIX, "hyprlock", "", &["yours"]);
+    assert_eq!(m.engine.take_grants(), []);
+}
+
+#[test]
+fn only_the_armed_uid_is_granted() {
+    let mut m = Machine::new("grant-uid");
+    m.set("other", 1001, "theirs");
+    m.engine.arm(LOCK.uid, LOCK.epoch);
+    assert_eq!(
+        m.verdict(OTHER, "hyprlock", "", &["theirs"]),
+        accepted("other", 1001)
+    );
+    assert_eq!(
+        m.engine.take_grants(),
+        [],
+        "another user's password opened ferrix's lock"
+    );
+}
+
+#[test]
+fn nothing_armed_means_nothing_granted() {
+    let mut m = Machine::new("grant-unarmed");
+    m.set("ferrix", 1000, "mine");
+    // Accepted before any lock was armed: no grant is kept for a later one.
+    let _ = m.verdict(FERRIX, "hyprlock", "", &["mine"]);
+    m.engine.arm(LOCK.uid, LOCK.epoch);
+    assert_eq!(m.engine.take_grants(), []);
+}
+
+#[test]
+fn a_service_without_grant_seat_grants_nothing() {
+    let mut m = armed("grant-service");
+    assert_eq!(
+        m.verdict(FERRIX, "gate", "", &["mine"]),
+        accepted("ferrix", 1000)
+    );
+    assert_eq!(m.engine.take_grants(), []);
+}
+
+#[test]
+fn a_new_arm_replaces_the_old_and_disarm_names_its_own() {
+    let mut m = armed("grant-rearm");
+    m.engine.arm(1000, 6);
+    // A disarm for the lock before does not touch this one.
+    m.engine.disarm(5);
+    let _ = m.verdict(FERRIX, "hyprlock", "", &["mine"]);
+    assert_eq!(
+        m.engine.take_grants(),
+        [Armed {
+            uid: 1000,
+            epoch: 6
+        }]
+    );
+    m.engine.arm(1000, 7);
+    m.engine.disarm(7);
+    let _ = m.verdict(FERRIX, "hyprlock", "", &["mine"]);
+    assert_eq!(m.engine.take_grants(), []);
+}
+
+#[test]
+fn the_seat_going_drops_what_was_armed_and_granted() {
+    let mut m = armed("grant-gone");
+    m.engine.seat_gone();
+    let _ = m.verdict(FERRIX, "hyprlock", "", &["mine"]);
+    assert_eq!(m.engine.take_grants(), []);
+}
+
+/// ARM is the seat channel's alone: from the socket it is a record out of
+/// turn, and arms nothing.
+#[test]
+fn arm_from_the_socket_arms_nothing() {
+    let mut m = Machine::new("grant-socket");
+    m.set("ferrix", 1000, "mine");
+    for record in [
+        Record::Arm {
+            uid: 1000,
+            epoch: 1,
+        },
+        Record::Disarm { epoch: 1 },
+        Record::Grant {
+            uid: 1000,
+            epoch: 1,
+        },
+    ] {
+        assert!(matches!(m.one(ROOT, &record), Reply::Unavailable(_)));
+    }
+    let _ = m.verdict(FERRIX, "hyprlock", "", &["mine"]);
+    assert_eq!(m.engine.take_grants(), []);
+}
+
+#[test]
+fn unlock_seat_is_roots_audited_grant() {
+    let mut m = Machine::new("unlock-seat");
     assert_eq!(
         m.one(FERRIX, &Record::UnlockSeat),
         Reply::Unavailable("only root may let the seat's lock go".to_owned())
     );
     assert!(
-        matches!(m.one(ROOT, &Record::UnlockSeat), Reply::Unavailable(ref t) if t.contains("phase 2"))
+        matches!(m.one(ROOT, &Record::UnlockSeat), Reply::Unavailable(ref t) if t.contains("no lock"))
     );
-    assert!(m.audit().contains("service=unlock-seat"));
+    m.engine.arm(LOCK.uid, LOCK.epoch);
+    assert_eq!(
+        m.one(FERRIX, &Record::UnlockSeat),
+        Reply::Unavailable("only root may let the seat's lock go".to_owned())
+    );
+    assert_eq!(m.engine.take_grants(), [], "a user's unlock-seat granted");
+    assert_eq!(m.one(ROOT, &Record::UnlockSeat), accepted("root", 0).reply);
+    assert_eq!(m.engine.take_grants(), [LOCK]);
+    let audit = m.audit();
+    assert!(audit.contains("service=unlock-seat"), "{audit}");
+    assert!(audit.contains("peer-uid=0"), "{audit}");
+    assert!(audit.contains("seat-epoch=5"), "{audit}");
 }
 
 #[test]

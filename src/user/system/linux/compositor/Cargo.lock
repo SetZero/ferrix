@@ -319,6 +319,9 @@ dependencies = [
  "compositor-seat",
  "compositor-socket",
  "compositor-wire",
+ "ferrix-auth-proto",
+ "ferrix-native",
+ "ferrix-native-abi",
  "libc",
 ]
 
@@ -520,6 +523,21 @@ version = "0.1.0"
 [[package]]
 name = "ferrix-linux-abi"
 version = "0.1.0"
+
+[[package]]
+name = "ferrix-native"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
+name = "ferrix-native-abi"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+]
 
 [[package]]
 name = "ferrix-svc-proto"

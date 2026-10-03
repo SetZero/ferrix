@@ -146,9 +146,9 @@ leaves the desktop running as root.
 
 | Agent | Wants | Phase 1 (desktop is root) | Phase 2 (desktop is a user) |
 |---|---|---|---|
-| **TA.WALKUP** A person at a *locked* screen, with the keyboard, the pointer and a USB port | In | The lock takes the keyboard (hyprix, stage 18). Only `authd`'s verdict opens it. The throttle (§3.5) makes guessing slow. A USB keyboard that types guesses gets the same throttle. | Same, and the compositor unlocks only on `authd`'s grant (§3.7). Crashing the locker leaves the screen locked, and a new locker may take over. |
+| **TA.WALKUP** A person at a *locked* screen, with the keyboard, the pointer and a USB port | In | The lock takes the keyboard (hyprix, stage 18). Only `authd`'s verdict opens it. The throttle (§3.5) makes guessing slow. A USB keyboard that types guesses gets the same throttle. | Same, and the compositor unlocks only on `authd`'s grant for the lock that is up (§3.7). Crashing the locker leaves the screen locked, and a new locker, started by a `bindl` key, may take over; it too needs the password. |
 | **TA.WALKUP'** The same person at an *unlocked*, unattended screen | Keep access later | `passwd` asks for the old password first, so they cannot change it. They can do anything else root can: phase 1 does not defend this. | `passwd` and becoming root both ask for a password. They can run anything as the user, and that is out of scope (§2.3). |
-| **TA.CLIENT** A compromised desktop client | The password, or an unlock | It is root and can read the store. Phase 1 does not defend this, and says so. | Same uid as the session. It cannot read the store (`0700 auth`) or `authd`'s memory (no `ptrace`, §1). It cannot forge the grant (the seat channel is init-routed, §3.7). It can guess only at the throttle's rate. It can kill hyprix, which ends the session (§6.4) rather than unlocking it. **It can draw a fake lock screen and phish**, which no design on a same-uid desktop prevents (§2.3). |
+| **TA.CLIENT** A compromised desktop client | The password, or an unlock | It is root and can read the store. Phase 1 does not defend this, and says so. | Same uid as the session. It cannot read the store (`0700 auth`) or `authd`'s memory (no `ptrace`, §1). It cannot forge the grant: the seat channel is init-routed to `sessiond`, which relays over the session's own socket pair and takes nothing grant-shaped from hyprix (§3.7). It cannot reopen that socket through `/proc`. It can guess only at the throttle's rate. Killing hyprlock and taking its lock over unlocks nothing (§3.7, `--boot hyprlock-session`). **It can kill hyprix, and until `login` lands (P2.3) that restarts into a fresh, unlocked desktop**; §6.4's answer, the session ending at `login`, is P2.7's. **It can draw a fake lock screen and phish**, which no design on a same-uid desktop prevents (§2.3). |
 | **TA.NET** A network attacker, once ssh or a network login exists | A shell | `sshdt` stays key-only (`tools/common/xtask/src/ssh.rs:29-31`). `authd` listens on no network socket. | Password or keyboard-interactive ssh goes through `authd` (phase 3), with the same throttle and audit. Until then it stays off. |
 | **TA.ROOT** A Linux-ABI program running as root | Everything | Out of reach by design. Root reads any file and can replace `authd`. What still holds: the hashes are Argon2id, so a stolen store costs a lot of work per guess (§5.1). | Same. Phase 2 makes root rarer: no desktop client runs as root. |
 | **TA.OFFLINE** Someone with a copy of the disk (`build/root.img`, the DK1's SD card) | Passwords, which people reuse | Argon2id with a per-user salt. Nothing else: there is no disk encryption. | Same. |
@@ -345,48 +345,114 @@ as the Security Target's §9.1 expects.
 
 ### 3.7 Who may unlock: the compositor decides, on `authd`'s word
 
-Today the client that holds the lock decides alone: `unlock_and_destroy`
-from it gives the screen back (`src/user/system/linux/compositor/server/src/client.rs:3745-3749`,
-`src/user/system/linux/compositor/hyprix/src/state.rs:5406-5417`). While every client is root,
-that costs nothing, because any client could do worse anyway. Once the
-desktop is a user's, it matters: the lock holder would be the one process
-between a same-uid attacker and the session.
+**Built 2026-10-03 (P2.5)** for a session that runs as its user, which is
+`run-compositor --everything`'s. The design below is the one the
+certification consultant reviewed (OK IF, ledger line 299, conditions G1 to
+G9), with what building it changed said where it changed.
 
-So in phase 2:
+The problem: the client that holds the lock decided alone. Once the desktop
+is a user's, every client is that user's, and the lock holder is the one
+process between a same-uid program and the session. So a session's lock
+goes only on `authd`'s word that the session's user typed their password
+while that lock was up.
 
-1. `authd.service` has `Offers=ferrix.auth.seat`, and `hyprix.service` has
-   `Uses=ferrix.auth.seat`. Init routes the channel (`docs/INIT.md` §6), so
-   hyprix knows the other end is `authd` without taking anyone's word for
-   it, and no other unit can open the name.
-2. When a conversation for a service with `Grant=seat` ends ACCEPTED,
-   `authd` sends `GRANT { uid, at }` down the seat channel. "The lock
-   screen's user typed their password at 12:00:03."
-3. hyprix honours `unlock_and_destroy` only when it has a grant for the
-   session's own uid that arrived after the lock was taken and in the last
-   30 s. It then uses the grant up. An unlock without a grant is refused:
-   the lock stays, the client is told it lost it (`finished`), and the
-   screen stays locked. That is the state a dead locker leaves today.
-4. **A lock whose client died, or which was refused, may be taken over by a
-   new lock client.** Today hyprix refuses every second lock, even one
-   replacing a dead client (`state.rs:5351-5361`), so a crashed hyprlock
-   means a reboot. With grants, a new client that takes over still cannot
-   unlock without the password. This is Hyprland's
-   `misc:allow_session_lock_restore`, made safe.
+**The channels.** `auth.service` says `Offers=ferrix.auth.seat` and the
+session's `hyprix.service` says `Uses=ferrix.auth.seat`, so init routes
+the name to that unit alone (`docs/INIT.md` §6). Init gives a service's
+bootstrap channel to the process it spawned, and that slot is sealed at
+`execve`; in a session that process is `sessiond` (root, the seat's owner),
+and hyprix is its fork-and-exec child as the user. A native handle cannot
+pass through `SCM_RIGHTS`, and hyprix has no native channel to take one on,
+so `sessiond` cannot hand the endpoint on: it **relays**. It already is the
+one process hyprix trusts, for the devices.
 
-hyprlock's two other ways out map onto this:
+```
+authd ==ferrix.auth.seat== sessiond ==fd 4 socketpair== hyprix (uid 1000)
+       ARM, DISARM ->                 <- locked N, unlocked N
+       <- SEAT_READY, GRANT           -> grants on|off, grant N
+```
 
-* **`--grace N`** (any key unlocks within N s of locking) becomes hyprix's
-  own setting, `misc:lock_grace`, which hyprix enforces from when *it* took
-  the lock. Its default is 0. hyprlock's `--grace` works up to hyprix's
-  limit and no further, so the client cannot extend it.
-* **`SIGUSR1`** (unlock from a script) becomes `authctl unlock-seat`, which
-  only root may send. It makes `authd` send a grant, and the audit log says
-  who asked. An admin who reached the machine by ssh can still let a
-  locked screen go, and the log shows they did.
+The lock's lines go on a socket pair of their own, descriptor 4
+(`compositor_seat::lock`), not on the devices' descriptor 3: that one is
+request and answer, and a grant arriving on its own could be read as a
+device's answer. Like descriptor 3 it has no path, hyprix marks it
+close-on-exec at once, and a uid-1000 program cannot reopen it through
+`/proc/<hyprix>/fd/4` (a socket reopens as `ENXIO`, as on Linux) or
+`ptrace` hyprix (Ferrix has no `ptrace`).
 
-In phase 1 there is no seat channel, because there is no init above hyprix,
-and hyprix keeps honouring the lock client. §2.2's phase 1 column says what
-that leaves open, which is nothing that root could not already do.
+**The rules.**
+
+1. hyprix numbers its locks, an epoch that only grows, and says `locked
+   N`. `sessiond` sends `ARM {uid, N}` to `authd` for the session's uid; one
+   epoch is armed at a time, and a new one replaces it. An epoch that does
+   not grow, or any line from hyprix that is not `locked` or `unlocked`, ends
+   the session: nothing grant-shaped is taken from hyprix's side.
+2. When a conversation of a `Grant=seat` service (hyprlock's alone) ends
+   ACCEPTED for the armed uid, `authd` sends `GRANT {uid, N}` and disarms
+   it, and its audit line says `result=granted why=seat-epoch=N`. ARM,
+   DISARM and GRANT exist only on the seat channel; from the socket they are
+   records out of turn. `authctl unlock-seat` (uid 0 by `SO_PEERCRED`)
+   grants the armed epoch, audited with who asked.
+3. `sessiond` passes `grant N` to hyprix only for the session's uid and the
+   epoch it armed, once.
+4. hyprix keeps a grant with its epoch and spends it on that lock's unlock,
+   which must still be the holder's own `unlock_and_destroy` on the lock it
+   was given. An unlock that comes before its grant waits
+   `grants::UNLOCK_WAIT`, 2 s (the grant and the answer travel different
+   ways); with no grant by then it is refused, and the lock is held by
+   nobody. A waiting unlock outlives its holder: hyprlock exits the moment
+   it has asked, and the person who typed the right password is not left at
+   an orphaned lock because the grant came a moment later (the consultant's
+   S2). A grant for another epoch, a late one, or one for a lock held by
+   nobody and not waiting, is nothing.
+5. **Takeover.** A lock held by nobody -- its holder died, or its unlock was
+   refused -- may be taken over by a new locker: a new epoch, `locked`
+   told afresh, the windows hidden throughout, and nothing about it an
+   unlock. A lock whose holder lives still refuses every second locker.
+   This is `misc:allow_session_lock_restore`, made safe; in a session it is
+   always so, and outside one never. **Who starts the new locker** (G7):
+   the user's `bindl` (a bind that works while locked, as Hyprland's does;
+   with a modifier, `bindl = SUPER, L, exec, hyprlock`, so that typing at
+   the lock does not start one) or hypridle's `lock_cmd`; a person at the locked screen presses the
+   key, types the password, and the new lock goes on its own grant. That
+   path never unlocks by itself.
+6. **While no grant can come** -- `sessiond` has no seat channel, or it
+   went -- hyprix takes no new lock in a session, and says so: a lock nothing
+   can open would lock the person out, and one opened without a grant would
+   be no lock. A held lock stays locked until a grant can come again. A
+   compositor whose lock channel `sessiond` named but which could not take
+   it is in this state for good (the consultant's S1); `authd` runs as uid
+   90, so no program of the user's can make the window by killing it.
+
+A desktop with no session user has no descriptor 4. There hyprix keeps the
+holder's word, as in phase 1, since every client there is root.
+
+**`misc:lock_grace`** is hyprix's (seconds, default 0, capped at
+`grants::LOCK_GRACE_CAP`, 10 s, whatever the user's file says). Within it,
+measured on hyprix's monotonic clock from when it took the lock, a fresh
+lock's holder unlocks with no grant: that is hyprlock's `--grace`, which
+hyprlock cannot extend. **A takeover gets no grace** (G1): otherwise killing
+hyprlock and taking over its lock would buy one. What is left, and accepted
+with §2.3's fake lock screen: a program that takes the lock *before*
+hyprlock does can unlock within the grace it was given.
+
+**`SIGUSR1`** does not unlock; `authctl unlock-seat` is root's audited way.
+
+**Tested by** `cargo xtask test-compositor --boot hyprlock-session`, the
+desktop as `ferrix`: a lock goes on `authd`'s grant; a program of
+`ferrix`'s kills hyprlock, takes its lock over and asks to unlock at once,
+and the screen stays locked; the same program cannot open descriptor 4
+through `/proc`; and a new hyprlock, started by a `bindl`, takes the lock
+over and the password lets it go. Its negative controls, through
+`gate.sh control`, make a takeover granted, make hyprix ignore grants, and
+make `authd` grant nothing; each must fail the boot. Host tests cover every
+rule above in `hyprix/src/state/grant_tests.rs`, `sessiond/src/relay.rs`,
+`authd/src/tests.rs` and `compositor_seat::lock`.
+
+**Not closed by this** (P2.3, P2.7): `hyprix.service` restarts on failure,
+and a same-uid program can kill hyprix, so killing it brings back a *fresh,
+unlocked* desktop. §6.4's answer -- the session ends with its compositor and
+the seat goes back to `login` -- needs `login` (P2.3) first.
 
 ### 3.8 Secrets in memory
 
@@ -766,8 +832,9 @@ channel. Every client is `ferrix`'s; `sshdt` and `udhcpc`, which must stay
 root, are units of `graphical.target` instead of `exec-once` lines. The
 kernel gives a pseudoterminal's slave to the process that opened
 `/dev/ptmx`, as devpts does, so a terminal works as a user. Not built
-yet: the session's own scope, `login`, the grant hyprix unlocks on, and
-the other desktops, which still run as root. **P1.5 landed the same day**
+yet: the session's own scope, `login`, and
+the other desktops, which still run as root. The grant hyprix unlocks on
+(P2.5, §3.7) was built the same evening. **P1.5 landed the same day**
 (the certification consultant's OK IF, ledger line 295): every desktop
 image carries `authd` and `/bin/hyprlock`, which asks `authd` for the
 session's own account's password, so on `--everything` that is
@@ -911,7 +978,7 @@ phase 1. hyprlock does not change when phase 2 moves the session to
 | P2.2 | K-C: zero socket, pipe and tty buffers when freed | kernel | | kernel gate | 1 |
 | P2.3 | `login`, and getty execs it. First password on a local console. `test-init` gains a stage: log in as `ferrix`, a wrong password refused, `id` says 1000, the session's scope is `user-1000.slice/session-1.scope`. | auth, init | P1 | `test-init --arch all` | 5 |
 | P2.4 | `sessiond`: seat0, device descriptors by `SCM_RIGHTS`, starts hyprix as the account in its scope, ends the session with its compositor. **Built 2026-10-03 for `--everything`** (§6.1), all but the scope: the session stays in `hyprix.service`'s cgroup; `test-compositor --boot everything-desktop` runs it as uid 1000 | session (new) | L10, P0 | `test-compositor` as uid 1000 | 10 |
-| P2.5 | hyprix: devices from `sessiond`, the seat channel and grants (§3.7), a new locker taking over a dead lock, `misc:lock_grace`. **Devices built 2026-10-03**; P1.5 landed the same day, so the grants, the locker and `lock_grace` are next | compositor | P2.4, P1.3 | `test-compositor`, `test-hyprlock` | 6 |
+| P2.5 | hyprix: devices from `sessiond`, the seat channel and grants (§3.7), a new locker taking over a dead lock, `misc:lock_grace`. **Built 2026-10-03**: the devices, then the grants, the takeover and `lock_grace` (§3.7; the consultant's OK IF, ledger line 299); `test-compositor --boot hyprlock-session` | compositor | P2.4, P1.3 | `test-compositor`, `test-hyprlock` | 6 |
 | P2.6 | `su`, set-uid root, the wheel rule | auth | P1 | `test-vfs` (it already becomes `ferrix` with `su`) | 3 |
 | P2.7 | Adversary controls in the gates. A client that calls `unlock_and_destroy` with no grant leaves the screen locked. So does a client at a dead locker's place, and one holding a lock it was refused, each sending `unlock_and_destroy`; putting back the old place-only check makes that boot fail (the consultant's condition, ledger line 296; host tests in `hyprix/src/state/tests.rs` already). A client that kills hyprix lands at `login`, not on a desktop. A uid-1000 program cannot read `/var/lib/ferrix/auth`. Each has a sabotage that must make it fail. | auth, compositor | P2.4, P2.5 | `test-compositor`, `test-auth` | 4 |
 
@@ -1081,6 +1148,7 @@ it was put to the customer.
 | P1.2 `src/lib/proto/auth-proto` | on `main` with this section: the records of §3.3, `Secret`, the `auth_proto` fuzz target |
 | P1.3 `authd`, P1.4 `passwd` and `authctl` | on `main` with this row (`src/user/system/linux/auth/`): 28 host tests, one of them over a real socket, and `test-auth` on all three architectures |
 | P1.6 `cargo xtask test-auth` | on `main` with this row (`tools/common/xtask/src/auth.rs`): passes on x86-64, AArch64 and ARMv7-A, and each of `--sabotage accept-any`, `tell-unknown`, `let-anyone-name` and `no-throttle` fails on its own line |
+| P2.5 the seat's grant | 2026-10-03: `authd` offers `ferrix.auth.seat`, `sessiond` arms each lock and relays its grant on descriptor 4, hyprix lets a session's lock go only on it, a dead lock may be taken over, `misc:lock_grace` capped (§3.7, ledger line 299). `--boot hyprlock-session` and three negative controls. Not closed: killing hyprix restarts a fresh desktop until `login` (P2.3, P2.7) |
 | hyprix's lock holder | 2026-10-03: only the holder unlocks, on its own lock object, and nobody once it has died (§1's lock row; the consultant's OK IF, ledger line 296); seven host tests, and negative controls in `~/.local/share/ferrix/logs/lock-orphan/` |
 | P1.5 hyprlock's backend | on `main` with this row (2026-10-03): `/bin/hyprlock` talks to `authd` through `src/user/system/linux/auth/client` (`hyprlock/src/auth.rs`), and every desktop image carries `authd` beside hyprlock (`tools/common/xtask/src/compositor/desktop.rs`), with a seed only where `--auth-seed` asks (the certification consultant's OK IF, ledger line 295). `test-compositor --boot hyprlock` locks, refuses a wrong password and takes the right one through `authd`; `--boot hyprlock-unset` refuses to lock an account with no password (decision 4) |
 | K-E `SO_PEERCRED` at `connect` and `listen` | on `main` with its boot check (E-01, closed) |

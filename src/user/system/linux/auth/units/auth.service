@@ -10,6 +10,10 @@ After=auth.socket
 [Service]
 Type=simple
 ExecStart=/sbin/authd
+# The seat channel (docs/AUTH.md §3.7): the session's sessiond opens it to
+# arm the lock that hyprlock's acceptance grants. Init routes it only to a
+# unit that says Uses=ferrix.auth.seat.
+Offers=ferrix.auth.seat
 Restart=on-failure
 RestartSec=1s
 MemoryMax=320M

@@ -26,6 +26,16 @@ fn every_kind() -> Vec<Record<'static>> {
         Record::Status { account: "" },
         Record::Reset { account: "root" },
         Record::UnlockSeat,
+        Record::Arm {
+            uid: 1000,
+            epoch: 1,
+        },
+        Record::Disarm { epoch: u64::MAX },
+        Record::Grant {
+            uid: 1000,
+            epoch: 7,
+        },
+        Record::SeatReady,
         Record::Prompt {
             visible: false,
             text: "Password: ",
@@ -100,11 +110,12 @@ fn the_layout_is_fixed() {
 
 #[test]
 fn decoding_refuses_every_malformed_packet() {
-    let cases: [(&[u8], DecodeError); 12] = [
+    let cases: [(&[u8], DecodeError); 13] = [
         (b"", DecodeError::Length),
         (&[0x03], DecodeError::Short),
         (&[0x03, 0x02], DecodeError::Version),
-        (&[0x07, 0x01], DecodeError::Kind),
+        (&[0x09, 0x01], DecodeError::Kind),
+        (&[0x07, 0x01, 0x00], DecodeError::Short),
         (&[0x03, 0x01, 0x00], DecodeError::Trailing),
         (&[0x20, 0x01, 0x02, 0x00, 0x00], DecodeError::Flag),
         (&[0x04, 0x01, 0x05, 0x00, b'a'], DecodeError::Short),

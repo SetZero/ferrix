@@ -8,7 +8,8 @@
 
 use compositor_wire::ObjectId;
 
-use super::{Lock, Slot, lock_changed};
+use super::{Lock, LockSeat, Slot, lock_changed};
+use crate::grants::Grants;
 
 /// The `ext_session_lock_v1` the holder locked with.
 const HELD: ObjectId = ObjectId(10);
@@ -26,6 +27,8 @@ fn step(
     covered: &[(ObjectId, ObjectId, usize)],
     unlocking: Option<(ObjectId, bool)>,
 ) -> Vec<String> {
+    // A desktop with no lock channel: the holder decides, as before phase 2.
+    let mut grants = Grants::default();
     let mut said = Vec::new();
     let _ = lock_changed(
         lock,
@@ -35,6 +38,11 @@ fn step(
         locking,
         covered,
         unlocking,
+        &mut LockSeat {
+            grants: &mut grants,
+            now: std::time::Instant::now(),
+            grace: std::time::Duration::ZERO,
+        },
         &mut |line| said.push(line.to_owned()),
     );
     said

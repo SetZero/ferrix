@@ -23,6 +23,8 @@ use crate::pool::Mapping;
 use crate::seat::Seat;
 
 mod draw;
+#[cfg(test)]
+mod grant_tests;
 mod serve;
 #[cfg(test)]
 mod tests;
@@ -273,6 +275,11 @@ struct Compositor<'r> {
     shots: Vec<Shot>,
     /// The session lock, while one is held.
     lock: Option<Lock>,
+    /// Whether a lock goes on `authd`'s grant, and the channel it comes by.
+    grants: crate::grants::Grants,
+    /// `misc:lock_grace`, capped: how long a fresh lock's holder may unlock
+    /// with no grant.
+    lock_grace: Duration,
     /// The input method, while a program is one.
     method: Option<Method>,
     /// The Wayland socket.
@@ -515,6 +522,7 @@ impl<'r> Compositor<'r> {
         let follow_mouse = config.int("input:follow_mouse").unwrap_or(1) != 0;
         let planes = crate::plane::wanted(config.int("cursor:no_hardware_cursors").unwrap_or(2));
         let focus_on_activate = config.int("misc:focus_on_activate").unwrap_or(0) != 0;
+        let lock_grace = lock_grace(config.int("misc:lock_grace"));
         {
             let (live, unresolved) = seat.binds();
             for reason in unresolved {
@@ -576,6 +584,8 @@ impl<'r> Compositor<'r> {
             clipboard: crate::clipboard::Clipboard::new(),
             shots: Vec::new(),
             lock: None,
+            grants: crate::grants::Grants::adopted(),
+            lock_grace,
             method: None,
             listener,
             devices,
@@ -666,6 +676,7 @@ impl<'r> Compositor<'r> {
         changed |= self.serve_ready(first_new, &mut asks)?;
         changed |= self.carry_asks(asks, now);
         self.after_clients();
+        changed |= self.carry_grants();
         changed |= self.run_asked(asked, &placements, now);
         changed |= self.drop_gone();
 
@@ -1184,6 +1195,34 @@ impl<'r> Compositor<'r> {
         changed
     }
 
+    /// The lock channel: what `sessiond` said, a waiting unlock given up on,
+    /// and the lines owed it. Gives whether the screen changed.
+    fn carry_grants(&mut self) -> bool {
+        let mut changed = false;
+        let woke = self
+            .grants
+            .raw_fd()
+            .is_some_and(|fd| self.ready.as_ref().is_none_or(|ready| ready.contains(&fd)));
+        if woke {
+            for what in self.grants.read() {
+                match what {
+                    compositor_seat::lock::ToCompositor::Grant(epoch) => {
+                        changed |=
+                            grant_arrived(&mut self.lock, epoch, &mut self.grants, self.report);
+                    }
+                    compositor_seat::lock::ToCompositor::Grants(on) => (self.report)(if on {
+                        "hyprix: authd can grant the session's locks"
+                    } else {
+                        "hyprix: authd cannot grant now; new locks are refused"
+                    }),
+                }
+            }
+        }
+        changed |= unlock_waited(&mut self.lock, Instant::now(), self.report);
+        self.grants.flush();
+        changed
+    }
+
     /// What is worked out from the clients once they have all been read:
     /// the screenshots, the pointer's constraint, the keybinds' inhibitor,
     /// the lock's watchers and the idle notifications.
@@ -1349,8 +1388,7 @@ impl<'r> Compositor<'r> {
         if let Some(held) = self.lock.as_mut()
             && held.held_by(index)
         {
-            held.orphaned = true;
-            held.surfaces.clear();
+            held.orphan();
             (self.report)("hyprix: the program holding the lock went; the screen stays locked");
             changed = true;
         }
@@ -1598,6 +1636,12 @@ impl<'r> Compositor<'r> {
             .map(crate::control::Pending::deadline)
             .min()
             .map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        // An unlock waiting for its grant is given up on at its deadline.
+        let unlock_wait = self
+            .lock
+            .as_ref()
+            .and_then(|held| held.waiting)
+            .map(|until| until.saturating_duration_since(Instant::now()));
         [
             frame_wait,
             idle_wait,
@@ -1607,6 +1651,7 @@ impl<'r> Compositor<'r> {
             gpu_wait,
             injected_wait,
             request_wait,
+            unlock_wait,
         ]
         .into_iter()
         .flatten()
@@ -1653,6 +1698,7 @@ impl<'r> Compositor<'r> {
                 .as_ref()
                 .and_then(crate::children::Children::raw_fd),
         );
+        fds.extend(self.grants.raw_fd());
         // A client whose socket was full has bytes waiting for it; the loop
         // wakes when it can take them, not only when it next asks something.
         let writable: Vec<i32> = self
@@ -3417,10 +3463,21 @@ struct Lock {
     surfaces: BTreeMap<usize, (ObjectId, ObjectId)>,
     /// Whether the client has been told every screen is covered.
     told: bool,
-    /// Whether the client that took it has gone. The screen stays locked:
-    /// a lock whose program died must not become an unlocked session, which
-    /// is the one thing the protocol is most explicit about.
+    /// Whether the client that took it has gone, or its unlock was refused.
+    /// The screen stays locked: a lock whose program died must not become an
+    /// unlocked session, which is the one thing the protocol is most
+    /// explicit about. A session's next locker may take it over.
     orphaned: bool,
+    /// Its number, which `sessiond` arms at `authd` and a grant names.
+    epoch: u64,
+    /// Whether the grant for it has come: the holder's unlock may go.
+    granted: bool,
+    /// The holder asked to unlock before the grant came: until when it
+    /// waits for it ([`crate::grants::UNLOCK_WAIT`]).
+    waiting: Option<Instant>,
+    /// Until when its holder may unlock with no grant: `misc:lock_grace`,
+    /// for a lock taken over an unlocked session only, never a takeover.
+    grace_until: Option<Instant>,
 }
 
 impl Lock {
@@ -3438,11 +3495,22 @@ impl Lock {
     fn renumber(&mut self, places: &[Option<usize>]) {
         match places.get(self.client).copied().flatten() {
             Some(at) if !self.orphaned => self.client = at,
-            _ => {
-                self.orphaned = true;
-                self.surfaces.clear();
-            }
+            _ => self.orphan(),
         }
+    }
+
+    /// Held by nobody: what was drawn, a grant and the grace go with the
+    /// holder. An unlock it asked for and is waiting on its grant does not:
+    /// hyprlock exits the moment it has asked, and the person who typed the
+    /// right password is not to be left at a lock nobody holds because the
+    /// grant came a moment after (the certification consultant's S2). Only
+    /// the grant for this lock's number completes it, its wait still ends,
+    /// and a takeover replaces it.
+    fn orphan(&mut self) {
+        self.orphaned = true;
+        self.surfaces.clear();
+        self.granted = false;
+        self.grace_until = None;
     }
 }
 
@@ -5114,14 +5182,28 @@ fn parent_rect(
     ))
 }
 
+/// What a lock's rules need beyond the clients: whether a grant is needed
+/// and the channel it comes by, the pass's clock, and `misc:lock_grace`.
+pub(crate) struct LockSeat<'a> {
+    pub(crate) grants: &'a mut crate::grants::Grants,
+    pub(crate) now: Instant,
+    pub(crate) grace: Duration,
+}
+
 /// Carry out what one client's pass said about the session lock.
 ///
 /// Gives whether the screen has to be drawn again, which is every one of
 /// them: taking the lock blanks the screen, covering a screen draws what
 /// the client put there, and unlocking gives the screen back to the windows.
+///
+/// In a session ([`crate::grants`]) a lock is numbered and goes only on
+/// `authd`'s grant for its number, or within a fresh lock's grace; an
+/// orphaned lock may be taken over by a new locker, which never unlocks it;
+/// and while no grant can come, no lock is taken. Elsewhere the holder's
+/// own unlock is enough, as before phase 2.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the lock reaches the screens, the client and the log, and is three events in one               pass"
+    reason = "the lock reaches the screens, the client, the seat and the log, and is three events in one pass"
 )]
 fn lock_changed(
     lock: &mut Option<Lock>,
@@ -5131,28 +5213,59 @@ fn lock_changed(
     locking: Option<ObjectId>,
     covered: &[(ObjectId, ObjectId, usize)],
     unlocking: Option<(ObjectId, bool)>,
+    seat: &mut LockSeat<'_>,
     report: &mut dyn FnMut(&str),
 ) -> bool {
     let mut changed = false;
     if let Some(object) = locking {
-        if lock.is_some() {
-            // One lock at a time. A second program is told it will never be
-            // given the screen, which is what `finished` means and what it
-            // is to answer by giving up.
+        let session = seat.grants.in_session();
+        let refuse = |slots: &mut [Slot], why: &str, report: &mut dyn FnMut(&str)| {
+            // The program is told it will never be given the screen, which
+            // is what `finished` means and what it is to answer by giving up.
             if let Some(slot) = slots.get_mut(index) {
                 slot.client_mut().session_lock_refused(object);
             }
-            report("hyprix: a second program asked to lock the session and was refused");
-        } else {
-            *lock = Some(Lock {
-                client: index,
-                object,
-                ..Lock::default()
-            });
-            report("hyprix: the session is locked");
-            // The windows stop being drawn now, not when the client has
-            // drawn something: that is what the protocol is for.
-            changed = true;
+            report(why);
+        };
+        match lock.as_mut() {
+            _ if session && !seat.grants.on() => refuse(
+                slots,
+                "hyprix: no grant can come from authd now, so the lock was refused",
+                report,
+            ),
+            None => {
+                let epoch = seat.grants.locked();
+                *lock = Some(Lock {
+                    client: index,
+                    object,
+                    epoch,
+                    grace_until: (session && !seat.grace.is_zero()).then(|| seat.now + seat.grace),
+                    ..Lock::default()
+                });
+                report("hyprix: the session is locked");
+                // The windows stop being drawn now, not when the client has
+                // drawn something: that is what the protocol is for.
+                changed = true;
+            }
+            // A session's dead or refused locker is replaced, and the new
+            // one holds a lock that still needs a grant: the windows stay
+            // hidden throughout, and nothing about it is an unlock.
+            Some(held) if session && held.orphaned => {
+                let epoch = seat.grants.locked();
+                *held = Lock {
+                    client: index,
+                    object,
+                    epoch,
+                    ..Lock::default()
+                };
+                report("hyprix: a new program took over the lock; the screen stays locked");
+                changed = true;
+            }
+            Some(_) => refuse(
+                slots,
+                "hyprix: a second program asked to lock the session and was refused",
+                report,
+            ),
         }
     }
     for (lock_surface, surface, output) in covered {
@@ -5191,19 +5304,80 @@ fn lock_changed(
         ));
     }
     if let Some((object, asked)) = unlocking
-        && lock
-            .as_ref()
-            .is_some_and(|held| held.held_by(index) && held.object == object)
+        && let Some(held) = lock.as_mut()
+        && held.held_by(index)
+        && held.object == object
     {
-        *lock = None;
-        changed = true;
-        report(if asked {
-            "hyprix: the session is unlocked"
-        } else {
-            "hyprix: the lock went"
-        });
+        let free = !seat.grants.in_session()
+            || held.granted
+            || held.grace_until.is_some_and(|until| seat.now < until);
+        if free {
+            let epoch = held.epoch;
+            *lock = None;
+            seat.grants.unlocked(epoch);
+            changed = true;
+            report(if asked {
+                "hyprix: the session is unlocked"
+            } else {
+                "hyprix: the lock went"
+            });
+        } else if held.waiting.is_none() {
+            // The grant and the unlock come by different ways; the unlock
+            // may be first. One waits, for a while.
+            held.waiting = Some(seat.now + crate::grants::UNLOCK_WAIT);
+            report("hyprix: an unlock waits for authd's grant");
+        }
     }
     changed
+}
+
+/// `misc:lock_grace`, in seconds, as a duration no longer than
+/// [`crate::grants::LOCK_GRACE_CAP`]: the file is the user's to edit. None,
+/// or a negative number, is none.
+fn lock_grace(seconds: Option<i64>) -> Duration {
+    Duration::from_secs(u64::try_from(seconds.unwrap_or(0)).unwrap_or(0))
+        .min(crate::grants::LOCK_GRACE_CAP)
+}
+
+/// `sessiond` passed on `authd`'s grant for the lock numbered `epoch`: a
+/// waiting unlock goes now, or the holder's next one will. A grant for any
+/// other lock, or for one held by nobody, is nothing.
+fn grant_arrived(
+    lock: &mut Option<Lock>,
+    epoch: u64,
+    grants: &mut crate::grants::Grants,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    let Some(held) = lock.as_mut() else {
+        return false;
+    };
+    if held.epoch != epoch || (held.orphaned && held.waiting.is_none()) {
+        return false;
+    }
+    if held.waiting.is_some() {
+        *lock = None;
+        grants.unlocked(epoch);
+        report("hyprix: the session is unlocked");
+        return true;
+    }
+    held.granted = true;
+    false
+}
+
+/// An unlock that waited [`crate::grants::UNLOCK_WAIT`] with no grant is
+/// refused: the lock is held by nobody, the screen stays locked, and the
+/// session's next locker may take it over.
+fn unlock_waited(lock: &mut Option<Lock>, now: Instant, report: &mut dyn FnMut(&str)) -> bool {
+    let Some(held) = lock.as_mut() else {
+        return false;
+    };
+    if held.waiting.is_none_or(|until| now < until) {
+        return false;
+    }
+    held.orphan();
+    held.waiting = None;
+    report("hyprix: no grant came for the unlock; the screen stays locked");
+    true
 }
 
 /// Where each slot will be once the ones that have gone are taken out.

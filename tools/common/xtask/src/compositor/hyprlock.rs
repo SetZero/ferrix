@@ -1,18 +1,23 @@
-//! The two hyprlock boots (`docs/AUTH.md` P1.5): `hyprlock`, where a lock
-//! taken with `L` refuses a wrong password through `authd` and lets the
-//! right one through, and `hyprlock-unset`, where with no password set
-//! hyprlock refuses to lock at all (decision 4).
+//! The hyprlock boots: `hyprlock`, where a lock taken with `L` refuses a
+//! wrong password through `authd` and lets the right one through, and
+//! `hyprlock-unset`, where with no password set hyprlock refuses to lock at
+//! all (decision 4), both `docs/AUTH.md` P1.5's; and `hyprlock-session`,
+//! P2.5's, where the session is the user `ferrix`'s and a lock goes only on
+//! `authd`'s grant.
 //!
-//! Both run `/bin/hyprlock` against a real `authd` in the image, as a
-//! desktop does; the session is root in these boots, as every judged boot's
+//! All run `/bin/hyprlock` against a real `authd` in the image, as a
+//! desktop does. The first two are root's session, as every judged boot's
 //! is, so the password is root's.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use super::boot::{Wanted, boot_and_dump_carrying};
-use super::{Carried, Programs, build};
+use super::boot::{Wanted, boot_and_dump_carrying, judge_still_running, judged_image, press};
+use super::{Carried, EITHER, MARKER, Programs, SETTLE, build};
 use crate::args::Args;
+use crate::display::{Qmp, free_port};
 use crate::paths::{self, Arch};
+use crate::qemu::Watching;
 use crate::{Error, Result};
 
 /// The hyprlock boot's configuration: the two windows, the German layout
@@ -82,7 +87,7 @@ const HYPRLOCK_BINDS: [(&str, &[&str]); 4] = [
 /// composited as hyprix composites a lock surface.
 pub(super) fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let carried = Carried {
-        ports: hyprlock_files(arch, Some(HYPRLOCK_PASSWORD))?,
+        ports: hyprlock_files(arch, Some(("root", HYPRLOCK_PASSWORD)))?,
         ..Carried::none()
     };
     let (screens, said) = boot_and_dump_carrying(
@@ -187,10 +192,10 @@ const HYPRLOCK_UNSET_EXPECTED: [(&str, &str); 2] = [
 /// Its one key.
 const HYPRLOCK_UNSET_BINDS: [(&str, &[&str]); 1] = [("L, which runs hyprlock", &["l"])];
 
-/// What both hyprlock boots carry: hyprlock and its configuration, authd,
-/// root's and authd's accounts, the font, and root's password where one is
-/// given.
-fn hyprlock_files(arch: Arch, password: Option<&str>) -> Result<Vec<crate::ports::File>> {
+/// What the hyprlock boots carry: hyprlock and its configuration, authd,
+/// root's, `ferrix`'s and authd's accounts, the font, and one account's
+/// password where one is given.
+fn hyprlock_files(arch: Arch, seed: Option<(&str, &str)>) -> Result<Vec<crate::ports::File>> {
     let data = paths::workspace_root().join("src/user/system/linux/compositor/hyprlock/tests/data");
     let read = |path: &Path| -> Result<Vec<u8>> {
         std::fs::read(path)
@@ -218,12 +223,16 @@ fn hyprlock_files(arch: Arch, password: Option<&str>) -> Result<Vec<crate::ports
         file(
             "etc/passwd",
             0o644,
-            format!("root:x:0:0:root:/:/bin/sh\n{}", crate::auth::PASSWD_LINE).into_bytes(),
+            format!(
+                "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/home/ferrix:/bin/sh\n{}",
+                crate::auth::PASSWD_LINE
+            )
+            .into_bytes(),
         ),
         file(
             "etc/group",
             0o644,
-            format!("root:x:0:\n{}", crate::auth::GROUP_LINE).into_bytes(),
+            format!("root:x:0:\nferrix:x:1000:\n{}", crate::auth::GROUP_LINE).into_bytes(),
         ),
         file(
             "usr/share/ferrix/fonts/LiberationSans-Regular.ttf",
@@ -231,8 +240,274 @@ fn hyprlock_files(arch: Arch, password: Option<&str>) -> Result<Vec<crate::ports
             read(&fonts.join("LiberationSans-Regular.ttf"))?,
         ),
     ]);
-    if let Some(password) = password {
-        ports.push(crate::auth::seed("root", password)?);
+    if let Some((account, password)) = seed {
+        ports.push(crate::auth::seed(account, password)?);
     }
     Ok(ports)
+}
+
+/// The session boot's configuration: as [`HYPRLOCK_CONFIG`], with hyprlock
+/// on a `bindl`, which works while the screen is locked -- how a person at a
+/// locked screen whose locker died starts a new one (`docs/AUTH.md` §3.7) --
+/// and the attacker started beside the windows.
+const SESSION_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor --boot hyprlock-session`.
+input:kb_layout = de
+input:kb_variant = nodeadkeys
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two --after one
+exec-once = /bin/sh /etc/attack.sh
+bindl = , L, exec, /bin/hyprlock -c /etc/hypr/hyprlock.conf
+";
+
+/// A program of the session's user, as any could be: it lets the person's
+/// first hyprlock come and go, kills the second once it holds the lock,
+/// takes the lock over with `/bin/lock` and asks to unlock at once (the
+/// certification consultant's G6), then tries to open the compositor's lock
+/// channel through `/proc` (G5).
+const ATTACK: &str = "\
+#!/bin/sh
+exec 2>&1
+echo attack-started
+# The pid of the process called $1, by /proc's comm: what pidof does.
+named() {
+\tfor dir in /proc/[0-9]*; do
+\t\t[ \"$(cat $dir/comm 2>/dev/null)\" = \"$1\" ] && echo ${dir#/proc/}
+\tdone
+}
+# The person's own first hyprlock, by its pid: the next may start the
+# moment it ends.
+first=
+while [ -z \"$first\" ]; do first=$(named hyprlock); sleep 1; done
+while [ -d /proc/$first ]; do sleep 1; done
+echo attack-waiting
+while [ -z \"$(named hyprlock)\" ]; do sleep 1; done
+sleep 4
+kill -9 $(named hyprlock)
+echo hyprlock-killed
+sleep 1
+/bin/lock 0
+sleep 3
+cat /proc/$(named hyprix)/fd/4 </dev/null >/dev/null 2>&1
+echo \"fd4-probe: $? as $(id -u)\"
+";
+
+/// What the session boot is waited for after each step, and what it must
+/// not say in between: the line that ends a step, its lines that must come
+/// with it, and the lines that may not.
+struct Step {
+    what: &'static str,
+    keys: &'static [&'static [&'static str]],
+    until: &'static str,
+    wanted: &'static [&'static str],
+    unwanted: &'static [&'static str],
+}
+
+/// `ferrix`'s password, typed key by key on a German keyboard: `y` is `z`.
+const SESSION_PASSWORD: [&[&str]; 6] = [&["g"], &["a"], &["t"], &["e"], &["y"], &["ret"]];
+
+/// The steps, in order.
+const SESSION_STEPS: [Step; 6] = [
+    Step {
+        what: "L: hyprlock locks",
+        keys: &[&["l"]],
+        until: "hyprlock: locked",
+        wanted: &["hyprix: the session is locked"],
+        unwanted: &[],
+    },
+    Step {
+        what: "ferrix's password, granted by authd for lock 1, unlocks",
+        keys: &SESSION_PASSWORD,
+        until: "hyprix: the session is unlocked",
+        wanted: &[
+            "service=hyprlock account=ferrix",
+            "result=granted",
+            "seat-epoch=1",
+        ],
+        unwanted: &[],
+    },
+    Step {
+        what: "L: hyprlock locks again",
+        keys: &[&["l"]],
+        until: "hyprlock: locked",
+        wanted: &[],
+        unwanted: &[],
+    },
+    Step {
+        what: "a program of ferrix's killed hyprlock, took the lock over and asked to unlock at \
+               once: the screen stayed locked",
+        keys: &[],
+        // The attacker's `/bin/lock` believes it unlocked, and exits: its
+        // unlock waited for a grant, and its going orphans the lock again.
+        // A refusal by the wait's timeout is the host tests' case.
+        until: "lock: locked 1 screen(s) and unlocked again",
+        wanted: &[
+            "hyprlock-killed",
+            "the program holding the lock went; the screen stays locked",
+            "a new program took over the lock; the screen stays locked",
+            "an unlock waits for authd's grant",
+        ],
+        unwanted: &["hyprix: the session is unlocked"],
+    },
+    Step {
+        what: "the same program could not open the compositor's lock channel through /proc",
+        keys: &[],
+        until: "fd4-probe: ",
+        wanted: &["as 1000"],
+        unwanted: &["fd4-probe: 0 ", "hyprix: the session is unlocked"],
+    },
+    Step {
+        what: "L, bound with bindl: a new hyprlock took the lock over",
+        keys: &[&["l"]],
+        until: "hyprlock: locked",
+        wanted: &["a new program took over the lock"],
+        unwanted: &["hyprix: the session is unlocked"],
+    },
+];
+
+/// P2.5's boot (`docs/AUTH.md` §3.7): the desktop as `ferrix`, whose
+/// locks go on `authd`'s grant through `sessiond`. The certification
+/// consultant's G5 and G6 are steps of it: a uid-1000 program cannot open the
+/// compositor's lock channel, and killing hyprlock to take its lock over and
+/// unlock at once leaves the screen locked.
+pub(super) fn test_hyprlock_session(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let Some(busybox) = crate::busybox::installed_program(arch) else {
+        println!("  {arch}: no busybox on this machine for the boot's keys; skipped");
+        return Ok(());
+    };
+    let mut ports = hyprlock_files(arch, Some(("ferrix", HYPRLOCK_PASSWORD)))?;
+    ports.push(crate::ports::File {
+        path: "etc/attack.sh".to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(ATTACK.as_bytes().to_vec()),
+    });
+    let lock = build(arch, "compositor-lock", "lock")?;
+    ports.push(crate::ports::File {
+        path: "bin/lock".to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(
+            std::fs::read(&lock)
+                .map_err(|error| Error::new(format!("reading {}: {error}", lock.display())))?,
+        ),
+    });
+    let carried = Carried {
+        busybox: Some(busybox),
+        ports,
+        ..Carried::none()
+    };
+    let session = Args {
+        session_user: Some(crate::session::USER.to_owned()),
+        ..args.clone()
+    };
+    let (image, kernel) = judged_image(arch, programs, SESSION_CONFIG, carried, None, &session)?;
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let mut said = Vec::new();
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
+        said = drive_session(arch, port, watching)?;
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    judge_still_running(arch, &said)?;
+    for wanted in [
+        "authd: offering ferrix.auth.seat",
+        "ferrix.auth.seat is up",
+        "hyprix: the session's locks go on authd's grant",
+        "hyprix: authd can grant the session's locks",
+    ] {
+        if !said.iter().any(|line| line.contains(wanted)) {
+            return Err(Error::new(format!(
+                "{arch}: the session boot never said `{wanted}`"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: as ferrix, a lock went only on authd's grant; killing hyprlock and taking its \
+         lock over with an immediate unlock left the screen locked; the lock channel would not \
+         open through /proc; and a new hyprlock took the lock over and the password let it go"
+    );
+    Ok(())
+}
+
+/// Press each step's keys and wait for its line: the transcript.
+fn drive_session(arch: Arch, port: u16, watching: &mut Watching<'_>) -> Result<Vec<String>> {
+    let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+    let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines.iter().any(|line| line.contains(MARKER))
+    })?;
+    if !up {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never printed `{MARKER}`"
+        )));
+    }
+    // The seat channel comes up beside the compositor; a lock taken
+    // before it would be refused, which is right but not this boot.
+    let _ = watching.read_more(Instant::now() + Duration::from_secs(30), |lines| {
+        lines
+            .iter()
+            .any(|line| line.contains("authd can grant the session's locks"))
+    })?;
+    let mut steps: Vec<&Step> = SESSION_STEPS.iter().collect();
+    // The last step's password, typed once its lock is up.
+    let password = Step {
+        what: "the password, to the hyprlock that took the lock over",
+        keys: &SESSION_PASSWORD,
+        until: "hyprix: the session is unlocked",
+        wanted: &["result=granted", "seat-epoch=4"],
+        unwanted: &[],
+    };
+    steps.push(&password);
+    for step in steps {
+        // Only what comes after this step's keys counts for it: the same
+        // line said by an earlier step is not this one's.
+        let from = watching.after().len();
+        for keys in step.keys {
+            press(&mut qmp, keys)?;
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        let done = watching.read_more(Instant::now() + Duration::from_secs(60), |lines| {
+            lines
+                .iter()
+                .skip(from)
+                .any(|line| line.contains(step.until))
+        })?;
+        let after = watching.after();
+        let these = after.get(from.min(after.len())..).unwrap_or_default();
+        if !done {
+            return Err(Error::new(format!(
+                "{arch}: {}: `{}` never came",
+                step.what, step.until
+            )));
+        }
+        // What must not happen is said first: an attack that worked is
+        // reported as itself, not as a line it made go missing.
+        if let Some(line) = these
+            .iter()
+            .find(|line| step.unwanted.iter().any(|bad| line.contains(bad)))
+        {
+            return Err(Error::new(format!(
+                "{arch}: {}: {}",
+                step.what,
+                line.trim()
+            )));
+        }
+        for wanted in step.wanted {
+            if !these.iter().any(|line| line.contains(wanted)) {
+                return Err(Error::new(format!(
+                    "{arch}: {}: nothing said `{wanted}`",
+                    step.what
+                )));
+            }
+        }
+        println!("  {arch}: {}", step.what);
+    }
+    Ok(watching
+        .lines()
+        .iter()
+        .chain(watching.after())
+        .cloned()
+        .collect())
 }

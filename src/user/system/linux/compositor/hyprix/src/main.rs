@@ -15,6 +15,16 @@ fn main() {
     if compositor_seat::adopt() {
         report("hyprix: seat0's devices come from sessiond");
     }
+    // And the lock channel beside it: the session's locks then go only on
+    // authd's grant (docs/AUTH.md §3.7).
+    match hyprix::grants::adopt() {
+        Some(true) => report("hyprix: the session's locks go on authd's grant, through sessiond"),
+        Some(false) => report(
+            "hyprix: sessiond named a lock channel that could not be taken; this session's locks \
+             are refused",
+        ),
+        None => {}
+    }
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(message) => {

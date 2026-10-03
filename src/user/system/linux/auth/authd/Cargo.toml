@@ -16,6 +16,9 @@ ferrix-argon2 = { path = "../../../../../lib/crypto/argon2" }
 ferrix-svc = { path = "../../../../../lib/init/svc" }
 # The socket helpers the clients use too.
 ferrix-auth-client = { path = "../client" }
+# The seat channel (docs/AUTH.md §3.7): init's bootstrap, OFFER and CONNECT.
+ferrix-native = { path = "../../../../../lib/proto/native" }
+ferrix-native-abi = { path = "../../../../../lib/proto/native-abi" }
 
 [lints]
 workspace = true

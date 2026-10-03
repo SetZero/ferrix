@@ -30,6 +30,8 @@ use std::time::{Duration, Instant};
 use compositor_socket::{Connection, RecvError};
 use compositor_wire::Fd;
 
+pub mod lock;
+
 /// The variable naming the channel's descriptor.
 pub const FD_VARIABLE: &str = "FERRIX_SEAT_FD";
 

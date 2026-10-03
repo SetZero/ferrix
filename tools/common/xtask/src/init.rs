@@ -498,7 +498,10 @@ pub(crate) fn desktop_files(
     };
     command.extend(arguments.iter().map(|word| exec_word(word)));
     let home = if session_user.is_some() {
-        ""
+        // sessiond, the unit's own process, takes the seat channel and arms
+        // each lock at authd (docs/AUTH.md §3.7): init routes the name to
+        // this unit alone.
+        "Uses=ferrix.auth.seat\n"
     } else {
         "# Root's home, which the kernel gave hyprix as pid 1 and a unit with\n\
          # no User= is not given; the clients find ~/.config through it.\n\

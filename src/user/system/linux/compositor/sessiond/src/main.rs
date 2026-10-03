@@ -14,6 +14,13 @@
 //! descriptor back (`compositor_seat`). No path leads to the channel, so no
 //! other program of the account can ask for the keyboard.
 //!
+//! The lock is spoken of on a second socket pair, descriptor 4
+//! (`compositor_seat::lock`), and relayed to and from `authd` over
+//! `ferrix.auth.seat` (§3.7, P2.5): this arms each lock the compositor takes
+//! for the session's uid, and passes on only a grant for that uid and that
+//! lock ([`relay`]). Init gives the seat channel's bootstrap to this
+//! process, the unit's own; the compositor cannot take it.
+//!
 //! The session ends with its compositor (§6.4): this exits with the
 //! compositor's status, and init's stop of the unit ends whatever the
 //! session left running. An image that logs a named user in at once
@@ -26,10 +33,21 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt, chown};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, ExitCode};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use compositor_seat::lock::{LOCK_FD, LOCK_FD_VARIABLE, MAX_LINE};
 use compositor_socket::{Connection, RecvError};
 use compositor_wire::Fd;
+use ferrix_auth_proto::Record;
+
+use crate::authd::{Authd, Heard};
+use crate::relay::{Act, Relay};
+
+mod authd;
+mod relay;
+
+/// How often a seat channel that went is asked for again.
+const ASK_AGAIN: Duration = Duration::from_secs(5);
 
 const USAGE: &str = "usage: sessiond --user NAME -- PROGRAM [ARGUMENT...]\n\
     \n\
@@ -223,8 +241,13 @@ fn run(args: &[String]) -> Result<i32, String> {
         true,
         0,
     );
+    // Before the compositor starts: init may have to start authd, and the
+    // lock is spoken of as soon as the compositor takes one.
+    let authd = Authd::open();
     let (ours, theirs) = UnixStream::pair().map_err(|error| format!("socketpair: {error}"))?;
-    let child = start(&account, &program, &runtime, theirs)?;
+    let (lock_ours, lock_theirs) =
+        UnixStream::pair().map_err(|error| format!("socketpair: {error}"))?;
+    let child = start(&account, &program, &runtime, theirs, lock_theirs)?;
     say(&format!(
         "seat0's session for {} (uid {}): {}, pid {}",
         account.name,
@@ -232,19 +255,22 @@ fn run(args: &[String]) -> Result<i32, String> {
         program.join(" "),
         child.id()
     ));
-    serve(ours, child)
+    serve(ours, lock_ours, authd, account.uid, child)
 }
 
-/// Start the compositor as `account`, with `theirs` as its descriptor 3.
+/// Start the compositor as `account`, with `theirs` as its descriptor 3 and
+/// `lock` as its descriptor 4.
 fn start(
     account: &Account,
     program: &[String],
     runtime: &str,
     theirs: UnixStream,
+    lock: UnixStream,
 ) -> Result<std::process::Child, String> {
     let (first, rest) = program.split_first().ok_or_else(|| USAGE.to_owned())?;
     let channel = OwnedFd::from(theirs);
-    let raw = channel.as_raw_fd();
+    let lock = OwnedFd::from(lock);
+    let raws = (channel.as_raw_fd(), lock.as_raw_fd());
     let ids = (account.uid, account.gid, account.groups.clone());
     let mut command = Command::new(first);
     let _ = command
@@ -258,49 +284,57 @@ fn start(
         .env(
             compositor_seat::FD_VARIABLE,
             compositor_seat::CHANNEL_FD.to_string(),
-        );
+        )
+        .env(LOCK_FD_VARIABLE, LOCK_FD.to_string());
     #[expect(
         unsafe_code,
-        reason = "AUDIT: pre_exec runs between fork and exec; the closure makes only async-signal-safe calls (dup2, fcntl, setgroups, setgid, setuid, getuid)"
+        reason = "AUDIT: pre_exec runs between fork and exec; the closure makes only async-signal-safe calls (fcntl, dup2, close, setgroups, setgid, setuid, getuid)"
     )]
     // SAFETY: the closure allocates nothing and calls only the system calls
     // the reason names, each on values captured before the fork.
     unsafe {
-        let _ = command.pre_exec(move || become_account(raw, &ids));
+        let _ = command.pre_exec(move || become_account(raws, &ids));
     }
     let child = command
         .spawn()
         .map_err(|error| format!("starting {first}: {error}"))?;
     drop(channel);
+    drop(lock);
     Ok(child)
 }
 
-/// In the child, before `exec`: the channel at descriptor 3 without
-/// close-on-exec, then the account's groups, gid and uid, in that order,
-/// checked.
-fn become_account(channel: i32, (uid, gid, groups): &(u32, u32, Vec<u32>)) -> std::io::Result<()> {
+/// In the child, before `exec`: the device channel at descriptor 3 and the
+/// lock channel at 4, neither close-on-exec, then the account's groups, gid
+/// and uid, in that order, checked.
+fn become_account(
+    (channel, lock): (i32, i32),
+    (uid, gid, groups): &(u32, u32, Vec<u32>),
+) -> std::io::Result<()> {
     let check = |result: libc::c_int| {
         if result < 0 {
             Err(std::io::Error::last_os_error())
         } else {
-            Ok(())
+            Ok(result)
         }
     };
-    let target = compositor_seat::CHANNEL_FD;
-    if channel == target {
-        // SAFETY: fcntl on a descriptor this process holds, with constants.
-        check(unsafe { libc::fcntl(target, libc::F_SETFD, 0) })?;
-    } else {
-        // SAFETY: dup2 of a descriptor this process holds; the copy has no
-        // close-on-exec.
-        check(unsafe { libc::dup2(channel, target) })?;
+    // Each first above 4, so that putting one at 3 or 4 cannot close the
+    // other where it was; `dup2` then gives copies without close-on-exec.
+    // SAFETY: fcntl on descriptors this process holds, with constants.
+    let channel = check(unsafe { libc::fcntl(channel, libc::F_DUPFD, 5) })?;
+    // SAFETY: as above.
+    let lock = check(unsafe { libc::fcntl(lock, libc::F_DUPFD, 5) })?;
+    for (from, to) in [(channel, compositor_seat::CHANNEL_FD), (lock, LOCK_FD)] {
+        // SAFETY: dup2 and close of descriptors this process holds.
+        let _ = check(unsafe { libc::dup2(from, to) })?;
+        // SAFETY: as above.
+        let _ = check(unsafe { libc::close(from) })?;
     }
     // SAFETY: the pointer and length are the vector's own, read only.
-    check(unsafe { libc::setgroups(groups.len(), groups.as_ptr()) })?;
+    let _ = check(unsafe { libc::setgroups(groups.len(), groups.as_ptr()) })?;
     // SAFETY: setgid and setuid take plain integers.
-    check(unsafe { libc::setgid(*gid) })?;
+    let _ = check(unsafe { libc::setgid(*gid) })?;
     // SAFETY: as above.
-    check(unsafe { libc::setuid(*uid) })?;
+    let _ = check(unsafe { libc::setuid(*uid) })?;
     // SAFETY: getuid cannot fail.
     if unsafe { libc::getuid() } != *uid {
         return Err(std::io::Error::from_raw_os_error(libc::EPERM));
@@ -308,9 +342,22 @@ fn become_account(channel: i32, (uid, gid, groups): &(u32, u32, Vec<u32>)) -> st
     Ok(())
 }
 
-/// Answer the compositor's requests until it exits, and give its status.
-fn serve(ours: UnixStream, mut child: std::process::Child) -> Result<i32, String> {
+/// The compositor's two channels and `authd`'s, until the compositor exits:
+/// its status.
+fn serve(
+    ours: UnixStream,
+    lock: UnixStream,
+    mut authd: Option<Authd>,
+    uid: u32,
+    mut child: std::process::Child,
+) -> Result<i32, String> {
     let mut connection = Some(Connection::new(ours).map_err(|error| format!("{error}"))?);
+    lock.set_nonblocking(true)
+        .map_err(|error| format!("the lock channel: {error}"))?;
+    let mut lock = Some(lock);
+    let mut said = Vec::new();
+    let mut relay = Relay::new(uid);
+    let mut asked = Instant::now();
     loop {
         if let Some(status) = child.try_wait().map_err(|error| format!("{error}"))? {
             let code = status
@@ -319,50 +366,168 @@ fn serve(ours: UnixStream, mut child: std::process::Child) -> Result<i32, String
             say(&format!(
                 "the session ended: its compositor exited with {code}"
             ));
+            let acts = relay.compositor_gone();
+            let _ = act(&acts, authd.as_ref(), lock.as_ref());
             return Ok(code);
         }
-        let Some(open) = connection.as_mut() else {
-            std::thread::sleep(Duration::from_millis(200));
-            continue;
-        };
-        wait_readable(open.as_raw_fd(), Duration::from_millis(200));
-        match open.receive() {
-            Ok(_) | Err(RecvError::WouldBlock) => {}
-            Err(RecvError::Closed) => {
-                connection = None;
-                continue;
-            }
-            Err(error) => {
-                say(&format!("the seat channel failed: {error:?}"));
-                connection = None;
-                continue;
+        if let Some(seat) = authd.as_mut()
+            && !seat.is_open()
+            && asked.elapsed() >= ASK_AGAIN
+        {
+            asked = Instant::now();
+            if let Err(error) = seat.ask() {
+                say(&format!(
+                    "asking for the seat channel again failed: {error:?}"
+                ));
             }
         }
-        while let Some(end) = open.bytes().iter().position(|&b| b == b'\n') {
-            let line = String::from_utf8_lossy(open.bytes().get(..end).unwrap_or(&[])).into_owned();
-            open.consume(end + 1, 0);
-            let (said, fd) = compositor_seat::serve(&line);
-            if said != "ok\n" {
-                say(&format!("refused `{line}`: {}", said.trim_end()));
+        let fds = [
+            connection.as_ref().map(Connection::as_raw_fd),
+            lock.as_ref().map(AsRawFd::as_raw_fd),
+            authd.as_ref().map(|seat| seat.fd().as_raw_fd()),
+        ];
+        let ready = wait_any(fds, Duration::from_millis(200));
+        if ready[0]
+            && let Some(open) = connection.as_mut()
+            && !answer_devices(open)
+        {
+            connection = None;
+        }
+        let mut acts = Vec::new();
+        if ready[1]
+            && let Some(stream) = lock.as_mut()
+        {
+            match read_lines(stream, &mut said) {
+                Some(lines) => {
+                    for line in lines {
+                        acts.extend(relay.compositor_said(&line));
+                    }
+                }
+                None => lock = None,
             }
-            let fds: Vec<Fd> = fd.iter().map(|fd| Fd(fd.as_raw_fd())).collect();
-            if let Err(error) = open.send(said.as_bytes(), &fds) {
-                say(&format!("answering the compositor failed: {error:?}"));
+        }
+        if ready[2]
+            && let Some(seat) = authd.as_mut()
+        {
+            for heard in seat.drain() {
+                acts.extend(match heard {
+                    Heard::Ready => {
+                        say("ferrix.auth.seat is up: the session's locks are granted by authd");
+                        relay.seat_ready()
+                    }
+                    Heard::Gone => {
+                        asked = Instant::now();
+                        relay.seat_gone()
+                    }
+                    Heard::Grant { uid, epoch } => relay.grant(uid, epoch),
+                });
             }
+        }
+        if let Some(why) = act(&acts, authd.as_ref(), lock.as_ref()) {
+            say(&format!("ending the session: {why}"));
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(1);
         }
     }
 }
 
-/// Wait until `fd` is readable or `left` has gone.
-fn wait_readable(fd: i32, left: Duration) {
-    let mut poll = libc::pollfd {
-        fd,
+/// Do what the relay asked; the reason to end the session, if it asked that.
+fn act(acts: &[Act], authd: Option<&Authd>, lock: Option<&UnixStream>) -> Option<String> {
+    for step in acts {
+        match step {
+            Act::Arm { uid, epoch } => {
+                let sent = authd.is_some_and(|seat| {
+                    seat.send(&Record::Arm {
+                        uid: *uid,
+                        epoch: *epoch,
+                    })
+                });
+                if !sent {
+                    say(&format!("lock {epoch} could not be armed at authd"));
+                }
+            }
+            Act::Disarm(epoch) => {
+                let _ = authd.is_some_and(|seat| seat.send(&Record::Disarm { epoch: *epoch }));
+            }
+            Act::Tell(what) => {
+                if let Some(mut stream) = lock
+                    && let Err(error) = stream.write_all(what.line().as_bytes())
+                {
+                    say(&format!("telling the compositor failed: {error}"));
+                }
+            }
+            Act::End(why) => return Some(why.clone()),
+        }
+    }
+    None
+}
+
+/// Read what the compositor wrote on the lock channel: its whole lines, and
+/// `None` once it has closed it. A line longer than any it may send ends it
+/// too, as a line it may not send does.
+fn read_lines(stream: &mut UnixStream, said: &mut Vec<u8>) -> Option<Vec<String>> {
+    let mut chunk = [0_u8; 256];
+    loop {
+        match std::io::Read::read(stream, &mut chunk) {
+            Ok(0) => return None,
+            Ok(got) => said.extend_from_slice(chunk.get(..got).unwrap_or_default()),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => return None,
+        }
+    }
+    let mut lines = Vec::new();
+    while let Some(end) = said.iter().position(|&b| b == b'\n') {
+        let line: Vec<u8> = said.drain(..=end).collect();
+        lines.push(String::from_utf8_lossy(line.get(..end).unwrap_or_default()).into_owned());
+    }
+    if said.len() >= MAX_LINE {
+        // Not a line the protocol has: the relay ends the session on it.
+        lines.push(String::from_utf8_lossy(said).into_owned());
+        said.clear();
+    }
+    Some(lines)
+}
+
+/// Answer the device requests waiting on the compositor's channel; false
+/// once it has gone.
+fn answer_devices(open: &mut Connection) -> bool {
+    match open.receive() {
+        Ok(_) | Err(RecvError::WouldBlock) => {}
+        Err(RecvError::Closed) => return false,
+        Err(error) => {
+            say(&format!("the seat channel failed: {error:?}"));
+            return false;
+        }
+    }
+    while let Some(end) = open.bytes().iter().position(|&b| b == b'\n') {
+        let line = String::from_utf8_lossy(open.bytes().get(..end).unwrap_or(&[])).into_owned();
+        open.consume(end + 1, 0);
+        let (said, fd) = compositor_seat::serve(&line);
+        if said != "ok\n" {
+            say(&format!("refused `{line}`: {}", said.trim_end()));
+        }
+        let fds: Vec<Fd> = fd.iter().map(|fd| Fd(fd.as_raw_fd())).collect();
+        if let Err(error) = open.send(said.as_bytes(), &fds) {
+            say(&format!("answering the compositor failed: {error:?}"));
+        }
+    }
+    true
+}
+
+/// Wait until any of `fds` is readable, or `left` has gone: which are.
+fn wait_any(fds: [Option<i32>; 3], left: Duration) -> [bool; 3] {
+    let mut polled = fds.map(|fd| libc::pollfd {
+        fd: fd.unwrap_or(-1),
         events: libc::POLLIN,
         revents: 0,
-    };
+    });
     let millis = libc::c_int::try_from(left.as_millis()).unwrap_or(libc::c_int::MAX);
-    // SAFETY: one pollfd, which lives for the call.
-    let _ = unsafe { libc::poll(&raw mut poll, 1, millis) };
+    let count = libc::nfds_t::try_from(polled.len()).unwrap_or(0);
+    // SAFETY: `polled` is valid for reads and writes of `count` entries; a
+    // negative descriptor is ignored by poll.
+    let _ = unsafe { libc::poll(polled.as_mut_ptr(), count, millis) };
+    polled.map(|entry| entry.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0)
 }
 
 fn main() -> ExitCode {

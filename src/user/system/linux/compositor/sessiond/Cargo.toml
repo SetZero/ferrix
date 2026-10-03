@@ -18,6 +18,11 @@ libc = "0.2.189"
 compositor-seat = { path = "../seat" }
 compositor-socket = { path = "../socket" }
 compositor-wire = { path = "../wire" }
+# The seat channel to authd (docs/AUTH.md §3.7): init's bootstrap, OPEN, and
+# the ARM, DISARM and GRANT records.
+ferrix-auth-proto = { path = "../../../../../lib/proto/auth-proto" }
+ferrix-native = { path = "../../../../../lib/proto/native" }
+ferrix-native-abi = { path = "../../../../../lib/proto/native-abi" }
 
 [lints]
 workspace = true

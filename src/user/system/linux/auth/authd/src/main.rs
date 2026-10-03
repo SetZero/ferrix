@@ -25,6 +25,7 @@ mod paths;
 mod phantom;
 mod policy;
 mod sabotage;
+mod seat;
 mod server;
 mod sha;
 mod sha_crypt;
@@ -115,7 +116,8 @@ fn run() -> Result<(), String> {
         become_auth(&paths)?;
     }
     say(&format!("authd: listening on {}", options.socket.display()));
-    server::serve(&listener, &mut engine, &STOP);
+    let mut seat = seat::Seat::offer();
+    server::serve(&listener, &mut engine, seat.as_mut(), &STOP);
     say("authd: stopped");
     Ok(())
 }

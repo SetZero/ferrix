@@ -392,6 +392,9 @@ pub(crate) static OPTIONS: &[(&str, Initial)] = &[
     ("misc:initial_workspace_tracking", Int(1)),
     ("misc:key_press_enables_dpms", Int(0)),
     ("misc:layers_hog_keyboard_focus", Int(1)),
+    // Ferrix's: seconds after a fresh lock in which its holder unlocks with
+    // no password, hyprlock's `--grace`; hyprix caps it (docs/AUTH.md §3.7).
+    ("misc:lock_grace", Int(0)),
     ("misc:lockdead_screen_delay", Int(1000)),
     ("misc:middle_click_paste", Int(1)),
     ("misc:mouse_move_enables_dpms", Int(0)),

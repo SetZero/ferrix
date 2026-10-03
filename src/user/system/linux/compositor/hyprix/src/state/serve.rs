@@ -825,6 +825,11 @@ impl Compositor<'_> {
             locking,
             &covered,
             unlocking,
+            &mut super::LockSeat {
+                grants: &mut self.grants,
+                now: std::time::Instant::now(),
+                grace: self.lock_grace,
+            },
             self.report,
         );
         changed |= self.for_the_bars(asked);

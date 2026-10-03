@@ -191,6 +191,21 @@ pub(crate) struct Engine {
     hasher: Hasher,
     audit: Audit,
     phantoms: Phantoms,
+    /// The seat's current lock, as `sessiond` armed it on the seat channel:
+    /// the session's uid and the lock's epoch (`docs/AUTH.md` §3.7). One at
+    /// a time; a new one replaces it.
+    armed: Option<Armed>,
+    /// Grants made and not yet sent down the seat channel.
+    grants: Vec<Armed>,
+}
+
+/// A lock that may be granted, or the grant for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Armed {
+    /// The session's user.
+    pub(crate) uid: u32,
+    /// The lock's number.
+    pub(crate) epoch: u64,
 }
 
 /// The throttle after `failures` in a row.
@@ -226,7 +241,55 @@ impl Engine {
             hasher,
             audit,
             phantoms: Phantoms::new(phantom_key),
+            armed: None,
+            grants: Vec::new(),
         }
+    }
+
+    /// `sessiond`'s ARM, from the seat channel only: the lock `epoch` of
+    /// `uid`'s session is up. It replaces any lock armed before it.
+    pub(crate) fn arm(&mut self, uid: u32, epoch: u64) {
+        self.armed = Some(Armed { uid, epoch });
+    }
+
+    /// `sessiond`'s DISARM: the lock `epoch` went without a grant.
+    pub(crate) fn disarm(&mut self, epoch: u64) {
+        if self.armed.is_some_and(|armed| armed.epoch == epoch) {
+            self.armed = None;
+        }
+    }
+
+    /// The seat channel closed: whatever was armed has nobody to go to.
+    pub(crate) fn seat_gone(&mut self) {
+        self.armed = None;
+        self.grants.clear();
+    }
+
+    /// The grants to send down the seat channel, oldest first.
+    pub(crate) fn take_grants(&mut self) -> Vec<Armed> {
+        std::mem::take(&mut self.grants)
+    }
+
+    /// Grant the armed lock, if it is `uid`'s, and disarm it: one grant a
+    /// lock. Audited with who asked and why.
+    fn grant(&mut self, peer: Peer, uid: Option<u32>, service: &str, account: &str) -> bool {
+        let Some(armed) = self.armed else {
+            return false;
+        };
+        if uid.is_some_and(|uid| uid != armed.uid) {
+            return false;
+        }
+        self.armed = None;
+        self.grants.push(armed);
+        let epoch = armed.epoch.to_string();
+        self.log(
+            peer,
+            service,
+            account,
+            "granted",
+            &format!("seat-epoch={epoch}"),
+        );
+        true
     }
 
     /// `target`'s tally: the store's for an account, the phantom table's
@@ -438,6 +501,12 @@ impl Engine {
                 let outs = match self.verify(peer, &policy, &target, &secret, now_ms) {
                     Ok(account) => {
                         self.log(peer, &policy.service, &target.name, "accepted", "");
+                        // A `Grant=seat` service's acceptance is the seat's
+                        // grant, for the armed lock of this account alone.
+                        if policy.grant_seat {
+                            let _ =
+                                self.grant(peer, Some(account.uid), &policy.service, &target.name);
+                        }
                         Out::now(Reply::Accepted {
                             uid: account.uid,
                             account: account.name,
@@ -714,19 +783,26 @@ impl Engine {
         self.status(peer, account, now_ms)
     }
 
+    /// `authctl unlock-seat`: root's audited override (decision 11). It
+    /// grants the armed lock whoever's it is; the audit line says root asked,
+    /// through which process, and for which lock.
     fn unlock_seat(&mut self, peer: Peer) -> Vec<Out> {
-        let result = if peer.uid == 0 {
-            "unavailable"
-        } else {
-            "refused"
-        };
-        self.log(peer, "unlock-seat", "", result, "no-seat-channel");
-        let text = if peer.uid == 0 {
-            "there is no seat channel yet; it comes with phase 2 (docs/AUTH.md §3.7)"
-        } else {
-            "only root may let the seat's lock go"
-        };
-        Out::now(Reply::Unavailable(text.to_owned()))
+        if peer.uid != 0 {
+            self.log(peer, "unlock-seat", "", "refused", "not-root");
+            return Out::now(Reply::Unavailable(
+                "only root may let the seat's lock go".to_owned(),
+            ));
+        }
+        if self.grant(peer, None, "unlock-seat", "root") {
+            return Out::now(Reply::Accepted {
+                uid: 0,
+                account: "root".to_owned(),
+            });
+        }
+        self.log(peer, "unlock-seat", "", "unavailable", "no-lock-armed");
+        Out::now(Reply::Unavailable(
+            "no lock is up on the seat, or no session's compositor is listening".to_owned(),
+        ))
     }
 
     fn log(&mut self, peer: Peer, service: &str, account: &str, result: &str, why: &str) {

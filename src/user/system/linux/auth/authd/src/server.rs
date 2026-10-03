@@ -19,6 +19,7 @@ use ferrix_auth_proto::{MAX_RECORD, Record};
 
 use crate::audit::say;
 use crate::engine::{Conversation, Engine, Peer, Reply};
+use crate::seat::Seat;
 
 /// The most connections held at once; one more is closed at once.
 const MAX_CONNECTIONS: usize = 64;
@@ -48,8 +49,14 @@ pub(crate) fn now_ms() -> u64 {
         })
 }
 
-/// Serve `listener` until `stop` is set.
-pub(crate) fn serve(listener: &OwnedFd, engine: &mut Engine, stop: &AtomicBool) {
+/// Serve `listener`, and the seat channel when there is one, until `stop`
+/// is set.
+pub(crate) fn serve(
+    listener: &OwnedFd,
+    engine: &mut Engine,
+    mut seat: Option<&mut Seat>,
+    stop: &AtomicBool,
+) {
     let mut connections: Vec<Connection> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
         let now = Instant::now();
@@ -72,6 +79,16 @@ pub(crate) fn serve(listener: &OwnedFd, engine: &mut Engine, stop: &AtomicBool) 
             events: if c.closing { 0 } else { libc::POLLIN },
             revents: 0,
         }));
+        // The seat's port last, so the connections stay at 1.. in step with
+        // `connections`; its place is kept, since `accept` may add to them.
+        let seat_at = polled.len();
+        if let Some(seat) = seat.as_deref() {
+            polled.push(libc::pollfd {
+                fd: seat.fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            });
+        }
         let timeout = i32::try_from(wake.as_millis()).unwrap_or(i32::MAX).max(1);
         let count = libc::nfds_t::try_from(polled.len()).unwrap_or(0);
         // SAFETY: `polled` is valid for reads and writes of `count` entries.
@@ -88,7 +105,7 @@ pub(crate) fn serve(listener: &OwnedFd, engine: &mut Engine, stop: &AtomicBool) 
         let mut dead = Vec::new();
         for (index, (connection, entry)) in connections
             .iter_mut()
-            .zip(polled.iter().skip(1))
+            .zip(polled.get(1..seat_at).unwrap_or_default())
             .enumerate()
         {
             if entry.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0
@@ -100,8 +117,20 @@ pub(crate) fn serve(listener: &OwnedFd, engine: &mut Engine, stop: &AtomicBool) 
                 dead.push(index);
             }
         }
+        let seat_ready = seat.is_some()
+            && polled
+                .get(seat_at)
+                .is_some_and(|p| p.revents & libc::POLLIN != 0);
         for index in dead.into_iter().rev() {
             let _ = connections.remove(index);
+        }
+        if let Some(seat) = seat.as_deref_mut() {
+            if seat_ready {
+                seat.drain(engine);
+            }
+            // After the connections: a grant made by an acceptance just now
+            // goes at once, as its ACCEPTED does.
+            seat.send(engine);
         }
     }
 }
