@@ -1369,7 +1369,10 @@ fn an_ended_namespace_gives_its_mount_points_back() {
     ns.rmdir(&ctx, None, b"/m").unwrap();
 }
 
+/// 4096 binds in one directory, each one looked up among those before it.
+/// Slow under Miri, past CI's six hours, so left to the native run.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn a_namespace_holds_mount_max_mounts_and_refuses_the_next_with_enospc() {
     let (ns, ctx) = fresh();
     let root = ns.resolve(&ctx, None, b"/", true).unwrap();
