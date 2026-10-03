@@ -113,8 +113,9 @@ What RM needs from the OS (the full lists are in
 * **53 `nvswitch_*` and `nvlink_*` functions**: also stubbed.
 * **13 retpoline thunks.**
 
-NVKMS needs 56 `nvkms_*` functions: allocation, timers, semaphores,
-`nvkms_call_rm`, `nvkms_copyin` and `nvkms_copyout`.
+NVKMS needs 55 `nvkms_*` functions (allocation, timers, semaphores,
+`nvkms_call_rm`, `nvkms_copyin` and `nvkms_copyout`), `memcpy`, and the
+same 13 thunks. This said 56 until N1a counted again.
 
 In the other direction, Linux's glue calls 161 distinct `rm_*` entry points
 into the core.
@@ -306,18 +307,46 @@ Nothing NVIDIA ships is committed here: not the kernel modules, not the
 firmware, and not the userspace. Instead, `tools/common/fetch/fetch-nvidia.sh`
 does the following, as `fetch-steam.sh` and `fetch-yserver.sh` do:
 
-* **The sources.** It fetches open-gpu-kernel-modules at a pinned tag
-  (580.173.02), checks a pinned tarball sha256, and unpacks it under
-  `~/.local/share/ferrix/nvidia/`.
+Everything it writes is under `~/.local/share/ferrix/nvidia/580.173.02/`
+(`$FERRIX_NVIDIA` moves the root), and it refuses a directory inside a git
+checkout:
+
+* **The sources.** It fetches GitHub's tarball of open-gpu-kernel-modules'
+  580.173.02 tag. It checks a pinned sha256 and that the tarball's header
+  names the tag's commit, `20e4e6e1`. It unpacks the tarball into `src/`.
+  `cargo xtask test-uvm` and `uvm-kpi`'s Makefile build UVM from there,
+  unless `FERRIX_NVIDIA_SRC` names another tree.
 * **The build.** It builds `nv-kernel.o` and `nv-modeset-kernel.o` with
-  NVIDIA's own makefiles, unmodified. Ferrix needs no patch to the core;
+  NVIDIA's own makefiles, unmodified, in `src/`, and copies them to
+  `objects/` with lists of what each defines and imports. The summary
+  compares those counts with §2.2's. Ferrix needs no patch to the core;
   if one is ever needed, it is carried as a numbered patch in
   `tools/common/fetch/nvidia/` and justified there.
-* **The userspace.** It downloads the matching `.run` (pinned sha256),
-  extracts it with `--extract-only`, and builds a data volume of the
-  libraries, the ICD and EGL manifests, `nvidia-smi` and the firmware. The
-  volume is built like Chrome's and yserver's. The firmware goes at
-  `lib/firmware/nvidia/580.173.02/gsp_ga10x.bin`, where `nvrm` reads it.
+* **The userspace.** It downloads the matching `.run`, pinned by the sha256
+  that NVIDIA publishes beside it, and extracts it with `--extract-only`
+  into `run/`. It then checks pinned sha256s of `nvidia-smi` and both GSP
+  images. Where the host has the same release installed, it also compares
+  them with the installed files; on nazuna they are byte-identical.
+* **The volume.** `nvidia.img` is a btrfs image of `tree/`, built like
+  Chrome's and yserver's, which Ferrix mounts at `/data`. It holds:
+  * the x86-64 libraries and the links NVIDIA's installer would make, read
+    from the `.run`'s manifest, in `usr/lib/x86_64-linux-gnu`;
+  * Debian 13's glibc, the build `fetch-chrome.sh` pins, so that
+    `nvidia-smi` runs from this volume alone and the volume merges with
+    the others;
+  * `nvidia-smi`, `nvidia-debugdump`, the CUDA MPS pair and
+    `nvidia-persistenced`, in `usr/bin`;
+  * the Vulkan ICD and layer, GLVND EGL and EGL platform manifests;
+  * the OpenCL ICD;
+  * NVIDIA's licence;
+  * the firmware, at `lib/firmware/nvidia/580.173.02/gsp_{ga10x,tu10x}.bin`,
+    where `nvrm` reads it.
+  
+  It leaves out the 32-bit libraries, the X driver and its GLX module,
+  `nvidia-settings` and its GTK libraries, `nvidia-modprobe`, the
+  installer and the Windows DLLs. `nvidia.version` beside the image says
+  what the image was made from. No gate attaches it yet: N1f's
+  `test-nvidia-smi` will, as `test-yserver` attaches yserver's.
 
 The license allows vendoring: the core is MIT file by file (2,751 `SPDX: MIT`
 headers, and nothing else in `src/`). The GPLv2 half of NVIDIA's dual
@@ -1154,6 +1183,41 @@ and took the recommended answer for D2, D3 and D5.
   files (G7). R5 loops a byte back through COM1, which QEMU delivers; a
   16550 on real hardware may hold its interrupt in loopback, so the check
   is the reference machine's.
+
+* **2026-10-03 — N1a: `fetch-nvidia.sh`** (branch `nvidia-n1a`). §3 is now
+  what the script does. It writes everything under
+  `~/.local/share/ferrix/nvidia/580.173.02/`. No GPU was used.
+  * **What it pins**:
+    * GitHub's tarball of the 580.173.02 tag: sha256 `a2cd41cf…`, whose
+      header names commit `20e4e6e1`;
+    * `NVIDIA-Linux-x86_64-580.173.02.run`: sha256 `8d8eb900…`, as
+      NVIDIA's own `.sha256sum` gives it;
+    * `nvidia-smi`, `gsp_ga10x.bin` and `gsp_tu10x.bin` inside the `.run`;
+    * Debian's `libc6` 2.41-12+deb13u4, Chrome's pin.
+    
+    The extracted `nvidia-smi`, `libnvidia-ml`, `libcuda`,
+    `libnvidia-glcore` and both GSP images are byte-identical to nazuna's
+    installed packages.
+  * **The objects match §2.2 exactly**, rebuilt with gcc 15.2.0:
+    * `nv-kernel.o` has 12,169,725 bytes of text, 13,372 defined globals
+      and 406 imports;
+    * `nv-modeset-kernel.o` has 1,502,689, 2,694 and 69;
+    * both import lists are the feasibility pass's, line for line.
+    
+    One count in §2.2's prose was off by one: NVKMS imports 55 `nvkms_*`
+    functions, not 56. The 69 are those, `memcpy` and 13 thunks.
+  * **The volume**: `nvidia.img` is 1,253 MiB (956 MiB of files), and
+    `btrfs check` passes on it. On the host, `nvidia-smi` resolves every
+    library from the tree, through the volume's own loader.
+  * **Disk use**: the downloads take 406 MB, `src/` with its build 220 MB,
+    `run/` 1.5 GB, and the image 1.3 GB. The tree is hard links into
+    `run/`.
+  * **`test-uvm`** now defaults to the tree in `src/`, and passes on it.
+    `FERRIX_NVIDIA_SRC` still names another tree. The feasibility pass's
+    `~/.local/share/ferrix/nvidia-ref/` is no longer read by anything.
+  * **Not done.** No gate attaches the volume yet; N1f's
+    `test-nvidia-smi` will. The volume has no 32-bit libraries, which
+    N4's 32-bit games may want.
 
 ## 11. CUDA (N5)
 

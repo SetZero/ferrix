@@ -756,6 +756,22 @@ test-clipboard` is the gate, on x86-64 and AArch64. X programs under
 yserver share the same clipboard and primary selection. [The clipboard
 design](CLIPBOARD.md) is the whole plan, and §8 records what it found.
 
+### NVIDIA's driver
+
+`tools/common/fetch/fetch-nvidia.sh` fetches NVIDIA's driver at the
+release Ferrix pins, 580.173.02, into
+`~/.local/share/ferrix/nvidia/580.173.02` (or under `$FERRIX_NVIDIA`). It
+needs no root and installs nothing. It takes open-gpu-kernel-modules at
+that tag and builds RM's and NVKMS's objects with NVIDIA's makefiles. It
+extracts the matching `.run` without running its installer, and makes
+`nvidia.img`, a btrfs volume of the userspace, `nvidia-smi` and the GSP
+firmware. Each download is pinned by its SHA-256. A second run checks the
+pins and rebuilds nothing, and it ends with a summary of what it has. The
+userspace and the firmware are NVIDIA's proprietary code: they stay in
+that directory and are never committed. `cargo xtask test-uvm` builds UVM
+from the tree it unpacks there, unless `FERRIX_NVIDIA_SRC` names another.
+[`docs/NVIDIA.md`](NVIDIA.md) §3 says what the volume holds.
+
 ### On an STM32MP157-DK1 board
 
 The same ARMv7-A image boots the STM32MP157D-DK1 from its SD card, under

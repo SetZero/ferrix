@@ -249,8 +249,9 @@ COMMANDS:
                   ipc(117) and 395-398)
     test-procfs   Boot procfs-test as init and require /proc/self/fd links to stat as fstat (sockets, anonymous files, a pipe,
                   a memfd), /proc/net/tcp's inode to match, and every /proc inode number to fit 32 bits, and mincore (--i686: 32-bit x86)
-    test-uvm      Build NVIDIA's UVM against uvm-kpi and ferrousli (FERRIX_NVIDIA_SRC names the 580.173.02 tree), boot it as init,
-                  and require its 15 GPU-free self-tests to pass; then a krealloc control that must fail one (x86_64)
+    test-uvm      Build NVIDIA's UVM against uvm-kpi and ferrousli from the tree tools/common/fetch/fetch-nvidia.sh fetches
+                  (or FERRIX_NVIDIA_SRC's), boot it as init, and require its 15 GPU-free self-tests to pass; then a krealloc
+                  control that must fail one (x86_64)
     test-rustc    Attach the rustc volume tools/common/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume tools/common/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-claude-code  Attach the volume tools/common/fetch/fetch-claude-code.sh makes, and require Claude Code to start and,

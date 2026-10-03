@@ -5,13 +5,14 @@
 #   make NVSRC=<tree> OUT=<dir> [CC=gcc]
 #   make NVSRC=<tree> OUT=<dir> ferrix
 #
-# NVSRC is the open-gpu-kernel-modules checkout at 580.173.02; OUT is a
+# NVSRC is the open-gpu-kernel-modules tree at 580.173.02, by default where
+# tools/common/fetch/fetch-nvidia.sh unpacks it; OUT is a
 # build directory outside the checkout. `all` links uvm-selftest against
 # the host's C library, to run on the host; `ferrix` links it statically
 # against ferrousli, Ferrix's own C library, to boot as init on Ferrix
 # (`cargo xtask test-uvm`), together with its negative control.
 
-NVSRC ?= $(HOME)/.local/share/ferrix/nvidia-ref/ogkm-580.173.02
+NVSRC ?= $(HOME)/.local/share/ferrix/nvidia/580.173.02/src
 OUT   ?= $(HOME)/.local/share/ferrix/target-nvidia-cuda/uvm-kpi
 CC    ?= gcc
 KPI   := $(CURDIR)

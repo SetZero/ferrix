@@ -4,7 +4,8 @@
 //! The program is `uvm-selftest`, from
 //! `src/user/system/linux/drivers/nvrm/uvm-kpi/`: NVIDIA's unmodified UVM
 //! sources, from the tree `FERRIX_NVIDIA_SRC` names (by default
-//! `~/.local/share/ferrix/nvidia-ref/ogkm-580.173.02`), built against
+//! `~/.local/share/ferrix/nvidia/580.173.02/src`, where
+//! `tools/common/fetch/fetch-nvidia.sh` unpacks it), built against
 //! `uvm-kpi` and linked statically against ferrousli. It is booted as init on
 //! x86-64. It loads UVM as Linux's module loader would, opens UVM's device,
 //! calls `UVM_INITIALIZE`, and runs UVM's fifteen tests that need no GPU
@@ -28,7 +29,8 @@ use crate::{Error, Result};
 const SOURCES_VAR: &str = "FERRIX_NVIDIA_SRC";
 
 /// Where the tree is when the variable is not set, under the home directory.
-const SOURCES_DEFAULT: &[&str] = &[".local", "share", "ferrix", "nvidia-ref", "ogkm-580.173.02"];
+/// `tools/common/fetch/fetch-nvidia.sh` unpacks it there.
+const SOURCES_DEFAULT: &[&str] = &[".local", "share", "ferrix", "nvidia", "580.173.02", "src"];
 
 /// The seconds a boot may take when `--timeout` does not say. Under KVM a
 /// run takes about 15 s; under TCG `UVM_TEST_RB_TREE_RANDOM`'s 100,000
@@ -142,7 +144,7 @@ fn sources() -> Result<PathBuf> {
     if !list.is_file() {
         return Err(Error::new(format!(
             "no NVIDIA open-gpu-kernel-modules 580.173.02 tree at {} (no {}); \
-             fetch it there or set {SOURCES_VAR}",
+             tools/common/fetch/fetch-nvidia.sh fetches it there, or set {SOURCES_VAR}",
             tree.display(),
             list.display()
         )));
