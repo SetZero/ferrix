@@ -38,7 +38,9 @@
 # (debconf, dpkg, PAM) is taken.
 #
 # Writes $FERRIX_RUSTC_SYSROOT/rustc.img (default
-# ~/.local/share/ferrix/rustc/rustc.img). Needs curl, sha256sum, dpkg-deb, tar
+# ~/.local/share/ferrix/rustc/rustc.img, or ~/.local/share/ferrix/rustc-arm64/
+# with FERRIX_SYSROOT_ARCH=arm64, which takes the same packages for a Ferrix
+# that compiles on AArch64 from rustc-sysroot-arm64.sh beside this script). Needs curl, sha256sum, dpkg-deb, tar
 # and mkfs.btrfs; no root, since mkfs.btrfs --rootdir writes an image file.
 #
 # Usage: tools/common/fetch/fetch-rustc-sysroot.sh
@@ -47,7 +49,14 @@ set -euo pipefail
 
 debian=${DEBIAN_MIRROR:-https://snapshot.debian.org/archive/debian/20260923T000000Z}
 rust=${RUST_DIST_SERVER:-https://static.rust-lang.org}
-out=${FERRIX_RUSTC_SYSROOT:-$HOME/.local/share/ferrix/rustc}
+arch=${FERRIX_SYSROOT_ARCH:-amd64}
+case "$arch" in
+    amd64) gnu=x86_64-linux-gnu triple=x86_64-unknown-linux-gnu loader=usr/lib64/ld-linux-x86-64.so.2
+        out=${FERRIX_RUSTC_SYSROOT:-$HOME/.local/share/ferrix/rustc} ;;
+    arm64) gnu=aarch64-linux-gnu triple=aarch64-unknown-linux-gnu loader=usr/lib/ld-linux-aarch64.so.1
+        out=${FERRIX_RUSTC_SYSROOT:-$HOME/.local/share/ferrix/rustc-arm64} ;;
+    *) echo "fetch-rustc-sysroot: FERRIX_SYSROOT_ARCH is amd64 or arm64, not $arch" >&2; exit 1 ;;
+esac
 
 # Pool path and SHA-256 of each Debian 13 (trixie) package.
 debs=(
@@ -241,6 +250,12 @@ components=(
     "dist/2026-07-16/cargo-1.97.1-x86_64-unknown-linux-gnu.tar.xz e1be5f5ff7f7f80ca506fb65770b759edbdc6d303781ed71c5de8ec8a8394779"
 )
 
+# The same packages and components for an AArch64 host, in place of the lists
+# above.
+if [ "$arch" = arm64 ]; then
+    . "$(dirname "$0")/rustc-sysroot-arm64.sh"
+fi
+
 for tool in curl sha256sum dpkg-deb tar mkfs.btrfs; do
     command -v "$tool" > /dev/null || { echo "fetch-rustc-sysroot: $tool is not installed" >&2; exit 1; }
 done
@@ -289,13 +304,13 @@ done
 
 # What Debian's postinst scripts and alternatives would have made. `cc` is
 # the name rustc runs.
-ln -sf x86_64-linux-gnu-gcc-15 "$tree/usr/bin/cc"
-ln -sf x86_64-linux-gnu-gcc-15 "$tree/usr/bin/gcc"
+ln -sf "$gnu-gcc-15" "$tree/usr/bin/cc"
+ln -sf "$gnu-gcc-15" "$tree/usr/bin/gcc"
 # gawk installs itself as `gawk`; `awk` is an alternative. g++ is named by
 # its target, as gcc is.
 ln -sf gawk "$tree/usr/bin/awk"
-ln -sf x86_64-linux-gnu-g++-15 "$tree/usr/bin/g++"
-ln -sf x86_64-linux-gnu-g++-15 "$tree/usr/bin/c++"
+ln -sf "$gnu-g++-15" "$tree/usr/bin/g++"
+ln -sf "$gnu-g++-15" "$tree/usr/bin/c++"
 ln -sf python3 "$tree/usr/bin/python"
 
 # Documentation and manuals, which nothing runs.
@@ -303,13 +318,13 @@ rm -rf "$tree/usr/share/doc" "$tree/usr/share/man" "$tree/usr/share/lintian" "$t
 
 test -x "$tree/rust/bin/rustc" || { echo "fetch-rustc-sysroot: no rustc in the tree" >&2; exit 1; }
 test -x "$tree/rust/bin/cargo" || { echo "fetch-rustc-sysroot: no cargo in the tree" >&2; exit 1; }
-test -x "$tree/rust/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld" \
+test -x "$tree/rust/lib/rustlib/$triple/bin/rust-lld" \
     || { echo "fetch-rustc-sysroot: no rust-lld in the tree" >&2; exit 1; }
 for target in x86_64-unknown-none x86_64-unknown-uefi aarch64-unknown-none-softfloat     aarch64-unknown-uefi armv7a-none-eabi armv7-unknown-linux-musleabi     x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
     test -d "$tree/rust/lib/rustlib/$target/lib" \
         || { echo "fetch-rustc-sysroot: no standard library for $target in the tree" >&2; exit 1; }
 done
-for tool in usr/libexec/gcc/x86_64-linux-gnu/15/cc1 usr/libexec/gcc/x86_64-linux-gnu/15/cc1plus \
+for tool in "usr/libexec/gcc/$gnu/15/cc1" "usr/libexec/gcc/$gnu/15/cc1plus" \
     usr/bin/cmake usr/bin/ninja usr/bin/as usr/bin/ld usr/bin/ar usr/bin/make \
     usr/bin/bash usr/bin/dash usr/bin/sed usr/bin/gawk usr/bin/tar \
     usr/bin/meson usr/bin/bison usr/bin/m4 usr/bin/pkg-config usr/bin/wayland-scanner; do
@@ -317,8 +332,8 @@ for tool in usr/libexec/gcc/x86_64-linux-gnu/15/cc1 usr/libexec/gcc/x86_64-linux
 done
 test -e "$tree/usr/include/linux/types.h" \
     || { echo "fetch-rustc-sysroot: no kernel UAPI headers in the tree" >&2; exit 1; }
-test -e "$tree/usr/lib64/ld-linux-x86-64.so.2" \
-    || { echo "fetch-rustc-sysroot: no linker at usr/lib64" >&2; exit 1; }
+test -e "$tree/$loader" \
+    || { echo "fetch-rustc-sysroot: no dynamic loader at $loader" >&2; exit 1; }
 
 # Room to spare for what the compile writes when it runs on the volume
 # itself, and a size that does not depend on how mkfs rounds.
