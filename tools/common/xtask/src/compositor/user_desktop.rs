@@ -13,7 +13,7 @@ use super::boot::{
     Wanted, boot_and_dump_carrying, judge_still_running, judged_image, press, say_the_marker,
     with_the_transcript,
 };
-use super::desktop::{desktop_programs, with_chrome};
+use super::desktop::{desktop_auth, desktop_programs, with_chrome};
 use super::run::everything_config;
 use super::{Carried, EITHER, MARKER, Programs, SETTLE, build};
 use crate::args::Args;
@@ -293,6 +293,9 @@ fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried, Strin
     };
     let mut ports = crate::dotfiles::carried(Path::new(conf_path))?;
     ports.extend(desktop_programs(arch)?);
+    // authd, as run-compositor carries it, and with no seed: the user's
+    // SUPER L must find hyprlock refusing to lock (`docs/AUTH.md` P1.5).
+    ports.extend(desktop_auth(arch, &Args::default())?);
     ports.extend(edid.files);
     ports.extend(crate::fuzzel::files(None, false)?);
     // zinc for the terminals to run, as run-compositor carries it.
@@ -333,6 +336,10 @@ fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried, Strin
 /// Whether the desktop ran as its user: `sessiond` said it started the
 /// session as `ferrix`, uid 1000, and hyprix that seat0's devices came from
 /// `sessiond`.
+/// What hyprlock says on the `--everything` desktop, whose account has no
+/// password unless `--auth-seed` gave it one.
+const NOT_LOCKING: &str = "not locking: no password is set for ferrix";
+
 fn judge_session(arch: Arch, said: &[String]) -> Result<()> {
     let wanted = [
         format!(
@@ -451,5 +458,34 @@ fn drive_everything_desktop(
         return Err(Error::new(format!("{arch}: {line}")));
     }
     println!("  {arch}: SUPER RETURN opened a terminal too, and vdagent was started");
+    hyprlock_refuses(arch, &mut qmp, watching)?;
     Ok(said)
+}
+
+/// Presses the user's own `bind = $mainMod, L, exec, hyprlock`: hyprlock
+/// runs as the session's user and asks authd for that account, which the
+/// image gives no password, so it must refuse to lock and say why.
+fn hyprlock_refuses(arch: Arch, qmp: &mut Qmp, watching: &mut Watching<'_>) -> Result<()> {
+    press(qmp, &["meta_l", "l"])?;
+    println!("  {arch}: pressed SUPER L, the user's own hyprlock bind");
+    let refused = watching.read_more(Instant::now() + Duration::from_secs(30), |lines| {
+        lines.iter().any(|line| line.contains(NOT_LOCKING))
+    })?;
+    let said = || watching.lines().iter().chain(watching.after());
+    if !refused || said().any(|line| line.contains("the session is locked")) {
+        return Err(Error::new(format!(
+            "{arch}: SUPER L did not have hyprlock refuse to lock with `{NOT_LOCKING}`"
+        )));
+    }
+    if !said().any(|line| line.contains("auth.socket: active")) {
+        return Err(Error::new(format!(
+            "{arch}: authd's socket never came up on the --everything desktop"
+        )));
+    }
+    println!(
+        "  {arch}: SUPER L ran hyprlock as {}, and with no password set authd's answer kept it \
+         from locking",
+        crate::session::USER
+    );
+    Ok(())
 }

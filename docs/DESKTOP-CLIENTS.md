@@ -529,21 +529,22 @@ upstream's PAM delay), or *unavailable* with its text. The widgets, the
 field and the session see nothing else. The typed secret is a `Secret`,
 zeroed when dropped.
 
-* **`/bin/hyprlock`** has `Missing` until `authd`'s client lands
-  (phase 1 slice P1.5, hyprlock's, once `src/lib/proto/auth-proto` is on
-  main): the conversation cannot begin, and hyprlock **does not take the
-  lock** and says `not locking: no authentication service is running`
-  (§5.4, decision 4: a lock nothing can open would lock the person out).
-  So the customer's `SUPER+L` does nothing visible yet.
-* **`hyprlock-gate`** (with the program, on branch `hyprlock`), a second binary of the crate (`src/bin/gate.rs`),
-  has a test-only backend that accepts the one secret in
-  `/etc/hyprlock/gate.secret`, refusing others after two seconds. Only the
-  gate boot's image carries the binary and the file; when `authd` lands the
-  gate seeds a real store entry and the binary goes (§4.4).
+* **`/bin/hyprlock`** uses `Service`, `authd`'s client (phase 1 slice
+  P1.5), asking for the service `hyprlock`: the caller's own account, a
+  two-second hold on a refusal, which hyprlock waits out and does not add
+  to. Every desktop image carries `authd`. Where the account has no
+  password, or no `authd` answers, hyprlock **does not take the lock** and
+  says why (``not locking: no password is set for ferrix: run `passwd`
+  first``; `docs/AUTH.md` §5.4, decision 4: a lock nothing can open would
+  lock the person out). `passwd` on the desktop, or `--auth-seed ferrix`
+  when the image is built, gives the account one.
+* The gate seeds a real store entry (`crate::auth::seed`), so there is no
+  test-only backend and no `hyprlock-gate` binary.
 * hyprlock never reads a credential. `$USER` and `$DESC` are the uid's
-  `/etc/passwd` line (upstream's `getpwuid(getuid())`); hyprix is init, so
-  on a phase-1 desktop that is root, and the lock asks for root's password
-  (decision 3).
+  `/etc/passwd` line (upstream's `getpwuid(getuid())`): `ferrix` on the
+  `--everything` desktop, which runs as that user (`docs/AUTH.md` §6.1),
+  and root on the other desktops and in the judged boots, which still run
+  as root (decision 3).
 * **`SIGUSR1`** does not unlock: it becomes root's audited
   `authctl unlock-seat` (decision 11). **`--grace`** is said and not
   honoured: the grace is hyprix's `misc:lock_grace`, default 0.
@@ -574,16 +575,20 @@ no diagnostic and no unsupported line
 not one of their three `desc:` monitors, upstream's rule gives only the
 clock panel, `$TIME` and the date, and their Lenovo gets all 8 widgets.
 
-**On branch `hyprlock`, parked at the 2026-09-27 wind-down:** the program
-(`/bin/hyprlock` on `compositor/toolkit`, text through `compositor/text`),
-`hyprlock-gate`, and the `hyprlock` boot of `test-compositor` (lock, five
-dots, a wrong password in `fail_color` with its text, the right one typed
-on a German keyboard, unlock), which passed pixel for pixel on x86_64
-before the relayout; and the `Service` backend over `authd` (`docs/AUTH.md`
-P1.5) with the desktop's `authd` and a no-password boot beside the
-`hyprlock` boot. Everything it waited on is on `main` now --
-`compositor/text`, `src/lib/proto/auth-proto` and `authd` -- so what is
-left is a rebase onto the relaid tree and its boots.
+**On main since 2026-10-03:** the program (`/bin/hyprlock` on
+`compositor/toolkit`, text through `compositor/text`) on every desktop,
+the `Service` backend over `authd` (`docs/AUTH.md` P1.5) with `authd` in
+every desktop image, and two boots of `test-compositor`: `hyprlock` (lock,
+five dots, a wrong password refused by `authd` in `fail_color` with its
+text, the right one typed on a German keyboard, unlock), pixel for pixel
+against the host's drawing of the same configuration
+(`hyprlock/tests/gate.rs`), and `hyprlock-unset`, where with no password
+set `L` leaves the windows as they were and hyprlock says why. The
+`everything-desktop` boot presses the user's own `SUPER L` on the desktop
+that runs as `ferrix`, and requires hyprlock to refuse to lock an account
+with no password, `authd` answering for it. Left: the
+grant hyprix unlocks on and a locker taking over a dead lock (P2.5), an
+AArch64 boot, and `SIGUSR1` as `authctl unlock-seat`.
 
 ## 6. hypridle
 

@@ -64,6 +64,7 @@ mod browser;
 mod desktop;
 mod drawing;
 mod drawn_here;
+mod hyprlock;
 mod idle;
 mod layout;
 mod machine;
@@ -416,7 +417,7 @@ fn gates_busybox(arch: Arch) -> Option<String> {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 33] = [
+const BOOTS: [(&str, Boot); 35] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -434,6 +435,8 @@ const BOOTS: [(&str, Boot); 33] = [
     ("twin", test_twin),
     ("screenshot", test_screenshot),
     ("lock", test_lock),
+    ("hyprlock", hyprlock::test_hyprlock),
+    ("hyprlock-unset", hyprlock::test_hyprlock_unset),
     ("menu", test_menu),
     ("pointer", test_pointer),
     ("cursor", test_cursor),

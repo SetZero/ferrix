@@ -98,7 +98,7 @@ Each fact below was read from the tree at `1a8bea54`.
 | init | Reads `User=` from `/etc/passwd`. Its control socket is `0666`, and `SO_PEERCRED` decides who may change state. A user may make a scope only under their own `user-<uid>.slice`. | `src/user/system/linux/init/init/src/spawn.rs:446-487`; `src/user/system/linux/init/init/src/control.rs:5-6`, `:67`; `docs/INIT.md` §10 |
 | The desktop | hyprix is linked into the kernel as its init, so it and every client run as uid 0. Moving it under init is `docs/INIT.md` L10, not started. | `tools/common/xtask/src/compositor.rs:1237-1239`; `docs/INIT.md:810`, `:887` |
 | The lock | `ext-session-lock-v1`. Any client may take the lock. Only the client that holds it may unlock. A lock whose client died stays locked, and **a second client is refused even then**, so a crashed locker needs a reboot. | `src/user/system/linux/compositor/server/src/client.rs:3670-3686`, `:3745-3749`; `src/user/system/linux/compositor/hyprix/src/state.rs:1048-1058`, `:5351-5361`, `:5406-5417` |
-| hyprlock (unlanded) | Authentication through one trait, `auth::Backend::check(secret) -> Verdict`. On Ferrix today its backend is `Missing`, and only `SIGUSR1` unlocks. | branch `hyprlock`, `src/user/system/linux/compositor/hyprlock/src/auth.rs:1-23`, `:56-61`; its `docs/DESKTOP-CLIENTS.md` §5.2 |
+| hyprlock | Authentication through `auth::Backend` (`ready`, `begin`, `respond`). On every desktop its backend is `Service`, `authd`'s client; it refuses to lock an account with no credential and unlocks only on `authd`'s ACCEPTED (P1.5, landed 2026-10-03, the certification consultant's OK IF of ledger line 295). `SIGUSR1` does not unlock. | `src/user/system/linux/compositor/hyprlock/src/auth.rs`; `docs/DESKTOP-CLIENTS.md` §5.2 |
 | ferrousli | `getspnam_r` reads `/etc/tcb/<name>/shadow` or `/etc/shadow`, as musl does. `crypt` does DES, MD5, `$5$` and `$6$`. Blowfish gives `"*"`. There is no yescrypt and no Argon2. | `src/user/system/linux/ferrousli/src/shadow.rs:1-12`; `src/user/system/linux/ferrousli/src/crypt.rs:1-27` |
 | Busybox | Built without PAM, with shadow passwords and libc's `crypt`, sha512 by default. `login`, `su`, `passwd`, `chpasswd`, `vlock` and `adduser` are built, and all are linked in `/bin`. | `~/.local/share/ferrix/busybox/ferrousli/src/busyboxconfig`; `tools/common/xtask/src/initramfs.rs:237`, `:243`, `:253`, `:260` |
 | ssh | `sshdt`, key-only. "`sshdt` given no key and no password accepts anyone", which is why every boot authorizes a key. | `tools/common/xtask/src/ssh.rs:10-31`; `docs/ROADMAP.md:3491-3526` |
@@ -766,8 +766,14 @@ channel. Every client is `ferrix`'s; `sshdt` and `udhcpc`, which must stay
 root, are units of `graphical.target` instead of `exec-once` lines. The
 kernel gives a pseudoterminal's slave to the process that opened
 `/dev/ptmx`, as devpts does, so a terminal works as a user. Not built
-yet: the session's own scope, `login`, the grant hyprlock unlocks on, and
-the other desktops, which still run as root. The text below is the plan
+yet: the session's own scope, `login`, the grant hyprix unlocks on, and
+the other desktops, which still run as root. **P1.5 landed the same day**
+(the certification consultant's OK IF, ledger line 295): every desktop
+image carries `authd` and `/bin/hyprlock`, which asks `authd` for the
+session's own account's password, so on `--everything` that is
+`ferrix`'s. A password is seeded only where `--auth-seed` or
+`--auth-seed-file` asks; without one hyprlock refuses to lock and says
+why, and `passwd` on the desktop sets one. The text below is the plan
 as it was written before that.
 
 hyprix is linked into the kernel as its init (`tools/common/xtask/src/compositor.rs:1239`),
@@ -905,7 +911,7 @@ phase 1. hyprlock does not change when phase 2 moves the session to
 | P2.2 | K-C: zero socket, pipe and tty buffers when freed | kernel | | kernel gate | 1 |
 | P2.3 | `login`, and getty execs it. First password on a local console. `test-init` gains a stage: log in as `ferrix`, a wrong password refused, `id` says 1000, the session's scope is `user-1000.slice/session-1.scope`. | auth, init | P1 | `test-init --arch all` | 5 |
 | P2.4 | `sessiond`: seat0, device descriptors by `SCM_RIGHTS`, starts hyprix as the account in its scope, ends the session with its compositor. **Built 2026-10-03 for `--everything`** (§6.1), all but the scope: the session stays in `hyprix.service`'s cgroup; `test-compositor --boot everything-desktop` runs it as uid 1000 | session (new) | L10, P0 | `test-compositor` as uid 1000 | 10 |
-| P2.5 | hyprix: devices from `sessiond`, the seat channel and grants (§3.7), a new locker taking over a dead lock, `misc:lock_grace`. **Devices built 2026-10-03**; the grants, the locker and `lock_grace` wait for P1.5 (the `hyprlock` branch) | compositor | P2.4, P1.3 | `test-compositor`, `test-hyprlock` | 6 |
+| P2.5 | hyprix: devices from `sessiond`, the seat channel and grants (§3.7), a new locker taking over a dead lock, `misc:lock_grace`. **Devices built 2026-10-03**; P1.5 landed the same day, so the grants, the locker and `lock_grace` are next | compositor | P2.4, P1.3 | `test-compositor`, `test-hyprlock` | 6 |
 | P2.6 | `su`, set-uid root, the wheel rule | auth | P1 | `test-vfs` (it already becomes `ferrix` with `su`) | 3 |
 | P2.7 | Adversary controls in the gates. A client that calls `unlock_and_destroy` with no grant leaves the screen locked. A client that kills hyprix lands at `login`, not on a desktop. A uid-1000 program cannot read `/var/lib/ferrix/auth`. Each has a sabotage that must make it fail. | auth, compositor | P2.4, P2.5 | `test-compositor`, `test-auth` | 4 |
 
@@ -1075,7 +1081,7 @@ it was put to the customer.
 | P1.2 `src/lib/proto/auth-proto` | on `main` with this section: the records of §3.3, `Secret`, the `auth_proto` fuzz target |
 | P1.3 `authd`, P1.4 `passwd` and `authctl` | on `main` with this row (`src/user/system/linux/auth/`): 28 host tests, one of them over a real socket, and `test-auth` on all three architectures |
 | P1.6 `cargo xtask test-auth` | on `main` with this row (`tools/common/xtask/src/auth.rs`): passes on x86-64, AArch64 and ARMv7-A, and each of `--sabotage accept-any`, `tell-unknown`, `let-anyone-name` and `no-throttle` fails on its own line |
-| P1.5 hyprlock's backend | the hyprlock stream's, now that `authd` and `src/user/system/linux/auth/client` are on `main`; it also puts `authd` into the desktop's image |
+| P1.5 hyprlock's backend | on `main` with this row (2026-10-03): `/bin/hyprlock` talks to `authd` through `src/user/system/linux/auth/client` (`hyprlock/src/auth.rs`), and every desktop image carries `authd` beside hyprlock (`tools/common/xtask/src/compositor/desktop.rs`), with a seed only where `--auth-seed` asks (the certification consultant's OK IF, ledger line 295). `test-compositor --boot hyprlock` locks, refuses a wrong password and takes the right one through `authd`; `--boot hyprlock-unset` refuses to lock an account with no password (decision 4) |
 | K-E `SO_PEERCRED` at `connect` and `listen` | on `main` with its boot check (E-01, closed) |
 | P1.7 the Security Target's OE.AUTH | on `main` with this row: OE.AUTH, A.AUTH and §9.1's note |
 

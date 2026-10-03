@@ -11,10 +11,15 @@
 //! screen, the clock, the keys -- so each rule is a host test: [`config`]
 //! reads the file through `compositor/hyprlang`, [`scene`] draws one screen's
 //! widgets with [`paint`] and [`blur`], [`session`] is the field's key rules,
-//! and [`auth`] the one interface a password goes through.
+//! and [`auth`] the one interface a password goes through. [`app`] is the
+//! program on `compositor/toolkit`, [`assets`] its text and pictures, and
+//! [`cli`] its command line.
 
+pub mod app;
+pub mod assets;
 pub mod auth;
 pub mod blur;
+pub mod cli;
 pub mod config;
 pub mod format;
 pub mod layout;

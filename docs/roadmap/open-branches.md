@@ -203,7 +203,9 @@ read its last section first.
   `compositor/run.rs`); compare before committing either.
 - `hyprlock` and `hyprlock-full-4e813ac4`, `fuzzel-window-*`: the desktop
   clients (`docs/DESKTOP-CLIENTS.md`); hyprlock is on `main`, and these hold
-  commits that are not: compare before resuming.
+  commits that are not: compare before resuming. `hyprlock`'s four WIP
+  commits (P1.5) landed on 2026-10-03, replayed onto the relaid tree as
+  `hyprlock-p15`, so that branch is history now.
 - `guest-frame-time` and `guest-frame-time-local`: diverged. The first has
   six WIP commits on terminal and scroll rendering; the second is d33a86602,
   a guest frame-cost fix (rounding and `memcmp` without the C library).

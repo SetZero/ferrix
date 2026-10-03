@@ -24,6 +24,7 @@ use crate::{Error, Result};
 const DESKTOP_CLIENTS: &[(&str, &str)] = &[
     ("compositor-waybar", "waybar"),
     ("compositor-fuzzel", "fuzzel"),
+    ("compositor-hyprlock", "hyprlock"),
 ];
 
 /// Where `run-compositor` puts the wallpaper it carries.
@@ -93,6 +94,42 @@ pub(super) fn desktop_programs(arch: Arch) -> Result<Vec<crate::ports::File>> {
     Ok(files)
 }
 
+/// authd on a desktop, so that hyprlock has something to check a password
+/// with (`docs/AUTH.md` P1.5): its programs, policies and units, its
+/// account, and a seed only where `--auth-seed` or `--auth-seed-file` asked
+/// for one. Without a seed the session's account has no password, and
+/// hyprlock says so and does not lock (decision 4); `passwd` on the desktop
+/// sets one. The accounts replace the ones the image's busybox slot writes,
+/// a later entry in the archive replacing an earlier one. Nothing on an
+/// architecture authd is not built for.
+pub(super) fn desktop_auth(arch: Arch, args: &Args) -> Result<Vec<crate::ports::File>> {
+    let mut files = crate::auth::carried(arch, None)?;
+    if files.is_empty() {
+        return Ok(files);
+    }
+    files.extend(crate::auth::seeds(args)?);
+    for (path, text) in [
+        (
+            "etc/passwd",
+            format!(
+                "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/home/ferrix:/bin/zsh\n{}",
+                crate::auth::PASSWD_LINE
+            ),
+        ),
+        (
+            "etc/group",
+            format!("root:x:0:\nferrix:x:1000:\n{}", crate::auth::GROUP_LINE),
+        ),
+    ] {
+        files.push(crate::ports::File {
+            path: path.to_owned(),
+            mode: 0o644,
+            content: crate::ports::Content::Bytes(text.into_bytes()),
+        });
+    }
+    Ok(files)
+}
+
 pub(super) fn desktop(
     arch: Arch,
     config: String,
@@ -104,6 +141,7 @@ pub(super) fn desktop(
     let config = with_network(with_layout(config, args), args);
     let mut carried = Carried::wanted(arch, args)?;
     carried.ports.extend(desktop_programs(arch)?);
+    carried.ports.extend(desktop_auth(arch, args)?);
     // The user's dotfiles and the fonts they name, from beside a real
     // `hyprland.conf`: `crate::dotfiles` says which and where.
     if let Some(path) = &args.config

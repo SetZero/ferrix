@@ -9,18 +9,13 @@
 //! * `Return` or `KP_Enter` submits, unless the field is empty and
 //!   `general:ignore_empty_input` is set. The field empties at once and the
 //!   check runs; keys are ignored until it answers.
-//! * A refusal lands when the backend's `retry_after_ms` is over, which is
-//!   when upstream's PAM returns from its own delay; the field shows
-//!   `check_color` until then. The failure's text then shows for
-//!   `general:fail_timeout` milliseconds, or until the next key.
+//! * The check holds a refusal for as long as its policy says (`authd`'s
+//!   `FailDelaySec`, as upstream's PAM holds one), and the field shows
+//!   `check_color` until it answers. The failure's text then shows for
+//!   `general:fail_timeout` milliseconds, or until the next key, and no new
+//!   attempt is submitted until its `retry_after_ms` is over.
 
 use crate::auth::Verdict;
-
-/// `pam_unix`'s delay after a failed attempt, in milliseconds: two seconds
-/// unless it is given `nodelay`, which the `login` stack hyprlock's PAM
-/// service includes does not give it on Arch, Debian or Fedora. What a
-/// backend with no `retry_after_ms` of its own should say.
-pub const FAIL_DELAY_MS: u64 = 2000;
 
 /// What a key did.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,8 +44,11 @@ pub struct Session {
     fail_until: Option<u64>,
     /// When the check submitted last answers, while it is running.
     checking: bool,
-    /// A refusal waiting out its delay, and when it lands.
-    refused: Option<(Verdict, u64)>,
+    /// A refusal to land at the next [`Session::tick`].
+    refused: Option<Verdict>,
+    /// Before when `Return` submits nothing: the last refusal's
+    /// `retry_after_ms`.
+    retry_at: u64,
     /// Caps Lock, as the field's colours read it.
     pub caps_lock: bool,
     /// Num Lock.
@@ -157,12 +155,12 @@ impl Session {
     }
 
     /// `handleKeySym`.
-    fn keysym(&mut self, key: &KeyPress<'_>, _now: u64) -> Keyed {
+    fn keysym(&mut self, key: &KeyPress<'_>, now: u64) -> Keyed {
         match key.keysym {
             "Escape" => self.buffer.clear(),
             "u" | "a" | "BackSpace" if key.control => self.buffer.clear(),
             "Return" | "KP_Enter" => {
-                if self.buffer.is_empty() && self.ignore_empty {
+                if (self.buffer.is_empty() && self.ignore_empty) || now < self.retry_at {
                     return Keyed::Nothing;
                 }
                 self.checking = true;
@@ -178,20 +176,23 @@ impl Session {
         Keyed::Redraw
     }
 
-    /// The check answered at `now`. A refusal lands after its
-    /// `retry_after_ms`; [`Session::tick`] delivers it.
+    /// The check answered at `now`. A refusal lands at the next
+    /// [`Session::tick`], and holds the next attempt back for its
+    /// `retry_after_ms`.
     pub fn answered(&mut self, outcome: Verdict, now: u64) {
-        let delay = match &outcome {
+        match &outcome {
             Verdict::Accepted => {
                 self.checking = false;
                 self.accepted = true;
                 self.pam_fail = Some(outcome.fail_text().to_owned());
                 return;
             }
-            Verdict::Failed { retry_after_ms, .. } => *retry_after_ms,
-            Verdict::Unavailable(_) => 0,
-        };
-        self.refused = Some((outcome, now.saturating_add(delay)));
+            Verdict::Failed { retry_after_ms, .. } => {
+                self.retry_at = now.saturating_add(*retry_after_ms);
+            }
+            Verdict::Unavailable(_) => {}
+        }
+        self.refused = Some(outcome);
     }
 
     /// The backend asked another question in the same conversation: the
@@ -204,11 +205,8 @@ impl Session {
     /// whose time is up goes. Whether anything changed.
     pub fn tick(&mut self, now: u64) -> bool {
         let mut changed = false;
-        if let Some((outcome, at)) = &self.refused
-            && now >= *at
-        {
+        if let Some(outcome) = self.refused.take() {
             let text = outcome.fail_text().to_owned();
-            self.refused = None;
             self.checking = false;
             self.attempts += 1;
             self.fail_text.clone_from(&text);
@@ -226,16 +224,19 @@ impl Session {
     /// The next moment [`Session::tick`] has something to do, if any.
     #[must_use]
     pub fn next_deadline(&self) -> Option<u64> {
-        [self.refused.as_ref().map(|(_, at)| *at), self.fail_until]
-            .into_iter()
-            .flatten()
-            .min()
+        if self.refused.is_some() {
+            return Some(0);
+        }
+        self.fail_until
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FAIL_DELAY_MS, KeyPress, Keyed, Session};
+    use super::{KeyPress, Keyed, Session};
+
+    /// `authd`'s hold on a refusal, which comes before the answer here.
+    const FAIL_DELAY_MS: u64 = 2000;
     use crate::auth::{REJECTED, Verdict};
 
     fn refused() -> Verdict {
@@ -307,13 +308,12 @@ mod tests {
     }
 
     #[test]
-    fn a_wrong_password_shows_its_failure_after_the_delay_then_goes() {
+    fn a_wrong_password_shows_its_failure_then_goes() {
         let mut session = Session::new(true, 2000, 0, 0);
         typed(&mut session, "wrong", 0);
         let _ = tap(&mut session, 28, "Return", "", 0);
-        session.answered(refused(), 10);
         assert!(session.checking());
-        assert!(!session.tick(10 + FAIL_DELAY_MS - 1));
+        session.answered(refused(), 10 + FAIL_DELAY_MS);
         assert!(session.tick(10 + FAIL_DELAY_MS));
         assert!(!session.checking());
         assert!(session.failing());
@@ -322,6 +322,29 @@ mod tests {
         // `fail_timeout` later, it goes.
         assert!(session.tick(10 + FAIL_DELAY_MS + 2000));
         assert!(!session.failing());
+    }
+
+    #[test]
+    fn a_refusal_holds_the_next_attempt_for_its_retry_after() {
+        let mut session = Session::new(true, 2000, 0, 0);
+        typed(&mut session, "a", 0);
+        let _ = tap(&mut session, 28, "Return", "", 0);
+        session.answered(
+            Verdict::Failed {
+                text: "wait 16 s".to_owned(),
+                retry_after_ms: 16_000,
+            },
+            100,
+        );
+        let _ = session.tick(100);
+        assert_eq!(session.pam_fail.as_deref(), Some("wait 16 s"));
+        typed(&mut session, "b", 200);
+        assert_eq!(tap(&mut session, 28, "Return", "", 200), Keyed::Nothing);
+        assert_eq!(session.length(), 1);
+        assert_eq!(
+            tap(&mut session, 28, "Return", "", 16_100),
+            Keyed::Submit("b".to_owned())
+        );
     }
 
     #[test]

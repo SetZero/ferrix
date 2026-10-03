@@ -257,7 +257,7 @@ pub(crate) fn with_seeds(arch: Arch, args: &Args) -> Result<Vec<File>> {
 }
 
 /// The seeds `--auth-seed` and `--auth-seed-file` ask for, as carried files.
-fn seeds(args: &Args) -> Result<Vec<File>> {
+pub(crate) fn seeds(args: &Args) -> Result<Vec<File>> {
     let mut files = Vec::new();
     for account in &args.auth_seeds {
         let password = ask_on_terminal(account)?;

@@ -17,7 +17,10 @@ fn refused() -> Verdict {
 }
 use crate::config::Config;
 use crate::format::Context;
-use crate::session::{FAIL_DELAY_MS, KeyPress, Session};
+use crate::session::{KeyPress, Session};
+
+/// `authd`'s hold on a refusal.
+const FAIL_DELAY_MS: u64 = 2000;
 
 /// Text as a box: half the point size wide per character, four thirds of
 /// it high, in the request's colour.
