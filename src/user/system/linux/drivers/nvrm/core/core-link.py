@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+# The three files that join nvrm and nvrm-core, RM's core linked on its own
+# (docs/NVIDIA.md §4.1, "The core"). nvrm is linked first; the core is then
+# linked against nvrm's addresses, and carries an export table nvrm checks
+# and reads when it loads it from the NVIDIA volume.
+#
+#   core-link.py calls   CORE OUT.S OUT.h OBJECT...   nvrm's side of the calls
+#   core-link.py imports CORE NVRM OUT.ld             the core's imports, bound
+#   core-link.py exports OUT.h NVRM OUT.S             the core's export header
+#
+#   core-link.py check-core CORE-ELF               program headers refused?
+#   core-link.py check-size NVRM LIMIT               under the driver limit?
+#   core-link.py same-layout BEFORE AFTER            the pin moved nothing?
+#
+# `calls` writes the exports' names, in order, beside OUT.h as OUT.list;
+# `exports` reads them from there, so both sides number them alike.
+#
+# CORE is nv-kernel.o and NVRM the linked nvrm. Every refusal is a line
+# naming what is wrong, and exit status 1: a half-made file is never left
+# for make to take as built.
+#
+# SPDX-License-Identifier: MIT
+
+import re
+import subprocess
+import sys
+
+# "NVRMCORE", little-endian, and the header's layout version: both are
+# core.h's too, and the loader refuses any other.
+MAGIC = 0x45524F434D52564E
+VERSION = 1
+# The core's base, and the end of the low 2 GiB its R_X86_64_32S
+# relocations can reach. nvrm-core.ld places the core at the base.
+CORE_BASE = 0x4000_0000
+CORE_END = 0x8000_0000
+# The core's data that nvrm reads, by name: a function is found by the
+# calls nvrm's objects make, data is not, since nv-ferrix.h reads it
+# through the table. Data comes first in the table, so its indices do not
+# depend on the objects that use them: nv-ferrix.h's NVRM_CORE_DATA_*
+# repeat this list's order.
+DATA = ["pNVRM_ID"]
+# RM's own functions that run a privileged instruction, and the ring-3
+# function of nvrm's each is bound to instead (os/nvos/src/cpu.rs). A
+# linker script's assignment overrides the object's definition, so every
+# call in the core reaches nvrm's; RM's own copy stays, never called.
+REPLACED = {"osNv_rdcr4": "nvos_rdcr4"}
+# The instructions ring 3 may not execute, as objdump spells them. Ferrix
+# sets CR4.UMIP (src/kernel/src/arch/x86_64/cpu.rs), so the descriptor-table
+# stores fault too. The VMX and SVM instructions are named one by one: a
+# `vm` prefix would also take AVX's vmovaps and vmulps.
+PRIVILEGED = re.compile(
+    r"^\s*[0-9a-f]+:\t(mov\s+%(cr|db|dr)\d|mov\s+\S+,%(cr|db|dr)\d|rdmsr|wrmsr|"
+    r"wrmsrns|wbinvd|invd|cli|sti|hlt|in\s|out\s|ins[bwl]|outs[bwl]|lgdt|lidt|"
+    r"lldt|ltr|sgdt|sidt|sldt|smsw|str|clts|invlpg|invlpga|invpcid|invept|"
+    r"invvpid|xsetbv|xsaves(64)?|xrstors(64)?|swapgs|sysret|sysexit|iretq?|"
+    r"lmsw|rdpmc|clac|stac|monitor|mwait|encls|pconfig|vmcall|vmlaunch|"
+    r"vmresume|vmxon|vmxoff|vmread|vmwrite|vmptrld|vmptrst|vmclear|vmfunc|"
+    r"vmrun|vmload|vmsave|vmmcall)\b")
+
+
+def refuse(why):
+    print(f"core-link: {why}", file=sys.stderr)
+    sys.exit(1)
+
+
+def nm(path, *flags):
+    """(name, type, address) for each symbol nm lists."""
+    run = subprocess.run(["nm", "--format=posix", *flags, path],
+                         capture_output=True, text=True)
+    if run.returncode != 0:
+        refuse(f"nm {path}: {run.stderr.strip()}")
+    symbols = []
+    for line in run.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or line.endswith(":"):
+            continue
+        address = int(fields[2], 16) if len(fields) > 2 else None
+        symbols.append((fields[0], fields[1], address))
+    return symbols
+
+
+def core_symbols(core):
+    defined = {}
+    undefined = set()
+    for name, kind, address in nm(core, "-g"):
+        if kind == "U":
+            undefined.add(name)
+        else:
+            defined[name] = kind
+    return defined, undefined
+
+
+def exports(core, objects):
+    """What nvrm takes from the core: DATA, then every function its objects
+    leave undefined that the core defines, sorted, so the two sides number
+    them alike."""
+    defined, _ = core_symbols(core)
+    wanted = set()
+    for path in objects:
+        for name, kind, _ in nm(path, "-u"):
+            if name in defined:
+                wanted.add(name)
+    for name in DATA:
+        if name not in defined:
+            refuse(f"the core defines no {name}")
+        wanted.discard(name)
+    functions = sorted(wanted)
+    for name in functions:
+        if defined[name] not in ("T", "t"):
+            refuse(f"nvrm calls {name}, which is the core's data, not code")
+    return functions, list(DATA)
+
+
+def write(path, text):
+    with open(path, "w") as out:
+        out.write(text)
+
+
+def calls(core, out_s, out_h, objects):
+    functions, data = exports(core, objects)
+    count = len(functions) + len(data)
+    first = len(data)
+    s = ["/* Generated by core-link.py calls: nvrm's calls into RM's core,",
+         " * each through its slot in nvrm_core_table, which core.c fills",
+         " * from the core's export header. Do not edit. */",
+         "\t.section .bss.nvrm_core_table,\"aw\",@nobits",
+         "\t.balign 8",
+         "\t.globl nvrm_core_table",
+         "nvrm_core_table:",
+         f"\t.zero {8 * count}",
+         "\t.size nvrm_core_table, . - nvrm_core_table",
+         "\t.text"]
+    for index, name in enumerate(functions):
+        s += [f"\t.globl {name}",
+              f"\t.type {name}, @function",
+              f"{name}:",
+              f"\tjmp *nvrm_core_table+{8 * (first + index)}(%rip)",
+              f"\t.size {name}, . - {name}"]
+    s.append("\t.section .note.GNU-stack,\"\",@progbits")
+    write(out_s, "\n".join(s) + "\n")
+    h = ["/* Generated by core-link.py calls. Do not edit. */",
+         "#ifndef NVRM_CORE_CALLS_H",
+         "#define NVRM_CORE_CALLS_H",
+         f"#define NVRM_CORE_MAGIC 0x{MAGIC:016x}ULL",
+         f"#define NVRM_CORE_VERSION {VERSION}u",
+         f"#define NVRM_CORE_BASE 0x{CORE_BASE:x}ULL",
+         f"#define NVRM_CORE_END 0x{CORE_END:x}ULL",
+         f"#define NVRM_CORE_EXPORTS {count}u",
+         f"#define NVRM_CORE_DATA {len(data)}u",
+         "/* Data comes first, in core-link.py's order, then the functions,",
+         " * sorted by name. */"]
+    h += ["#endif", ""]
+    write(out_h, "\n".join(h))
+    write(list_of(out_h), "\n".join(data + functions) + "\n")
+
+
+def list_of(header):
+    return header[:-2] + ".list" if header.endswith(".h") else header + ".list"
+
+
+def imports(core, nvrm, out_ld):
+    """Bind each of the core's imports to nvrm's address for it: the only
+    symbols of nvrm the core sees, where --just-symbols would offer all of
+    them, nvrm's call stubs for the core's own functions among them."""
+    _, undefined = core_symbols(core)
+    have = {}
+    for name, kind, address in nm(nvrm, "--defined-only"):
+        if kind.upper() in "TDBRVW":
+            have[name] = address
+    lines = ["/* Generated by core-link.py imports: the core's imports at",
+             " * nvrm's addresses. Do not edit. */"]
+    missing = sorted(name for name in undefined if name not in have)
+    if missing:
+        refuse(f"nvrm defines none of these {len(missing)} imports of the "
+               f"core: {' '.join(missing[:20])}")
+    for name in sorted(undefined):
+        if have[name] >= CORE_BASE:
+            refuse(f"nvrm's {name} is at {have[name]:#x}, not below the "
+                   f"core's base {CORE_BASE:#x}")
+        lines.append(f"{name} = 0x{have[name]:x};")
+    privileged(core)
+    defined, _ = core_symbols(core)
+    for name, replacement in sorted(REPLACED.items()):
+        if defined.get(name) not in ("T", "t"):
+            refuse(f"the core defines no function {name} to replace")
+        if replacement not in have:
+            refuse(f"nvrm defines no {replacement} to replace the core's {name}")
+        lines.append(f"/* RM's {name} runs a privileged instruction: nvrm's "
+                     f"{replacement} instead. */")
+        lines.append(f"{name} = 0x{have[replacement]:x};")
+    write(out_ld, "\n".join(lines) + "\n")
+
+
+def build_id(nvrm):
+    run = subprocess.run(["readelf", "-n", nvrm], capture_output=True, text=True)
+    for line in run.stdout.splitlines():
+        if "Build ID:" in line:
+            return bytes.fromhex(line.split("Build ID:")[1].strip())
+    refuse(f"{nvrm} has no build-id note (link it with --build-id=sha1)")
+
+
+def export_header(header, nvrm, out_s):
+    """The header at the core's base: magic, version, count, nvrm's
+    build-id, and each export's address, in the order `calls` wrote."""
+    with open(list_of(header)) as names_file:
+        names = [line.strip() for line in names_file if line.strip()]
+    ident = build_id(nvrm)
+    if len(ident) != 20:
+        refuse(f"nvrm's build-id is {len(ident)} bytes, not sha1's 20")
+    s = ["/* Generated by core-link.py exports: the export header nvrm's",
+         " * core.c reads at the core's base. Do not edit. */",
+         "\t.section .nvrm_core_header,\"a\",@progbits",
+         "\t.balign 8",
+         "\t.globl nvrm_core_header",
+         "nvrm_core_header:",
+         f"\t.quad 0x{MAGIC:016x}",
+         f"\t.long {VERSION}, {len(names)}",
+         "\t.byte " + ", ".join(f"0x{b:02x}" for b in ident),
+         "\t.long 20"]
+    s += [f"\t.quad {name}" for name in names]
+    s.append("\t.section .note.GNU-stack,\"\",@progbits")
+    write(out_s, "\n".join(s) + "\n")
+
+
+def check_core(path):
+    """The linked core: PT_LOAD and PT_GNU_STACK only, none writable and
+    executable, every PT_LOAD inside [CORE_BASE, CORE_END)."""
+    run = subprocess.run(["readelf", "-lW", path], capture_output=True, text=True)
+    if run.returncode != 0:
+        refuse(f"readelf {path}: {run.stderr.strip()}")
+    loads = 0
+    for line in run.stdout.splitlines():
+        fields = line.split()
+        if not fields or not fields[0].isupper() or fields[0] in ("Elf", "Entry", "There"):
+            continue
+        kind = fields[0]
+        if kind in ("Type", "Program", "Section", "Segment"):
+            continue
+        if kind not in ("LOAD", "GNU_STACK"):
+            refuse(f"{path} has a {kind} program header (only LOAD and GNU_STACK)")
+        flags = "".join(field for field in fields[6:-1] if set(field) <= set("RWE"))
+        if "W" in flags and "E" in flags:
+            refuse(f"{path} has a {kind} segment that is writable and executable")
+        if kind == "LOAD":
+            loads += 1
+            start = int(fields[2], 16)
+            end = start + int(fields[5], 16)
+            if start < CORE_BASE or end > CORE_END:
+                refuse(f"{path} has a segment at {start:#x}-{end:#x}, outside "
+                       f"[{CORE_BASE:#x}, {CORE_END:#x})")
+    if loads == 0:
+        refuse(f"{path} has no LOAD segment")
+
+
+def privileged(path):
+    """Refuse a privileged instruction anywhere in the core's code but in
+    the functions REPLACED binds away, which are never called. Read from
+    nv-kernel.o itself, where every function still has its name: in the
+    linked core, a replaced function's body is labelled by its neighbour."""
+    run = subprocess.run(["objdump", "-d", "--no-show-raw-insn", path],
+                         capture_output=True, text=True)
+    if run.returncode != 0:
+        refuse(f"objdump {path}: {run.stderr.strip()}")
+    function = None
+    for line in run.stdout.splitlines():
+        if line.endswith(">:"):
+            function = line.split("<", 1)[1][:-2]
+            continue
+        if PRIVILEGED.match(line) and function not in REPLACED:
+            instruction = line.split("\t", 1)[1].strip()
+            refuse(f"{path}: {function} executes `{instruction}`, which "
+                   f"faults in ring 3: bind it to an nvrm function in "
+                   f"core-link.py's REPLACED")
+
+
+def check_size(path, limit):
+    import os
+    size = os.stat(path).st_size
+    if size >= int(limit, 0):
+        refuse(f"{path} is {size} bytes, at or above the {int(limit, 0)} the "
+               f"kernel's driver read leaves with its margin (docs/NVIDIA.md "
+               f"§4.1, \"The core\")")
+
+
+def layout(path):
+    """`path`'s section headers and symbol table, as readelf and nm print
+    them; a tool that fails or prints nothing is a refusal, so that two
+    failed runs never compare equal."""
+    listed = []
+    for command in (["readelf", "-SW", path], ["nm", "-n", path]):
+        run = subprocess.run(command, capture_output=True, text=True)
+        if run.returncode != 0 or not run.stdout.strip():
+            refuse(f"{' '.join(command)} failed (exit {run.returncode}): "
+                   f"{run.stderr.strip() or 'no output'}")
+        listed.append(run.stdout)
+    return listed[0], listed[1]
+
+
+def same_layout(before, after):
+    """The pin's objcopy changes the bytes of one section and nothing
+    else: the section headers and the symbol table must be identical."""
+    old_sections, old_symbols = layout(before)
+    new_sections, new_symbols = layout(after)
+    if old_sections.replace(before, "") != new_sections.replace(after, ""):
+        refuse(f"pinning moved {after}'s section headers")
+    if old_symbols != new_symbols:
+        refuse(f"pinning changed {after}'s symbol table")
+
+
+def main(argv):
+    if len(argv) >= 5 and argv[1] == "calls":
+        calls(argv[2], argv[3], argv[4], argv[5:])
+    elif len(argv) == 5 and argv[1] == "imports":
+        imports(argv[2], argv[3], argv[4])
+    elif len(argv) == 5 and argv[1] == "exports":
+        export_header(argv[2], argv[3], argv[4])
+    elif len(argv) == 3 and argv[1] == "check-core":
+        check_core(argv[2])
+    elif len(argv) == 4 and argv[1] == "check-size":
+        check_size(argv[2], argv[3])
+    elif len(argv) == 4 and argv[1] == "same-layout":
+        same_layout(argv[2], argv[3])
+    else:
+        refuse("usage: core-link.py calls|imports|exports ... (see the head)")
+
+
+if __name__ == "__main__":
+    main(sys.argv)
