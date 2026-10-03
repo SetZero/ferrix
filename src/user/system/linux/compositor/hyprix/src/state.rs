@@ -315,6 +315,12 @@ struct Compositor<'r> {
     settling: bool,
     /// Whether something has changed that no frame has shown yet.
     owed: bool,
+    /// Until when no frame is drawn, after one the card did not take: a
+    /// driver that is stalled refuses the next at once, and a loop owed
+    /// every one of them drew whole frames at the refresh rate on a host
+    /// already too busy to run the GPU. When it is over, one whole frame
+    /// is owed.
+    held_until: Option<Instant>,
     /// When the next frame may be drawn. `crate::pace` says why a change
     /// waits.
     pace: crate::pace::Pace,
@@ -588,6 +594,7 @@ impl<'r> Compositor<'r> {
             placed_layers: Vec::new(),
             settling: false,
             owed: false,
+            held_until: None,
             pace: crate::pace::Pace::default(),
             commits: crate::damage::Told::default(),
             next_window: 1,
@@ -1536,9 +1543,13 @@ impl<'r> Compositor<'r> {
     /// How long the wait may last: until the next frame, idle, test or
     /// device timer, whichever is first, or for ever.
     fn timeout(&self, animating: bool) -> Option<Duration> {
-        let frame_wait = (self.owed || animating || self.settling)
-            .then(|| self.pace.until(Instant::now()))
-            .flatten();
+        // A held frame waits for the hold, not for the screen's refresh.
+        let frame_wait = match self.held_until {
+            Some(until) => Some(until.saturating_duration_since(Instant::now())),
+            None => (self.owed || animating || self.settling)
+                .then(|| self.pace.until(Instant::now()))
+                .flatten(),
+        };
         let idle = u64::try_from(
             self.forced
                 .unwrap_or_else(|| self.last_input.elapsed())
@@ -2537,6 +2548,9 @@ struct Screen {
     /// Whether a dropped frame has been said since it last showed one.
     said_dropped: bool,
 }
+
+/// How long the frames wait after one the card did not take.
+const HOLD: Duration = Duration::from_millis(250);
 
 impl Screen {
     /// Say that the card went away, once a loss, whichever path found it.

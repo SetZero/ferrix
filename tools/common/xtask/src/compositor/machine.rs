@@ -164,9 +164,15 @@ fn judge_desktop(arch: Arch, said: &[String]) -> Result<()> {
 /// Where the restart boot's script is on the guest.
 const KILL_GPU_PATH: &str = "etc/killgpu";
 
-/// The script the restart boot runs from `exec-once`, twice over: wait until
-/// the compositor holds `card0`, kill the display driver, and wait for devmgr
-/// to have started another. zinc's, since a gate boot carries no busybox and
+/// The script the restart boot runs from `exec-once`. First a stall: once
+/// both windows are drawn, stop the display driver for longer than the
+/// kernel waits for its reply, open a third window so the compositor has a
+/// frame to show meanwhile, then let the driver go on and close the window.
+/// The window is `exec-once`'s, waiting on the script's marker: a zinc
+/// script that started it with `&` stopped there and went no further. The
+/// waits count `EPOCHSECONDS`: `SECONDS` is empty in a zinc script.
+/// Then twice over: wait until the compositor holds `card0`, kill the
+/// display driver, and wait for devmgr to have started another. zinc's, since a gate boot carries no busybox and
 /// `exec-once` runs one program with no shell.
 ///
 /// A card is open to one program at a time, so an open that fails on a card
@@ -180,6 +186,27 @@ const KILL_GPU: &str = r#"gpu() {
   done
 }
 held() { [[ -e /dev/dri/card0 ]] && ! { : 3<> /dev/dri/card0 } 2>/dev/null }
+newest() {
+  most=0
+  for p in /proc/[0-9]*; do
+    read n < $p/comm 2>/dev/null
+    if [[ $n == $1 ]] && (( ${p#/proc/} > most )); then most=${p#/proc/}; fi
+  done
+  echo $most
+}
+until held; do :; done
+until [[ -e /tmp/pattern-two.drawn ]]; do :; done
+stopped=$(gpu)
+echo "killgpu: stopping gpu $stopped"
+kill -STOP $stopped
+: > /tmp/pattern-stalled.drawn
+began=$EPOCHSECONDS
+until (( EPOCHSECONDS - began >= 12 )); do :; done
+kill -CONT $stopped
+echo "killgpu: letting gpu $stopped go on"
+began=$EPOCHSECONDS
+until [[ -e /tmp/pattern-three.drawn ]] || (( EPOCHSECONDS - began >= 30 )); do :; done
+kill $(newest pattern)
 for round in 1 2; do
   until held; do :; done
   killed=$(gpu)
@@ -196,6 +223,7 @@ const RESTART_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor --boot restart`.
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two --after one
+exec-once = /bin/pattern checkerboard three --after stalled
 exec-once = /bin/zinc /etc/killgpu
 ";
 
@@ -203,15 +231,31 @@ exec-once = /bin/zinc /etc/killgpu
 /// has published its device.
 const PUBLISHED_AGAIN: &str = "was started again and published";
 
+/// What the restart boot's script says as it stops the driver, and as it
+/// lets it go on.
+const STOPPING: &str = "killgpu: stopping gpu";
+const GOES_ON: &str = "killgpu: letting gpu";
+
+/// What the compositor says when a frame its card did not answer for in
+/// time is given up (`hyprix::state::Screen::drop_frame`).
+const DROPPED: &str = "dropped a frame";
+
 /// What the compositor says when its card goes, and when it has it back.
 const CARD_WENT: &str = "the card went away";
 const CARD_BACK: &str = "the card is back";
 
-/// How long the restart boot waits for both deaths and both returns.
-const RESTART_PATIENCE: Duration = Duration::from_secs(120);
+/// How long the restart boot waits for the stall, both deaths and both
+/// returns.
+const RESTART_PATIENCE: Duration = Duration::from_secs(150);
 
-/// The twenty-first boot: the display driver killed under the compositor,
-/// twice (`docs/DEVMGR.md` §4).
+/// The twenty-first boot: the display driver stopped for longer than the
+/// kernel waits for it, and then killed under the compositor, twice
+/// (`docs/DEVMGR.md` §4).
+///
+/// Stopping it is the stall a busy host made on 2026-10-03: the flip timed
+/// out, the compositor ended on `ETIMEDOUT`, and every window went with it.
+/// Now it drops the frame and draws the next one whole, which is required
+/// here: the compositor said it dropped one, and nothing ended.
 ///
 /// Killing `gpu` once took the whole machine down: the card answered
 /// `ENODEV`, the compositor ended on it, and it was init. Now devmgr starts
@@ -333,11 +377,14 @@ fn judge_restart(arch: Arch, said: &[String]) -> Result<()> {
         line.contains(FAILED) || compositor_ended(line) || line.contains(crate::qemu::PANIC_MARKER)
     }) {
         return Err(Error::new(format!(
-            "{arch}: the machine did not survive its display driver being killed: {}",
+            "{arch}: the machine did not survive its display driver being stopped or killed: {}",
             line.trim()
         )));
     }
     let wanted = [
+        (STOPPING, 1, "the script stopped the driver"),
+        (GOES_ON, 1, "the script let it go on"),
+        (DROPPED, 1, "the compositor dropped a frame and went on"),
         (KILLING, 2, "the script killed the driver twice"),
         (CARD_WENT, 1, "the compositor saw its card go"),
         (PUBLISHED_AGAIN, 2, "devmgr started the driver again twice"),
@@ -361,8 +408,9 @@ fn judge_restart(arch: Arch, said: &[String]) -> Result<()> {
         )));
     }
     println!(
-        "  {arch}: the display driver was killed twice under the compositor, and each time \
-         devmgr started it again and the compositor drew on its card again"
+        "  {arch}: the display driver was stopped under the compositor, which dropped a \
+         frame and went on, and then killed twice, and each time devmgr started it again \
+         and the compositor drew on its card again"
     );
     Ok(())
 }

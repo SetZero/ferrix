@@ -288,8 +288,9 @@ desktop took the card away for good, the compositor ended on `ENODEV`, and
 the compositor was init, so the machine powered off.
 `cargo xtask test-restart` (a shell kills it twice; `--boot input`, `net`,
 `blk` or `all` for the other kinds, the disk's on a btrfs root) and
-`cargo xtask test-compositor --boot restart` (a script kills it twice under
-hyprix) are the gates. For sound, `cargo xtask test-audio`'s restart boot
+`cargo xtask test-compositor --boot restart` (a script first stops it for
+longer than the kernel's five-second reply wait, which hyprix must ride out
+by dropping frames, then kills it twice under hyprix) are the gates. For sound, `cargo xtask test-audio`'s restart boot
 kills `snd` twice under a running stream, requires the quarantine to have
 caught a late write, and plays a second on the third driver's card.
 

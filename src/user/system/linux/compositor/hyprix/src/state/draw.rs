@@ -75,6 +75,15 @@ impl Compositor<'_> {
             self.owed = true;
         }
         self.overlay_was = overlay_on;
+        // A hold after a frame the card did not take: nothing is drawn
+        // until it is over, and then everything is.
+        if let Some(until) = self.held_until {
+            if Instant::now() < until {
+                return Ok(animating);
+            }
+            self.held_until = None;
+            self.owed = true;
+        }
         if (self.owed || self.tally.drawn == 0 || animating || self.settling)
             && self.pace.due(Instant::now(), refresh_ns(&self.screens))
         {
@@ -195,7 +204,7 @@ impl Compositor<'_> {
                     Ok(()) => screen.said_dropped = false,
                     Err(why) => {
                         screen.drop_frame(&why, self.report);
-                        self.owed = true;
+                        self.held_until = Some(Instant::now() + super::HOLD);
                     }
                 }
             }
@@ -569,7 +578,7 @@ impl Compositor<'_> {
             // the next is drawn whole, as after a flip the card refused.
             Err(why) => {
                 screen.drop_frame(&why, self.report);
-                self.owed = true;
+                self.held_until = Some(Instant::now() + super::HOLD);
             }
         }
         Ok(())
