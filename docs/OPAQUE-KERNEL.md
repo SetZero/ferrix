@@ -3915,3 +3915,32 @@ conditions:
 reserved before the rows are written. Then each piece is built in the order
 above and comes back to the consultant with the logs of its cases and
 controls, F-60's fix first among 2f's.
+
+### 9.9 Where it stands (2026-10-03, at the wind-down)
+
+**On `main`:** step 1; F-60's fix; and 2a, 2b, 2c, 2d and 2e of step 2, each
+with the consultant's OK, its checks and its negative controls. The `loom`
+model of 2c's and 2e's protocols runs in `check`. The round trip inside a
+domain is 2,556 ns p50 with every mitigation on (37 us before step 1, 3,021
+ns after it). The target is seL4's 440 ns (§9.6); Redox's scheme round trip
+is 1,965 ns without any speculative defence (§9.6a).
+
+**Not on `main`:** 2f (branch `step2f`, WIP and ungated), the exact
+`bench-ipc` (`bench-exact`), and step 4's groundwork (`step4-prep`: the
+boot switch, the park protocol's `loom` model and `ipc-equiv`).
+`docs/roadmap/open-branches.md` lists what each owes. 3a, 3b, step 4's fast
+path, step 5 and step 4b are not started.
+
+**What changed in the plan on the way:**
+- The target is seL4's figure itself, not 1.5 times it, so Ferrix's software
+  outside the switch has about 90 ns a direction (§9.6).
+- No PCID on nazuna: step 3's PCIDs wait for hardware that has them, and the
+  budget's 20 ns for `CR3` is about 110 ns here, for both kernels (§9.6).
+- `IBPB` costs about 230 ns a switch under KVM, not 2 us (§9.6).
+- ERAPS, fewer TLB misses, global pages for shared text and FSGSBASE are
+  step 5's means to the target (§9.6).
+- `bench-ipc`'s p50 resolves 233 ns. 2a's, 2c's and 2e's own savings are
+  unmeasured until `bench-exact` lands; 2b's 465 ns and 2e's 230 ns showed.
+
+The session's account, with every landing and every decision, is
+`docs/handover/2026-10-03-ipc.md`.

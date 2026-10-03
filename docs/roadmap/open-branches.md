@@ -104,26 +104,57 @@ is `~/.local/share/ferrix/cert-consultant/reviews.md` on nazuna.
 
 ## The channel round trip (IPC fast path)
 
-`docs/OPAQUE-KERNEL.md` §8 (the ring-3 trip, os-35) and §9 (the channel round
-trip, os-86) are the plan and state; `docs/BACKLOG.md`, *Branches that still
-hold unlanded work*, says what each of these needs.
+The plan is `docs/OPAQUE-KERNEL.md` §9.5 to §9.8, and §9.9 says where it
+stood at the 2026-10-03 wind-down; the session's account is
+[the IPC handover](../handover/2026-10-03-ipc.md). The target is seL4's own
+figure or better (440 ns a round trip on nazuna, the customer, 2026-10-02).
+Step 1, 2a to 2e and F-60's fix are on `main`; these branches hold the rest.
+Each lands only with the certification consultant's OK. **These three are
+local branches on nazuna, not yet on GitHub**: pushing them is the
+customer's call.
 
-- `os-35/ipc-lazytlb-on-ef206bb2`: lazy TLB, renumbered to L.user.108-110;
-  needs regeneration on nazuna, the full row and the consultant. Ring B's
-  L.object.106 now clashes with `stage13-cgctl` and must be renumbered.
-  `os-35/ipc-lazytlb-land` is the same change prepared
-  for landing; the other `ipc-lazytlb-*` branches are earlier states, and
-  `-nc*`/`-rnc*` are negative-control copies.
-- `os-35/ipc-ring` (part B) and `os-35/ipc-wake` (sync wake, halt-poll, SGIs):
-  rebase behind part A, the full row, the consultant.
-  `os-35/ipc-ring-land` is ring B being prepared.
-- `os-ipc/zircon-trip`: the round trip's remaining changes; §9.4 says which
-  commits to cherry-pick onto `main`. `os-ipc/prof` and `os-ipc/prof2` are
-  timing builds.
+- `step2f` (bc256748a, on the `step2f-ids` reservation, now on `main`): 2f,
+  no global or locked writes in the switch. **WIP, ungated, not reviewed.**
+  Built for x86-64 only; the weight arithmetic's host test passes. Owed, in
+  order: the rows L.sched.50-53 and L.object.160-161 (until they exist,
+  `check` fails on their `Verifies:` tags); the condition-6 table re-read
+  against the code, with F-60's `answer_leaving` as a remote reader of
+  `LAST_DOMAIN`; a stage-5 case that a running processor never reads as idle;
+  five controls (the idle clear skipped, `take_resched` on the wrong
+  processor, `LAST_DOMAIN` stored after the compare, the host test's division
+  left at `u32`, and the new `regroup` loom model's control, which has not
+  run); SPECULATION.md §3, coverage, the full gate and `bench-ipc`; then the
+  consultant. About 3 to 4 hours. Worktree `.claude/worktrees/ipc-step1`
+  (warm target dir); logs `~/.local/share/ferrix/logs/step2a/`.
+- `bench-exact` (81409fd7a): step 0's exact `bench-ipc`, a fenced counter,
+  p50 from sorted samples, one pinned processor and `--alternate <ref>`.
+  Outside the item. Its gate was not confirmed at the wind-down: run a
+  full `cargo xtask check` on its rebased head before landing it. Land it
+  first, since today's p50 moves in 233 ns steps and hides 2a's, 2c's and
+  2e's savings.
+- `step4-prep` (fe424cd81, three commits on the `step4-ids` reservation,
+  now on `main`): step 4's groundwork. `ferrix.fastpath` (off by default,
+  printed at stage 9, L.x86_64.150); the `loom` model of the park protocol
+  (§9.7 condition 9, three controls); `ipc-equiv` and `cargo xtask
+  test-ipc-equiv`, passing on the general path, with the cases that need
+  threads, signals, affinity or 3a printed as owed. No fast-path code. Not
+  reviewed; §9.7 on the branch says what it holds.
+- Not started: 3a (the vector-state contract) and 3b (FS and GS kept in the
+  task, the write-skip dropped), with the consultant's conditions 7 and 8 in
+  §9.8; step 4's fast path itself, which needs 2f and 3a; step 5; step 4b.
+
+Older branches of this work: `os-ipc/zircon-trip` is landed in substance (its
+six commits went in as step 1), and `os-ipc/prof` and `os-ipc/prof2` are
+timing builds that never land. The `os-35/ipc-*` branches below are os-35's
+lazy TLB, ring B and sync wake; step 1 took the sync wake, and the lazy TLB
+still needs its own landing.
 
 | Branch | Last commit | Unlanded | Kind | Tip |
 |---|---|---:|---|---|
-| `os-ipc/zircon-trip` | 2026-10-01 | 10 | work | WIP: save a task's vector state with XSAVEOPT at a switch, where the processor has it |
+| `step2f` | 2026-10-03 | 1 | work | WIP: 2f, no global or locked writes in the switch (wind-down, ungated) |
+| `bench-exact` | 2026-10-03 | 1 | work | bench-ipc made exact: fenced counter, sorted samples, one pinned processor, alternation |
+| `step4-prep` | 2026-10-03 | 3 | work | Say where step 4 stands (OPAQUE-KERNEL.md §9.7) |
+| `os-ipc/zircon-trip` | 2026-10-01 | 10 | history | WIP: save a task's vector state with XSAVEOPT at a switch, where the processor has it |
 | `os-ipc/prof2` | 2026-10-01 | 12 | never land | PROFILE: user-state sub-spans |
 | `os-ipc/prof` | 2026-10-01 | 7 | never land | PROFILE, not for landing: spans of a round trip |
 | `os-35/ipc-wake` | 2026-10-01 | 3 | work | WIP: poll before an idle halt, and interrupt one core with a targeted SGI (os-35 part C) |

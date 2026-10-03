@@ -37,14 +37,18 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 * **Speculation domains** (2026-10-01, bf9efba95, `docs/OPAQUE-KERNEL.md`
   §9). A job marked at its creation, by the holder of MANAGE on its parent,
   is one speculation domain. A switch between two programs born in it skips
-  `IBPB`, and every other switch keeps the barrier. It was reviewed by the
-  certification consultant, and its check has eight negative controls. It
-  landed ahead of its full gate on the customer's word, and the evidence
-  still owed is a row in `docs/BACKLOG.md`. With the round-trip changes still
-  on `os-ipc/zircon-trip`, a native channel round trip inside a domain takes
-  2.8 to 3.0 us with every mitigation on, down from 37 us. Under a
-  microsecond needs those changes landed, then PCIDs, a direct switch and a
-  shorter system-call path.
+  `IBPB`, and every other switch keeps the barrier. F-60, a leave that could
+  miss an installing processor, was found and closed on 2026-10-03.
+
+* **The channel round trip, toward seL4** (2026-10-03, `docs/OPAQUE-KERNEL.md`
+  §9.5 to §9.9). The customer's target is seL4's own figure, 440 ns a round
+  trip on nazuna, measured with protections matched. Step 1 and five of step
+  2's six pieces (2a to 2e) are on `main`, each reviewed by the certification
+  consultant: a native round trip inside a domain is 2,556 ns with every
+  mitigation on, down from 37 us. Redox, measured the same way, takes 1,965
+  ns with no speculative defence. Left: 2f (on a branch), step 3, step 4's
+  direct switch and fast path, step 5 and step 4b; the handover is
+  `docs/handover/2026-10-03-ipc.md`.
 
 * **Steam signs in and shows its store** on the `--everything` desktop,
   its 64-bit side on ferrousli (2026-09-30, `docs/STEAM.md` §5), and

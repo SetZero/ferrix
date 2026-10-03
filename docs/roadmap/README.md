@@ -37,6 +37,9 @@ The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
   `steamcmd` logs in to Steam. The Steam client draws its sign-in window
   through yserver (2026-09-29), with launch-side workarounds
   (`docs/STEAM.md`).
+- **The channel round trip, toward seL4 (440 ns):** 2,556 ns with every
+  mitigation on, from 37 us; step 1 and 2a to 2e are in, 2f to step 5 are
+  left (`docs/OPAQUE-KERNEL.md` §9.9).
 - **The installer:** an MVP installs Ferrix on a VM's disk (2026-09-28).
 - **Chrome** runs headless and in a window, on glibc and on ferrousli, Ferrix's
   own C library.
