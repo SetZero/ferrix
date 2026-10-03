@@ -847,6 +847,7 @@ dependencies = [
  "ferrix-cpio",
  "ferrix-displayctl",
  "ferrix-elf",
+ "ferrix-native-abi",
  "ferrix-netwire",
  "ferrix-pkg",
  "ferrix-vdagent",

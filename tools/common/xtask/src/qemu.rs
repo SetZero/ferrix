@@ -1960,6 +1960,12 @@ pub(crate) fn x86_machine(accelerator: &str) -> String {
 /// `IRTA.EIME` = 0 -- QEMU's `auto` would offer it under the split irqchip.
 pub(crate) const INTEL_IOMMU: &str = "intel-iommu,intremap=on,eim=off";
 
+/// [`INTEL_IOMMU`] without interrupt remapping: the unit translates DMA and
+/// remaps no interrupt, so `device_isolation`'s bit 1 is clear for every
+/// device. Only `test-nvrm`'s refused hand-over boots it
+/// (`Args::unisolated_interrupts`).
+pub(crate) const INTEL_IOMMU_UNISOLATED: &str = "intel-iommu,intremap=off";
+
 /// Which CPU model the `virt` machine emulates for an Arm architecture.
 ///
 /// `cortex-a72` is ARMv8.0 and so has no PAN -- the feature the kernel uses to
@@ -2072,9 +2078,14 @@ fn qemu_command(
                 "-device",
                 "isa-debug-exit,iobase=0xf4,iosize=0x04",
                 // A VT-d unit for stage 10's IOMMU domains, remapping
-                // interrupts (`INTEL_IOMMU`).
+                // interrupts (`INTEL_IOMMU`), unless the boot is
+                // `test-nvrm`'s without.
                 "-device",
-                INTEL_IOMMU,
+                if args.unisolated_interrupts {
+                    INTEL_IOMMU_UNISOLATED
+                } else {
+                    INTEL_IOMMU
+                },
             ]);
             // The machine's own VGA, which `q35` adds unasked, is QEMU's
             // first console and the card is the second, so a window opens on

@@ -48,5 +48,10 @@ ferrix-argon2.workspace = true
 # make cannot disagree about what a package is.
 ferrix-pkg.workspace = true
 
+[dev-dependencies]
+# The native ABI's numbers, which a host test holds nvrm's C header to
+# (`nvrm/tests.rs`): nvrm names the calls it makes by number, in C.
+ferrix-native-abi.workspace = true
+
 [lints]
 workspace = true

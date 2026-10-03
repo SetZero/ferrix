@@ -13,6 +13,7 @@
 //! cargo xtask test-shm --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-procfs --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-uvm  [--arch x86_64] [--timeout SECONDS]
+//! cargo xtask test-nvrm [--arch x86_64] [--accel kvm|tcg] [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
 //! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
 //! cargo xtask builds-execute --plan DIR
@@ -107,6 +108,7 @@ mod keyboard;
 mod native;
 mod net;
 mod noise;
+mod nvrm;
 mod omz;
 mod orphans;
 mod parallel;
@@ -252,6 +254,9 @@ COMMANDS:
     test-uvm      Build NVIDIA's UVM against uvm-kpi and ferrousli from the tree tools/common/fetch/fetch-nvidia.sh fetches
                   (or FERRIX_NVIDIA_SRC's), boot it as init, and require its 15 GPU-free self-tests to pass; then a krealloc
                   control that must fail one (x86_64)
+    test-nvrm     Build nvrm against ferrousli and boot it as devmgr's Gpu driver on QEMU's pci-testdev: handed over
+                  (marked, interrupts isolated, budget set, nvrm up with its device), and refused for a budget too small
+                  and for interrupts not isolated (x86_64)
     test-rustc    Attach the rustc volume tools/common/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume tools/common/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-claude-code  Attach the volume tools/common/fetch/fetch-claude-code.sh makes, and require Claude Code to start and,
@@ -588,6 +593,7 @@ fn run() -> Result<()> {
         "test-install" => installer::test_install(&args),
         "test-threads" | "test-sem" | "test-shm" => sem::run(command, &args),
         "test-procfs" | "test-uvm" => sem::run(command, &args),
+        "test-nvrm" => nvrm::test_nvrm(&args),
         "test-apps" => apps::test_apps(&args),
         "test-pkg" => pkg::test_pkg(&args),
         "coverage" => coverage::run(&args),

@@ -144,6 +144,10 @@ pub(crate) struct Args {
     /// Whether `--smp` was given, rather than left at its default: under WHPX
     /// the default is one processor, and a count asked for is kept.
     pub(crate) smp_given: bool,
+    /// `test-nvrm`'s unisolated boot: the VT-d unit with interrupt
+    /// remapping off, so no device's interrupts are isolated
+    /// (`docs/NVIDIA.md` §12.3). Set by that gate, never by a flag.
+    pub(crate) unisolated_interrupts: bool,
     /// `--memory`, guest RAM in MiB.
     pub(crate) memory: u32,
     /// Whether `--memory` was given: `test-rustc` needs more than the
