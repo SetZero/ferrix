@@ -50,6 +50,9 @@ pub fn named(keysym: &str) -> Option<&'static [u8]> {
         // the discipline's `VERASE` is DEL to match.
         "BackSpace" => b"\x7F",
         "Tab" => b"\t",
+        // Shift and Tab: the keymap's second level of the key, and xterm's
+        // back-tab, which Claude Code switches its mode on.
+        "ISO_Left_Tab" => b"\x1B[Z",
         "Escape" => b"\x1B",
         "space" => b" ",
         // The arrows and the keys around them, in the "normal" mode a

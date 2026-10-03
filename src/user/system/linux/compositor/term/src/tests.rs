@@ -558,6 +558,8 @@ fn the_keys_a_terminal_sends_are_the_ones_xterm_sends() {
     assert_eq!(sends("Return"), Some(b"\r".to_vec()));
     assert_eq!(sends("BackSpace"), Some(b"\x7F".to_vec()));
     assert_eq!(sends("Up"), Some(b"\x1b[A".to_vec()));
+    // Shift and Tab is the keymap's `ISO_Left_Tab`, and sent nothing.
+    assert_eq!(sends("ISO_Left_Tab"), Some(b"\x1b[Z".to_vec()));
     assert_eq!(sends("Right"), Some(b"\x1b[C".to_vec()));
     assert_eq!(sends("space"), Some(b" ".to_vec()));
     // A modifier sends nothing at all.
