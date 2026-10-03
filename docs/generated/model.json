@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "7762057a4b597202e51ed87b481f95fc2e04b5ce432a1ea3cf3502f7ec42c2d7",
+  "digest": "dda35f4ceca48030a9b0be05a68d94c0be7389a83256f6b1e39d05ee8e82dc55",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -105,7 +105,7 @@
   ],
   "summary": {
     "packages": 129,
-    "elements": 6301,
+    "elements": 6316,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -32719,7 +32719,7 @@
                   "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::aTrustingWaitIsWokenByWhatEndsIt",
                   "kind": "attribute",
                   "redefines": "statement",
-                  "value": "\"channel_write_read's wait shall file no recheck while it is listed on its end's queue, and shall end on each of what it waits for: a message arriving on the end, the peer's close, and its process's end or another thread's execve, each of which wakes it; it shall then answer the message, PEER_CLOSED, or EINTR. The message and the close shall be looked at under the end's inbox lock, which their wakers take, and the task's blocked state and its process's end shall be ordered by a SeqCst fence on each side (WaitQueue::wait_trusting, Process::wake_other_tasks).\"",
+                  "value": "\"channel_write_read's wait shall file no recheck while it is listed on its end's queue, and shall end on each of what it waits for: a message arriving on the end, the peer's close, and its process's end or another thread's execve, each of which wakes it; it shall then answer the message, PEER_CLOSED, or EINTR. The message and the close shall be read from the end's state word and the end or execve from the task's END bit, each ordered against the task's blocked state by a SeqCst fence on each side (L.object.141, L.sched.40).\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
                     "line": 1561
@@ -32756,6 +32756,120 @@
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
                     "line": 1570
+                  }
+                }
+              ]
+            },
+            {
+              "name": "anEndsWordIsItsInbox",
+              "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::anEndsWordIsItsInbox",
+              "kind": "requirement",
+              "shortName": "L.object.140",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/14-object-requirements.sysml",
+                "line": 1572
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::anEndsWordIsItsInbox",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Under a channel end's inbox lock, its state word's NONEMPTY shall be set exactly when the inbox holds a message, after every operation that changes that -- a write, a small write, a read, a small read, a put-back and the close's drain -- and its PEER_CLOSED shall be set once the peer has closed, after the peer's closed and before the end's waiters are woken.\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1578
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::anEndsWordIsItsInbox",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"4096 writes, small writes, reads, small reads and put-backs in a pseudo-random order on one pair leave each end's word equal to its inbox after every one, each operation having crossed the empty boundary once first, and a close is marked in the survivor's (the `chword` line); with the put-back's update removed the check fails after a put-back into an empty inbox.\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1584
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::anEndsWordIsItsInbox",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.OBJ.11\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1585
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::anEndsWordIsItsInbox",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"object::channel::Half::note\", \"object::channel::Half::note_peer_closed\", \"object::channel::Half::word\", \"object::channel::Endpoint::read\", \"object::channel::Endpoint::read_small\", \"object::channel::Endpoint::write\", \"object::channel::Endpoint::write_small\", \"object::channel::Endpoint::unread\", \"object::channel::Endpoint::take_unread\")",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1590
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aWakerFencesTheWordBeforeItsWake",
+              "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::aWakerFencesTheWordBeforeItsWake",
+              "kind": "requirement",
+              "shortName": "L.object.141",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/14-object-requirements.sysml",
+                "line": 1592
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::aWakerFencesTheWordBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"channel_write_read's wait shall read readiness with one load of its end's state word and one of the caller's END bit, without the inbox lock or the personality; and a writer, a put-back and a closer shall make a SeqCst fence after the word's store and before their wake reads a waiter's state, paired with the wait's fence after it stores BLOCKED, so that a waiter listed and not yet blocked either is found blocked or reads the word.\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1599
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::aWakerFencesTheWordBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The `wrread` line's message and close cases; with the close's mark removed, the close case's waiter stays blocked and the check fails by name. The loom model of a waiter listed and not yet blocked against a writer, a closer, both, and an end finds no lost wake, and its two controls, the writer without its fence and the closer marking after its wake, each find one (`cargo xtask loom`, src/tests/loom).\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1606
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::aWakerFencesTheWordBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.OBJ.11\"",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1607
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixObjectRequirements::ChannelWriteRead::aWakerFencesTheWordBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"object::channel::Endpoint::readable_or_closed\", \"syscall::native::receive_words\", \"sched::work::own_end\")",
+                  "source": {
+                    "file": "docs/sysml/14-object-requirements.sysml",
+                    "line": 1609
                   }
                 }
               ]
@@ -33221,10 +33335,10 @@
                   "qualifiedName": "FerrixSchedRequirements::Wakes::notifyPostsBeforeItWakes",
                   "kind": "attribute",
                   "redefines": "criterion",
-                  "value": "\"The stop check's second stop, posted by notify's half under the list's lock and woken after it, parks both counting threads; with the post removed the same check fails by name.\"",
+                  "value": "\"The stop check's second stop, posted by notify's half under the list's lock and woken after it, parks both counting threads; with the post removed the same check fails by name. The loom model of a post against the task's clear and read finds the state read or the bit kept, and its control, the clear after the read, finds neither (`cargo xtask loom`).\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 136
+                    "line": 138
                   }
                 },
                 {
@@ -33235,7 +33349,7 @@
                   "value": "(\"H.OBJ.9\", \"H.SCHED.1\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 137
+                    "line": 139
                   }
                 },
                 {
@@ -33246,7 +33360,7 @@
                   "value": "(\"sched::work::notify\", \"sched::work::wake_posted\", \"sched::work::post\", \"sched::work::post_own\", \"sched::work::has_end\", \"sched::task::Task::work\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 140
+                    "line": 142
                   }
                 }
               ]
@@ -33259,7 +33373,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 142
+                "line": 144
               },
               "children": [
                 {
@@ -33270,7 +33384,7 @@
                   "value": "\"A wake shall read its target's state only under the run-queue lock of the processor that owns the target, after reading which processor that is again under that lock, with no way out before it that reads the state without the lock.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 146
+                    "line": 148
                   }
                 },
                 {
@@ -33281,7 +33395,7 @@
                   "value": "\"At two processors or more, a blocker that holds its own run-queue lock while a poster on another processor reaches its wake, then marks itself blocked and lets the lock go, is woken within 100 ms (the `wakerow` line); with a lock-free exit in wake_at_home the check fails by name.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 151
+                    "line": 153
                   }
                 },
                 {
@@ -33292,7 +33406,7 @@
                   "value": "\"H.SCHED.1\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 152
+                    "line": 154
                   }
                 },
                 {
@@ -33303,7 +33417,7 @@
                   "value": "(\"sched::wake_at_home\", \"sched::wake_onto\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 153
+                    "line": 155
                   }
                 }
               ]
@@ -33316,7 +33430,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 155
+                "line": 157
               },
               "children": [
                 {
@@ -33327,7 +33441,7 @@
                   "value": "\"With the self-checks on, attention_due shall ask needs_attention at a clear word too, and audit shall stop the machine with FX-0520 when it answers yes while no poster is between its write and its post and the word is still clear; every poster shall bracket its write and its post in a Posting.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 160
+                    "line": 162
                   }
                 },
                 {
@@ -33338,7 +33452,7 @@
                   "value": "\"Every boot, test-shell, test-threads, test-vfs and test-init reach their marker with the look on; with enter_stop's STOP to the other tasks removed, test-threads stops with FX-0520's message.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 164
+                    "line": 166
                   }
                 },
                 {
@@ -33349,7 +33463,7 @@
                   "value": "\"H.FAIL.1\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 165
+                    "line": 167
                   }
                 },
                 {
@@ -33360,7 +33474,7 @@
                   "value": "(\"sched::work::audit\", \"sched::work::posting\", \"sched::work::set_auditing\", \"sched::work::auditing\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 167
+                    "line": 169
                   }
                 }
               ]
@@ -33373,7 +33487,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 169
+                "line": 171
               },
               "children": [
                 {
@@ -33384,7 +33498,7 @@
                   "value": "\"The hook in notify shall be armed only by stage 9's checks, record which check armed it and the task it watches, be disarmed by that check whatever the check found, and be required disarmed before the boot's marker, with F-60's leave hook, which stops with FX-0908 naming the check if it is not.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 174
+                    "line": 176
                   }
                 },
                 {
@@ -33395,7 +33509,7 @@
                   "value": "\"The `wakerow` line, then the marker; with the check's disarm removed the boot stops with FX-0908's message naming the wake row.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 177
+                    "line": 179
                   }
                 },
                 {
@@ -33406,7 +33520,7 @@
                   "value": "\"H.FAIL.1\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 178
+                    "line": 180
                   }
                 },
                 {
@@ -33417,7 +33531,7 @@
                   "value": "(\"sched::work::arm\", \"sched::work::disarm\", \"sched::work::armed_by\", \"sched::work::hook_armed_by\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 180
+                    "line": 182
                   }
                 }
               ]
@@ -33430,7 +33544,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 182
+                "line": 184
               },
               "children": [
                 {
@@ -33441,7 +33555,7 @@
                   "value": "\"end_record shall store the process's end and then, after a SeqCst fence, post END to every task its list holds, waking each and interrupting its processor, with nothing allocated and no task let go under the list's lock; list_task shall list a task before it can run, failing its start with AllocError when the list cannot grow.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 188
+                    "line": 190
                   }
                 },
                 {
@@ -33452,7 +33566,7 @@
                   "value": "\"A program past its cgroup's memory.max is OOM-killed and ends (the `cgroups` line's OOM case, which no signal reaches first); with end_record's post removed it never ends and the check fails by name.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 192
+                    "line": 194
                   }
                 },
                 {
@@ -33463,7 +33577,7 @@
                   "value": "(\"H.OBJ.9\", \"H.QUOTA.6\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 193
+                    "line": 195
                   }
                 },
                 {
@@ -33474,7 +33588,64 @@
                   "value": "(\"object::process::Process::end_record\", \"object::process::Process::list_task\", \"object::process::Process::post_to_tasks\", \"object::process::Process::with_tasks\", \"object::process::Exit::record\", \"object::process::Process::take_listed\", \"object::process::take_batch\", \"object::process::next_live\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 199
+                    "line": 201
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aPostIsFencedBeforeItsWake",
+              "qualifiedName": "FerrixSchedRequirements::Wakes::aPostIsFencedBeforeItsWake",
+              "kind": "requirement",
+              "shortName": "L.sched.40",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 203
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aPostIsFencedBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"wake_posted, the wake of every notify and of post_to_tasks, shall make a SeqCst fence after the bits are posted and before the wake reads the task's state, paired with a trusting wait's fence after it stores BLOCKED, so that a wait that reads the bit itself is found blocked or reads it.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 208
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aPostIsFencedBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A thread blocked in channel_write_read is ended by its process's kill (the `wrread` line); with that wait reading no END it stays blocked and the check fails by name. The loom model of an end posted against a waiter listed and not yet blocked finds no lost wake (`cargo xtask loom`).\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 213
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aPostIsFencedBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.OBJ.9\", \"H.OBJ.11\")",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 214
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Wakes::aPostIsFencedBeforeItsWake",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"sched::work::wake_posted\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 215
                   }
                 }
               ]
@@ -33488,7 +33659,7 @@
           "doc": "src/kernel/src/sched/preempt.rs and src/kernel/src/sched/mod.rs: the preemption count every crate::sync::SpinLock raises, kept in each processor's record without a locked operation (docs/OPAQUE-KERNEL.md §9.8, 2b; the consultant's OK IF of 2026-10-02, condition 2).",
           "source": {
             "file": "docs/sysml/15-sched-requirements.sysml",
-            "line": 203
+            "line": 219
           },
           "children": [
             {
@@ -33499,7 +33670,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 210
+                "line": 226
               },
               "children": [
                 {
@@ -33510,7 +33681,7 @@
                   "value": "\"A preemption-disabling lock, and a raise by hand, shall raise and lower the preemption count and, for a lock, the locks held of the processor its holder runs on, in that processor's record and without a locked operation, so that no update is lost to an interrupt and none lands on another processor's record: on x86-64 in one GS-relative instruction, with every entry that can reach it running on the kernel's GS base; on AArch64 and ARMv7-A with every exception that can take a lock masked; and a report reading another processor's count shall read each of the count and the locks held whole.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 220
+                    "line": 236
                   }
                 },
                 {
@@ -33521,7 +33692,7 @@
                   "value": "\"At two processors or more, two tasks per processor, preempted by the timer and moving between processors, take and let go of a lock 100000 times each with raises by hand among them and move at least once (the `preempt` line). The stress provokes a lost or misplaced update; what detects one is FX-0503's test at the release, which stops the boot when the locks held or the count it lowers is already zero, and, behind it, every processor's count and locks held read zero there by a task that holds nothing. The three atomicity controls (x86-64's record found before the add, the Arm mask removed on aarch64 and on armv7a at two processors) each stop the boot on FX-0503's held-zero message.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 232
+                    "line": 248
                   }
                 },
                 {
@@ -33532,7 +33703,7 @@
                   "value": "(\"H.SCHED.1\", \"H.SCHED.2\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 233
+                    "line": 249
                   }
                 },
                 {
@@ -33543,7 +33714,7 @@
                   "value": "(\"sched::preempt::raise\", \"sched::preempt::lower\", \"sched::preempt::Preempt::disable\", \"sched::preempt::preempt_disable\", \"sched::preempt::PreemptState::note\", \"sched::preempt::preempt_count\", \"sched::preempt::locks_held\", \"smp::record\", \"arch::percpu::this_cpu_add\", \"arch::x86_64::cpu::gs_xadd\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 238
+                    "line": 254
                   }
                 }
               ]
@@ -33556,7 +33727,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 240
+                "line": 256
               },
               "children": [
                 {
@@ -33567,7 +33738,7 @@
                   "value": "\"The scheduler shall stop the machine (FX-0503), naming the site that last raised the count, when it is asked to switch with its processor's count raised, and when a release finds the count, or for a lock the locks held, already at zero, having put the word back first; a release that brings the count to zero shall make the decision an interrupt deferred, if interrupts are on.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 247
+                    "line": 263
                   }
                 },
                 {
@@ -33578,7 +33749,7 @@
                   "value": "\"The release's cover test refuses a word whose count, or for a lock whose locks held, is zero, and passes one that covers the release (the stage-5 checks). That held-zero test is the detector L.sched.20's stress relies on; the negative controls of a task that sleeps holding a lock and of a release with nothing raised each stop the boot on FX-0503's message.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 253
+                    "line": 269
                   }
                 },
                 {
@@ -33589,7 +33760,7 @@
                   "value": "(\"H.SCHED.1\", \"H.SCHED.2\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 254
+                    "line": 270
                   }
                 },
                 {
@@ -33600,7 +33771,7 @@
                   "value": "(\"sched::preempt::preempt_enable\", \"sched::preempt::Preempt::enable\", \"sched::preempt::enable_from\", \"sched::preempt::unmatched\", \"sched::preempt::covers\", \"sched::preempt::decide_deferred\", \"sched::schedule_from\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 258
+                    "line": 274
                   }
                 }
               ]
@@ -33613,7 +33784,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 260
+                "line": 276
               },
               "children": [
                 {
@@ -33624,7 +33795,7 @@
                   "value": "\"may_block shall answer true only when the scheduler runs, interrupts are on, a task is running, and the count of the processor it runs on, read so that the processor and its count are one processor's (one instruction on x86-64, interrupts masked on Arm), is zero.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 265
+                    "line": 281
                   }
                 },
                 {
@@ -33635,7 +33806,7 @@
                   "value": "\"A task holding nothing may block; holding a preemption-disabling lock, or with the count raised by hand, it may not; once it lets go it may again (the stage-5 checks).\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 268
+                    "line": 284
                   }
                 },
                 {
@@ -33646,7 +33817,7 @@
                   "value": "\"H.SCHED.1\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 269
+                    "line": 285
                   }
                 },
                 {
@@ -33657,7 +33828,7 @@
                   "value": "(\"sched::may_block\", \"sched::preempt::count_here\", \"arch::percpu::this_cpu_read\", \"arch::x86_64::cpu::read_gs_at\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 271
+                    "line": 287
                   }
                 }
               ]
@@ -33670,7 +33841,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/15-sched-requirements.sysml",
-                "line": 273
+                "line": 289
               },
               "children": [
                 {
@@ -33681,7 +33852,7 @@
                   "value": "\"A try_lock of a preemption-disabling lock that fails shall leave its processor's count and locks held as it found them, and with interrupts masked shall not switch; one that succeeds shall raise both by one until its guard drops; and ferrix_sync::SpinLock::try_lock_manually shall take no ticket when it fails.\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 279
+                    "line": 295
                   }
                 },
                 {
@@ -33692,7 +33863,7 @@
                   "value": "\"With a lock held, a try_lock of it with interrupts on and with them masked leaves the count and the locks held unchanged and, masked, the task's switches unchanged; a try_lock_manually of a held plain lock fails and changes neither; a successful try_lock raises both by one until it drops (the stage-5 checks, and ferrix-sync's host test of try_lock_manually).\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 285
+                    "line": 301
                   }
                 },
                 {
@@ -33703,7 +33874,7 @@
                   "value": "\"H.SCHED.1\"",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 286
+                    "line": 302
                   }
                 },
                 {
@@ -33714,7 +33885,7 @@
                   "value": "(\"sched::preempt::Preempt::disable\", \"sched::preempt::Preempt::enable\")",
                   "source": {
                     "file": "docs/sysml/15-sched-requirements.sysml",
-                    "line": 288
+                    "line": 304
                   }
                 }
               ]

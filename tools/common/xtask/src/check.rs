@@ -13,10 +13,26 @@ use crate::paths::{self, Arch};
 use crate::workspace;
 use crate::{Error, Result};
 
+/// The commands [`command`] answers: `check`, and its steps run alone.
+pub(crate) const COMMANDS: &[&str] = &[
+    "check",
+    "miri",
+    "loom",
+    "check-ferrousli",
+    "host-clippy",
+    "host-test",
+    "host-doctest",
+    "host-doc",
+    "check-apps",
+    "check-docs",
+    "gate-rows",
+];
+
 /// `check`, or one of its steps run alone, by the command's name.
 pub(crate) fn command(name: &str, args: &Args) -> Result<()> {
     match name {
         "miri" => miri_all(args.jobs),
+        "loom" => loom(&paths::workspace_root()),
         "check-ferrousli" => ferrousli(&paths::workspace_root()),
         "host-clippy" => host_clippy(),
         "host-test" => host_test(),
@@ -224,6 +240,7 @@ fn run(args: &Args) -> Result<()> {
     step("tests", host_test)?;
     step("doc tests", host_doctest)?;
     step("documentation", host_doc)?;
+    loom(&root)?;
 
     compositor(&root)?;
     userland(&root)?;
@@ -464,6 +481,46 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
 ///
 /// The tests start Linux executables and the pty needs a Linux kernel, so on
 /// Windows those steps run in WSL, as ferrousli's do.
+/// The `loom` models of `src/tests/loom`: the orderings the kernel's wait
+/// and its way back to user mode rest on (`docs/OPAQUE-KERNEL.md` §9.8, 2c's
+/// case 9 and 2e's condition 5), each with a control that must fail.
+///
+/// A workspace of its own, as `src/tests/fuzz` is, so that loom and what it
+/// pulls in stay out of the kernel's dependency graph and `deny.toml`
+/// (the customer's decision of 2026-10-03). `--locked`, so the versions run
+/// are the lock file's. Seconds: the models are small and run under a
+/// preemption bound of three.
+pub(crate) fn loom(root: &std::path::Path) -> Result<()> {
+    let dir = root.join("src/tests/loom");
+    let native = |arguments: &[&str]| {
+        let mut command = Command::new(cargo_binary());
+        let _ = command.current_dir(&dir).args(arguments);
+        command
+    };
+    step("loom: formatting", || {
+        cargo::run(native(&["fmt", "--check"]), "cargo fmt (loom)")
+    })?;
+    step("loom: clippy", || {
+        cargo::run(
+            native(&[
+                "clippy",
+                "--locked",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]),
+            "cargo clippy (loom)",
+        )
+    })?;
+    step("loom: models", || {
+        cargo::run(
+            native(&["test", "--locked", "--release"]),
+            "cargo test (loom models)",
+        )
+    })
+}
+
 fn zinc(root: &std::path::Path) -> Result<()> {
     let dir = root.join("src/user/system/linux/zinc");
     const TARGET: &str = "x86_64-unknown-linux-musl";

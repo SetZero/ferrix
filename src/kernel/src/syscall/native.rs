@@ -863,7 +863,7 @@ fn channel_write_read(caller: &dyn Host, a: &[u64; 6]) -> Result<(usize, [u64; 3
     if sending {
         send_words(&endpoint, count, a)?;
     }
-    receive_words(&endpoint, caller)
+    receive_words(&endpoint)
 }
 
 /// `channel_write_read`'s write: `count` bytes of the words in the third to
@@ -890,7 +890,7 @@ fn send_words(endpoint: &Endpoint, count: usize, a: &[u64; 6]) -> Result<(), Err
 
 /// `channel_write_read`'s read: wait for the next message on `endpoint` and
 /// answer its size and its words, the bytes after it zero.
-fn receive_words(endpoint: &Endpoint, caller: &dyn Host) -> Result<(usize, [u64; 3]), Errno> {
+fn receive_words(endpoint: &Endpoint) -> Result<(usize, [u64; 3]), Errno> {
     loop {
         match endpoint.read_small() {
             Ok(small) => {
@@ -909,11 +909,13 @@ fn receive_words(endpoint: &Endpoint, caller: &dyn Host) -> Result<(usize, [u64;
             Err(refused) => return Err(read_refusal(refused)),
         }
         // Trusting the queue: a message and the peer's close both wake it,
-        // and its process's end wakes the task.
+        // and its process's end wakes the task. Two loads (2e): the end's
+        // word, and the caller's `END` (`sched::work`), which the core posts
+        // for every case the personality's `must_leave` answers true.
         let _ = endpoint
             .waiters()
-            .wait_trusting(|| endpoint.readable_or_closed() || must_leave(caller));
-        if must_leave(caller) {
+            .wait_trusting(|| endpoint.readable_or_closed() || crate::sched::work::own_end());
+        if crate::sched::work::own_end() {
             return Err(Errno::EINTR);
         }
     }

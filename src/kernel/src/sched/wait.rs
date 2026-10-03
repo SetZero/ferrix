@@ -156,20 +156,21 @@ impl WaitQueue {
     /// The task is listed on this queue, then marked blocked, then `ready` is
     /// looked at, and a wake finds it only if it is listed and blocked. For
     /// each waker of `channel_write_read`'s wait:
-    /// - **A message and the peer's close**, the inbox lock. The writer queues
-    ///   under the end's inbox lock and the closer takes that lock after it
-    ///   marks itself closed; each then takes this queue's lock to wake it.
-    ///   `ready` reads both under the inbox lock (`readable_or_closed`). A
-    ///   look that takes the lock after the waker's sees what it did; one that
-    ///   takes it before was made after the task listed itself, so the
-    ///   waker's wake, later on this queue's lock, finds it listed.
+    /// - **A message and the peer's close**, the end's state word. The writer
+    ///   and the closer set it under the end's inbox lock and then take this
+    ///   queue's lock to wake it; `ready` reads it with one load
+    ///   (`readable_or_closed`). A drain before the listing passes the store
+    ///   on through this queue's lock. A drain after it, with the task not
+    ///   yet marked blocked, is a store then a load on each side, so the
+    ///   waker makes a `SeqCst` fence before its wake, paired with this
+    ///   one (`docs/OPAQUE-KERNEL.md` §9.8, 2e, condition 5).
     /// - **A kill and another thread's `execve`**, a fence pair. They take no
-    ///   lock this wait takes: they record the end, or the replacing thread,
-    ///   and wake the process's tasks (`Process::wake_other_tasks`), which
+    ///   lock this wait takes: they post `END` to the process's tasks, which
+    ///   `ready` reads, and wake them (`sched::work::wake_posted`), which
     ///   reads each task's state. That is a store then a load on each side,
     ///   so each side has a `SeqCst` fence between them: here after the task
-    ///   is marked blocked, and in `wake_other_tasks` before the first
-    ///   state is read. Of two such fences one comes first, and the side
+    ///   is marked blocked, and in `wake_posted` after the bit and before
+    ///   the state is read. Of two such fences one comes first, and the side
     ///   whose fence comes second sees the other's store: the waker finds the
     ///   task blocked and wakes it, or `ready` finds the process ending.
     pub(crate) fn wait_trusting(&self, ready: impl FnMut() -> bool) -> bool {
@@ -247,7 +248,7 @@ impl WaitQueue {
             // A wait that trusts its wakes has no recheck to find a wake it
             // missed, so the store above is ordered before `ready`'s loads
             // for the wakers that take no lock this wait takes: a kill and
-            // an `execve`, whose own fence is in `Process::wake_other_tasks`.
+            // an `execve`, whose own fence is in `sched::work::wake_posted`.
             if recheck.is_none() {
                 core::sync::atomic::fence(Ordering::SeqCst);
             }

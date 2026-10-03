@@ -104,6 +104,7 @@ type Answer = (isize, [u64; 3]);
 ///
 /// Verifies: L.object.128, L.object.129, L.object.130, L.object.131
 /// Verifies: L.object.132
+/// Verifies: `L.object.141`, `L.sched.40`
 pub(crate) fn run() -> Result<Report, &'static str> {
     let mut report = Report {
         within_seconds: WOKEN_WITHIN_NANOS / 1_000_000_000,

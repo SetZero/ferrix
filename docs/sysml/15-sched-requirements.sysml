@@ -133,7 +133,9 @@ package FerrixSchedRequirements {
             attribute :>> criterion = "The stop check's second stop, posted by
                 notify's half under the list's lock and woken after it, parks both
                 counting threads; with the post removed the same check fails by
-                name.";
+                name. The loom model of a post against the task's clear and read
+                finds the state read or the bit kept, and its control, the clear
+                after the read, finds neither (`cargo xtask loom`).";
             attribute :>> parent = ("H.OBJ.9", "H.SCHED.1");
             attribute :>> unit = ("sched::work::notify", "sched::work::wake_posted",
                 "sched::work::post", "sched::work::post_own", "sched::work::has_end",
@@ -197,6 +199,20 @@ package FerrixSchedRequirements {
                 "object::process::Process::with_tasks", "object::process::Exit::record",
                 "object::process::Process::take_listed", "object::process::take_batch",
                 "object::process::next_live");
+        }
+        requirement <'L.sched.40'> aPostIsFencedBeforeItsWake : ItemLowLevel {
+            attribute :>> statement = "wake_posted, the wake of every notify and of
+                post_to_tasks, shall make a SeqCst fence after the bits are posted
+                and before the wake reads the task's state, paired with a trusting
+                wait's fence after it stores BLOCKED, so that a wait that reads the
+                bit itself is found blocked or reads it.";
+            attribute :>> criterion = "A thread blocked in channel_write_read is
+                ended by its process's kill (the `wrread` line); with that wait
+                reading no END it stays blocked and the check fails by name. The
+                loom model of an end posted against a waiter listed and not yet
+                blocked finds no lost wake (`cargo xtask loom`).";
+            attribute :>> parent = ("H.OBJ.9", "H.OBJ.11");
+            attribute :>> unit = "sched::work::wake_posted";
         }
     }
 

@@ -290,6 +290,13 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
 /// The wake row (`sched::work::check`), and its line.
 fn check_the_wake_row() -> Result<(), &'static str> {
+    // And a channel end's state word, which 2e's wait reads in place of the
+    // inbox: beside the wake row, the other half of that wait's argument.
+    let words = super::channel::check::run()?;
+    crate::console::println!(
+        "  chword   {words} channel operations in turn on one pair, each end's state word its \
+         inbox's after every one, and a close marked in the survivor's"
+    );
     match crate::sched::work::check::run()? {
         Some(report) => crate::console::println!(
             "  wakerow  a wake made while its target held its own run-queue lock waited for the \

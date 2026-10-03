@@ -50,10 +50,12 @@
 //! `Channel` adds no edge: what a side's queue holds is freed when that
 //! side's `Endpoint` goes, whichever end still holds the channel.
 
+pub(crate) mod check;
+
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering, fence};
 
 use crate::sync::SpinLock;
 use ferrix_native_abi::signals::Signals;
@@ -380,7 +382,22 @@ struct Half {
     /// Whether this side's [`Endpoint`] has gone. Set once, under `inbox`'s
     /// lock as the queue is emptied, and never cleared.
     closed: AtomicBool,
+    /// What a reader waiting on this side waits for, in one word:
+    /// [`NONEMPTY`] and [`PEER_CLOSED`]. Written only under `inbox`'s lock,
+    /// and read without it by `channel_write_read`'s wait
+    /// ([`Endpoint::readable_or_closed`]).
+    state: AtomicU8,
 }
+
+/// A side's [`Half::state`]: its inbox holds a message. Set and cleared
+/// under the inbox lock by every operation that changes whether the inbox
+/// is empty, so that under the lock it is set exactly when the inbox is not
+/// empty.
+const NONEMPTY: u8 = 1 << 0;
+/// A side's [`Half::state`]: the other side has gone. Set once, by the
+/// closer under this side's inbox lock, after the other side's `closed` and
+/// before this side's waiters are woken; never cleared.
+const PEER_CLOSED: u8 = 1 << 1;
 
 impl Half {
     /// An open side with nothing queued.
@@ -390,7 +407,34 @@ impl Half {
             waiters: WaitQueue::new(),
             observers: SpinLock::new(Observers::new()),
             closed: AtomicBool::new(false),
+            state: AtomicU8::new(0),
         }
+    }
+
+    /// Bring [`NONEMPTY`] into line with `inbox`, this side's, whose lock the
+    /// caller holds: after every operation that may have changed whether it
+    /// is empty.
+    fn note(&self, inbox: &Inbox) {
+        let word = self.state.load(Ordering::Relaxed);
+        let fresh = if inbox.is_empty() {
+            word & !NONEMPTY
+        } else {
+            word | NONEMPTY
+        };
+        if fresh != word {
+            self.state.store(fresh, Ordering::Release);
+        }
+    }
+
+    /// Mark the other side gone in this side's word, holding this side's
+    /// inbox lock.
+    fn note_peer_closed(&self) {
+        let _ = self.state.fetch_or(PEER_CLOSED, Ordering::Release);
+    }
+
+    /// This side's word, read without the lock.
+    fn word(&self) -> u8 {
+        self.state.load(Ordering::Acquire)
     }
 
     /// Whether this side's `Endpoint` has gone.
@@ -512,6 +556,7 @@ impl Endpoint {
             let handles = take().map_err(WriteFailure::Take)?;
             // NOALLOC: the room `reserve` made above.
             let refused = inbox.push(Message { bytes, handles }).err();
+            peer.note(&inbox);
             let fired = refused.is_none() && trigger(&mut peer.observers.lock(), Signals::READABLE);
             (refused, fired)
         };
@@ -528,6 +573,10 @@ impl Endpoint {
                 if fired {
                     deliver(|| peer.observers.lock().next_fired());
                 }
+                // The word's store before the wake's reads of the waiters'
+                // states, against a waiter listed and not yet blocked: see
+                // [`Endpoint::readable_or_closed`].
+                fence(Ordering::SeqCst);
                 // Onto this processor where it is free: a writer usually
                 // waits for the answer next, and a reader woken elsewhere is
                 // an interrupt to a processor that is likely halted. See
@@ -592,7 +641,9 @@ impl Endpoint {
             if needs_topology {
                 return Err(ReadError::NeedsTopology);
             }
-            (inbox.pop_fitting(byte_capacity, handle_capacity), was_full)
+            let taken = inbox.pop_fitting(byte_capacity, handle_capacity);
+            self.own().note(&inbox);
+            (taken, was_full)
         };
         // A reader that makes room in a full queue is what a blocked writer
         // is waiting for; a closed peer has nobody waiting.
@@ -646,12 +697,14 @@ impl Endpoint {
                 // NOALLOC: the room `reserve` made above.
                 inbox.push(message).map_err(|_| WriteFailure::NoMemory)?;
             }
+            peer.note(&inbox);
             trigger(&mut peer.observers.lock(), Signals::READABLE)
         };
-        // As `write`, after the lock.
+        // As `write`, after the lock, with its fence.
         if fired {
             deliver(|| peer.observers.lock().next_fired());
         }
+        fence(Ordering::SeqCst);
         peer.waiters.wake_all_with(crate::sched::Wake::Sync);
         Ok(())
     }
@@ -670,7 +723,9 @@ impl Endpoint {
         let (taken, was_full) = {
             let mut inbox = self.own().inbox.lock();
             let was_full = inbox.is_full();
-            (inbox.pop_small(), was_full)
+            let taken = inbox.pop_small();
+            self.own().note(&inbox);
+            (taken, was_full)
         };
         if was_full && taken.is_ok() {
             self.peer().waiters.wake_all();
@@ -686,17 +741,34 @@ impl Endpoint {
     }
 
     /// Whether a message is waiting on this end, or nothing more will come:
-    /// what `channel_write_read`'s wait waits for.
+    /// what `channel_write_read`'s wait waits for. One load of this side's
+    /// word, without the inbox lock (`docs/OPAQUE-KERNEL.md` §9.8, 2e).
     ///
-    /// Both looked at under this end's inbox lock, which a writer holds as it
-    /// queues and a closing peer takes after it marks itself closed and
-    /// before it wakes this end's waiters (`Endpoint::drop`). So a look that
-    /// takes the lock after theirs sees the message or the close, and one that
-    /// takes it before is made by a waiter already listed, whom their wake
-    /// then finds: see `WaitQueue::wait_trusting`.
+    /// # Why no wake is lost
+    ///
+    /// A writer sets [`NONEMPTY`] under the inbox lock and a closing peer
+    /// sets [`PEER_CLOSED`] under it; each then wakes this end's waiters,
+    /// which drains them under the wait queue's lock and reads each one's
+    /// state. The waiter lists itself under the wait queue's lock, stores
+    /// `BLOCKED`, makes a `SeqCst` fence, and reads the word.
+    /// - *The waker's drain after the waiter's listing*, and the waiter
+    ///   already `BLOCKED` as the waker reads its state: woken.
+    /// - *The drain before the listing*: the word's store came before the
+    ///   waker's release of the wait queue's lock, which came before the
+    ///   waiter's acquire of it, so the waiter's read sees the word.
+    /// - *The drain after the listing, with the waiter not yet `BLOCKED`*
+    ///   (the consultant's condition 5): the waker found it runnable and did
+    ///   nothing, so the waiter's read must see the word. Each side is a
+    ///   store then a load -- the word then the state, `BLOCKED` then the
+    ///   word -- with a `SeqCst` fence between, the waker's before its wake
+    ///   (`write`, `write_small`, `unread`, the close), the waiter's in
+    ///   `WaitQueue::wait_sliced`. Of the two fences one comes first, and
+    ///   the side whose fence comes second sees the other's store: the waker
+    ///   finds the waiter `BLOCKED`, or the waiter finds the word.
+    ///
+    /// The model of all three is `src/tests/loom` (`cargo xtask loom`).
     pub(crate) fn readable_or_closed(&self) -> bool {
-        let inbox = self.own().inbox.lock();
-        !inbox.is_empty() || self.peer_closed()
+        self.own().word() != 0
     }
 
     /// Put back a message [`Endpoint::read`] took and the caller could not
@@ -714,7 +786,14 @@ impl Endpoint {
     /// could not grow to take it again. The caller disposes of what it
     /// carries once it holds no lock; its call was failing already.
     pub(crate) fn unread(&self, message: ChannelMessage) -> Result<(), ChannelMessage> {
-        self.own().inbox.lock().unpop(message)?;
+        {
+            let mut inbox = self.own().inbox.lock();
+            let put_back = inbox.unpop(message);
+            self.own().note(&inbox);
+            put_back?;
+        }
+        // As a write's: the word before the wake's reads of the states.
+        fence(Ordering::SeqCst);
         self.own().waiters.wake_all();
         Ok(())
     }
@@ -882,11 +961,16 @@ impl Drop for Endpoint {
         // made under, so one made a moment ago is found here.
         let fired = {
             let _inbox = peer.inbox.lock();
+            // After this side's `closed` (`take_unread`), and before the
+            // wake, under the survivor's inbox lock: the word's invariant.
+            peer.note_peer_closed();
             trigger(&mut peer.observers.lock(), Signals::PEER_CLOSED)
         };
         if fired {
             deliver(|| peer.observers.lock().next_fired());
         }
+        // As a write's: the word before the wake's reads of the states.
+        fence(Ordering::SeqCst);
         peer.waiters.wake_all();
         dispose(
             unread
@@ -913,7 +997,9 @@ impl Endpoint {
         let messages = {
             let mut inbox = own.inbox.lock();
             own.closed.store(true, Ordering::Release);
-            inbox.drain()
+            let messages = inbox.drain();
+            own.note(&inbox);
+            messages
         };
         let registrations = core::mem::take(&mut *own.observers.lock());
         drop(registrations);

@@ -10,6 +10,16 @@
   ],
   "owed": [
     {
+      "landing": "OPAQUE-KERNEL.md §9.8 step 2e, the channel's wait from one state word (branch step2e)",
+      "architectures": [
+        "x86_64",
+        "aarch64",
+        "armv7a"
+      ],
+      "dropped": "carried from 5cf6d7889, and over the rebase from a2771373b, no anchor dropped.",
+      "what": "Measure and test or argue the new lines on every architecture: object/channel.rs's Half::note, note_peer_closed and word, the notes and fences added to write, write_small, read, read_small, unread, take_unread and Endpoint's drop, and readable_or_closed's one load; syscall/native.rs's receive_words reading own_end; sched/work.rs's own_end and wake_posted's fence; and object/channel/check.rs, the word check."
+    },
+    {
       "landing": "OPAQUE-KERNEL.md §9.8 step 2c, the pending-work word (branch step2b; the consultant's OK IF of 2026-10-03, condition 3)",
       "architectures": [
         "x86_64",

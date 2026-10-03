@@ -1,0 +1,26 @@
+[package]
+name = "ferrix-loom"
+description = "Models, checked with loom, of the orderings the kernel's wait and way back to user mode rest on (docs/OPAQUE-KERNEL.md §9.8, 2c case 9 and 2e condition 5)"
+version = "0.0.0"
+edition = "2024"
+# Matches Ferrix's rust-toolchain.toml, which rustup finds from here.
+rust-version = "1.97"
+license = "MIT"
+publish = false
+
+# A workspace of its own, as src/tests/fuzz is: loom and what it pulls in are
+# host test tooling, and the Ferrix workspace's dependency policy (deny.toml,
+# which bans libc) is written for a kernel. Nothing here is linked into any
+# image: the models restate the kernel's protocols in loom's types, they do
+# not compile the kernel's code. The customer's decision of 2026-10-03.
+# `tools/common/check/check-crate-layering.sh` skips a manifest that declares
+# one.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+# Exact, so that what the consultant reviewed is what runs; the lock file
+# pins the rest.
+[dev-dependencies]
+loom = "=0.7.2"

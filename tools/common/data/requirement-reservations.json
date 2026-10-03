@@ -38,13 +38,6 @@
       "branch": "step2a",
       "date": "2026-10-02",
       "purpose": "OPAQUE-KERNEL.md §9.8 step 2a (the consultant's OK IF of 2026-10-02): the running task by borrow, and current() without the run queue's lock. 2b wrote L.sched.20-23."
-    },
-    {
-      "ids": ["L.object.140-143", "L.sched.40-41"],
-      "owner": "step2b",
-      "branch": "step2e",
-      "date": "2026-10-03",
-      "purpose": "OPAQUE-KERNEL.md §9.8 step 2e (session B, the consultant's OK IF of 2026-10-02, condition 5): the channel half's state word and its invariant under the inbox lock, the wait read from the word and the caller's END, the writer's, closer's and poster's SeqCst fences paired with the wait's, and the loom model of 2c's case 9 and 2e's window"
     }
   ]
 }

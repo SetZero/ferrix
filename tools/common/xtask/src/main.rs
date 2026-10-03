@@ -299,6 +299,8 @@ COMMANDS:
                   check --ferrousli's ferrousli steps alone, as CI runs them
     miri          CI's Miri steps alone, --jobs crates at a time, building nothing else
                   (needs a nightly toolchain with miri)
+    loom          check's loom models alone (src/tests/loom): the wait's and the way out's
+                  orderings, each with a control that must fail
     native-clippy check's clippy of the native programs for --arch, as CI runs it
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
@@ -601,8 +603,7 @@ fn run() -> Result<()> {
         "bench-chrome-video" => compositor::bench_chrome_video(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),
         "builds-execute" => builds_execute(&args),
-        "check" | "miri" | "check-ferrousli" | "host-clippy" | "host-test" | "host-doctest"
-        | "host-doc" | "check-apps" | "check-docs" | "gate-rows" => check::command(command, &args),
+        name if check::COMMANDS.contains(&name) => check::command(command, &args),
         "native-clippy" => args
             .arches()?
             .into_iter()

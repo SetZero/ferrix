@@ -116,6 +116,13 @@ pub(crate) fn notify(task: &Arc<Task>, bits: u32) {
 /// under a lock it must let go of before waking: wake `task` and interrupt
 /// its processor.
 pub(crate) fn wake_posted(task: &Arc<Task>) {
+    // The bit before the wake's read of the task's state, paired with the
+    // fence a trusting wait makes after it stores `BLOCKED`
+    // (`WaitQueue::wait_sliced`), for a wait that reads the bit itself
+    // (`syscall::native::receive_words`'s `END`): of the two fences one
+    // comes first, and the side whose fence comes second sees the other's
+    // store. The model is `src/tests/loom`.
+    core::sync::atomic::fence(Ordering::SeqCst);
     if HOOK.load(Ordering::Acquire) != 0 {
         check::before_wake(task);
     }
@@ -134,6 +141,13 @@ pub(crate) fn post(task: &Task, bits: u32) {
 /// back to user mode, where it looks.
 pub(crate) fn post_own(bits: u32) {
     let _ = with_running(|task| post(task, bits));
+}
+
+/// Whether the running task has [`END`] posted: what a native wait asks in
+/// place of the personality's `must_leave` (2e), which the core and the
+/// personality post it for. False where nothing runs.
+pub(crate) fn own_end() -> bool {
+    with_running(has_end).unwrap_or(false)
 }
 
 /// Whether `task` has [`END`] posted: for a start that re-checks after it

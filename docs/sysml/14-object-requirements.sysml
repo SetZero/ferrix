@@ -1555,10 +1555,10 @@ package FerrixObjectRequirements {
                 of what it waits for: a message arriving on the end, the peer's
                 close, and its process's end or another thread's execve, each of
                 which wakes it; it shall then answer the message, PEER_CLOSED, or
-                EINTR. The message and the close shall be looked at under the end's
-                inbox lock, which their wakers take, and the task's blocked state
-                and its process's end shall be ordered by a SeqCst fence on each
-                side (WaitQueue::wait_trusting, Process::wake_other_tasks).";
+                EINTR. The message and the close shall be read from the end's state
+                word and the end or execve from the task's END bit, each ordered
+                against the task's blocked state by a SeqCst fence on each side
+                (L.object.141, L.sched.40).";
             attribute :>> criterion = "A thread blocked in channel_write_read and
                 listed on its end's queue is woken within 10 s by a message, which it
                 answers, by its peer's close, which it answers PEER_CLOSED, and by
@@ -1568,6 +1568,45 @@ package FerrixObjectRequirements {
             attribute :>> unit = ("object::channel::Endpoint::readable_or_closed",
                 "sched::wait::WaitQueue::wait_trusting", "sched::wait::WaitQueue::wait_sliced",
                 "object::channel::Endpoint::drop");
+        }
+        requirement <'L.object.140'> anEndsWordIsItsInbox : ItemLowLevel {
+            attribute :>> statement = "Under a channel end's inbox lock, its state
+                word's NONEMPTY shall be set exactly when the inbox holds a message,
+                after every operation that changes that -- a write, a small write, a
+                read, a small read, a put-back and the close's drain -- and its
+                PEER_CLOSED shall be set once the peer has closed, after the peer's
+                closed and before the end's waiters are woken.";
+            attribute :>> criterion = "4096 writes, small writes, reads, small reads
+                and put-backs in a pseudo-random order on one pair leave each end's
+                word equal to its inbox after every one, each operation having
+                crossed the empty boundary once first, and a close is marked in the
+                survivor's (the `chword` line); with the put-back's update removed
+                the check fails after a put-back into an empty inbox.";
+            attribute :>> parent = "H.OBJ.11";
+            attribute :>> unit = ("object::channel::Half::note",
+                "object::channel::Half::note_peer_closed", "object::channel::Half::word",
+                "object::channel::Endpoint::read", "object::channel::Endpoint::read_small",
+                "object::channel::Endpoint::write", "object::channel::Endpoint::write_small",
+                "object::channel::Endpoint::unread", "object::channel::Endpoint::take_unread");
+        }
+        requirement <'L.object.141'> aWakerFencesTheWordBeforeItsWake : ItemLowLevel {
+            attribute :>> statement = "channel_write_read's wait shall read readiness
+                with one load of its end's state word and one of the caller's END
+                bit, without the inbox lock or the personality; and a writer, a
+                put-back and a closer shall make a SeqCst fence after the word's
+                store and before their wake reads a waiter's state, paired with the
+                wait's fence after it stores BLOCKED, so that a waiter listed and
+                not yet blocked either is found blocked or reads the word.";
+            attribute :>> criterion = "The `wrread` line's message and close cases;
+                with the close's mark removed, the close case's waiter stays blocked
+                and the check fails by name. The loom model of a
+                waiter listed and not yet blocked against a writer, a closer, both,
+                and an end finds no lost wake, and its two controls, the writer
+                without its fence and the closer marking after its wake, each find
+                one (`cargo xtask loom`, src/tests/loom).";
+            attribute :>> parent = "H.OBJ.11";
+            attribute :>> unit = ("object::channel::Endpoint::readable_or_closed",
+                "syscall::native::receive_words", "sched::work::own_end");
         }
     }
 }
