@@ -732,6 +732,36 @@ one invalidation fail on purpose with a
 patience of its own, 2 ms, rather than spend the unit's 100 ms of every
 boot on an answer known in advance.
 
+### 2.2j The way back to user mode and a process's task list (`sched::work`)
+
+Every return to ring 3 makes one masked look at the running task's
+pending-work word (`L.sched.30`): the running task's run-queue lock, held for
+one load, and, only when a bit is set, one `Acquire` read-modify-write to
+clear `STOP` and `SIGNAL`. The personality's `needs_attention`, with its two
+references and two locks, runs only after a set bit -- or, with the
+self-checks on, at a clear word too (`L.sched.33`), which is the cost every
+return paid before 2c. So the way out's span shrinks only in a boot run with
+`ferrix.checks=skip`; the default boot keeps the old cost and the check. And
+no saving is claimed for 2c until 2a lands: `look` still takes the run
+queue's lock to find the running task, which costs about what the two
+references it replaced did.
+
+The core's end (`object::process::Process::end_record`, `L.sched.35`) and
+every walk that posts a bit to a process's tasks (`post_to_tasks`) allocate
+nothing: the tasks are taken out of the list eight at a time onto the
+walker's stack, under the list's interrupt-masking lock, posted to there, and
+woken and released after it. A walk that finds the list changed since its
+last batch starts again from the top, so its length is bounded by the
+number of starts the process makes while it is walked. That number is
+bounded too: a start lists a task of the ending process itself, made by a
+thread of that process, and every such thread has `END` posted by the walk
+or, listed after it, by its own start, so it leaves at its next way back to
+user mode instead of starting more; and a start that reads the end already
+recorded refuses (`start_thread`). Listing a task
+(`list_task`) is the one allocation, `fallible::try_push` before the task
+can run, and a start whose task cannot be listed fails before anything runs
+(F-23).
+
 ### 2.3 What is missing, per standard
 
 * **DO-178C DAL C** does not require WCET as such, but does require that

@@ -3047,6 +3047,60 @@ Security Target: ADV_TDS describes the word as a module of the scheduler,
 with the personality's obligation to post as an interface the item states;
 the Safety Manual's description of the personality boundary names it.
 
+**As built (session B, branch `step2b`, 2026-10-03).** Built to the
+design above with the review's conditions, for its code review. What
+differs from the draft, and what the walk on the code found:
+- *The clear is the core's.* The way out's look (`sched::work::look`, from
+  `trap::attention_due`) clears `STOP` and `SIGNAL` as it finds them, and
+  the personality's `needs_attention` reads the state only. Same order
+  argument (A then B), one place; the last look of `return_to_user` goes
+  through `attention_due` too.
+- *A process-directed signal posts `SIGNAL` with its record*, in
+  `Process::post`, to every thread that does not block it (question 3), not
+  in `notify_signal`. The audit's first boot stopped on FX-0520 for a writer
+  the table above did not have: stage 7's hand-off check records a signal
+  with `post_signal` and wakes only another thread; with the post beside the
+  record, every caller is covered.
+- *A new task is told what was posted before it was listed.* Every start
+  lists its task before it runs (`Process::list_task`, fallible, F-23), and
+  after the launch posts `END` if the process is ending or being replaced,
+  and `SIGNAL` if its thread can already take a pending signal. A thread
+  started into a pending process-directed signal was the second writer the
+  table missed.
+- *`STOP` to the caller* only when the caller is one of the process's
+  threads; a kernel caller (a check) gets none.
+- *Termination's `END` is the core's* (condition 3): `Process::end_record`
+  stores the end, fences, and posts `END` through `post_to_tasks`, which
+  takes the core's task list a batch of eight at a time onto its stack, so
+  nothing is allocated or let go under the list's lock. `Exit::record` is
+  private to it.
+- *The bit table checked* (condition 4): `sched::work::audit` at every clear
+  word with the self-checks on, FX-0520, with every poster's write and post
+  bracketed in a `Posting` so that a look between them is not a miss.
+- *`TRACE` and `FILTERED` are reserved bits*; nothing posts either, and the
+  way out does not read `FILTERED`. Case 11 is not built.
+- *The cases.* One per bit, each with its control: `END` by the core, the
+  OOM kill of stage 13's cgroup check, which no signal reaches first;
+  `execve`'s `END`, a new stage-7 case (two threads of the stop program
+  counting while the first replaces the program); `STOP`, the stop check run
+  a second time with the stop alone; `SIGNAL`, stage 7's hand-off check.
+  The wake row's case 10 (`sched::work::check`, the `wakerow` line) and its
+  hook, required disarmed by F-60's boot check (FX-0908), which now asks
+  both hooks; each keeps its own static. Cases 4 to 8 are not separate cases: the audit covers them
+  on every boot and test. The `loom` model (case 9) is owed: `loom` is not a
+  dependency of the tree, and adding one is a change of its own.
+- *Without 2a*, the look takes the run-queue lock for its one load, so no
+  saving is claimed for 2c before 2a lands.
+- *The delivery cap* (the consultant's condition 2 on landing):
+  `return_to_user` acts on at most 65 signals a pass, and the look that
+  brought the thread there cleared `SIGNAL`, so a pass that ends on the cap
+  posts it again. A thread can have 70 due: one per number in the
+  process's set and one in its own. The `capped` line takes 70 ignored ones
+  in one way back.
+- *The walk's restarts are bounded*: a task listed while `post_to_tasks`
+  walks is started by a thread of the ending process, which has `END`
+  itself and leaves instead of starting more.
+
 #### 2d: the native call decoded once
 
 **What changes.** x86-64's `answer_here` decodes every call against the Linux
