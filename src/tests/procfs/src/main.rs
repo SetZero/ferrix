@@ -21,6 +21,12 @@
 //!   large-file support fail with `EOVERFLOW` on a wider number or offset,
 //!   and the Steam client then lists no processes; built for `i686`, this
 //!   program is one, and its calls take the kernel's 32-bit x86 paths.
+//! * **mincore**: what Chromium's memory dumps count a mapping's resident
+//!   bytes with. Over four written pages it answers 0 and a byte per page
+//!   with the resident bit set; with the third page unmapped it is `ENOMEM`,
+//!   having written the first two bytes and left the rest; an address off a
+//!   page boundary is `EINVAL`, a vector at address 0 `EFAULT`, and a length
+//!   of 0 answers 0.
 //!
 //! Built with `negative-fd`, the link steps `lstat` where they mean `stat`
 //! and must fail on the first; with `negative-ino`, the inode step holds the
@@ -315,6 +321,71 @@ fn memfd() -> Step {
     .map(drop)
 }
 
+/// `mincore` over four pages, then over the same range with a hole in it.
+fn mincore() -> Step {
+    const PAGES: usize = 4;
+    let page = 4096;
+    // SAFETY: a fresh private anonymous mapping, unmapped before returning.
+    let at = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            PAGES * page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if at == libc::MAP_FAILED {
+        return Err(format!("mmap: errno {}", errno()));
+    }
+    let at = at.cast::<u8>();
+    let outcome = (|| {
+        for index in 0..PAGES {
+            // SAFETY: inside the mapping, which is writable.
+            unsafe { at.add(index * page).write(1) };
+        }
+        let mut vec = [0xEE_u8; PAGES];
+        // SAFETY: `vec` has a byte for each page.
+        let got = unsafe { libc::mincore(at.cast(), PAGES * page, vec.as_mut_ptr()) };
+        if got != 0 || vec.iter().any(|&byte| byte & 1 == 0) {
+            return Err(format!("over four written pages: {got} {vec:?}, errno {}", errno()));
+        }
+        // SAFETY: the third page of the mapping.
+        if unsafe { libc::munmap(at.add(2 * page).cast(), page) } != 0 {
+            return Err(format!("munmap: errno {}", errno()));
+        }
+        let mut vec = [0xEE_u8; PAGES];
+        // SAFETY: as above.
+        let got = unsafe { libc::mincore(at.cast(), PAGES * page, vec.as_mut_ptr()) };
+        if got != -1 || errno() != libc::ENOMEM || vec != [1, 1, 0xEE, 0xEE] {
+            return Err(format!("over a hole: {got} {vec:?}, errno {}", errno()));
+        }
+        // SAFETY: as above; the call must refuse before writing.
+        let got = unsafe { libc::mincore(at.add(1).cast(), page, vec.as_mut_ptr()) };
+        if got != -1 || errno() != libc::EINVAL {
+            return Err(format!("off a page boundary: {got}, errno {}", errno()));
+        }
+        // SAFETY: the kernel writes nothing through a vector at 0.
+        let got = unsafe { libc::mincore(at.cast(), page, std::ptr::null_mut()) };
+        if got != -1 || errno() != libc::EFAULT {
+            return Err(format!("a vector at 0: {got}, errno {}", errno()));
+        }
+        // SAFETY: no bytes.
+        let got = unsafe { libc::mincore(at.cast(), 0, vec.as_mut_ptr()) };
+        if got != 0 {
+            return Err(format!("no bytes: {got}, errno {}", errno()));
+        }
+        Ok(())
+    })();
+    // SAFETY: the mapping made above; its unmapped page is skipped.
+    unsafe {
+        let _ = libc::munmap(at.cast(), 2 * page);
+        let _ = libc::munmap(at.add(3 * page).cast(), page);
+    }
+    outcome
+}
+
 /// A directory's entries through `getdents64`: name, `d_ino`, `d_type` and
 /// `d_off`, `.` and `..` left out.
 fn list(dir: &str) -> Result<Vec<(String, u64, u8, i64)>, String> {
@@ -453,7 +524,7 @@ fn walk_proc() -> Result<(usize, u64), String> {
 }
 
 fn main() {
-    let steps: [Named; 7] = [
+    let steps: [Named; 8] = [
         ("tcp", tcp),
         ("unix", unix),
         ("eventfd", eventfd),
@@ -461,6 +532,7 @@ fn main() {
         ("pipe", pipe),
         ("memfd", memfd),
         ("inodes", inodes),
+        ("mincore", mincore),
     ];
     for (name, step) in steps {
         if let Err(what) = step() {

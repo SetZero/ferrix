@@ -9,7 +9,9 @@
 //! row for the listening port to carry the socket's inode number, which is
 //! how `lsof -i` finds the process that Steam asks it for. Then it lists
 //! `/proc` recursively and requires every inode number to fit 32 bits and
-//! be a name's own, and every entry's offset to fit a 32-bit `off_t`. It
+//! be a name's own, and every entry's offset to fit a 32-bit `off_t`. Last,
+//! `mincore` over a mapping and over one with a hole, as Chromium's memory
+//! dumps call it, with Linux's refusals. It
 //! prints a line per step and `procfs: all ok`, and exits 0; this requires
 //! every one of those lines, in order, and the status.
 //!
@@ -33,6 +35,7 @@ const STEPS: &[&str] = &[
     "procfs: pipe ok",
     "procfs: memfd ok",
     "procfs: inodes ok",
+    "procfs: mincore ok",
     "procfs: all ok",
 ];
 

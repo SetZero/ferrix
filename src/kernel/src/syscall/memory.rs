@@ -1,4 +1,4 @@
-//! `mmap`, `munmap`, `mprotect`, `mremap`, `madvise` and `brk`.
+//! `mmap`, `munmap`, `mprotect`, `mremap`, `madvise`, `mincore` and `brk`.
 //!
 //! The four calls a program reshapes its own address space with, and the first
 //! four a static musl binary makes: it allocates with `mmap` before it does
@@ -34,6 +34,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::syscall::fd;
 use crate::syscall::process::Process;
+use crate::syscall::uaccess;
 use crate::user::space::{
     Advice, Declined, Destination, FileMapping, FilePlace, MMAP_MIN_ADDR, SpaceError, WindowPages,
 };
@@ -366,7 +367,17 @@ pub(crate) fn sys_msync(
         .map(|len| len & !(PAGE_SIZE - 1))
         .ok_or(Errno::ENOMEM)?;
     let end = addr.checked_add(len).ok_or(Errno::ENOMEM)?;
-    let covered = process.space().with_regions(|regions| {
+    if mapped_from(process, addr, end) < end {
+        return Err(Errno::ENOMEM);
+    }
+    Ok(0)
+}
+
+/// How far from `addr` the mappings run without a gap, looking no further
+/// than `end`: `addr` itself when nothing maps it, and possibly past `end`
+/// when the last region does.
+fn mapped_from(process: &Process, addr: u64, end: u64) -> u64 {
+    process.space().with_regions(|regions| {
         let mut covered = addr;
         for region in regions {
             if covered >= end || region.start > covered {
@@ -375,8 +386,51 @@ pub(crate) fn sys_msync(
             covered = covered.max(region.end);
         }
         covered
-    });
-    if covered < end {
+    })
+}
+
+/// `mincore`.
+///
+/// Every mapped page is reported resident, as a page cache that never
+/// evicts would answer: there is no swap, and a file's pages, once read, stay.
+/// An anonymous page not yet touched is reported resident too, where Linux
+/// would say it is not -- it is a zero page a touch commits, and what asks
+/// (Chromium's memory dumps counting a range's resident bytes) only
+/// over-counts by it.
+///
+/// The checks run in Linux's order: an address off a page boundary is
+/// `EINVAL`, a range outside the program's half `ENOMEM`, and a vector
+/// outside it `EFAULT`. Then each page from `addr` gets its byte until a gap,
+/// which is `ENOMEM` with the bytes before it already written, as Linux's
+/// walk leaves them.
+pub(crate) fn sys_mincore(
+    process: &Process,
+    addr: u64,
+    len: u64,
+    vec: u64,
+) -> Result<usize, Errno> {
+    /// One run of the vector, written at a time.
+    const RESIDENT: [u8; 256] = [1; 256];
+    if !addr.is_multiple_of(PAGE_SIZE) {
+        return Err(Errno::EINVAL);
+    }
+    if !uaccess::is_user_range(addr, len) {
+        return Err(Errno::ENOMEM);
+    }
+    let pages = len.div_ceil(PAGE_SIZE);
+    if !uaccess::is_user_range(vec, pages) {
+        return Err(Errno::EFAULT);
+    }
+    let end = addr.checked_add(pages * PAGE_SIZE).ok_or(Errno::ENOMEM)?;
+    let mapped = (mapped_from(process, addr, end).min(end) - addr) / PAGE_SIZE;
+    let mut written = 0;
+    while written < mapped {
+        let left = usize::try_from(mapped - written).unwrap_or(usize::MAX);
+        let run = RESIDENT.get(..left).unwrap_or(&RESIDENT);
+        uaccess::copy_to_user(process.space(), vec + written, run).map_err(|_| Errno::EFAULT)?;
+        written += run.len() as u64;
+    }
+    if mapped < pages {
         return Err(Errno::ENOMEM);
     }
     Ok(0)

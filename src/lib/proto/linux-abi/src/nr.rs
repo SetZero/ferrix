@@ -109,6 +109,8 @@ pub mod x86_64 {
     pub const MREMAP: usize = 25;
     /// Flush a file-backed mapping to its file.
     pub const MSYNC: usize = 26;
+    /// Report which pages of a mapping are resident.
+    pub const MINCORE: usize = 27;
     /// Advise the kernel about future use of a memory range.
     pub const MADVISE: usize = 28;
     /// Create or look up a System V shared memory segment.
@@ -953,6 +955,8 @@ pub mod aarch64 {
     pub const MPROTECT: usize = 226;
     /// Flush a file-backed mapping to its file.
     pub const MSYNC: usize = 227;
+    /// Report which pages of a mapping are resident.
+    pub const MINCORE: usize = 232;
     /// Advise the kernel about future use of a memory range.
     pub const MADVISE: usize = 233;
     /// Accept a connection, with flags for the new descriptor.
@@ -1332,6 +1336,8 @@ pub mod arm {
     pub const SETFSGID32: usize = 216;
     /// Read directory entries in the 64-bit layout.
     pub const GETDENTS64: usize = 217;
+    /// Report which pages of a mapping are resident.
+    pub const MINCORE: usize = 219;
     /// Advise the kernel about future use of a memory range.
     pub const MADVISE: usize = 220;
     /// Manipulate a file descriptor's flags and locks, with 64-bit `flock64`
@@ -1894,6 +1900,8 @@ pub mod i386 {
     pub const SETFSGID32: usize = 216;
     /// Make another mount the root, and move the old root beneath it.
     pub const PIVOT_ROOT: usize = 217;
+    /// Report which pages of a mapping are resident.
+    pub const MINCORE: usize = 218;
     /// Advise the kernel about future use of a memory range.
     pub const MADVISE: usize = 219;
     /// Read directory entries in the 64-bit layout.
@@ -2294,6 +2302,8 @@ pub enum Syscall {
     Msync,
     /// Advise the kernel about future use of a memory range.
     Madvise,
+    /// Report which pages of a mapping are resident.
+    Mincore,
     /// Move the program break, the classic heap boundary.
     Brk,
     /// Install a signal handler.
@@ -2937,6 +2947,7 @@ fn x86_64_file_and_process(nr: usize) -> Option<Syscall> {
         x86_64::MREMAP => Syscall::Mremap,
         x86_64::MSYNC => Syscall::Msync,
         x86_64::MADVISE => Syscall::Madvise,
+        x86_64::MINCORE => Syscall::Mincore,
         x86_64::DUP => Syscall::Dup,
         x86_64::DUP2 => Syscall::Dup2,
         x86_64::NANOSLEEP => Syscall::Nanosleep,
@@ -3390,6 +3401,7 @@ fn aarch64_memory_and_process(nr: usize) -> Option<Syscall> {
         aarch64::MPROTECT => Syscall::Mprotect,
         aarch64::MSYNC => Syscall::Msync,
         aarch64::MADVISE => Syscall::Madvise,
+        aarch64::MINCORE => Syscall::Mincore,
         aarch64::WAIT4 => Syscall::Wait4,
         aarch64::PRLIMIT64 => Syscall::Prlimit64,
         aarch64::NAME_TO_HANDLE_AT => Syscall::NameToHandleAt,
@@ -3688,6 +3700,7 @@ fn arm_ids_and_at_family(nr: usize) -> Option<Syscall> {
         arm::SETGID32 => Syscall::Setgid,
         arm::GETDENTS64 => Syscall::Getdents64,
         arm::MADVISE => Syscall::Madvise,
+        arm::MINCORE => Syscall::Mincore,
         arm::FCNTL64 => Syscall::Fcntl64,
         arm::GETTID => Syscall::Gettid,
         arm::TKILL => Syscall::Tkill,
@@ -4086,6 +4099,7 @@ fn i386_ids_and_at_family(nr: usize) -> Option<Syscall> {
         i386::SETFSGID32 => Syscall::Setfsgid,
         i386::PIVOT_ROOT => Syscall::PivotRoot,
         i386::MADVISE => Syscall::Madvise,
+        i386::MINCORE => Syscall::Mincore,
         i386::GETDENTS64 => Syscall::Getdents64,
         i386::FCNTL64 => Syscall::Fcntl64,
         i386::GETTID => Syscall::Gettid,
