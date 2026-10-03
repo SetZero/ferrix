@@ -393,10 +393,26 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
             "the compositor is not built for {arch}"
         )));
     }
-    let config = match &args.config {
-        Some(path) => std::fs::read_to_string(path)
-            .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
-        None => RUN_CONFIG.to_owned(),
+    let host = match &args.config {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
+        ),
+        None => None,
+    };
+    let config = match (&host, args.session) {
+        // A session's desktop is a person's own configuration, which names
+        // a terminal Ferrix may not have: one always a key away, and one to
+        // start with, as `run-compositor --everything` adds.
+        (Some(host), true) => format!(
+            "{}\n# Appended by `cargo xtask flash --compositor --session`: a shell to start \
+             with, and one always a key away.\n\
+             exec-once = /bin/term /bin/zinc\n\
+             bind = SUPER, RETURN, exec, /bin/term /bin/zinc\n",
+            host.trim_end()
+        ),
+        (Some(host), false) => host.clone(),
+        (None, _) => RUN_CONFIG.to_owned(),
     };
     // `flash --compositor --chrome` is a board's desktop with the browser
     // on it, from a volume the board attaches itself: the Pixel 7's VM gives
@@ -414,12 +430,35 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
     let args = &Args {
         net: false,
         init,
+        session_user: args.session.then(|| crate::session::USER.to_owned()),
         ..args.clone()
     };
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(BOARD_SCREEN);
     let screen = laid_out(size, &config);
     let (config, mut carried) = desktop(arch, config, size, false, Backdrop::Board(screen), args)?;
+    // `--session`: the desktop runs as its user, through `sessiond`, and the
+    // dotfiles seed the home disk (`crate::session`). The board's screen is
+    // said again after the configuration, whose own catch-all `monitor =`
+    // line -- a desktop's, at its own scale -- would otherwise win over the
+    // one `desktop` put first: a phone's screen at a monitor's scale is
+    // text a few millimetres high.
+    let config = if args.session_user.is_some() {
+        println!(
+            "  session: the desktop runs as {}, started by sessiond",
+            crate::session::USER
+        );
+        let config = crate::session::for_session(&config, &mut carried.ports, host.as_deref());
+        let scale = args.scale.as_deref().unwrap_or("1");
+        format!(
+            "{config}# The board's screen, over the configuration's own monitor lines \
+             (`cargo xtask flash --compositor --session`).\n\
+             monitor = , {}x{}@60, auto, {scale}\n",
+            size.0, size.1
+        )
+    } else {
+        config
+    };
     // Nor the curl and git apps: on ARMv7-A they are curl, git and the TLS
     // test server curl's gate talks to, programs for a network the board
     // does not have, and 13 MB of an archive the loader reads off the card

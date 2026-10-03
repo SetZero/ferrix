@@ -142,6 +142,12 @@ pub(crate) struct Args {
     /// of the two (`crate::everything`). The network and the hypervisor a
     /// watched boot has already.
     pub(crate) everything: bool,
+    /// `--session`: `flash --compositor`'s desktop runs as the user
+    /// `ferrix` through `sessiond`, as `run-compositor --everything`'s does
+    /// (`crate::session`): `--config`'s dotfiles seed the home disk once,
+    /// and what is edited there is kept. The Pixel 7's VM desktop with the
+    /// user's own `hyprland.conf` (`tools/vendor/google/pixel7`).
+    pub(crate) session: bool,
     /// `-h`/`--help`.
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
@@ -517,6 +523,15 @@ impl Args {
         }
     }
 
+    /// `--no-dotfiles` and `--session`: what becomes of `--config`'s
+    /// dotfiles -- left behind, or seeding the session user's home.
+    fn dotfiles(&mut self, flag: &str) {
+        match flag {
+            "--session" => self.session = true,
+            _ => self.no_dotfiles = true,
+        }
+    }
+
     /// `--reset-root`, `--reset-flash`, `--tmpfs-root`, `--btrfs-root` and
     /// `--persistent`: where `/` is for the boot, what of what the machine
     /// keeps starts over, and whether `/data` is kept too.
@@ -589,7 +604,7 @@ impl Args {
                 flag if ROOT_FLAGS.contains(&flag) => args.root(flag),
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
-                "--no-dotfiles" => args.no_dotfiles = true,
+                "--no-dotfiles" | "--session" => args.dotfiles(&item),
                 "--chrome" => args.chrome = true,
                 "--everything" => args.everything(),
                 "--forward" => {
@@ -1041,6 +1056,8 @@ mod tests {
 
     #[test]
     fn everything_turns_on_every_feature_of_a_watched_desktop() {
+        let args = parse(&["flash", "--compositor", "--session"]).unwrap();
+        assert!(args.session && args.compositor && !args.everything);
         let args = parse(&["run-compositor", "--everything"]).unwrap();
         assert!(args.everything && args.chrome && args.clipboard && args.release);
         assert!(args.gl && args.display);

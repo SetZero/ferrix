@@ -92,7 +92,8 @@ With `desktop.Image` beside it, the app boots that instead, with
 (`tools/common/fetch/fetch-chromium-arm64.sh`, pushed by
 `build-desktop.sh --chrome --push`), it adds three blank 1 MiB disks and then
 the volume, so that the volume is `vdd`, the first disk Ferrix mounts at
-`/data`.
+`/data`. `home.img` comes after it when it is there (below, "Your own
+desktop"), and Ferrix mounts it at `/home`.
 
 The 16550 takes crosvm's standard input too, the su process's, which the app
 keeps open for the run: a line it writes there reaches the guest's shell on
@@ -117,6 +118,17 @@ compositor. `tools/vendor/google/pixel7/build-desktop.sh <dir> [scale] [--push]`
 The scale is 2 unless given, since 1080x2400 at 1 is text a few millimetres
 high, and the keymap US, which the app's key codes are. Delete
 `desktop.Image` to go back to the console image.
+
+**Your own desktop.** `build-desktop.sh <dir> 2 --chrome --dotfiles --push`
+builds the desktop `run-compositor --everything` boots on the PC: this
+machine's `~/.config/hypr/hyprland.conf` and the dotfiles beside it, the
+session running as the user `ferrix` (`flash --compositor --session`), with
+the phone's screen line put after the configuration's own. With `--push` it
+also makes `home.img` on the phone, an empty 8 GiB sparse `ferrix-home`
+volume, when there is none. The first boot seeds it from the dotfiles, and
+what is changed there afterwards is kept: a new `desktop.Image` never
+replaces it, and neither does a later `--push`. `--reset-home` makes it
+again, empty, so that the next boot seeds it anew.
 
 **Updates.** The app keeps `desktop.Image` on the newest GitHub release
 that carries it, with no PC (below, "Updates").

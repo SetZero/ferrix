@@ -182,7 +182,10 @@ private const val MOUSE = "$VM_DIR/mouse.sock"
  * otherwise `ferrix.Image`, the helper's console image. `chromium.img` beside
  * it, `tools/common/fetch/fetch-chromium-arm64.sh`'s volume, becomes the guest's
  * fourth disk, `vdd`, which Ferrix mounts at `/data`: a desktop built with
- * `--chrome` starts Chromium from it. Ferrix takes a data disk only from
+ * `--chrome` starts Chromium from it. `home.img`, a btrfs volume labelled
+ * `ferrix-home` (`build-desktop.sh --dotfiles --push` makes it once), comes
+ * after it, and Ferrix mounts it at `/home`: the session user's home, which
+ * a new `desktop.Image` never replaces. Ferrix takes those disks only from
  * `vdd` on, since `vda` to `vdc` are the boot checks' fixtures under QEMU,
  * so three blank megabytes stand in for them here. The desktop boots with
  * `ferrix.checks=skip`, as every board's desktop does (xtask's
@@ -203,10 +206,11 @@ private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): S
         "--input 'single-touch[path=$TOUCH,width=$w,height=$h]' --input 'keyboard[path=$KEYBOARD]' " +
         "--input 'mouse[path=$MOUSE]'; " +
         "else echo 'FERRIX-VM-BRIDGE did not start: no screen'; set --; fi; " +
-        "if [ -f $VM_DIR/chromium.img ]; then for b in a b c; do " +
+        "D=; for d in chromium.img home.img; do [ ! -f $VM_DIR/\$d ] || D=\"\$D \$d\"; done; " +
+        "if [ -n \"\$D\" ]; then for b in a b c; do " +
         "[ -f $VM_DIR/blank-\$b.img ] || truncate -s 1M $VM_DIR/blank-\$b.img; " +
         "set -- \"\$@\" --block path=$VM_DIR/blank-\$b.img; done; " +
-        "set -- \"\$@\" --block path=$VM_DIR/chromium.img; fi; " +
+        "for d in \$D; do set -- \"\$@\" --block path=$VM_DIR/\$d; done; fi; " +
         "[ \$I != desktop.Image ] || set -- \"\$@\" -p ferrix.checks=skip; " +
         "exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1,stdin " +
         "\"\$@\" \$I 2>/dev/null"

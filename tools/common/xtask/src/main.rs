@@ -367,6 +367,10 @@ OPTIONS:
                                          claude too once fetch-claude-code.sh has run; and
                                          this machine's ~/.config/hypr/hyprland.conf with its
                                          dotfiles unless --config or --no-dotfiles says otherwise
+    --session                            flash --compositor: the desktop runs as the user ferrix,
+                                         started by sessiond, as --everything's does; --config's
+                                         dotfiles seed the home disk once and edits there are kept,
+                                         and the board's screen beats the config's monitor lines
     --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
                                          e.g. 2222:22 for sshdt; repeatable; turns --net on
     --ssh <PORT>                         run-compositor: start sshdt in the guest, reached at
