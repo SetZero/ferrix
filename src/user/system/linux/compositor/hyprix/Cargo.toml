@@ -24,6 +24,7 @@ compositor-anim = { path = "../anim" }
 compositor-config = { path = "../config" }
 compositor-regex = { path = "../regex" }
 compositor-drm = { path = "../drm" }
+compositor-seat = { path = "../seat" }
 compositor-ipc = { path = "../ipc" }
 compositor-layout = { path = "../layout" }
 compositor-protocol = { path = "../protocol" }

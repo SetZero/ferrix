@@ -18,7 +18,7 @@
 
 use std::ffi::CStr;
 use std::io;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 
 use ferrix_linux_abi::drm::{self, GemClose, PrimeHandle, Version};
 use ferrix_linux_abi::socket::Width;
@@ -68,11 +68,8 @@ impl Render {
     /// Whatever `open` said; `ENOENT` when the card has no GPU behind it,
     /// which is the ordinary answer for a 2D device.
     pub fn open() -> io::Result<Self> {
-        // SAFETY: NODE is a NUL-terminated path; the flags are constants.
-        let fd = unsafe { libc::open(NODE.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        // Through `sessiond` in a session that runs as its user.
+        let fd = compositor_seat::open(NODE, libc::O_RDWR)?.into_raw_fd();
         Ok(Self { fd })
     }
 

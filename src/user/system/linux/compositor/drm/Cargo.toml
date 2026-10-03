@@ -13,6 +13,8 @@ publish.workspace = true
 negative-control = []
 
 [dependencies]
+# seat0's devices, from `sessiond` in a session that runs as its user.
+compositor-seat = { path = "../seat" }
 compositor-virgl = { path = "../virgl" }
 # Declarations only, as in zinc: open, ioctl and mmap are the C library std
 # already links.

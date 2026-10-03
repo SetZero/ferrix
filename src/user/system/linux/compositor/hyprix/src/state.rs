@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use compositor_config::{Config, MonitorRule, NoSources, Position, Transform};
+use compositor_config::{Config, MonitorRule, Position, Transform};
 use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Style};
@@ -5898,7 +5898,13 @@ fn read_config(options: &Options) -> Result<Config, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("reading {}: {error}", path.display()))?;
     let name = path.to_string_lossy().into_owned();
-    let config = compositor_config::parse(&name, &text, &mut NoSources).config;
+    // `source =` lines are read as Hyprland reads them, `~` the home this
+    // compositor runs with: the `--everything` session's configuration
+    // sources the user's own, kept in their home.
+    let mut sources = compositor_config::FsSources {
+        home: std::env::var_os("HOME").map(PathBuf::from),
+    };
+    let config = compositor_config::parse(&name, &text, &mut sources).config;
     if let Ok(mut env) = CHILD_ENV.lock() {
         env.clone_from(&config.env);
     }

@@ -21,6 +21,8 @@ path = "src/main.rs"
 negative-control = []
 
 [dependencies]
+# seat0's devices, from `sessiond` in a session that runs as its user.
+compositor-seat = { path = "../seat" }
 # Declarations only, as in the card: open, ioctl and read are the C library
 # std already links.
 libc = "0.2.189"

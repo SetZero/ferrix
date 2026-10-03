@@ -1,0 +1,23 @@
+[package]
+name = "compositor-sessiond"
+description = "seat0's owner: starts the graphical session as its user and hands its compositor the devices"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sessiond"
+path = "src/main.rs"
+
+[dependencies]
+# Declarations only: setgroups, setgid, setuid, chown and dup2 are the C
+# library std already links.
+libc = "0.2.189"
+compositor-seat = { path = "../seat" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+
+[lints]
+workspace = true

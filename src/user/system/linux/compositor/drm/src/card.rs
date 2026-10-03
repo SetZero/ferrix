@@ -2,7 +2,7 @@
 
 use std::ffi::CStr;
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, FbDirtyCmd, Field, GetBlob,
@@ -52,11 +52,8 @@ impl Card {
     /// Whatever `open` said. A card that is not there is a compositor with
     /// no screen, which is the one thing it cannot do without.
     pub fn open() -> io::Result<Self> {
-        // SAFETY: CARD is a NUL-terminated path; the flags are constants.
-        let fd = unsafe { libc::open(CARD.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        // Through `sessiond` in a session that runs as its user.
+        let fd = compositor_seat::open(CARD, libc::O_RDWR)?.into_raw_fd();
         Ok(Self {
             fd,
             name: "card0".to_owned(),
@@ -72,12 +69,7 @@ impl Card {
         let name = format!("card{index}");
         let path = std::ffi::CString::new(format!("/dev/dri/{name}"))
             .map_err(|_| io::Error::other("a card path with a NUL in it"))?;
-        // SAFETY: `path` is a NUL-terminated path held across the call; the
-        // flags are constants.
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let fd = compositor_seat::open(&path, libc::O_RDWR)?.into_raw_fd();
         Ok(Self { fd, name })
     }
 

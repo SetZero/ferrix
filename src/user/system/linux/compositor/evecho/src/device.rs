@@ -403,6 +403,11 @@ fn bit(bits: &[u8], index: u16) -> bool {
 }
 
 fn open_rw_then_ro(path: &CString) -> io::Result<OwnedFd> {
+    // A session running as its user has `sessiond` open the node, which
+    // falls back to reading only itself.
+    if compositor_seat::adopt() {
+        return compositor_seat::open(path, libc::O_RDWR | libc::O_NONBLOCK);
+    }
     for flags in [libc::O_RDWR, libc::O_RDONLY] {
         // SAFETY: `path` is NUL-terminated and the flags are constants.
         let fd = unsafe { libc::open(path.as_ptr(), flags | libc::O_CLOEXEC | libc::O_NONBLOCK) };

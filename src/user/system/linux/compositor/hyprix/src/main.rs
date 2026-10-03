@@ -9,6 +9,12 @@ use std::io::Write;
 use hyprix::Options;
 
 fn main() {
+    // Before any thread or child: a session running as its user gets its
+    // devices from `sessiond` over a channel this takes out of the
+    // environment, so nothing the compositor starts inherits it.
+    if compositor_seat::adopt() {
+        report("hyprix: seat0's devices come from sessiond");
+    }
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(message) => {

@@ -1,0 +1,18 @@
+[package]
+name = "compositor-seat"
+description = "seat0's devices: opened by sessiond, which owns them, and handed to the session's compositor over a socket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Declarations only: open, fcntl, poll and fstat are the C library std
+# already links.
+libc = "0.2.189"
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+
+[lints]
+workspace = true

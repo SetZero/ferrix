@@ -138,6 +138,7 @@ dependencies = [
 name = "compositor-drm"
 version = "0.1.0"
 dependencies = [
+ "compositor-seat",
  "compositor-virgl",
  "ferrix-linux-abi",
  "libc",
@@ -147,6 +148,7 @@ dependencies = [
 name = "compositor-evecho"
 version = "0.1.0"
 dependencies = [
+ "compositor-seat",
  "ferrix-linux-abi",
  "libc",
 ]
@@ -286,6 +288,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-seat"
+version = "0.1.0"
+dependencies = [
+ "compositor-socket",
+ "compositor-wire",
+ "libc",
+]
+
+[[package]]
 name = "compositor-server"
 version = "0.1.0"
 dependencies = [
@@ -293,6 +304,16 @@ dependencies = [
  "compositor-socket",
  "compositor-wire",
  "compositor-xkb",
+]
+
+[[package]]
+name = "compositor-sessiond"
+version = "0.1.0"
+dependencies = [
+ "compositor-seat",
+ "compositor-socket",
+ "compositor-wire",
+ "libc",
 ]
 
 [[package]]
@@ -636,6 +657,7 @@ dependencies = [
  "compositor-protocol",
  "compositor-regex",
  "compositor-render",
+ "compositor-seat",
  "compositor-server",
  "compositor-shm",
  "compositor-shot",

@@ -30,12 +30,29 @@ const PATIENCE: Duration = Duration::from_secs(5);
 /// Where the instance directory is: `$XDG_RUNTIME_DIR/hypr`, or the
 /// temporary directory when there is no session manager to set the variable,
 /// which is what `hyprix` falls back to as well.
+///
+/// Without the variable, a session's own directory comes first: `sessiond`
+/// runs the desktop as its user under `/run/user/<uid>`, and root, logged in
+/// over ssh or running a unit, has no variable naming it. The first
+/// `/run/user/<uid>/hypr` there is is taken, and the temporary directory
+/// otherwise.
 #[must_use]
 pub fn runtime() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("hypr")
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime).join("hypr");
+    }
+    let mut sessions: Vec<PathBuf> = std::fs::read_dir("/run/user")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path().join("hypr"))
+        .filter(|path| path.is_dir())
+        .collect();
+    sessions.sort();
+    sessions
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| std::env::temp_dir().join("hypr"))
 }
 
 /// The event socket, beside the request one.
