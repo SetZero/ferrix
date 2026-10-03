@@ -90,6 +90,12 @@ const DISPLAY_CLASS: u8 = 0x03;
 /// Like the GPU it sits on a VT-d unit and has a 64-bit BAR of gigabytes.
 /// It is matched only to the driver image `nvrm-test`, which only that
 /// gate's image carries, so no other boot starts anything on it.
+///
+/// That image is the whole guard: every x86-64 machine xtask boots carries
+/// `pci-testdev,membar=8G`, so an `nvrm-test` image put into any other
+/// image -- a test boot's, `run`'s, a release's -- would have devmgr hand
+/// the pci-testdev over to it (marked, budgeted and started) on that boot.
+/// Only `cargo xtask test-nvrm` may add it (`tools/common/xtask/src/nvrm.rs`).
 const TEST_GPU_VENDOR: u16 = 0x1B36;
 const TEST_GPU_IDS: [u16; 1] = [0x0005];
 
