@@ -98,8 +98,13 @@ pub(crate) struct Args {
     /// `run-compositor` boots -- rather than the self-checks or a busybox.
     pub(crate) compositor: bool,
     /// `--reset-root`: start the btrfs root `run` and `run-compositor` boot
-    /// with over from the fixture, throwing away what is on it.
+    /// with over from the fixture, throwing away the system's files on it.
+    /// The home disk and `--persistent`'s `/data` are kept.
     pub(crate) reset_root: bool,
+    /// `--reset-flash`: start everything the machine keeps over -- the root,
+    /// the home disk and `--persistent`'s `/data` -- as a machine whose
+    /// flash was wiped would.
+    pub(crate) reset_flash: bool,
     /// `--tmpfs-root`: boot `run` and `run-compositor` with `/` in memory,
     /// as the test boots are, and leave the btrfs root off the bus.
     pub(crate) tmpfs_root: bool,
@@ -165,6 +170,10 @@ pub(crate) struct Args {
     /// `test-selfhost`'s volume, made afresh for each run, which the host
     /// reads the built image back out of.
     pub(crate) data_image_kept: bool,
+    /// A home volume a test boot attaches, kept: `test-shell`'s K7 boots
+    /// (`crate::init_file`). `run` and `run-compositor` attach
+    /// `build/home.img` beside their root instead.
+    pub(crate) home_image: Option<std::path::PathBuf>,
     /// `--seeds`, how many power failures `test-powerfail` makes.
     pub(crate) seeds: u64,
     /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`,
@@ -411,8 +420,9 @@ pub(crate) struct Args {
 }
 
 /// The flags [`Args::root`] takes.
-const ROOT_FLAGS: [&str; 4] = [
+const ROOT_FLAGS: [&str; 5] = [
     "--reset-root",
+    "--reset-flash",
     "--tmpfs-root",
     "--btrfs-root",
     "--persistent",
@@ -503,12 +513,13 @@ impl Args {
         }
     }
 
-    /// `--reset-root`, `--tmpfs-root`, `--btrfs-root` and `--persistent`:
-    /// where `/` is for the boot, whether it starts over, and whether
-    /// `/data` is kept too.
+    /// `--reset-root`, `--reset-flash`, `--tmpfs-root`, `--btrfs-root` and
+    /// `--persistent`: where `/` is for the boot, what of what the machine
+    /// keeps starts over, and whether `/data` is kept too.
     fn root(&mut self, flag: &str) {
         match flag {
             "--reset-root" => self.reset_root = true,
+            "--reset-flash" => self.reset_flash = true,
             "--tmpfs-root" => self.tmpfs_root = true,
             "--persistent" => self.persistent = true,
             _ => self.btrfs_root = true,

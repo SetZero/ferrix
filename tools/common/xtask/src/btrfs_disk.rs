@@ -125,6 +125,31 @@ pub(crate) fn blank_copy(arch: Arch, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// A fresh copy of the home fixture under `build/<arch>/` as `name`, for a
+/// test boot that keeps files across two boots on it (`test-shell`'s K7).
+///
+/// # Errors
+///
+/// The file not writable.
+pub(crate) fn home_copy(arch: Arch, name: &str) -> Result<PathBuf> {
+    let directory = paths::build_dir(arch);
+    std::fs::create_dir_all(&directory)?;
+    let path = directory.join(name);
+    write_packed_sized(&path, HOME, HOME_SIZE)
+        .map_err(|error| Error::new(format!("writing {}: {error}", path.display())))?;
+    Ok(path)
+}
+
+/// The packed home fixture: an empty volume labelled `ferrix-home`, which
+/// the kernel mounts at `/home`.
+const HOME: &[u8] = include_bytes!("../../../../src/lib/fs/btrfs/testdata/home.img.packed");
+
+/// The home image's size: what `mkfs.btrfs` made the fixture at.
+const HOME_SIZE: u64 = 8 * 1024 * 1024 * 1024;
+
+/// The home image's name under `build/`: `/home` in an interactive boot.
+const HOME_FILE_NAME: &str = "home.img";
+
 /// The root image's name under `build/`: `/` in an interactive boot.
 const ROOT_FILE_NAME: &str = "root.img";
 
@@ -145,6 +170,31 @@ pub(crate) fn ensure_root(reset: bool) -> Result<(PathBuf, bool)> {
     std::fs::create_dir_all(&directory)?;
     let partial = directory.join(format!("{ROOT_FILE_NAME}.{}.partial", std::process::id()));
     write_packed_sized(&partial, ROOT, ROOT_SIZE).map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        Error::new(format!("writing {}: {error}", partial.display()))
+    })?;
+    std::fs::rename(&partial, &path)
+        .map_err(|error| Error::new(format!("renaming to {}: {error}", path.display())))?;
+    Ok((path, true))
+}
+
+/// The home disk: `build/home.img`, made from the `home` fixture if it is
+/// not there or `reset` asks (`--reset-flash`), and otherwise left exactly as
+/// the last boot left it -- `--reset-root` does not touch it. Answers its
+/// path and whether it was made new.
+///
+/// # Errors
+///
+/// The file not writable.
+pub(crate) fn ensure_home(reset: bool) -> Result<(PathBuf, bool)> {
+    let directory = paths::workspace_root().join("build");
+    let path = directory.join(HOME_FILE_NAME);
+    if !reset && path.is_file() {
+        return Ok((path, false));
+    }
+    std::fs::create_dir_all(&directory)?;
+    let partial = directory.join(format!("{HOME_FILE_NAME}.{}.partial", std::process::id()));
+    write_packed_sized(&partial, HOME, HOME_SIZE).map_err(|error| {
         let _ = std::fs::remove_file(&partial);
         Error::new(format!("writing {}: {error}", partial.display()))
     })?;

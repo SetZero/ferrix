@@ -181,7 +181,19 @@ virtual machines only, the root file system 1 GiB whatever the disk, and
 no graphical installer yet. `cargo xtask test-install` installs and boots
 the result.
 
-`--reset-root` throws the volume away and installs the system on a new one.
+`run` and `run-compositor` also keep a home disk, `build/home.img`: an 8 GiB
+btrfs volume labelled `ferrix-home`, which the kernel mounts at `/home`. The
+first boot makes it empty, and init makes each account's home on it
+(`/home/ferrix`, `0700`, the account's own). The users' files and settings
+live there, apart from the system's. A root made before 2026-10-03 kept
+`/home` on itself: those files are still on `build/root.img`, hidden under
+the disk's mount rather than deleted, until `--reset-root` starts the root
+over.
+
+`--reset-root` throws the root volume away and installs the system on a new
+one. It keeps the home disk, and `--persistent`'s `/data` below.
+`--reset-flash` starts everything the machine keeps over, as a machine whose
+flash was wiped: the root, the home disk and `--persistent`'s `/data`.
 `--tmpfs-root` boots with `/` in memory instead, as every boot did before,
 and leaves the volume untouched for the next boot that wants it; on a kernel
 command line, `ferrix.root=tmpfs` does the same. The test boots never attach
@@ -211,8 +223,8 @@ Chrome's profile, which moves from `/dev/shm` to `/data/home/chrome`, are
 all still there at the next boot. What the guest writes reaches the disk at
 its next commit, every 30 seconds, so closing the window loses at most the
 last half minute. The copy does not follow the volume: when a fetch script
-remakes the volume, the boot says so. `--persistent --reset-root` then starts
-both the root and the copy over, and everything on them is lost.
+remakes the volume, the boot says so. `--persistent --reset-flash` then starts
+the root, the home disk and the copy over, and everything on them is lost.
 
 `cargo xtask test-selfhost --accel kvm` is stage 20's gate, on a Linux host
 with `btrfs-progs`. It stages the sysroot's tree, every file git tracks here

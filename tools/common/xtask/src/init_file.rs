@@ -13,16 +13,18 @@
 //! `/bin/sh /etc/shell-test`, that file must exit with the script's status,
 //! and the fallback line must not be there.
 //!
-//! # K7: `reboot(2)` commits `/data`
+//! # K7: `reboot(2)` commits `/data` and `/home`
 //!
 //! Where the shell is busybox, whose `poweroff -f -n` makes the call with no
-//! `sync` of its own first; zinc has no way to make it. Two boots of one
-//! volume, a fresh copy of the blank fixture attached at `/data`:
+//! `sync` of its own first; zinc has no way to make it. Two boots of the same
+//! two volumes, a fresh copy of the blank fixture attached at `/data` and of
+//! the home fixture, which the kernel mounts at `/home` by its label:
 //!
-//! 1. `ferrix.init=/etc/k7-write`: write `/data/k7`, then `poweroff -f -n`.
+//! 1. `ferrix.init=/etc/k7-write`: write `/data/k7` and `/home/k7`, then
+//!    `poweroff -f -n`.
 //!    A test boot has no root disk and so no committer, so nothing but the
 //!    call itself can commit the file before the power goes.
-//! 2. `ferrix.init=/etc/k7-read ferrix.onexit=panic`: read it back and exit
+//! 2. `ferrix.init=/etc/k7-read ferrix.onexit=panic`: read both back and exit
 //!    0, after which the kernel must panic with `FX-1501` -- §8.3's option,
 //!    checked on the same boot because it costs nothing more.
 
@@ -43,8 +45,9 @@ pub(crate) const SCRIPT_FILE: &str = "/etc/shell-test";
 const K7_WRITE: &str = "/etc/k7-write";
 const K7_READ: &str = "/etc/k7-read";
 
-/// The volume both K7 boots attach, under `build/`.
+/// The volumes both K7 boots attach, under `build/`.
 const K7_VOLUME: &str = "k7-data.img";
+const K7_HOME: &str = "k7-home.img";
 
 /// What the first K7 boot writes and the second must read back.
 const K7_TEXT: &str = "committed by reboot(2)";
@@ -54,6 +57,12 @@ const FELL_BACK: &str = "falling back to the built-in program";
 
 /// What the kernel says once it has mounted a data disk.
 const DATA_MOUNTED: &str = "mounted writable at /data";
+
+/// What the kernel says once it has mounted the home disk.
+const HOME_MOUNTED: &str = "mounted writable at /home";
+
+/// The files the K7 boots write and read back.
+const K7_FILES: [&str; 2] = ["/data/k7", "/home/k7"];
 
 /// What `reboot(2)` says as it powers the machine off, Linux's line.
 const POWER_DOWN: &str = "reboot: Power down";
@@ -117,7 +126,8 @@ pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> 
     let mut with_volume = args.clone();
     with_volume.data_image = Some(volume);
     with_volume.data_image_kept = true;
-    println!("  {arch}: writing /data/k7, then poweroff -f -n, which does not sync");
+    with_volume.home_image = Some(btrfs_disk::home_copy(arch, K7_HOME)?);
+    println!("  {arch}: writing /data/k7 and /home/k7, then poweroff -f -n, which does not sync");
     let image = parts.image(
         &shell,
         K7_WRITE,
@@ -128,7 +138,7 @@ pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> 
     let lines = qemu::watch_to_power_off(arch, &image, kernel, &with_volume, SUCCESS_MARKER)?;
     judge_k7_write(&lines).map_err(|why| failed(arch, &why))?;
 
-    println!("  {arch}: reading /data/k7 back, under ferrix.onexit=panic");
+    println!("  {arch}: reading /data/k7 and /home/k7 back, under ferrix.onexit=panic");
     with_volume.data_image_kept = false;
     let cmdline = format!("{} ferrix.onexit=panic", qemu::init_option(K7_READ));
     let image = parts.image(&shell, K7_READ, &read_script(), &cmdline, false)?;
@@ -141,7 +151,8 @@ pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> 
     })?;
     judge_k7_read(after_marker(&lines)).map_err(|why| failed(arch, &why))?;
     println!(
-        "  {arch}: /data/k7 survived poweroff -f -n, and init's exit panicked with {INIT_EXITED}"
+        "  {arch}: /data/k7 and /home/k7 survived poweroff -f -n, and init's exit panicked with \
+         {INIT_EXITED}"
     );
     Ok(())
 }
@@ -186,27 +197,31 @@ impl Parts<'_> {
     }
 }
 
-/// The first K7 boot's script: write the file, and power off through busybox
-/// without letting it sync.
+/// The first K7 boot's script: write the files, and power off through
+/// busybox without letting it sync.
 fn write_script() -> String {
-    format!(
-        "#!/bin/sh\n\
-         echo \"k7: writing /data/k7\"\n\
-         echo \"{K7_TEXT}\" > /data/k7\n\
-         poweroff -f -n\n\
-         echo \"k7: poweroff returned\"\n\
-         exit 1\n"
-    )
+    let mut script = "#!/bin/sh\n".to_owned();
+    for file in K7_FILES {
+        script.push_str(&format!(
+            "echo \"k7: writing {file}\"\necho \"{K7_TEXT}\" > {file}\n"
+        ));
+    }
+    script.push_str("poweroff -f -n\necho \"k7: poweroff returned\"\nexit 1\n");
+    script
 }
 
-/// The second K7 boot's script: read the file back with the shell's own
+/// The second K7 boot's script: read the files back with the shell's own
 /// `read`, which needs no other program.
 fn read_script() -> String {
-    "#!/bin/sh\n\
-     if read line < /data/k7; then echo \"k7: read back: $line\"; \
-     else echo \"k7: /data/k7 is not there\"; fi\n\
-     exit 0\n"
-        .to_owned()
+    let mut script = "#!/bin/sh\n".to_owned();
+    for file in K7_FILES {
+        script.push_str(&format!(
+            "if read line < {file}; then echo \"k7: read back {file}: $line\"; \
+             else echo \"k7: {file} is not there\"; fi\n"
+        ));
+    }
+    script.push_str("exit 0\n");
+    script
 }
 
 /// The lines from the boot marker on: only what init did counts.
@@ -259,17 +274,19 @@ fn judge_from_file(after: &[String]) -> std::result::Result<(), String> {
 /// Whether the first K7 boot wrote on `/data` and powered off through
 /// `reboot(2)`, and not through init's exit.
 fn judge_k7_write(lines: &[String]) -> std::result::Result<(), String> {
-    if !lines.iter().any(|line| line.contains(DATA_MOUNTED)) {
-        return Err(
-            "the volume was not mounted at /data, so there was nothing to write".to_owned(),
-        );
+    for (mounted, at) in [(DATA_MOUNTED, "/data"), (HOME_MOUNTED, "/home")] {
+        if !lines.iter().any(|line| line.contains(mounted)) {
+            return Err(format!(
+                "the volume was not mounted at {at}, so there was nothing to write"
+            ));
+        }
     }
     let after = after_marker(lines);
-    if !after
-        .iter()
-        .any(|line| line.trim() == "k7: writing /data/k7")
-    {
-        return Err(format!("{K7_WRITE} never ran"));
+    for file in K7_FILES {
+        let wrote = format!("k7: writing {file}");
+        if !after.iter().any(|line| line.trim() == wrote) {
+            return Err(format!("{K7_WRITE} never wrote {file}"));
+        }
     }
     if !after.iter().any(|line| line.trim() == POWER_DOWN) {
         return Err(format!(
@@ -284,16 +301,20 @@ fn judge_k7_write(lines: &[String]) -> std::result::Result<(), String> {
 ///
 /// Verifies: L.console.14
 fn judge_k7_read(after: &[String]) -> std::result::Result<(), String> {
-    let wanted = format!("k7: read back: {K7_TEXT}");
-    if !after.iter().any(|line| line.trim() == wanted) {
-        let said = after
-            .iter()
-            .find(|line| line.trim_start().starts_with("k7: "))
-            .map_or("nothing", |line| line.trim());
-        return Err(format!(
-            "/data/k7 did not survive poweroff -f -n: reboot(2) powered off without committing \
-             /data (the read said {said})"
-        ));
+    for file in K7_FILES {
+        let wanted = format!("k7: read back {file}: {K7_TEXT}");
+        if !after.iter().any(|line| line.trim() == wanted) {
+            let asked = format!("k7: {file} ");
+            let said = after
+                .iter()
+                .find(|line| line.trim_start().starts_with(&asked))
+                .map_or("nothing", |line| line.trim());
+            let volume = file.trim_end_matches("/k7");
+            return Err(format!(
+                "{file} did not survive poweroff -f -n: reboot(2) powered off without \
+                 committing {volume} (the read said {said})"
+            ));
+        }
     }
     let exited = format!("init     {K7_READ} exited with 0");
     let Some(at) = after.iter().position(|line| line.trim() == exited) else {
@@ -358,30 +379,42 @@ mod tests {
     fn the_write_boot_must_power_off_through_reboot() {
         let good = transcript(&[
             "  data     vde mounted writable at /data",
+            "  home     vdf mounted writable at /home",
             SUCCESS_MARKER,
             "k7: writing /data/k7",
+            "k7: writing /home/k7",
             "reboot: Power down",
         ]);
         assert_eq!(judge_k7_write(&good), Ok(()));
         let exited = transcript(&[
             "  data     vde mounted writable at /data",
+            "  home     vdf mounted writable at /home",
             SUCCESS_MARKER,
             "k7: writing /data/k7",
+            "k7: writing /home/k7",
             "  init     /etc/k7-write exited with 1",
         ]);
         assert!(judge_k7_write(&exited).unwrap_err().contains(POWER_DOWN));
+        let homeless: Vec<String> = good
+            .iter()
+            .filter(|line| !line.contains("/home"))
+            .cloned()
+            .collect();
+        assert!(judge_k7_write(&homeless).unwrap_err().contains("/home"));
     }
 
     #[test]
     fn a_lost_file_is_named_as_reboots_fault() {
         let lost = transcript(&[
             SUCCESS_MARKER,
-            "k7: /data/k7 is not there",
+            "k7: read back /data/k7: committed by reboot(2)",
+            "k7: /home/k7 is not there",
             "  init     /etc/k7-read exited with 0",
             "  code      FX-1501  init exited, and ferrix.onexit=panic asked for a panic",
         ]);
         let why = judge_k7_read(&lost).unwrap_err();
-        assert!(why.contains("did not survive"), "{why}");
+        assert!(why.contains("/home/k7 did not survive"), "{why}");
+        assert!(why.contains("committing /home"), "{why}");
         assert!(why.contains("is not there"), "{why}");
     }
 
@@ -389,7 +422,8 @@ mod tests {
     fn the_read_boot_must_end_in_the_panic_asked_for() {
         let kept = transcript(&[
             SUCCESS_MARKER,
-            "k7: read back: committed by reboot(2)",
+            "k7: read back /data/k7: committed by reboot(2)",
+            "k7: read back /home/k7: committed by reboot(2)",
             "  init     /etc/k7-read exited with 0",
         ]);
         assert!(judge_k7_read(&kept).unwrap_err().contains(INIT_EXITED));

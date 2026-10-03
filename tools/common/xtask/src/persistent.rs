@@ -17,8 +17,8 @@
 //! other runs keep reading what the fetch scripts made.
 //!
 //! The copy does not follow the volume. When the volume is made again -- a
-//! new Chrome, a new yserver pin -- the run says so, and `--reset-root`
-//! starts both the root and the copy over, with everything on them.
+//! new Chrome, a new yserver pin -- the run says so, and `--reset-flash`
+//! starts the root, the home disk and the copy over, with everything on them.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -47,7 +47,7 @@ pub(crate) fn data_volume(volume: &Path, reset: bool) -> Result<PathBuf> {
         if std::fs::read_to_string(&from).ok().as_deref() != Some(&stamp(volume, made)) {
             println!(
                 "  note: {} has been made again since {} was copied from it; \
-                 --reset-root starts the copy over from it, losing what is on it",
+                 --reset-flash starts the copy over from it, losing what is on it",
                 volume.display(),
                 copy.display()
             );

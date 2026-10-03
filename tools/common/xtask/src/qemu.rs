@@ -2157,6 +2157,9 @@ fn qemu_command(
     attach_install_disks(&mut command, arch, image, args);
     attach_root_disk(&mut command, arch, args)?;
     attach_data_image(&mut command, arch, args)?;
+    if let Some(home) = &args.home_image {
+        attach_home(&mut command, arch, home, "kept for the next boot");
+    }
     let network = attach_network(&mut command, arch, args)?;
 
     attach_firmware(&mut command, arch, &firmware)?;
@@ -2650,7 +2653,7 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) -> Result<(
         args.persistent && matches!(args.command.as_deref(), Some("run" | "run-compositor"));
     let copy;
     let volume = if persistent {
-        copy = crate::persistent::data_volume(volume, args.reset_root)?;
+        copy = crate::persistent::data_volume(volume, args.reset_flash)?;
         &copy
     } else {
         volume
@@ -2749,7 +2752,7 @@ fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()
     let (disk, made) = if test {
         (btrfs_disk::ensure_test_root(arch)?, true)
     } else {
-        btrfs_disk::ensure_root(args.reset_root)?
+        btrfs_disk::ensure_root(args.reset_root || args.reset_flash)?
     };
     println!(
         "  {arch}: btrfs root {}, {}",
@@ -2760,6 +2763,11 @@ fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()
             "as the last boot left it (--reset-root starts it over, --tmpfs-root leaves it off)"
         }
     );
+    let home = if test {
+        None
+    } else {
+        Some(btrfs_disk::ensure_home(args.reset_flash)?)
+    };
     let _ = command.args([
         "-drive",
         &format!(
@@ -2773,7 +2781,36 @@ fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()
         "virtio-blk-pci,drive=btrfsroot,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", device]);
+    // The users' files, beside the root and kept when it starts over: the
+    // kernel mounts the disk at `/home` by its label.
+    if let Some((home, made)) = home {
+        let said = if made {
+            "made empty; init makes each account's home on it"
+        } else {
+            "as the last boot left it (--reset-flash starts it over)"
+        };
+        attach_home(command, arch, &home, said);
+    }
     Ok(())
+}
+
+/// Attach `home`, a btrfs volume labelled `ferrix-home`, written through:
+/// the kernel mounts it at `/home` by its label, wherever it is on the bus.
+fn attach_home(command: &mut Command, arch: Arch, home: &Path, said: &str) {
+    println!("  {arch}: btrfs home {}, {said}", display(home));
+    let _ = command.args([
+        "-drive",
+        &format!(
+            "file={},if=none,format=raw,id=btrfshome,cache=writeback",
+            display(home)
+        ),
+    ]);
+    let device = if arch == Arch::Armv7a {
+        "virtio-blk-pci,drive=btrfshome,disable-legacy=on"
+    } else {
+        "virtio-blk-pci,drive=btrfshome,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", device]);
 }
 
 /// Attach a fresh blank btrfs volume as a fourth virtio device, so it is

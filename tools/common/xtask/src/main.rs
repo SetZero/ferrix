@@ -469,11 +469,14 @@ OPTIONS:
     --abi <native|linux>                 new-app: the ABI the new app's program speaks [default: native]
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --jobs <N>                           miri: crates interpreted at once, by default one per core up to 8
-    --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
+    --reset-root                         run, run-compositor: start the btrfs root over from a fresh install,
+                                         keeping /home and --persistent's /data
+    --reset-flash                        run, run-compositor: start everything kept over: the root, /home and
+                                         --persistent's /data
     --tmpfs-root                         run, run-compositor: / in memory instead of on the btrfs root disk
     --persistent                         run, run-compositor: keep /data too, and Chrome's profile on it, so a
                                          Steam sign-in or a Chrome extension is there at the next boot;
-                                         with --reset-root, start /data over as well
+                                         with --reset-flash, start /data over as well
     --btrfs-root                         test-chrome-window: / on a btrfs root disk made fresh for the run
     --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
                                          build, run: put that CMDLINE.TXT in the image
