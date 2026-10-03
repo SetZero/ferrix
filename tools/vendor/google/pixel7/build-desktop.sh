@@ -18,10 +18,10 @@
 #             and the dotfiles seed its home once, so what is changed there
 #             on the phone is kept across new desktops
 #   --bar-zoom=N  with --dotfiles, waybar N times the size the PC's files
-#             give it, 3 when not given: the bar is drawn at scale 1, so
-#             a monitor's bar on the phone's screen is a few millimetres
-#             high. It is what the home is seeded with, so a change to it
-#             reaches a phone that has a home.img only with --reset-home
+#             give it, 1.5 when not given: a monitor's bar is small on a
+#             phone even at the screen's scale. It is what the home is
+#             seeded with, so a change to it reaches a phone that has a
+#             home.img only with --reset-home
 #   --push    copy desktop.Image to /data/local/tmp/ferrix-vm/ on the phone,
 #             where the app boots it in place of ferrix.Image, and stops
 #             the app updating it from GitHub's releases until asked to;
@@ -41,7 +41,7 @@
 set -eu
 out=${1:?usage: build-desktop.sh <out-dir> [scale] [--chrome] [--dotfiles] [--bar-zoom=N] [--push] [--reset-home]}
 shift
-scale=2 push= chrome= dotfiles= reset_home= bar_zoom=3
+scale=2 push= chrome= dotfiles= reset_home= bar_zoom=1.5
 for arg in "$@"; do
     case $arg in
         --push) push=1 ;;

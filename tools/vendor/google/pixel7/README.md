@@ -123,9 +123,9 @@ high, and the keymap US, which the app's key codes are. Delete
 builds the desktop `run-compositor --everything` boots on the PC: this
 machine's `~/.config/hypr/hyprland.conf` and the dotfiles beside it, the
 session running as the user `ferrix` (`flash --compositor --session`), with
-the phone's screen line put after the configuration's own, and waybar three
-times the size the PC's files give it (`--bar-zoom=N` for another size),
-since it draws at scale 1. With `--push` it
+the phone's screen line put after the configuration's own, and waybar one
+and a half times the size the PC's files give it on top of the screen's
+scale (`--bar-zoom=N` for another size). With `--push` it
 also makes `home.img` on the phone, an empty 8 GiB sparse `ferrix-home`
 volume, when there is none. The first boot seeds it from the dotfiles, and
 what is changed there afterwards is kept: a new `desktop.Image` never
