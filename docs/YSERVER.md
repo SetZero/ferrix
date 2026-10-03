@@ -163,6 +163,17 @@ again would mean writing an X renderer. What is new sits around the renderer:
   the tile meanwhile. `WM_TRANSIENT_FOR` naming a shown window makes the
   new window a dialog of it (`xdg_toplevel.set_parent`, sent before the
   first commit).
+* **Drags by a window's own title bar.** A window that draws its own title
+  bar, as Steam's sign-in window does, sends the root `_NET_WM_MOVERESIZE`
+  when it is pressed there. The server lists the hint in `_NET_SUPPORTED`
+  and, as the announced window manager, queues the request
+  (`ServerState::server_wm_requests`) for the backend. The backend turns a
+  move or a pointer resize into `xdg_toplevel.move` or `resize` with the
+  press's serial (the toolkit's `drag_window`). hyprix then drags a floating
+  window until the button comes up, and passes the release on to the client.
+  It leaves a tiled one where it is. Added 2026-10-03 (fork `54aa541b`);
+  `test-xwindow`'s drag case presses the floating dialog through QEMU and
+  sends the request with `xmoveresize`.
 
 ### 4.3 Frames
 

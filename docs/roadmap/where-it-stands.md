@@ -74,8 +74,11 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
   which a Windows host cannot (`docs/GPU.md` §3).
 * **yserver is done**, all 36 of its points (`docs/YSERVER.md`, Y1 to Y7):
   X windows show on hyprix with their input, sizes, close, dialogs, menus
-  and clipboard, and a window of a fixed size floats at that size. It is the
-  X server stage 19 counted 40 for.
+  and clipboard, and a window of a fixed size floats at that size. A
+  floating window that draws its own title bar, such as Steam's sign-in
+  window, can be dragged by it (2026-10-03: `_NET_WM_MOVERESIZE` becomes
+  `xdg_toplevel.move`, which hyprix now carries out). It is the X server
+  stage 19 counted 40 for.
 * **Namespaces**: N1, per-mount flags (2026-09-28), N2, binds and
   detach, and N3, mount namespaces with `pivot_root` and `openat2`
   (2026-09-30), are in, each reviewed by the certification consultant:
