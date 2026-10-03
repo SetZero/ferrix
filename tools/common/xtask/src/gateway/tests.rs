@@ -1063,28 +1063,47 @@ fn a_lost_segment_is_sent_again_alone() {
     let (mut stream, _server) = a_long_download(&guest, 40_011);
     let quiet = Duration::from_millis(5);
     let (first, len) = stream.data_within(PATIENCE).expect("the download starts");
-    // The rest of what is in flight.
-    while stream.data_within(quiet).is_some() {}
+    // The rest of what is in flight, and where what has been sent ends.
+    let mut sent = first.wrapping_add(len as u32);
+    let drain = |stream: &mut Stream<'_>, sent: &mut u32| {
+        while let Some((sequence, len)) = stream.data_within(quiet) {
+            let end = sequence.wrapping_add(len as u32);
+            if end.wrapping_sub(*sent) < 1 << 31 {
+                *sent = end;
+            }
+        }
+    };
+    drain(&mut stream, &mut sent);
 
     // The first segment arrives, and the second is lost: acknowledge the
     // first, then say so three more times.
     let lost = first.wrapping_add(len as u32);
     stream.expected = lost;
     stream.send(Flags::ACK, &[]);
-    while stream.data_within(quiet).is_some() {}
+    drain(&mut stream, &mut sent);
     for _ in 0..3 {
         stream.send(Flags::ACK, &[]);
     }
+    let asked = std::time::Instant::now();
 
     let (again, _) = stream
         .data_within(PATIENCE)
         .expect("the lost segment comes again");
     assert_eq!(again, lost, "the segment sent again is the one asked for");
-    assert_eq!(
-        stream.data_within(quiet),
-        None,
-        "and nothing after it: the segments behind it were not lost"
-    );
+    // New data may follow it: the host's bytes can reach the gateway after
+    // the first burst, as they do on Windows. What must not come is anything
+    // sent before, until the retransmission timer, restarted by the third
+    // duplicate, could have rewound it.
+    while let Some((sequence, len)) = stream.data_within(quiet) {
+        if asked.elapsed() >= super::tcp::RETRANSMIT {
+            break;
+        }
+        assert!(
+            sequence.wrapping_sub(sent) < 1 << 31,
+            "and nothing else sent before: the segments behind it were not lost, \
+             but {sequence}+{len} came again (sent up to {sent})"
+        );
+    }
 }
 
 #[test]

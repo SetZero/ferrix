@@ -107,7 +107,7 @@ const SEND_CAPACITY: usize = 64 * 1024;
 /// milliseconds, and no more, because every lost segment the duplicate
 /// acknowledgments did not recover waits this long. The serving thread's
 /// turn bounds how finely it is kept (about 15 ms on Windows).
-const RETRANSMIT: Duration = Duration::from_millis(20);
+pub(super) const RETRANSMIT: Duration = Duration::from_millis(20);
 
 /// How long a forwarded connection's SYN waits for the guest's answer before
 /// it is sent again. A guest still booting answers nothing for seconds, and
