@@ -170,6 +170,14 @@ enum Parsing {
     Text,
     /// An `ESC` has arrived.
     Escape,
+    /// An `ESC` and an intermediate byte have arrived, as in `ESC ( B`,
+    /// which picks a character set: the sequence ends at its final byte.
+    EscapeIntermediate,
+    /// An `OSC`, `DCS`, `APC`, `PM` or `SOS` has arrived: a string that runs
+    /// to a `BEL` or an `ST` (`ESC \`), and whether its last byte was the
+    /// `ESC` that may start that `ST`. Nothing in one is kept -- an `OSC 8`
+    /// hyperlink's text is the ordinary text after it.
+    String(bool),
     /// A `CSI` has arrived, and these are its parameter bytes, and whether
     /// an intermediate byte came after them -- which makes it a sequence
     /// nothing here knows, whatever its final byte.
@@ -770,14 +778,34 @@ impl Grid {
     fn byte(&mut self, byte: u8) {
         match core::mem::replace(&mut self.parsing, Parsing::Text) {
             Parsing::Text => self.text(byte),
-            // `ESC [` starts a `CSI`; `ESC` and any other byte is a
-            // sequence nothing here needs, and a sequence that is dropped is
-            // better than one that is printed.
+            // `ESC [` starts a `CSI`, and `ESC ]`, `P`, `_`, `^` and `X` a
+            // string; `ESC` and any other byte is a sequence nothing here
+            // needs, and a sequence that is dropped is better than one that
+            // is printed.
             Parsing::Escape => match byte {
                 b'[' => self.parsing = Parsing::Csi(Vec::new(), false),
+                b']' | b'P' | b'_' | b'^' | b'X' => self.parsing = Parsing::String(false),
+                0x20..=0x2F => self.parsing = Parsing::EscapeIntermediate,
                 b'7' => self.saved = (self.cursor, self.pen),
                 b'8' => self.restore_cursor(),
                 _ => {}
+            },
+            Parsing::EscapeIntermediate => {
+                if (0x20..=0x2F).contains(&byte) {
+                    self.parsing = Parsing::EscapeIntermediate;
+                }
+            }
+            Parsing::String(escape) => match byte {
+                0x07 => {}
+                b'\\' if escape => {}
+                0x1B => self.parsing = Parsing::String(true),
+                // An `ESC` that is not an `ST` ends the string and starts a
+                // sequence of its own.
+                _ if escape => {
+                    self.parsing = Parsing::Escape;
+                    self.byte(byte);
+                }
+                _ => self.parsing = Parsing::String(false),
             },
             Parsing::Csi(mut parameters, intermediate) => match byte {
                 // Parameters, which are digits, the `;` between them and a
@@ -941,6 +969,38 @@ impl Grid {
                 self.cursor.0 = (self.cursor.0 + first.max(1)).min(self.columns.saturating_sub(1));
             }
             b'D' => self.cursor.0 = self.cursor.0.saturating_sub(first.max(1)),
+            // Down or up, to the start of the line.
+            b'E' => {
+                self.cursor = (
+                    0,
+                    (self.cursor.1 + first.max(1)).min(self.rows.saturating_sub(1)),
+                );
+            }
+            b'F' => self.cursor = (0, self.cursor.1.saturating_sub(first.max(1))),
+            // A column, or a row, alone: counted from one, and a missing
+            // number is one. Claude Code's TUI places every word with `G`.
+            b'G' | b'`' => {
+                self.cursor.0 = first
+                    .max(1)
+                    .saturating_sub(1)
+                    .min(self.columns.saturating_sub(1));
+            }
+            b'd' => {
+                self.cursor.1 = first
+                    .max(1)
+                    .saturating_sub(1)
+                    .min(self.rows.saturating_sub(1));
+            }
+            // Blank this many cells from the cursor on, and leave it there.
+            b'X' => {
+                let (column, row) = self.cursor;
+                let end = (column + first.max(1)).min(self.columns);
+                for index in row * self.columns + column..row * self.columns + end {
+                    if let Some(slot) = self.cells.get_mut(index) {
+                        *slot = Cell::default();
+                    }
+                }
+            }
             // Counted from one, and a missing number is one.
             b'H' | b'f' => {
                 self.cursor = (

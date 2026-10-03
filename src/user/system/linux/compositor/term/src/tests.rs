@@ -114,9 +114,45 @@ fn an_unknown_sequence_leaves_nothing_behind() {
     grid.write(b"\x1b[6nok");
     assert_eq!(grid.line(0), "ok");
     grid.write(b"\r\x1b]0;a title\x07done");
-    // `ESC ]` is not understood either, and what follows it is text: what
-    // matters is that the escape itself left nothing.
-    assert!(!grid.line(0).contains('\x1b'));
+    assert_eq!(grid.line(0), "done");
+    grid.write(b"\r\x1b]0;a title\x1b\\again");
+    assert_eq!(grid.line(0), "again");
+    // A character set picked: `ESC ( B` used to leave its `B`.
+    grid.write(b"\r\x1b(Bthird");
+    assert_eq!(grid.line(0), "third");
+}
+
+/// An `OSC 8` hyperlink is its text alone: Claude Code's sign-in screen
+/// sends its address as one, which was drawn as `8;id=…;https://…` twice
+/// over and the address again.
+#[test]
+fn a_hyperlink_is_its_text() {
+    let mut grid = Grid::new(30, 2);
+    grid.write(b"\x1b]8;id=iofw5e;https://claude.com/a\x1b\\https://claude.com/a\x1b]8;;\x1b\\");
+    assert_eq!(grid.line(0), "https://claude.com/a");
+    // A string cut short by another sequence ends there, and that sequence
+    // is still read.
+    grid.write(b"\r\n\x1b]8;;x\x1b[2Ggo");
+    assert_eq!(grid.line(1), " go");
+}
+
+/// `CSI G` and `CSI d` put the cursor in a column or a row alone; Claude
+/// Code's TUI places every word with `G`, and without it its words ran
+/// together, as `WelcometoClaudeCode`.
+#[test]
+fn a_column_or_row_alone_places_the_cursor() {
+    let mut grid = Grid::new(20, 3);
+    grid.write(b"\x1b[HClaude\x1b[8GCode\x1b[14Gv2");
+    assert_eq!(grid.line(0), "Claude Code  v2");
+    grid.write(b"\x1b[3d\x1b[Gend\x1b[99G!");
+    assert_eq!(grid.line(2), "end                !");
+    grid.write(b"\x1b[1;3H\x1b[3X");
+    assert_eq!(grid.line(0), "Cl   e Code  v2");
+    grid.write(b"\x1b[1;5H\x1b[Ex\x1b[Fy");
+    assert_eq!(
+        (grid.line(0).chars().next(), grid.line(1).chars().next()),
+        (Some('y'), Some('x'))
+    );
 }
 
 #[test]
