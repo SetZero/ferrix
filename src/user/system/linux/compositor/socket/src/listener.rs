@@ -66,7 +66,20 @@ impl Listener {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(ListenerError::Io(error)),
         }
-        let inner = UnixListener::bind(&path).map_err(ListenerError::Io)?;
+        // Bound under a name of its own and renamed into place: `bind`
+        // makes the file before it listens, and a client that saw the file
+        // in between and connected was refused (`ECONNREFUSED`), which a
+        // loaded host made often enough to fail a gate. Renamed, the file
+        // is there only once it takes connections.
+        let mut name = path.clone().into_os_string();
+        name.push(format!(".{}.binding", std::process::id()));
+        let binding = PathBuf::from(name);
+        let _ = std::fs::remove_file(&binding);
+        let inner = UnixListener::bind(&binding).map_err(ListenerError::Io)?;
+        if let Err(error) = std::fs::rename(&binding, &path) {
+            let _ = std::fs::remove_file(&binding);
+            return Err(ListenerError::Io(error));
+        }
         inner.set_nonblocking(true).map_err(ListenerError::Io)?;
         Ok(Self { inner, path })
     }
