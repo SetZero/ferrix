@@ -201,6 +201,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
         }};
     }
 
+    super::borrow_check::installed(topology)?;
     one_task()?;
     describes_itself()?;
     a_reaper_without_memory_frees_one_at_a_time(topology)?;
@@ -225,6 +226,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     balancing(topology, &mut report)?;
     mark!(7);
     slice_scaling(&mut report)?;
+    super::borrow_check::run(topology)?;
     mark!(8);
     // The last `mark!` advances `at` for a phase that never comes; reading it
     // here is what says so, rather than an allow.

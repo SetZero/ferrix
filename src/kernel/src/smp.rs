@@ -109,6 +109,10 @@ pub(crate) struct PerCpu {
     /// ([`PREEMPT_WORD_OFFSET`]); on Arm they are made with every exception
     /// that can take a lock masked. `arch::percpu` argues both.
     pub(crate) preempt: crate::sched::PreemptState,
+    /// The task this processor runs, as `Arc::as_ptr` of its run queue's
+    /// `current`, written beside it: what `sched::with_current` lends without
+    /// the queue's lock. `sched::borrow` argues it.
+    pub(crate) running: crate::sched::RunningSlot,
 }
 
 /// Where in a [`PerCpu`] record its preemption word is, for
@@ -116,6 +120,11 @@ pub(crate) struct PerCpu {
 /// record. `repr(C)` above keeps it fixed.
 pub(crate) const PREEMPT_WORD_OFFSET: usize =
     core::mem::offset_of!(PerCpu, preempt) + crate::sched::PreemptState::WORD_OFFSET;
+
+/// Where in a [`PerCpu`] record the running task's pointer is, for
+/// `arch::this_cpu_read`, which reads it without first finding the record.
+pub(crate) const RUNNING_WORD_OFFSET: usize =
+    core::mem::offset_of!(PerCpu, running) + crate::sched::RunningSlot::WORD_OFFSET;
 
 impl PerCpu {
     /// Whether this processor has said it is running.
@@ -187,6 +196,7 @@ impl Topology {
                 tlb_seen: AtomicU64::new(0),
                 gp_seen: AtomicU64::new(0),
                 preempt: crate::sched::PreemptState::new(),
+                running: crate::sched::RunningSlot::new(),
             })
             // FATAL-ALLOC: boot only: stage 4 builds the processor table once, before the secondaries start.
             .collect();

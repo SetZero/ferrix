@@ -39,6 +39,8 @@
 //! holding another processor's record. Every use here is inside an
 //! interrupts-masked region for that reason.
 
+mod borrow;
+mod borrow_check;
 mod check;
 mod preempt;
 mod preempt_check;
@@ -62,6 +64,7 @@ use crate::smp::Topology;
 use queue::CpuQueue;
 use task::{DEAD, RUNNABLE};
 
+pub(crate) use borrow::{RunningSlot, with_current};
 pub(crate) use check::before_start as check_before_start;
 pub(crate) use check::run as run_checks;
 pub(crate) use preempt::{
@@ -196,13 +199,8 @@ pub(crate) fn regroup_current() {
     let seen = cpu
         .and_then(|cpu| RUNNING_SEEN.get()?.get(cpu))
         .is_none_or(|seen| seen.swap(moves, Ordering::AcqRel) == moves);
-    let task = if seen {
-        None
-    } else {
-        cpu.and_then(queue_of)
-            .and_then(|lock| lock.lock().current.clone())
-    };
     <arch::Irq as IrqControl>::restore(saved);
+    let task = if seen { None } else { current() };
     let Some(task) = task else {
         return;
     };
@@ -223,12 +221,7 @@ pub(crate) fn regroup_current() {
 /// Run the calling task in `index`'s share, and charge what it does to it:
 /// for a check that acts as a program in a job would.
 pub(crate) fn set_current_group(index: u32) {
-    let saved = <arch::Irq as IrqControl>::disable();
-    let task = this_cpu()
-        .and_then(queue_of)
-        .and_then(|lock| lock.lock().current.clone());
-    <arch::Irq as IrqControl>::restore(saved);
-    if let Some(task) = task {
+    if let Some(task) = current() {
         set_task_group(&task, index);
     }
 }
@@ -431,7 +424,7 @@ pub(crate) fn may_block() -> bool {
         return false;
     }
     // One instruction on x86-64, masked on Arm: `preempt::count_here`.
-    preempt::count_here() == 0 && current().is_some()
+    preempt::count_here() == 0 && borrow::running()
 }
 
 /// The next identifier to give a task.
@@ -603,6 +596,7 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
     per_cpu_words(online);
 
     adopt_boot_task()?;
+    audit_here(borrow::Site::Boot);
     joined(0);
     STARTED.store(true, Ordering::Release);
 
@@ -686,7 +680,7 @@ fn adopt_boot_task() -> Result<(), &'static str> {
         let _ = queue.fair.pick_next();
         queue.exec_start = crate::timer::now_nanos();
         note_running(0, boot.id, quota::NONE, 0);
-        queue.current = Some(boot);
+        set_current(&mut queue, 0, boot);
     }
     <arch::Irq as IrqControl>::restore(saved);
     Ok(())
@@ -743,11 +737,14 @@ pub(crate) fn enter_idle() -> ! {
             let mut queue = lock.lock();
             queue.idle = Some(Arc::clone(&idle));
             note_running(cpu, idle.id, quota::NONE, 0);
-            queue.current = Some(idle);
+            set_current(&mut queue, cpu, idle);
             queue.exec_start = crate::timer::now_nanos();
         }
         <arch::Irq as IrqControl>::restore(saved);
     }
+    // Before it says it has joined, so that the audit of every secondary's
+    // installation is in by the time `init` stops waiting (`borrow`).
+    audit_here(borrow::Site::Idle);
     joined(cpu);
     idle_loop()
 }
@@ -762,6 +759,12 @@ pub(crate) fn enter_idle() -> ! {
 /// [`reap_batch`] for the boot that showed why.
 fn idle_loop() -> ! {
     let cpu = this_cpu();
+    // The boot processor's idle task, which a switch starts rather than
+    // `enter_idle`, is audited as it first runs; a secondary's was audited
+    // in `enter_idle`.
+    if cpu == Some(0) {
+        audit_here(borrow::Site::Idle);
+    }
     // A secondary arrives here with interrupts masked, from the look-and-wait
     // step of `smp::secondary_main` that handed it over, and the first thing
     // below is a reap, which frees a stack, which is a shootdown that waits
@@ -1340,14 +1343,49 @@ pub(crate) fn exit() -> ! {
     }
 }
 
-/// The task running on this processor.
+/// The task running on this processor, as an `Arc` of the caller's own,
+/// for a caller that keeps it beyond a borrow: made from the processor
+/// record's pointer without the run queue's lock (`borrow`). A caller that
+/// only uses the task while it runs borrows it with [`with_current`]
+/// instead, which raises no count.
 pub(crate) fn current() -> Option<Arc<Task>> {
+    borrow::current_arc()
+}
+
+/// Make `task` `queue`'s `current` and name it in `cpu`'s record, together:
+/// the one place either is written, so that whenever interrupts are on the
+/// record names the task the queue holds (`borrow`, the consultant's
+/// condition 1 on 2a). With interrupts masked and `queue`'s lock held, on
+/// `cpu` itself.
+fn set_current(queue: &mut CpuQueue, cpu: usize, task: Arc<Task>) {
+    if let Some(record) = crate::smp::record(cpu) {
+        record.running.set(&task);
+    }
+    queue.current = Some(task);
+}
+
+/// Audit, at `site`, that this processor's record names its queue's
+/// `current`, while the audit runs (`borrow`). Takes the queue's lock with
+/// interrupts masked. At an interrupt's exit only if the lock is free, so
+/// that an interrupt never waits on another processor's hold for an audit;
+/// at the boot and idle sites, which are made once each and must be, it
+/// waits.
+fn audit_here(site: borrow::Site) {
+    if !borrow::auditing() {
+        return;
+    }
     let saved = <arch::Irq as IrqControl>::disable();
-    let task = this_cpu()
-        .and_then(queue_of)
-        .and_then(|lock| lock.lock().current.clone());
+    if let Some(lock) = this_cpu().and_then(queue_of) {
+        let queue = if matches!(site, borrow::Site::Interrupt) {
+            lock.try_lock()
+        } else {
+            Some(lock.lock())
+        };
+        if let Some(queue) = queue {
+            borrow::audit(site, queue.current.as_ref());
+        }
+    }
     <arch::Irq as IrqControl>::restore(saved);
-    task
 }
 
 /// Real nanoseconds the task running on this processor has run for,
@@ -1752,6 +1790,7 @@ pub(crate) fn preempt_on_irq_exit(from_user: bool) {
     if let Some(mark) = KICK_PENDING.get().and_then(|marks| marks.get(cpu)) {
         let _ = mark.swap(false, Ordering::AcqRel);
     }
+    audit_here(borrow::Site::Interrupt);
 
     // Before the switch, not after: `schedule` may not come back to this
     // context for a while, and a balance that runs on the way out of every
@@ -1987,7 +2026,7 @@ fn choose_next(
     }
     carry_in_call(cpu, &previous, &next);
     queue.previous = Some(Arc::clone(&previous));
-    queue.current = Some(Arc::clone(&next));
+    set_current(queue, cpu, Arc::clone(&next));
     note_running(cpu, next.id, next.group(), next.moves_seen());
     // Idle to the rest of the machine exactly while the idle task is what
     // runs: cleared here, before any other task can, and set again when the
@@ -2124,6 +2163,11 @@ fn finish_switch() {
     // `choose_next` and switched to here, or the context that switched to
     // this one did and handed it over.
     let queue = unsafe { lock.locked_data() };
+    // In the incoming context, under the lock the switch handed over: the
+    // record must already name what the queue now runs (`borrow`).
+    if borrow::auditing() {
+        borrow::audit(borrow::Site::Switch, queue.current.as_ref());
+    }
     let previous = queue.previous.take();
     let dead = previous.as_ref().is_some_and(|task| task.is_dead());
     // **The last moment a dead task's queue membership means anything.** It is

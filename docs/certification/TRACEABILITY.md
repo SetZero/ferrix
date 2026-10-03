@@ -15,16 +15,16 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 123 | 72 | 51 |
-| Low (`L.*`) | 802 | 531 | 271 |
+| Low (`L.*`) | 804 | 533 | 271 |
 
-1632 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1645 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1634 |
-| Accessors, covered by the requirement they serve | 853 |
+| Named by a low-level requirement | 1647 |
+| Accessors, covered by the requirement they serve | 855 |
 | Check code in a product file | 65 |
-| Named by none | 885 |
+| Named by none | 883 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
@@ -580,6 +580,13 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.sched.21` | The scheduler shall stop the machine (FX-0503), naming the site that last raised the count, when it is asked to switch with its processor's count raised, and when a release finds the count, or for a lock the locks held, already at zero, having put the word back first; a release that brings the count to zero shall make the decision an interrupt deferred, if interrupts are on. | The release's cover test refuses a word whose count, or for a lock whose locks held, is zero, and passes one that covers the release (the stage-5 checks). That held-zero test is the detector L.sched.20's stress relies on; the negative controls of a task that sleeps holding a lock and of a release with nothing raised each stop the boot on FX-0503's message. | H.SCHED.1, H.SCHED.2 | `sched::preempt::preempt_enable`, `sched::preempt::Preempt::enable`, `sched::preempt::enable_from`, `sched::preempt::unmatched`, `sched::preempt::covers`, `sched::preempt::decide_deferred`, `sched::schedule_from` | `src/kernel/src/sched/preempt_check.rs::an_underflow_is_refused` | not built | not built | not built |
 | `L.sched.22` | may_block shall answer true only when the scheduler runs, interrupts are on, a task is running, and the count of the processor it runs on, read so that the processor and its count are one processor's (one instruction on x86-64, interrupts masked on Arm), is zero. | A task holding nothing may block; holding a preemption-disabling lock, or with the count raised by hand, it may not; once it lets go it may again (the stage-5 checks). | H.SCHED.1 | `sched::may_block`, `sched::preempt::count_here`, `arch::percpu::this_cpu_read`, `arch::x86_64::cpu::read_gs_at` | `src/kernel/src/sched/preempt_check.rs::may_block_reads_its_own_count` | not built | not built | not built |
 | `L.sched.23` | A try_lock of a preemption-disabling lock that fails shall leave its processor's count and locks held as it found them, and with interrupts masked shall not switch; one that succeeds shall raise both by one until its guard drops; and ferrix_sync::SpinLock::try_lock_manually shall take no ticket when it fails. | With a lock held, a try_lock of it with interrupts on and with them masked leaves the count and the locks held unchanged and, masked, the task's switches unchanged; a try_lock_manually of a held plain lock fails and changes neither; a successful try_lock raises both by one until it drops (the stage-5 checks, and ferrix-sync's host test of try_lock_manually). | H.SCHED.1 | `sched::preempt::Preempt::disable`, `sched::preempt::Preempt::enable` | `src/kernel/src/sched/preempt_check.rs::a_failed_try_leaves_the_count` | not built | not built | not built |
+
+### RunningTask
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.sched.24` | Whenever interrupts are on, each processor's record shall name, as Arc::as_ptr, the task its run queue's current holds; the scheduler shall write the two together, on that processor with interrupts masked and its queue lock held, at the boot task's adoption, at an idle task's installation and at every switch, and nowhere else. | From boot to the end of stage 5, an audit compares the record with the queue's current, read under its lock, once the boot task is adopted, as each processor's idle task first runs, in the incoming context of every switch and at every interrupt exit, and finds no mismatch at any site; and two tasks per processor, yielding to each other, resume after a switch 10000 times, each time with the record naming the queue's current and the task itself (the `borrow` line). Removing the record's write at the adoption, at the idle installation or at the switch stops the boot on that site's message. | H.SCHED.1, H.SCHED.6 | `sched::set_current`, `sched::adopt_boot_task`, `sched::enter_idle`, `sched::choose_next`, `sched::borrow::RunningSlot::set`, `sched::audit_here`, `sched::borrow::audit`, `sched::borrow::end_audit` | `src/kernel/src/sched/borrow_check.rs::installed`, `src/kernel/src/sched/borrow_check.rs::run` | not built | not built | not built |
+| `L.sched.25` | with_current shall lend the running task only to a closure, by a reference its result cannot name, read from the processor's record so that the processor and its record are one processor's (one instruction on x86-64, interrupts masked on Arm); current() shall answer the running task as an Arc of the caller's own without taking the run queue's lock; and before the records are kept both shall answer none. | Each of the borrow check's 10000 resumptions borrows the running task and finds the task itself, and every audit's borrowed pointer equals the queue's current (the `borrow` line); every boot, shell and bench gate runs on current() made this way. | H.SCHED.1, H.SCHED.6 | `sched::borrow::with_current`, `sched::borrow::current_arc`, `sched::borrow::current_ptr`, `sched::borrow::running`, `sched::current` | `src/kernel/src/sched/borrow_check.rs::run` | not built | not built | not built |
 
 ### Discovery
 
@@ -1699,6 +1706,9 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/object/write_read_check.rs::run` | kernel | L.object.128, L.object.129, L.object.130, L.object.131 |
 | `src/kernel/src/object/write_read_check.rs::run` | kernel | L.object.132 |
 | `src/kernel/src/object/write_read_check.rs::run` | kernel | L.object.141, L.sched.40 |
+| `src/kernel/src/sched/borrow_check.rs::installed` | kernel | L.sched.24 |
+| `src/kernel/src/sched/borrow_check.rs::run` | kernel | L.sched.24 |
+| `src/kernel/src/sched/borrow_check.rs::run` | kernel | L.sched.25 |
 | `src/kernel/src/sched/check.rs::many_tasks` | kernel | L.x86_64.17 |
 | `src/kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
 | `src/kernel/src/sched/preempt_check.rs::a_failed_try_leaves_the_count` | kernel | L.sched.23 |

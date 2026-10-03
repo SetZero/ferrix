@@ -204,7 +204,7 @@ pub(super) fn start_counting() {
 
 /// Whether the count is kept yet. `Relaxed`: the flag orders nothing, and
 /// the words it guards have been zero since the records were made.
-fn counting() -> bool {
+pub(super) fn counting() -> bool {
     COUNTING.load(Ordering::Relaxed)
 }
 

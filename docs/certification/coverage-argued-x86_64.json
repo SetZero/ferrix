@@ -1090,105 +1090,105 @@
     },
     {
       "file": "sched/mod.rs",
-      "lines": "1124",
+      "lines": "1127",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The debug assertion's own row is its panic call: a prepared task dropped with interrupts masked, which would free its stack waiting on every processor with interrupts off. The condition is evaluated under line 1105's and 1113's rows, which are reached (an unstarted child's drop at stage 9)."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "1339",
+      "lines": "1342",
       "category": "defensive",
       "match": "arch::wait_for_interrupt();",
       "why": "After the switch away from a dead task, which never returns to it: a dead task is never picked again (stage 5's a_dead_task_is_not_filed_as_a_sleeper, and check_invariants' DEAD_STILL_QUEUED, hold that). If it ever were picked, halting here is the only answer that corrupts nothing."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "1899-1901",
+      "lines": "1938-1940",
       "category": "failure-path",
       "match": "preempt_count(cpu),",
       "why": "FX-0503: a task blocked or yielded while holding a lock that disables preemption, which the preemption count cannot survive. The report names the lock's site and stops the machine; a kernel that never blocks under a spin lock never takes it."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "1957",
+      "lines": "1996",
       "category": "defensive",
       "match": "queue.insert(previous);",
       "why": "A task going to sleep with no sleep slot to be filed in: its slot is lent to a sleeper set or the reaper and returned when it leaves, so a task switching away to sleep always has it back. Were it lent twice, the task runs on and its sleep returns early and asks again (CpuQueue::file_sleeper)."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2674-2675",
+      "lines": "2718-2719",
       "category": "failure-path",
       "match": "pub(crate) fn report_queues() {",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2679",
+      "lines": "2723",
       "category": "failure-path",
       "match": "for (cpu, lock) in queues.iter().enumerate() {",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2684-2685",
+      "lines": "2728-2729",
       "category": "failure-path",
       "match": "queue.len(),",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2688-2689",
+      "lines": "2732-2733",
       "category": "failure-path",
       "match": ".and_then(|flags| flags.get(cpu))",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2693",
+      "lines": "2737",
       "category": "failure-path",
       "match": "}",
       "why": "What each run queue holds, printed for a stage 5 check that has failed so the report says where the tasks were. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2696-2697",
+      "lines": "2740-2741",
       "category": "failure-path",
       "match": "pub(crate) fn print_picks(cpu: usize) {",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2702",
+      "lines": "2746",
       "category": "failure-path",
       "match": "let Ok(mut picks) = fallible::try_with_capacity::<queue::Pic",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2706",
+      "lines": "2750",
       "category": "failure-path",
       "match": "for pick in lock.lock().picks() {",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2713",
+      "lines": "2757",
       "category": "failure-path",
       "match": "pick.at / 1000,",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2718",
+      "lines": "2762",
       "category": "failure-path",
       "match": "for seen in pick.seen.iter().take(pick.count) {",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
     },
     {
       "file": "sched/mod.rs",
-      "lines": "2728",
+      "lines": "2772",
       "category": "failure-path",
       "match": "}",
       "why": "The fairness window's remembered picks, printed for a fairness check that has failed. Called only on that failure path."
@@ -1244,28 +1244,28 @@
     },
     {
       "file": "smp.rs",
-      "lines": "755, 759-760",
+      "lines": "765, 769-770",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The failure arm of a `debug_assert!` and its message's arguments: a shootdown requested while holding a lock that disables preemption, which the assertion exists to stop on. It holds on every run of the suite."
     },
     {
       "file": "smp.rs",
-      "lines": "781",
+      "lines": "791",
       "category": "failure-path",
       "match": "debug_assert!(",
       "why": "The failure arm of a `debug_assert!`: a shootdown that has to wait for other processors requested with interrupts masked, which no other processor could answer. It holds on every run."
     },
     {
       "file": "smp.rs",
-      "lines": "822",
+      "lines": "832",
       "category": "failure-path",
       "match": "stood / 1_000_000",
       "why": "The millisecond count in the `fatal!` a processor raises when no shootdown turn started for the timeout while it waited, printed as the kernel stops."
     },
     {
       "file": "smp.rs",
-      "lines": "878",
+      "lines": "888",
       "category": "failure-path",
       "match": "waited / 1_000_000",
       "why": "The millisecond count in the `fatal!` raised when a processor never answered a shootdown or a grace period, printed as the kernel stops."

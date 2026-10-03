@@ -31,13 +31,6 @@
       "branch": "nvidia-c3k",
       "date": "2026-10-02",
       "purpose": "NVIDIA C3-K, the kernel's fault windows (docs/NVIDIA.md §11.4, the consultant's OK IF of 2026-10-02): window regions, forwarded faults and their wait, kernel copies that never wait, refused partial operations, the mapping count and UNMAPPED, break-before-make entries, revoke, server death, insert checks and holds, answers only from the server handle; a server-inserted frame unreachable before its hold goes, and a client waiting on a server only by its own mapping"
-    },
-    {
-      "ids": ["L.sched.24-29"],
-      "owner": "ipc-step2 session A",
-      "branch": "step2a",
-      "date": "2026-10-02",
-      "purpose": "OPAQUE-KERNEL.md §9.8 step 2a (the consultant's OK IF of 2026-10-02): the running task by borrow, and current() without the run queue's lock. 2b wrote L.sched.20-23."
     }
   ]
 }

@@ -181,11 +181,13 @@ pub(crate) const fn wants_attention(word: u32) -> bool {
 
 /// Run `visit` on the task running on this processor, with interrupts masked
 /// so that it stays the running one. `None` before the scheduler has one.
+///
+/// The task is the processor record's borrow (2a, `sched::borrow`), not the
+/// run queue's `current` under its lock, which this took for one load: so
+/// [`look`], [`own_end`] and [`post_own`] take no lock.
 fn with_running<R>(visit: impl FnOnce(&Task) -> R) -> Option<R> {
     let saved = <arch::Irq as IrqControl>::disable();
-    let answer = super::this_cpu()
-        .and_then(super::queue_of)
-        .and_then(|lock| lock.lock().current.as_deref().map(visit));
+    let answer = super::with_current(visit);
     <arch::Irq as IrqControl>::restore(saved);
     answer
 }

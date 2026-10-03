@@ -304,4 +304,53 @@ package FerrixSchedRequirements {
                 "sched::preempt::Preempt::enable");
         }
     }
+
+    package RunningTask {
+        doc /* src/kernel/src/sched/borrow.rs and src/kernel/src/sched/mod.rs:
+             * the running task borrowed from the processor's record
+             * (docs/OPAQUE-KERNEL.md §9.8, 2a; the consultant's OK IF of
+             * 2026-10-02, condition 1, and Q1). */
+
+        requirement <'L.sched.24'> theRecordNamesTheRunningTask : ItemLowLevel {
+            attribute :>> statement = "Whenever interrupts are on, each processor's
+                record shall name, as Arc::as_ptr, the task its run queue's current
+                holds; the scheduler shall write the two together, on that
+                processor with interrupts masked and its queue lock held, at the
+                boot task's adoption, at an idle task's installation and at every
+                switch, and nowhere else.";
+            attribute :>> criterion = "From boot to the end of stage 5, an audit
+                compares the record with the queue's current, read under its lock,
+                once the boot task is adopted, as each processor's idle task first
+                runs, in the incoming context of every switch and at every
+                interrupt exit, and finds no mismatch at any site; and two tasks per
+                processor, yielding to each other, resume after a switch 10000
+                times, each time with the record naming the queue's current and the
+                task itself (the `borrow` line). Removing the record's write at the
+                adoption, at the idle installation or at the switch stops the boot
+                on that site's message.";
+            attribute :>> parent = ("H.SCHED.1", "H.SCHED.6");
+            attribute :>> unit = ("sched::set_current", "sched::adopt_boot_task",
+                "sched::enter_idle", "sched::choose_next",
+                "sched::borrow::RunningSlot::set", "sched::audit_here",
+                "sched::borrow::audit", "sched::borrow::end_audit");
+        }
+        requirement <'L.sched.25'> theRunningTaskIsLentWithoutTheLock : ItemLowLevel {
+            attribute :>> statement = "with_current shall lend the running task
+                only to a closure, by a reference its result cannot name, read from
+                the processor's record so that the processor and its record are
+                one processor's (one instruction on x86-64, interrupts masked on
+                Arm); current() shall answer the running task as an Arc of the
+                caller's own without taking the run queue's lock; and before the
+                records are kept both shall answer none.";
+            attribute :>> criterion = "Each of the borrow check's 10000 resumptions
+                borrows the running task and finds the task itself, and every
+                audit's borrowed pointer equals the queue's current (the `borrow`
+                line); every boot, shell and bench gate runs on current() made
+                this way.";
+            attribute :>> parent = ("H.SCHED.1", "H.SCHED.6");
+            attribute :>> unit = ("sched::borrow::with_current",
+                "sched::borrow::current_arc", "sched::borrow::current_ptr",
+                "sched::borrow::running", "sched::current");
+        }
+    }
 }
