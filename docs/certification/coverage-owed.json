@@ -9,16 +9,16 @@
     "re-claimed for the code named here."
   ],
   "owed": [
-  {
-   "landing": "OPAQUE-KERNEL.md §9.8 step 2c, the pending-work word (branch step2b; the consultant's OK IF of 2026-10-03, condition 3)",
-   "architectures": [
-    "x86_64",
-    "aarch64",
-    "armv7a"
-   ],
-   "dropped": "carried from cf83b01dd, 1 anchor dropped as unmeasured: x86_64 arch/x86_64/syscall.rs:659 (the SYSCALL entry's way out, now through trap::attention_due); and on the rebase onto 36d5aedcf with condition 2's fix, 1 more: x86_64 arch/x86_64/trap.rs:51 (TrapFrame's derive, which gained Default for the delivery cap's case).",
-   "what": "Measure and test or argue the new lines on every architecture: sched/work.rs whole (notify, wake_posted, post, post_own, has_end, look, wants_attention, with_running, posting and Posting's drop, set_auditing, auditing, audit and its fatal arm, arm, disarm, armed_by, hook_armed_by, PreparedTask::task); sched/work/check.rs (the wake row's case, its retry and failure arms); object/process.rs's task list and end (TaskList, end_record, list_task and its AllocError arm, with_tasks, post_to_tasks, take_listed, take_batch, next_live); trap::attention_due and its audit arm; and the personality's new posts that the item states as its interface (Process::post's SIGNAL, end_other_threads' and enter_stop's posts through post_to_tasks, tell_a_new_task, change_blocked's opened arm, force's and mark_restart's post_own, return_to_user's capped post, the delivery cap's case in syscall/deliver/check.rs)."
-  },
+    {
+      "landing": "OPAQUE-KERNEL.md §9.8 step 2c, the pending-work word (branch step2b; the consultant's OK IF of 2026-10-03, condition 3)",
+      "architectures": [
+        "x86_64",
+        "aarch64",
+        "armv7a"
+      ],
+      "dropped": "carried from cf83b01dd, 1 anchor dropped as unmeasured: x86_64 arch/x86_64/syscall.rs:659 (the SYSCALL entry's way out, now through trap::attention_due); and on the rebase onto 36d5aedcf with condition 2's fix, 1 more: x86_64 arch/x86_64/trap.rs:51 (TrapFrame's derive, which gained Default for the delivery cap's case).",
+      "what": "Measure and test or argue the new lines on every architecture: sched/work.rs whole (notify, wake_posted, post, post_own, has_end, look, wants_attention, with_running, posting and Posting's drop, set_auditing, auditing, audit and its fatal arm, arm, disarm, armed_by, hook_armed_by, PreparedTask::task); sched/work/check.rs (the wake row's case, its retry and failure arms); object/process.rs's task list and end (TaskList, end_record, list_task and its AllocError arm, with_tasks, post_to_tasks, take_listed, take_batch, next_live); trap::attention_due and its audit arm; and the personality's new posts that the item states as its interface (Process::post's SIGNAL, end_other_threads' and enter_stop's posts through post_to_tasks, tell_a_new_task, change_blocked's opened arm, force's and mark_restart's post_own, return_to_user's capped post, the delivery cap's case in syscall/deliver/check.rs)."
+    },
     {
       "landing": "NVIDIA N0 (N0a DMAR scopes through bridges, N0b MSI, N0c write-combining; carried in f5776a5f7) and its conditions A2 and B1-B3 (branch nvidia-n0-conds)",
       "architectures": [
@@ -108,6 +108,16 @@
       ],
       "dropped": "2b's carry from 36d5aedcf, 9 anchors dropped as unmeasured: sched/mod.rs 257-258 and 266 on each architecture, the old preempt_enable_from's underflow arm and preempt_site's load, both failure-path arguments. Their statements moved to sched/preempt.rs and their arguments are re-attached there by hand (preempt.rs 353-354 and 402, with the release's add-back at 249-250), the five lines entered in each residual as unreached until a run measures them.",
       "what": "Measure the new code and test or argue what a passing run leaves: sched/preempt.rs (the word, raise, lower, enable_from, decide_deferred, count_here, word_here, the report readers, start_counting and its FX-0506 arm), sched/preempt_check.rs (the stage-5 checks), arch/percpu.rs (this_cpu_add and this_cpu_read; on x86-64 arch/x86_64/cpu.rs's read_gs_at and gs_xadd), smp::record, and sched/mod.rs's resched_asked and may_block. Then confirm or replace the hand-placed residual rows and arguments for preempt.rs 249-250, 353-354 and 402."
+    },
+    {
+      "landing": "NVIDIA N0g, interrupt remapping on VT-d (branch nvidia-n0g, docs/NVIDIA.md section 12.3, on slice 1)",
+      "architectures": [
+        "x86_64",
+        "aarch64",
+        "armv7a"
+      ],
+      "dropped": "Carried from 5cf6d7889: 2 anchors dropped, aarch64 and armv7a residual iommu/vtd.rs 362 and 533 (Unit::open's signature and enable, edited). x86_64: none.",
+      "what": "Measure on x86-64, and argue as other-architecture on aarch64 and armv7a, the new and edited lines: iommu/remapping.rs whole (bring_up's not-capable, no-scope, conversion-refused, IRE-failed and CFIS-set arms are absent-hardware on QEMU; route's compatibility and refused arms; remap_message; the check vector's and the retired vector's counters); vtd.rs's unit_frames, start_table, start_remapping (its CFIS-set arm absent-hardware), remap (its no-table, index-past and present arms), invalidate_interrupt_entry, take_fault's interrupt arm, translate; iommu.rs's Cause::Interrupt and its name, provoked's interrupt arm, recorded's INTERRUPT_FAULT arm, bring_up_vtd's per-unit line, programmed_unit_for; arch/x86_64 msi.rs's msi_allocate routing, taken, take_vector; mod.rs's console hooks (route_console, console_vector, mask/unmask/convert_console_line, loop_back_console) and service_interrupts' check-vector arm; apic.rs's leave_x2apic (its locked arm is absent-hardware), xapic_locked, modes_checked and IoApicInput's new methods; smp.rs's secondary_start look and CpuStarter's started count; irq.rs's move_handler (its refusals); device.rs's isolated mark and interrupts_isolated; syscall/native.rs's set_isolated_mark, device_isolation, device_isolated_in and the refusals in interrupt_create and vmo_pin; console's with_port_quiet, take_check_byte and loop_back. The C6 review's new lines too: iommu.rs's name_functions_without_vectors (its naming arm runs on no QEMU machine, whose units place every function), check_console_line's not-observable arm (a UART that raises nothing in loopback, real hardware only), and check_forged's R3 patience loop. The new check code is device/check.rs's check_forged, forge, restore and minted_elsewhere, iommu/check.rs's check_no_route_unplaced, check_entry_never_rewritten, check_isolation_mark, check_console_line, plant_masked_byte, require_masked_byte_served and check_stray_deliveries, and arch/x86_64/apic/check.rs."
     }
   ]
 }

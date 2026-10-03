@@ -47,6 +47,7 @@ Causes are listed most likely first.
 | [FX-0405](#fx-0405) | a secondary processor's record does not describe it |
 | [FX-0406](#fx-0406) | not every processor firmware described came online |
 | [FX-0407](#fx-0407) | the processors failed to work together |
+| [FX-0408](#fx-0408) | a processor's local APIC is locked in x2APIC mode |
 | [FX-0501](#fx-0501) | the scheduler could not be started |
 | [FX-0502](#fx-0502) | the scheduler failed its self-check |
 | [FX-0503](#fx-0503) | a task tried to block while holding a lock that disables preemption |
@@ -100,6 +101,7 @@ Causes are listed most likely first.
 | [FX-1009](#fx-1009) | a devmgr pid 1 started did not keep device authority to itself |
 | [FX-1010](#fx-1010) | two cores enabling neighbouring interrupt lines lost one's setting |
 | [FX-1011](#fx-1011) | a driver's configuration window or device_aperture did not answer as specified |
+| [FX-1012](#fx-1012) | interrupt remapping could not come up as specified |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
@@ -835,6 +837,25 @@ rely on each of these whenever more than one processor runs.
 See: src/kernel/src/smp/check.rs run; src/kernel/src/smp/check.rs
 migrating_shootdown; src/kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage
 4.
+
+<a id="fx-0408"></a>
+
+## FX-0408 — a processor's local APIC is locked in x2APIC mode
+
+This kernel drives the local APIC through its MMIO window, which does not exist
+in x2APIC mode. Every processor looks at its own `IA32_APIC_BASE` before it uses
+the window, and one firmware left in x2APIC mode is switched back to xAPIC
+(`docs/NVIDIA.md` section 12.3, condition G6). A platform that has disabled
+legacy xAPIC (`IA32_XAPIC_DISABLE_STATUS`) cannot be switched, and the boot
+stops here by name rather than drive a window that is not there: the customer's
+decision.
+
+1. The platform's firmware locks the local APIC in x2APIC mode, as some recent
+   Intel platforms do. The kernel needs x2APIC support (and `IRTA.EIME` = 1 in
+   interrupt remapping) to boot there.
+
+See: src/kernel/src/arch/x86_64/apic.rs leave_x2apic;
+src/kernel/src/arch/x86_64/smp.rs secondary_start; docs/NVIDIA.md section 12.3.
 
 <a id="fx-0501"></a>
 
@@ -2199,6 +2220,12 @@ exactly the right answers before any node is published.
    device's.
 3. `DeviceNode::pci` minted an aperture from a BAR whose size or address
    enumeration had not checked.
+4. Where a VT-d unit remaps interrupts, `edu`'s forged messages were not refused
+   as `device/check.rs` check_forged requires (checks R1 to R3, `docs/NVIDIA.md`
+   section 12.3): a compatibility-format message to 0xFC or in NMI mode was
+   delivered, or not faulted 0x25 -- the QEMU is not the patched one, or
+   remapping is off -- or one naming another function's entry was delivered, or
+   not faulted 0x26, because the entry does not check the source ID.
 
 See: src/kernel/src/device.rs publish; src/kernel/src/discovery/pci.rs;
 docs/ROADMAP.md stage 10.
@@ -2235,12 +2262,18 @@ sends a device's writes somewhere its driver did not choose.
    stopped, or R7's unpin with a wait that writes no status did not fail, or
    released its frames, or left them counted live rather than kept
    (`object/pin/check.rs` check_failed_invalidation).
-8. A completion error (`ICE`) the check planted on a unit did not fail its
+8. Interrupt remapping's stage 10 checks (`docs/NVIDIA.md` section 12.3): the
+   console's I/O APIC line did not deliver a looped-back byte through its entry,
+   or delivered on its retired vector (R5); a requester no unit places was given
+   a message route (`L.device.28`); a present interrupt entry was rewritten
+   (`L.iommu.52`); or the isolated-interrupts mark was not set, did not refuse a
+   vector while interrupts were forced not isolated, or was cleared (R10).
+9. A completion error (`ICE`) the check planted on a unit did not fail its
    invalidation, was not cleared and counted, or left the next invalidation
    failing or the unit marked failed (`iommu/check.rs` check_completion_errors).
-9. A unit's invalidation queue, turned on as firmware leaves one, was not turned
-   off and read back off by the path `open` takes on such a unit
-   (`iommu/check.rs` check_firmware_left_on).
+10. A unit's invalidation queue, turned on as firmware leaves one, was not
+    turned off and read back off by the path `open` takes on such a unit
+    (`iommu/check.rs` check_firmware_left_on).
 
 See: src/kernel/src/iommu.rs Domain; src/kernel/src/iommu/check.rs
 check_domains; src/kernel/src/device.rs DeviceNode::domain;
@@ -2378,7 +2411,12 @@ DMA it was not given, and a unit whose faults nobody reads would hide it.
    probe's own fault, when the lost one may have been the probe's next; the
    `first read here` line names the record that was full. QEMU's unit never
    overflows on one device's faults, so there it means a second device faulted.
-8. A VT-d unit's invalidation queue stopped (`FSTS.IQE` or `ITE`) and the unit
+8. Interrupt remapping let a message through that it should have refused: the
+   check vector 0xFC was delivered outside checks R1 and R2's window, or the
+   console's I/O APIC line was delivered on its retired vector after its
+   conversion -- a compatibility-format route that survived, which under KVM's
+   split irqchip is an entry rewritten unmasked.
+9. A VT-d unit's invalidation queue stopped (`FSTS.IQE` or `ITE`) and the unit
    was marked failed: it takes no invalidation again, and nothing its domains
    may reach is released until reboot. The line before names the unit and which
    error stopped it; a descriptor the unit would not take is a kernel encoding
@@ -2495,6 +2533,34 @@ rewritten. `device::config_check` holds all of it on the published nodes
 See: src/kernel/src/device.rs ConfigWrites, config_write, verify_config;
 src/kernel/src/device/config_check.rs; src/lib/platform/pci/src/window.rs;
 docs/NVIDIA.md §12.1; docs/certification/SAFETY-MANUAL.md AoU-22.
+
+<a id="fx-1012"></a>
+
+## FX-1012 — interrupt remapping could not come up as specified
+
+A VT-d unit that remaps interrupts with compatibility format blocked drops any
+message that is not in remappable format. `iommu::remapping` brings it up
+(`docs/NVIDIA.md` section 12.3): the console's I/O APIC line, live since stage
+3, is masked, given a fresh vector and an entry in the unit's table, then turned
+into a remappable entry once remapping is on. Before remapping goes on, every
+vector handed out must be the console's (check R9): a vector minted in
+compatibility format before it would either pass through every unit or, once
+blocked, never arrive.
+
+1. A message vector was minted before `iommu::bring_up`: `arch::msi_allocate`
+   was called at an earlier stage, so its device's message is in compatibility
+   format.
+2. A byte the console's port received while its line was masked for the
+   conversion was not read by the service once after it (G3): the conversion did
+   not service the port.
+3. The console's line was masked and its entry written, but moving its handler
+   to the new vector, or writing its remappable entry, failed: the generic
+   interrupt table already had a handler on the new vector, or none on the old
+   one.
+
+See: src/kernel/src/iommu/remapping.rs; src/kernel/src/arch/x86_64/mod.rs
+convert_console_line; src/kernel/src/irq.rs move_handler; docs/NVIDIA.md section
+12.3.
 
 <a id="fx-1101"></a>
 
