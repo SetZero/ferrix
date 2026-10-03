@@ -3218,6 +3218,43 @@ calls through the personality, each with a `current()`.
 **Documents.** SPECULATION.md: none. MEMORY-AND-TIMING: none. FINDINGS: none.
 Security Target: none; the change is inside the channel's module.
 
+**As built (session B, branch `step2e`, 2026-10-03).** Built to the design
+and condition 5, for the consultant's code review:
+- `Half::state` holds `NONEMPTY` and `PEER_CLOSED`, written only under the
+  half's inbox lock (`Half::note` after every operation that changes the
+  inbox's emptiness, `note_peer_closed` in the close). `readable_or_closed`
+  is one load of it, and `receive_words`' wait reads the caller's `END`
+  (`sched::work::own_end`) in place of the personality's `must_leave`.
+- Condition 5: `write`, `write_small`, `unread` and the close each make a
+  `SeqCst` fence after the word and before their wake. One more fence the
+  walk found: `END` is now read by the wait itself, and its poster
+  (`post_to_tasks`, `notify`) stored it after the kill's fence, so
+  `sched::work::wake_posted` makes a `SeqCst` fence after the post and
+  before the wake reads the state.
+- *Without 2a*, `own_end` takes the run-queue lock to find the task, so of
+  the guessed saving only the inbox lock and the personality call go.
+- The checks: the `chword` boot line drives 4096 operations on one pair and
+  compares each end's word with its inbox (a boot check, since `Inbox` is
+  the kernel's), each operation first once across the empty boundary, and
+  the `wrread` line's cases run unchanged. Controls, each firing its
+  check's own message: the put-back's update removed ("disagreed after a
+  put-back into an empty inbox"); the close's mark removed (wait case 2,
+  not woken by the close); the wait reading no `END` (wait case 3, not
+  woken by the kill). The design's close control, the mark moved after
+  the wake, did not fire: the woken waiter's next look comes a switch
+  later, after the mark, so the boot cannot hit that window; the loom
+  model's control is what shows its order.
+- The `loom` model, `src/tests/loom` (`cargo xtask loom`, and a step of
+  `check`): 2c's case 9 with its control (the clear after the read), and
+  condition 5's waiter listed and not yet blocked against a writer, a
+  closer, both, and an end, with the model-only control the consultant
+  asked for, the writer without its fence, and, at its review, one for the
+  mark's place: a closer that marks after its wake, the design's close
+  control moved where it can fire. All three controls must fail, and do
+  (`should_panic` on their message): eight models, under a preemption
+  bound of 3, in about a second. Each names the kernel sites it restates;
+  that it matches them is by review (TOOLS.md §3).
+
 #### 2f: no global or locked writes in the switch
 
 **What changes.** The switch on `ipc-step1` makes these locked operations,
