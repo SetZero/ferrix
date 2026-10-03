@@ -374,6 +374,9 @@ OPTIONS:
     --bar-zoom <N>                       flash --session: the carried waybar N times its size, its
                                          style's px lengths and its config's height, width, spacing
                                          and icon-size multiplied; the host's files are not changed
+    --bar-drop <a,b,...>                 flash --session: the carried waybar without these modules
+    --bar-margin-right <N>               flash --session: the carried waybar N px short of the
+                                         right edge
     --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
                                          e.g. 2222:22 for sshdt; repeatable; turns --net on
     --ssh <PORT>                         run-compositor: start sshdt in the guest, reached at

@@ -125,7 +125,10 @@ machine's `~/.config/hypr/hyprland.conf` and the dotfiles beside it, the
 session running as the user `ferrix` (`flash --compositor --session`), with
 the phone's screen line put after the configuration's own, and waybar one
 and a half times the size the PC's files give it on top of the screen's
-scale (`--bar-zoom=N` for another size). With `--push` it
+scale (`--bar-zoom=N` for another size), without the modules a phone has no
+room for (`--bar-drop=LIST`; the window title, audio, cpu, memory, network
+and tray unless given) and 150 px short of the right edge, where the app's
+keyboard and menu buttons float (`--bar-margin-right=N`). With `--push` it
 also makes `home.img` on the phone, an empty 8 GiB sparse `ferrix-home`
 volume, when there is none. The first boot seeds it from the dotfiles, and
 what is changed there afterwards is kept: a new `desktop.Image` never

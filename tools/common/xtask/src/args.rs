@@ -377,6 +377,13 @@ pub(crate) struct Args {
     /// multiplied, so that a desktop's bar reads on a phone
     /// ([`crate::session::zoom_bar`]).
     pub(crate) bar_zoom: Option<f64>,
+    /// `--bar-drop <a,b,...>`: `flash --session`'s waybar without these
+    /// modules, for a screen too narrow for a desktop's bar
+    /// ([`crate::session::trim_bar`]).
+    pub(crate) bar_drop: Vec<String>,
+    /// `--bar-margin-right <N>`: that bar this many pixels short of the
+    /// screen's right edge, where the Pixel 7 app's buttons float.
+    pub(crate) bar_margin_right: Option<u32>,
     /// `--fps <N>`: how many frames a second of a video `wallpapers` keeps.
     ///
     /// A wallpaper that moves is its frames, so this is a size as much as a
@@ -433,6 +440,9 @@ pub(crate) struct Args {
     /// all; this is for the person writing one.
     pub(crate) boot: Option<String>,
 }
+
+/// The flags [`Args::scales`] takes, each with a value.
+const SCALE_FLAGS: [&str; 4] = ["--scale", "--bar-zoom", "--bar-drop", "--bar-margin-right"];
 
 /// The flags [`Args::root`] takes.
 const ROOT_FLAGS: [&str; 5] = [
@@ -537,13 +547,31 @@ impl Args {
         }
     }
 
-    /// `--scale` and `--bar-zoom`: the screen's scale, and the bar's on it.
-    fn scales(&mut self, flag: &str, raw: &str) -> Result<()> {
-        let factor = scale(flag, raw)?;
-        if flag == "--scale" {
-            self.scale = Some(raw.to_owned());
-        } else {
-            self.bar_zoom = Some(factor);
+    /// `--scale`, and the `--bar-` options: the screen's scale, and how
+    /// the bar is made to fit it.
+    fn scales(&mut self, flag: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        let raw = &value(items, flag)?;
+        match flag {
+            "--bar-drop" => {
+                self.bar_drop = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+            }
+            "--bar-margin-right" => {
+                self.bar_margin_right = Some(raw.parse().map_err(|_| {
+                    Error::new(format!(
+                        "--bar-margin-right wants a number of pixels, got `{raw}`"
+                    ))
+                })?);
+            }
+            "--scale" => {
+                let _ = scale(flag, raw)?;
+                self.scale = Some(raw.to_owned());
+            }
+            _ => self.bar_zoom = Some(scale(flag, raw)?),
         }
         Ok(())
     }
@@ -683,7 +711,7 @@ impl Args {
                 "--from" => args.from = Some(value(&mut items, "--from")?),
                 "--plan" => args.plan = Some(value(&mut items, "--plan")?),
                 "--size" => args.size = Some(dimensions(&value(&mut items, "--size")?, "--size")?),
-                "--scale" | "--bar-zoom" => args.scales(&item, &value(&mut items, &item)?)?,
+                flag if SCALE_FLAGS.contains(&flag) => args.scales(flag, &mut items)?,
                 "--video-size" => {
                     let raw = value(&mut items, "--video-size")?;
                     args.video_size = Some(dimensions(&raw, "--video-size")?);
@@ -1079,6 +1107,16 @@ mod tests {
             (Some(3.0), Some("2"))
         );
         assert!(parse(&["flash", "--bar-zoom", "0"]).is_err());
+        let args = parse(&[
+            "flash",
+            "--bar-drop",
+            "cpu, tray",
+            "--bar-margin-right",
+            "150",
+        ])
+        .unwrap();
+        assert_eq!(args.bar_drop, ["cpu", "tray"]);
+        assert_eq!(args.bar_margin_right, Some(150));
         let args = parse(&["run-compositor", "--everything"]).unwrap();
         assert!(args.everything && args.chrome && args.clipboard && args.release);
         assert!(args.gl && args.display);

@@ -193,6 +193,78 @@ const BAR_LENGTHS: [&str; 4] = ["height", "width", "spacing", "icon-size"];
 /// desktop's bar on a phone is as many pixels as on a monitor a third as
 /// dense: this is what makes it read there.
 pub(crate) fn zoom_bar(ports: &mut [File], by: f64) {
+    edit_bar(ports, |file, text| match file {
+        BarFile::Style => zoom_style(text, by),
+        BarFile::Config => zoom_config(text, by),
+    });
+}
+
+/// `--bar-drop` and `--bar-margin-right`: the carried waybar without the
+/// modules `drop` names, and `margin_right` pixels short of the screen's
+/// right edge -- a desktop's bar on a phone, which has room for a few
+/// modules and floats the app's buttons over the top right corner. Only
+/// a module array written as plain strings is changed; one with a comment
+/// inside is left as it is.
+pub(crate) fn trim_bar(ports: &mut [File], drop: &[String], margin_right: Option<u32>) {
+    edit_bar(ports, |file, text| match file {
+        BarFile::Style => text.to_owned(),
+        BarFile::Config => {
+            let mut config = text.to_owned();
+            for key in [
+                "\"modules-left\"",
+                "\"modules-center\"",
+                "\"modules-right\"",
+            ] {
+                config = drop_modules(&config, key, drop);
+            }
+            match margin_right {
+                Some(px) => config.replacen(
+                    "\"modules-left\"",
+                    &format!("\"margin-right\": {px},\n    \"modules-left\""),
+                    1,
+                ),
+                None => config,
+            }
+        }
+    });
+}
+
+/// `config`'s `key` array without the modules in `drop`.
+fn drop_modules(config: &str, key: &str, drop: &[String]) -> String {
+    let Some((before, after)) = config.split_once(key) else {
+        return config.to_owned();
+    };
+    let Some((gap, rest)) = after.split_once('[') else {
+        return config.to_owned();
+    };
+    let Some((items, tail)) = rest.split_once(']') else {
+        return config.to_owned();
+    };
+    let names: Option<Vec<&str>> = items
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| item.strip_prefix('"')?.strip_suffix('"'))
+        .collect();
+    let Some(names) = names else {
+        return config.to_owned();
+    };
+    let kept: Vec<String> = names
+        .into_iter()
+        .filter(|name| !drop.iter().any(|dropped| dropped == name))
+        .map(|name| format!("\"{name}\""))
+        .collect();
+    format!("{before}{key}{gap}[{}]{tail}", kept.join(", "))
+}
+
+/// Which of waybar's files a carried file is.
+enum BarFile {
+    Style,
+    Config,
+}
+
+/// Each carried waybar file made what `edit` makes of its text.
+fn edit_bar(ports: &mut [File], edit: impl Fn(BarFile, &str) -> String) {
     for file in ports {
         let Content::Bytes(bytes) = &file.content else {
             continue;
@@ -200,17 +272,17 @@ pub(crate) fn zoom_bar(ports: &mut [File], by: f64) {
         let Ok(text) = std::str::from_utf8(bytes) else {
             continue;
         };
-        let zoomed = if file.path.ends_with(".config/waybar/style.css") {
-            zoom_style(text, by)
+        let kind = if file.path.ends_with(".config/waybar/style.css") {
+            BarFile::Style
         } else if [".config/waybar/config", ".config/waybar/config.jsonc"]
             .iter()
             .any(|name| file.path.ends_with(name))
         {
-            zoom_config(text, by)
+            BarFile::Config
         } else {
             continue;
         };
-        file.content = Content::Bytes(zoomed.into_bytes());
+        file.content = Content::Bytes(edit(kind, text).into_bytes());
     }
 }
 
@@ -421,5 +493,27 @@ mod tests {
         assert!(zoomed.contains("\"height\": 120,") && zoomed.contains("\"spacing\" : 18,"));
         assert!(zoomed.contains("\"icon-size\": 54 }") && zoomed.contains("{:%H:%M}"));
         assert_eq!(bytes(&ports[2]), "pad=4px\n");
+    }
+    #[test]
+    fn a_phones_bar_keeps_what_fits_and_clears_the_apps_buttons() {
+        let config = "{\n    \"height\": 40,\n    \"modules-left\":   [\"custom/launcher\", \"hyprland/window\"],\n    \
+                      \"modules-center\": [\"custom/clock\"],\n    \
+                      \"modules-right\":  [\"custom/ws-1\", \"custom/ws-2\",\n                       \
+                      \"cpu\", \"tray\"],\n    \"cpu\": { \"format\": \"cpu {usage}%\" }\n}\n";
+        let mut ports = vec![File {
+            path: "etc/skel/.config/waybar/config.jsonc".to_owned(),
+            mode: 0o644,
+            content: Content::Bytes(config.as_bytes().to_vec()),
+        }];
+        let drop = ["hyprland/window", "cpu", "tray"].map(str::to_owned);
+        trim_bar(&mut ports, &drop, Some(150));
+        assert_eq!(
+            bytes(&ports[0]),
+            "{\n    \"height\": 40,\n    \"margin-right\": 150,\n    \
+             \"modules-left\":   [\"custom/launcher\"],\n    \
+             \"modules-center\": [\"custom/clock\"],\n    \
+             \"modules-right\":  [\"custom/ws-1\", \"custom/ws-2\"],\n    \
+             \"cpu\": { \"format\": \"cpu {usage}%\" }\n}\n"
+        );
     }
 }

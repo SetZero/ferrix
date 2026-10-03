@@ -457,6 +457,14 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
             crate::session::zoom_bar(&mut carried.ports, by);
             println!("  session: waybar {by} times its size");
         }
+        if !args.bar_drop.is_empty() || args.bar_margin_right.is_some() {
+            crate::session::trim_bar(&mut carried.ports, &args.bar_drop, args.bar_margin_right);
+            println!(
+                "  session: waybar without {}, {} px from the right edge",
+                args.bar_drop.join(", "),
+                args.bar_margin_right.unwrap_or(0)
+            );
+        }
         let scale = args.scale.as_deref().unwrap_or("1");
         format!(
             "{config}# The board's screen, over the configuration's own monitor lines \

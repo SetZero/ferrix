@@ -3,7 +3,7 @@
 # loader wrapping a kernel and initramfs whose init is the compositor.
 #
 # Usage: tools/vendor/google/pixel7/build-desktop.sh <out-dir> [scale] [--chrome] [--dotfiles]
-#            [--bar-zoom=N] [--push] [--reset-home]
+#            [--bar-zoom=N] [--bar-drop=LIST] [--bar-margin-right=N] [--push] [--reset-home]
 #
 #   out-dir   a new directory; the stage and desktop.Image are written there
 #   scale     the monitor's scale, 2 when not given: 1080x2400 at 1 is text
@@ -22,6 +22,12 @@
 #             phone even at the screen's scale. It is what the home is
 #             seeded with, so a change to it reaches a phone that has a
 #             home.img only with --reset-home
+#   --bar-drop=LIST  with --dotfiles, waybar's modules left off, comma
+#             separated: a phone has room for a few. The window title,
+#             audio, cpu, memory, network and tray when not given
+#   --bar-margin-right=N  with --dotfiles, the bar N px short of the
+#             screen's right edge, where the app floats its keyboard and
+#             menu buttons: 150 when not given
 #   --push    copy desktop.Image to /data/local/tmp/ferrix-vm/ on the phone,
 #             where the app boots it in place of ferrix.Image, and stops
 #             the app updating it from GitHub's releases until asked to;
@@ -39,9 +45,10 @@
 # CARGO_TARGET_DIR defaults to one of this worktree's own: two worktrees
 # sharing one build each other's xtask.
 set -eu
-out=${1:?usage: build-desktop.sh <out-dir> [scale] [--chrome] [--dotfiles] [--bar-zoom=N] [--push] [--reset-home]}
+out=${1:?usage: build-desktop.sh <out-dir> [scale] [--chrome] [--dotfiles] [--bar-zoom=N] [--bar-drop=LIST] [--bar-margin-right=N] [--push] [--reset-home]}
 shift
 scale=2 push= chrome= dotfiles= reset_home= bar_zoom=1.5
+bar_drop=hyprland/window,pulseaudio,cpu,memory,network,tray bar_margin_right=150
 for arg in "$@"; do
     case $arg in
         --push) push=1 ;;
@@ -49,6 +56,8 @@ for arg in "$@"; do
         --dotfiles) dotfiles=1 ;;
         --reset-home) reset_home=1 ;;
         --bar-zoom=*) bar_zoom=${arg#--bar-zoom=} ;;
+        --bar-drop=*) bar_drop=${arg#--bar-drop=} ;;
+        --bar-margin-right=*) bar_margin_right=${arg#--bar-margin-right=} ;;
         *) scale=$arg ;;
     esac
 done
@@ -62,7 +71,8 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd)
 cd "$root"
 if [ -n "$dotfiles" ]; then
-    set -- --session --config "$HOME/.config/hypr/hyprland.conf" --bar-zoom "$bar_zoom"
+    set -- --session --config "$HOME/.config/hypr/hyprland.conf" --bar-zoom "$bar_zoom" \
+        --bar-drop "$bar_drop" --bar-margin-right "$bar_margin_right"
 else
     set --
 fi
