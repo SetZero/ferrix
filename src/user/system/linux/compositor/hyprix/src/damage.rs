@@ -261,6 +261,67 @@ fn inside(rect: Rect, buffer: (i64, i64), into: Rect) -> Rect {
     )
 }
 
+/// A surface's surface-coordinate `rect` -- `wl_surface.damage` -- in its
+/// buffer's own pixels, which is where [`Painted::rects`] are.
+///
+/// Without a viewport the buffer is the surface times its scale. With one,
+/// the surface is the viewport's destination, and what is stretched over it
+/// is the source: part of the buffer, in the buffer's pixels over its scale,
+/// or the whole buffer when no source is set. Chromium draws a buffer twice
+/// its surface and scales it down this way, and its damage multiplied by
+/// the scale alone (1) covered the buffer's top-left quarter: only that
+/// quarter of the window was ever redrawn.
+///
+/// The result is rounded outward, so a fraction of a pixel still counts.
+#[must_use]
+pub(crate) fn from_surface(
+    rect: Rect,
+    scale: i64,
+    buffer: Option<(i64, i64)>,
+    source: Option<(f64, f64, f64, f64)>,
+    destination: Option<(i32, i32)>,
+) -> Rect {
+    let scale = scale.max(1);
+    let multiplied = || {
+        Rect::new(
+            rect.x.saturating_mul(scale),
+            rect.y.saturating_mul(scale),
+            rect.width.saturating_mul(scale),
+            rect.height.saturating_mul(scale),
+        )
+    };
+    if source.is_none() && destination.is_none() {
+        return multiplied();
+    }
+    let scaled = scale as f64;
+    let source = match (source, buffer) {
+        (Some(source), _) => source,
+        (None, Some((width, height))) => (0.0, 0.0, width as f64 / scaled, height as f64 / scaled),
+        (None, None) => return multiplied(),
+    };
+    // A source with no destination makes the surface the source's size.
+    let (width, height) = destination.map_or((source.2, source.3), |(width, height)| {
+        (f64::from(width), f64::from(height))
+    });
+    if width <= 0.0 || height <= 0.0 || source.2 <= 0.0 || source.3 <= 0.0 {
+        return multiplied();
+    }
+    let x = |value: i64| (source.0 + value as f64 * source.2 / width) * scaled;
+    let y = |value: i64| (source.1 + value as f64 * source.3 / height) * scaled;
+    let left = x(rect.x).floor();
+    let top = y(rect.y).floor();
+    let right = x(rect.right()).ceil();
+    let bottom = y(rect.bottom()).ceil();
+    // `as` saturates: `INT32_MAX` wide stays a very large rectangle, which
+    // `inside` clamps to the buffer.
+    Rect::new(
+        left as i64,
+        top as i64,
+        (right - left).max(0.0) as i64,
+        (bottom - top).max(0.0) as i64,
+    )
+}
+
 /// `rect` with `margin` pixels added on every side.
 #[must_use]
 fn grown(rect: Rect, margin: (i64, i64)) -> Rect {
@@ -732,3 +793,6 @@ impl Watch {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

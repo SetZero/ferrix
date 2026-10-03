@@ -3492,8 +3492,9 @@ enum Shot {
 /// `src/user/system/linux/compositor/server`'s `surface.rs` keeps a commit's two damage lists
 /// apart, because it cannot join them: `wl_surface.damage` is in surface
 /// coordinates and `damage_buffer` in the buffer's, and what turns one into
-/// the other is the surface's scale. This is the moment the scale is known,
-/// so both become the buffer's own pixels here -- which is the space the
+/// the other is the surface's scale and viewport
+/// ([`crate::damage::from_surface`]). This is the moment both are known,
+/// so both lists become the buffer's own pixels here -- which is the space the
 /// renderer draws from, since it draws the whole of a buffer into the
 /// rectangle the layout gave it however the surface is scaled.
 ///
@@ -3508,23 +3509,26 @@ fn painted(client: &Client, index: usize, surface: ObjectId) -> crate::damage::P
         .map(|buffer| (i64::from(buffer.width), i64::from(buffer.height)));
     let mut rects = Vec::new();
     if let Some(state) = state {
-        let scale = i64::from(state.current.scale.max(1));
-        let held = |rect: &ServerRect, scale: i64| {
+        let current = &state.current;
+        let rect = |rect: &ServerRect| {
             Rect::new(
-                i64::from(rect.x).saturating_mul(scale),
-                i64::from(rect.y).saturating_mul(scale),
-                i64::from(rect.width).saturating_mul(scale),
-                i64::from(rect.height).saturating_mul(scale),
+                i64::from(rect.x),
+                i64::from(rect.y),
+                i64::from(rect.width),
+                i64::from(rect.height),
             )
         };
-        rects.extend(
-            state
-                .current
-                .buffer_damage
-                .iter()
-                .map(|rect| held(rect, 1))
-                .chain(state.current.damage.iter().map(|rect| held(rect, scale))),
-        );
+        rects.extend(current.buffer_damage.iter().map(rect).chain(
+            current.damage.iter().map(|surface| {
+                crate::damage::from_surface(
+                    rect(surface),
+                    i64::from(current.scale),
+                    buffer,
+                    current.viewport_source,
+                    current.viewport_size,
+                )
+            }),
+        ));
     }
     // A window drawn without its shadows: what is stretched to its tile is
     // the crop, so the damage is the crop's part of it, from the crop's
