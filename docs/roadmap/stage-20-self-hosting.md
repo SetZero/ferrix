@@ -108,6 +108,23 @@ then made builds of the plan until two runs in a row stopped on FX-0001, a
 processor that did not answer a TLB shootdown within its one second; that is
 the next step, below.
 
+**On Arm hardware (2026-10-03): Ferrix builds its own AArch64 image on the
+Pixel 7.** `FERRIX_SYSROOT_ARCH=arm64 tools/common/fetch/fetch-rustc-sysroot.sh`
+makes the same toolchain for an AArch64 host (the same Debian packages from the
+same snapshots, and rustc and Cargo 1.97.1 for `aarch64-unknown-linux-gnu`),
+and `tools/vendor/google/pixel7/selfhost.sh` puts it on a volume with the
+checkout and its vendored crates, sends it to the phone, and boots the phone's
+own `desktop.Image` in crosvm, unchanged, with the volume as `vdd` and
+`ferrix.init=/data/selfhost/init`: no image is made for the test. On four
+vCPUs (one Cortex-X1, three Cortex-A78) and 5 GiB, `cargo xtask build --arch
+aarch64` at two jobs wrote the image 546 seconds after the boot (125609 KiB
+kernel, 22345 KiB initramfs). Back on the host, `cargo xtask test-selfhost
+--arch aarch64 --volume <img>` found the volume a clean btrfs with
+`--check-data-csum`, took the image and kernel out, and booted the image to
+`FERRIX-BOOT-OK stages 1-12` with every self-check run, under QEMU. FX-0001 did
+not fire. The USB link to the phone drops now and then, so the script moves
+the volume in checksummed pieces and runs the phone's long steps detached.
+
 What the exit needs now:
 
 * **Room for a preempted processor.** Both FX-0001 stops came with example at

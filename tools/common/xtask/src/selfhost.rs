@@ -149,6 +149,9 @@ const BUILT: &str = "built /data/src/build/x86_64/ferrix.img";
 /// does not finish, the volume is not a clean btrfs, or the image the guest
 /// built does not pass the boot test.
 pub(crate) fn test_selfhost(args: &Args) -> Result<()> {
+    if let Some(volume) = &args.volume {
+        return judge_volume(Path::new(volume), args);
+    }
     let arch = Arch::X86_64;
     if args.arches()?.iter().any(|&asked| asked != arch) {
         return Err(Error::new(
@@ -229,7 +232,7 @@ pub(crate) fn test_selfhost(args: &Args) -> Result<()> {
         );
         return Ok(());
     }
-    let (built, built_kernel) = restore(&volume, &work, args.release)?;
+    let (built, built_kernel) = restore(arch, &volume, &work, args.release)?;
     println!("  {arch}: booting the image Ferrix built");
     qemu::test_boot(arch, &built, &built_kernel, args)?;
     println!("  {arch}: Ferrix built its own image, and it booted");
@@ -542,7 +545,7 @@ fn restore_store(volume: &Path, plan: &Path) -> Result<PathBuf> {
 
 /// Take the image and the kernel ELF the guest built out of `volume`, into
 /// `work`, and return their paths.
-fn restore(volume: &Path, work: &Path, release: bool) -> Result<(PathBuf, PathBuf)> {
+fn restore(arch: Arch, volume: &Path, work: &Path, release: bool) -> Result<(PathBuf, PathBuf)> {
     let out = work.join("out");
     if out.exists() {
         std::fs::remove_dir_all(&out)?;
@@ -551,9 +554,7 @@ fn restore(volume: &Path, work: &Path, release: bool) -> Result<(PathBuf, PathBu
     let profile = if release { "release" } else { "debug" };
     // `btrfs restore` matches each directory on the way down as well, so the
     // expression names every one.
-    let wanted = format!(
-        "^/(|src(|/build(|/x86_64(|/ferrix\\.img)))|target(|/x86_64-unknown-none(|/{profile}(|/ferrix-kernel))))$"
-    );
+    let wanted = wanted(arch, profile);
     let mut command = Command::new("btrfs");
     let _ = command
         .args(["restore", "--path-regex", &wanted])
@@ -561,9 +562,10 @@ fn restore(volume: &Path, work: &Path, release: bool) -> Result<(PathBuf, PathBu
         .arg(&out)
         .stdout(Stdio::null());
     cargo::run(command, "btrfs restore")?;
-    let image = out.join("src/build/x86_64/ferrix.img");
+    let image = out.join(format!("src/build/{arch}/ferrix.img"));
     let kernel = out.join(format!(
-        "target/x86_64-unknown-none/{profile}/ferrix-kernel"
+        "target/{}/{profile}/ferrix-kernel",
+        arch.kernel_target()
     ));
     for file in [&image, &kernel] {
         if !file.is_file() {
@@ -580,6 +582,40 @@ fn restore(volume: &Path, work: &Path, release: bool) -> Result<(PathBuf, PathBu
         std::fs::metadata(&kernel)?.len() >> 10
     );
     Ok((image, kernel))
+}
+
+/// The `btrfs restore` expression for `arch`'s image and kernel: it matches
+/// each directory on the way down as well, so it names every one.
+fn wanted(arch: Arch, profile: &str) -> String {
+    format!(
+        "^/(|src(|/build(|/{arch}(|/ferrix\\.img)))|target(|/{}(|/{profile}(|/ferrix-kernel))))$",
+        arch.kernel_target().replace('.', "\\.")
+    )
+}
+
+/// Judge a volume Ferrix built on somewhere else -- the Pixel 7's crosvm
+/// guest, by `tools/vendor/google/pixel7/selfhost.sh` -- as the build boot's
+/// volume is judged: a clean btrfs, an image and kernel in it, and the image
+/// passing the boot test.
+fn judge_volume(volume: &Path, args: &Args) -> Result<()> {
+    let [arch] = args.arches()?[..] else {
+        return Err(Error::new(
+            "test-selfhost --volume judges one architecture: name it with --arch",
+        ));
+    };
+    if !volume.is_file() {
+        return Err(Error::new(format!("no volume at {}", volume.display())));
+    }
+    btrfs_check::Checker::required()?.run(volume, arch)?;
+    let work = paths::build_dir(arch).join("selfhost-volume");
+    let (built, built_kernel) = restore(arch, volume, &work, args.release)?;
+    println!(
+        "  {arch}: booting the image Ferrix built on {}",
+        volume.display()
+    );
+    qemu::test_boot(arch, &built, &built_kernel, args)?;
+    println!("  {arch}: the image Ferrix built booted");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -648,5 +684,17 @@ mod tests {
         // `main.rs`'s `build` prints "built <image>", and the image is
         // `paths::build_dir`'s `ferrix.img` under the guest's source.
         assert_eq!(BUILT, format!("built {SOURCE}/build/x86_64/ferrix.img"));
+    }
+
+    #[test]
+    fn restore_names_each_architectures_image_and_kernel_and_the_directories_down() {
+        let x86 = wanted(Arch::X86_64, "debug");
+        assert_eq!(
+            x86,
+            r"^/(|src(|/build(|/x86_64(|/ferrix\.img)))|target(|/x86_64-unknown-none(|/debug(|/ferrix-kernel))))$"
+        );
+        let arm = wanted(Arch::AArch64, "release");
+        assert!(arm.contains(r"/build(|/aarch64(|/ferrix\.img))"));
+        assert!(arm.contains(r"/aarch64-unknown-none-softfloat(|/release(|/ferrix-kernel))"));
     }
 }

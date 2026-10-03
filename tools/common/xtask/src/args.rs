@@ -366,6 +366,11 @@ pub(crate) struct Args {
     /// `test-selfhost` has Ferrix carry out and `builds-execute` carries out
     /// (see `crate::builds`).
     pub(crate) plan: Option<String>,
+    /// `--volume <IMG>`: a volume Ferrix built on elsewhere, which
+    /// `test-selfhost` judges instead of building one: `btrfs check`, the
+    /// image and kernel taken out, and the image booted (the Pixel 7's
+    /// `tools/vendor/google/pixel7/selfhost.sh` makes one on the phone).
+    pub(crate) volume: Option<String>,
     /// `--size <W>x<H>`: the screen `run-compositor` gives the guest and
     /// `wallpapers` cuts pictures for, 1920x1080 for both when not given.
     pub(crate) size: Option<(u32, u32)>,
@@ -600,6 +605,18 @@ impl Args {
         Ok(self)
     }
 
+    /// `--plan` and `--volume`, what `test-selfhost` is given instead of
+    /// building one image on Ferrix (`crate::selfhost`).
+    fn selfhost(&mut self, flag: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        let raw = value(items, flag)?;
+        if flag == "--plan" {
+            self.plan = Some(raw);
+        } else {
+            self.volume = Some(raw);
+        }
+        Ok(())
+    }
+
     /// `--auth-seed`, `--auth-seed-file` and `--sabotage` (`crate::auth`).
     fn auth(&mut self, flag: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
         let raw = value(items, flag)?;
@@ -709,7 +726,7 @@ impl Args {
                 "--wallpaper" => args.wallpaper = Some(value(&mut items, "--wallpaper")?),
                 "--edid" => args.edid = Some(value(&mut items, "--edid")?),
                 "--from" => args.from = Some(value(&mut items, "--from")?),
-                "--plan" => args.plan = Some(value(&mut items, "--plan")?),
+                "--plan" | "--volume" => args.selfhost(&item, &mut items)?,
                 "--size" => args.size = Some(dimensions(&value(&mut items, "--size")?, "--size")?),
                 flag if SCALE_FLAGS.contains(&flag) => args.scales(flag, &mut items)?,
                 "--video-size" => {

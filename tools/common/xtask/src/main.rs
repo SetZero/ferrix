@@ -18,6 +18,7 @@
 //! cargo xtask run-nvidia [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
 //! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
+//! cargo xtask test-selfhost --arch x86_64|aarch64 --volume IMG [--release]
 //! cargo xtask builds-execute --plan DIR
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask miri      [--jobs N]
@@ -300,7 +301,9 @@ COMMANDS:
     bench-chrome  Chrome in a window, left alone, scrolled and pointed at: processor time, frames and memory per phase
     bench-chrome-video  Chrome playing a video with its sound: processor time, frames shown and dropped, underruns, and gaps in what the card played
     test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made;
-                  with --plan DIR, have Ferrix make every build a FERRIX_BUILDS=record:DIR run wrote down
+                  with --plan DIR, have Ferrix make every build a FERRIX_BUILDS=record:DIR run wrote down;
+                  with --volume IMG, judge a volume Ferrix built on elsewhere (the Pixel 7's selfhost.sh):
+                  btrfs check, then boot the image it holds
     builds-execute  Make every build in --plan DIR here, keeping the outputs in DIR/store (see tools/common/xtask/src/builds.rs)
     coverage      Run every boot gate under QEMU's drcov plugin (FERRIX_DRCOV) with --init, and
                   require the certified item's statement coverage to hold its recorded floor
