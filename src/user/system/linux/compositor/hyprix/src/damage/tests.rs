@@ -49,7 +49,13 @@ fn a_source_is_the_part_stretched() {
 fn fractions_round_outward() {
     // A 100-wide buffer over a 30-wide surface: one surface pixel is 3.33.
     assert_eq!(
-        from_surface(Rect::new(1, 1, 1, 1), 1, Some((100, 100)), None, Some((30, 30))),
+        from_surface(
+            Rect::new(1, 1, 1, 1),
+            1,
+            Some((100, 100)),
+            None,
+            Some((30, 30))
+        ),
         Rect::new(3, 3, 4, 4)
     );
 }

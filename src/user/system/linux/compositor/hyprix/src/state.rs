@@ -3518,17 +3518,21 @@ fn painted(client: &Client, index: usize, surface: ObjectId) -> crate::damage::P
                 i64::from(rect.height),
             )
         };
-        rects.extend(current.buffer_damage.iter().map(rect).chain(
-            current.damage.iter().map(|surface| {
-                crate::damage::from_surface(
-                    rect(surface),
-                    i64::from(current.scale),
-                    buffer,
-                    current.viewport_source,
-                    current.viewport_size,
-                )
-            }),
-        ));
+        rects.extend(
+            current
+                .buffer_damage
+                .iter()
+                .map(rect)
+                .chain(current.damage.iter().map(|surface| {
+                    crate::damage::from_surface(
+                        rect(surface),
+                        i64::from(current.scale),
+                        buffer,
+                        current.viewport_source,
+                        current.viewport_size,
+                    )
+                })),
+        );
     }
     // A window drawn without its shadows: what is stretched to its tile is
     // the crop, so the damage is the crop's part of it, from the crop's
