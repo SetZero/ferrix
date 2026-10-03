@@ -43,7 +43,7 @@ out=${FERRIX_YSERVER_VOLUME:-$HOME/.local/share/ferrix/yserver}
 
 # The fork, and the commit of it that is built. YSERVER_REPO may name a local
 # clone, for a commit not yet pushed.
-repo=${YSERVER_REPO:-https://github.com/SetZero/yserver.git}
+repo=${YSERVER_REPO:-https://github.com/ferrix-os/yserver.git}
 YSERVER_COMMIT=54aa541b1651d42ad1f2af74973bb2569b1f6da2
 # The toolchain Ferrix pins in rust-toolchain.toml.
 toolchain=${YSERVER_TOOLCHAIN:-1.97.1}

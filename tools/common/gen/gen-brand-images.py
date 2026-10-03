@@ -139,7 +139,7 @@ def social():
     Drivers run as separate processes and can restart after a crash.
   </div>
   <div style="margin-top:auto" class="muted"><span style="font-size:21px;font-weight:600">{ARCHES}</span>
-    <span style="font-size:21px">&nbsp;&nbsp;&middot;&nbsp;&nbsp;github.com/SetZero/ferrix</span></div>
+    <span style="font-size:21px">&nbsp;&nbsp;&middot;&nbsp;&nbsp;github.com/ferrix-os/ferrix</span></div>
 </div>
 <div style="position:absolute;right:60px;top:150px;width:540px">{terminal(t)}</div>
 """

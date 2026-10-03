@@ -26,7 +26,7 @@ import org.json.JSONObject
 private const val TAG = "FerrixUpdate"
 
 /** Where the releases are; the repository is public, so no token is needed. */
-private const val RELEASES = "https://api.github.com/repos/SetZero/ferrix/releases?per_page=30"
+private const val RELEASES = "https://api.github.com/repos/ferrix-os/ferrix/releases?per_page=30"
 
 /**
  * A debug build's stand-in for [RELEASES], kept in the preferences: a list

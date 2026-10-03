@@ -1,6 +1,6 @@
 name: Website
 
-# Publishes docs/website/ to GitHub Pages (https://setzero.github.io/ferrix/).
+# Publishes docs/website/ to GitHub Pages (https://ferrix-os.github.io/ferrix/).
 # Pages has to be switched on once, in Settings -> Pages -> Source:
 # "GitHub Actions". Until then the deploy job fails and nothing else does.
 

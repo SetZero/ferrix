@@ -17,7 +17,7 @@ create-missing = false
 command = "python3 ../../tools/common/gen/split-roadmap.py mdbook"
 
 [output.html]
-git-repository-url = "https://github.com/SetZero/ferrix"
+git-repository-url = "https://github.com/ferrix-os/ferrix"
 no-section-label = true
 additional-css = ["theme/roadmap.css"]
 

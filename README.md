@@ -18,7 +18,7 @@ Ferrix is still experimental. Authentication and parts of process isolation
 are unfinished, so it is not ready to be your everyday OS.
 
 [Boot Ferrix](#boot-ferrix) · [See what works](#what-works) ·
-[Read the technical guide](docs/GUIDE.md) · [Visit the website](https://setzero.github.io/ferrix/)
+[Read the technical guide](docs/GUIDE.md) · [Visit the website](https://ferrix-os.github.io/ferrix/)
 
 ![Ferrix's Wayland desktop with Chrome, btop and a terminal](docs/brand/screenshots/desktop-hero.png)
 
@@ -66,7 +66,7 @@ still being built. Ferrix is not ready as an everyday operating system.
 Install Rust and QEMU, then:
 
 ```sh
-git clone https://github.com/SetZero/ferrix.git
+git clone https://github.com/ferrix-os/ferrix.git
 cd ferrix
 cargo xtask run --arch x86_64
 ```
@@ -99,4 +99,4 @@ and what changed afterward. Human contributions are welcome; see
 
 Ferrix is MIT licensed. [Explore the code and component docs](docs/GUIDE.md#layout),
 [get the logo and press kit](docs/marketing/README.md), or
-[open an issue](https://github.com/SetZero/ferrix/issues).
+[open an issue](https://github.com/ferrix-os/ferrix/issues).

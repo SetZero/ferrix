@@ -1,5 +1,5 @@
 #!/bin/sh
-# One-time GitHub settings for SetZero/ferrix: what search, the repository
+# One-time GitHub settings for ferrix-os/ferrix: what search, the repository
 # page and link previews show. Everything here is public the moment it runs;
 # read it first. Needs `gh auth login` with admin rights on the repository.
 #
@@ -9,12 +9,12 @@
 # The social preview image cannot be set through the API. Upload
 # docs/brand/social-preview.png by hand: Settings -> General -> Social preview.
 set -eu
-repo=SetZero/ferrix
+repo=ferrix-os/ferrix
 
 # Keep the public description short enough to read in repository search.
 gh repo edit "$repo" \
   --description "Linux apps without Linux. Ferrix is an experimental Rust OS with a Wayland desktop and drivers outside the kernel." \
-  --homepage "https://setzero.github.io/ferrix/" \
+  --homepage "https://ferrix-os.github.io/ferrix/" \
   --enable-discussions \
   --enable-issues \
   --enable-wiki=false

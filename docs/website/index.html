@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ferrix: a Rust operating system that runs Linux apps</title>
 <meta name="description" content="Ferrix is an experimental Rust operating system. Boot its Wayland desktop in QEMU and run tested Linux apps unchanged on its own kernel.">
-<link rel="canonical" href="https://setzero.github.io/ferrix/">
+<link rel="canonical" href="https://ferrix-os.github.io/ferrix/">
 <meta name="theme-color" content="#0d0f12" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f7f5f2" media="(prefers-color-scheme: light)">
 <meta name="color-scheme" content="dark light">
@@ -18,15 +18,15 @@
 <meta property="og:site_name" content="Ferrix">
 <meta property="og:title" content="Ferrix: Linux apps without Linux">
 <meta property="og:description" content="Boot Ferrix in QEMU and run Chrome, git, curl or rustc on its own Rust kernel. Drivers run as separate processes that can restart after a crash.">
-<meta property="og:url" content="https://setzero.github.io/ferrix/">
-<meta property="og:image" content="https://setzero.github.io/ferrix/assets/social-preview.png">
+<meta property="og:url" content="https://ferrix-os.github.io/ferrix/">
+<meta property="og:image" content="https://ferrix-os.github.io/ferrix/assets/social-preview.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta property="og:image:alt" content="Ferrix: Linux apps without Linux, beside a serial log showing rustc and a Ferrix image boot">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Ferrix: Linux apps without Linux">
 <meta name="twitter:description" content="Chrome, git, curl and rustc run unchanged on Ferrix's own Rust kernel. Boot it in QEMU and see for yourself.">
-<meta name="twitter:image" content="https://setzero.github.io/ferrix/assets/social-preview.png">
+<meta name="twitter:image" content="https://ferrix-os.github.io/ferrix/assets/social-preview.png">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -41,11 +41,11 @@
       "@type": "SoftwareSourceCode",
       "name": "Ferrix",
       "description": "An experimental Rust operating system that runs tested Linux programs unchanged on its own kernel. Its disk, network, graphics and input drivers run as restartable processes.",
-      "codeRepository": "https://github.com/SetZero/ferrix",
+      "codeRepository": "https://github.com/ferrix-os/ferrix",
       "programmingLanguage": "Rust",
       "license": "https://opensource.org/licenses/MIT",
-      "url": "https://setzero.github.io/ferrix/",
-      "image": "https://setzero.github.io/ferrix/assets/social-preview.png",
+      "url": "https://ferrix-os.github.io/ferrix/",
+      "image": "https://ferrix-os.github.io/ferrix/assets/social-preview.png",
       "keywords": "Rust operating system, Rust kernel, OS development, Linux ABI compatibility, userland drivers, btrfs, Wayland compositor"
     },
     {
@@ -54,7 +54,7 @@
       "applicationCategory": "OperatingSystem",
       "operatingSystem": "x86-64, AArch64, ARMv7-A (QEMU, STM32MP157D-DK1, Pixel 7)",
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-      "url": "https://setzero.github.io/ferrix/"
+      "url": "https://ferrix-os.github.io/ferrix/"
     },
     {
       "@type": "FAQPage",
@@ -87,7 +87,7 @@
       <a href="#try">Try it</a>
       <a href="#faq">FAQ</a>
     </nav>
-    <a class="btn btn-small" href="https://github.com/SetZero/ferrix">
+    <a class="btn btn-small" href="https://github.com/ferrix-os/ferrix">
       <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 .2a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.5c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.3.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.5 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.8-3.7 4 .3.3.6.8.6 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 .2Z"/></svg>
       GitHub
     </a>
@@ -104,7 +104,7 @@
         <code>curl</code> unchanged on its own Rust kernel. Its disk, network, graphics and input drivers
         run as separate processes that can restart after a crash.</p>
       <div class="ctas">
-        <a class="btn" href="https://github.com/SetZero/ferrix">View the source</a>
+        <a class="btn" href="https://github.com/ferrix-os/ferrix">View the source</a>
         <a class="btn btn-ghost" href="#try">Build and boot it &rarr;</a>
       </div>
       <p class="arches">x86-64 &middot; AArch64 &middot; ARMv7-A &middot; MIT licensed</p>
@@ -228,9 +228,9 @@
       <p>Changes have to pass their tests before they land. If a change affects the boot image,
         it also has to boot on all three architectures. The team has made mistakes, too. After one
         shared git index silently reverted another session's work, we added a rule to prevent it.</p>
-      <p>The <a href="https://github.com/SetZero/ferrix/tree/main/docs/roadmap">roadmap</a> shows what is finished,
-        the <a href="https://github.com/SetZero/ferrix/blob/main/docs/BACKLOG.md">backlog</a> tracks what is left,
-        and <a href="https://github.com/SetZero/ferrix/blob/main/docs/CONVENTIONS.md">the working rules</a>
+      <p>The <a href="https://github.com/ferrix-os/ferrix/tree/main/docs/roadmap">roadmap</a> shows what is finished,
+        the <a href="https://github.com/ferrix-os/ferrix/blob/main/docs/BACKLOG.md">backlog</a> tracks what is left,
+        and <a href="https://github.com/ferrix-os/ferrix/blob/main/docs/CONVENTIONS.md">the working rules</a>
         include the incidents behind them.</p>
     </div>
     <ol class="timeline" aria-label="Milestones">
@@ -250,7 +250,7 @@
     <h2>Try it</h2>
     <p class="sub">Install Rust and QEMU first. You can run these commands on Linux, macOS or Windows.</p>
     <pre class="term big"><span class="c"># clone and boot to a shell on the serial console</span>
-git clone https://github.com/SetZero/ferrix &amp;&amp; cd ferrix
+git clone https://github.com/ferrix-os/ferrix &amp;&amp; cd ferrix
 cargo xtask run --arch x86_64
 
 <span class="c"># the Wayland desktop with a terminal</span>
@@ -262,7 +262,7 @@ cargo xtask run-compositor --everything
 <span class="c"># run the project checks</span>
 cargo xtask check</pre>
     <p class="note">Quit QEMU with <kbd>Ctrl-A</kbd> <kbd>x</kbd>. The
-      <a href="https://github.com/SetZero/ferrix/blob/main/docs/GUIDE.md#getting-started">technical guide</a> covers every flag, the
+      <a href="https://github.com/ferrix-os/ferrix/blob/main/docs/GUIDE.md#getting-started">technical guide</a> covers every flag, the
       board, and Windows.</p>
   </div>
 </section>
@@ -275,7 +275,7 @@ cargo xtask check</pre>
       <div><h3 class="doing">In progress</h3><p>Authentication, process isolation, XWayland and the rest of the desktop work. The first 32-bit pieces needed for Steam are under way.</p></div>
       <div><h3>Further out</h3><p>Real-time domains, a native GPU driver for bare metal and Steam itself.</p></div>
     </div>
-    <p class="note"><a href="https://github.com/SetZero/ferrix/tree/main/docs/roadmap">Read the full roadmap &rarr;</a></p>
+    <p class="note"><a href="https://github.com/ferrix-os/ferrix/tree/main/docs/roadmap">Read the full roadmap &rarr;</a></p>
   </div>
 </section>
 
@@ -301,9 +301,9 @@ cargo xtask check</pre>
 <footer class="foot">
   <div class="wrap foot-in">
     <span><img src="assets/logo-mark.svg" alt="" width="20" height="20"> Ferrix &middot; MIT licensed</span>
-    <span><a href="https://github.com/SetZero/ferrix">GitHub</a> &middot;
-      <a href="https://github.com/SetZero/ferrix/releases">Releases</a> &middot;
-      <a href="https://github.com/SetZero/ferrix/tree/main/docs">Docs</a></span>
+    <span><a href="https://github.com/ferrix-os/ferrix">GitHub</a> &middot;
+      <a href="https://github.com/ferrix-os/ferrix/releases">Releases</a> &middot;
+      <a href="https://github.com/ferrix-os/ferrix/tree/main/docs">Docs</a></span>
   </div>
 </footer>
 </body>

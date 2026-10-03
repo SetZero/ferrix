@@ -242,7 +242,7 @@ Beside each edition goes `ferrix-pixel7-<edition>.json`, which names each
 asset with the SHA-256 and size of what it unpacks to. A tag with no phone
 build, or one whose job failed, is passed over for the next older one.
 
-The app asks GitHub (`api.github.com/repos/SetZero/ferrix/releases`, no
+The app asks GitHub (`api.github.com/repos/ferrix-os/ferrix/releases`, no
 token) when it starts and hourly while it is in front, and at "Check now".
 It reads the VM's directory with `su`, as it runs the VM, and then:
 

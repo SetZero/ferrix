@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 RELEASES = Path(__file__).resolve().parents[3] / "docs" / "RELEASES.md"
-REPO = "https://github.com/SetZero/ferrix"
+REPO = "https://github.com/ferrix-os/ferrix"
 
 
 def section(tag):
@@ -44,7 +44,7 @@ def main():
     print("---")
     print(f"Boot it: `git checkout {tag} && cargo xtask run --arch x86_64`. "
           f"Everything else is in the [README]({REPO}/blob/{tag}/README.md) "
-          f"and on the [website](https://setzero.github.io/ferrix/).")
+          f"and on the [website](https://ferrix-os.github.io/ferrix/).")
 
 
 if __name__ == "__main__":
