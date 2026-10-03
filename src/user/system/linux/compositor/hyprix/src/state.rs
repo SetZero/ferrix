@@ -1577,6 +1577,16 @@ impl<'r> Compositor<'r> {
         let rescan_wait = self
             .rescan
             .map(|due| due.saturating_duration_since(Instant::now()));
+        // A screen that gave its GPU up looks for it again on a frame, and
+        // a desktop where nothing moves draws none: the look is a wake of
+        // its own.
+        let gpu_wait = self
+            .screens
+            .iter()
+            .filter(|screen| !screen.backend.lost())
+            .filter_map(|screen| screen.gpu_again.map(|(at, _)| at))
+            .min()
+            .map(|at| at.saturating_duration_since(Instant::now()));
         // What a virtual device injected this pass is carried out on the
         // next, which must then come at once: waiting for some other
         // descriptor to wake the loop left `ydotool`'s motion unseen until
@@ -1596,6 +1606,7 @@ impl<'r> Compositor<'r> {
             deadline_wait,
             overlay_wait,
             rescan_wait,
+            gpu_wait,
             injected_wait,
             request_wait,
         ]
@@ -2547,10 +2558,27 @@ struct Screen {
     said_gone: bool,
     /// Whether a dropped frame has been said since it last showed one.
     said_dropped: bool,
+    /// Frames the GPU failed in a row: [`GPU_TRIES`] of them give it up.
+    gpu_failures: u32,
+    /// When a screen that gave its GPU up looks for one again, and how long
+    /// it waited before that look.
+    gpu_again: Option<(Instant, Duration)>,
 }
 
 /// How long the frames wait after one the card did not take.
 const HOLD: Duration = Duration::from_millis(250);
+
+/// GPU frames that fail in a row before a screen gives its GPU up. One is a
+/// stall -- a host too busy to answer in the kernel's five seconds -- and
+/// the next frame drawn on the GPU is usually fine; a GPU that fails three
+/// times running is not coming back by itself.
+const GPU_TRIES: u32 = 3;
+
+/// How long a screen that gave its GPU up draws in software before it
+/// looks for the GPU again, at first and at most: each look that finds
+/// none doubles the wait.
+const GPU_AGAIN_FIRST: Duration = Duration::from_secs(5);
+const GPU_AGAIN_MOST: Duration = Duration::from_secs(60);
 
 impl Screen {
     /// Say that the card went away, once a loss, whichever path found it.
@@ -2561,6 +2589,75 @@ impl Screen {
                 self.name
             ));
             self.said_gone = true;
+        }
+    }
+
+    /// Give the GPU up, for `why`: draw in software, show the screen's own
+    /// buffer again, and look for the GPU again in a while if `renderer`
+    /// is one that would have one.
+    fn give_up_gpu(
+        &mut self,
+        why: &str,
+        renderer: crate::options::Renderer,
+        report: &mut dyn FnMut(&str),
+    ) {
+        use crate::options::Renderer;
+
+        self.gpu = None;
+        self.gpu_failures = 0;
+        if let Err(error) = self.backend.forsake() {
+            report(&format!(
+                "hyprix: {}: the card goes on showing the GPU's last frame ({error})",
+                self.name
+            ));
+        }
+        self.watch = crate::damage::Watch::default();
+        self.gpu_again = matches!(renderer, Renderer::Auto | Renderer::Gpu)
+            .then(|| (Instant::now() + GPU_AGAIN_FIRST, GPU_AGAIN_FIRST));
+        let again = if self.gpu_again.is_some() {
+            format!(
+                ", and looking for the GPU again in {} s",
+                GPU_AGAIN_FIRST.as_secs()
+            )
+        } else {
+            String::new()
+        };
+        report(&format!(
+            "hyprix: {}: {why}; drawing in software{again}",
+            self.name
+        ));
+    }
+
+    /// Look for the GPU again, if this screen gave it up and it is time.
+    /// Found, the next frame is drawn on it, whole; not found, the next
+    /// look waits twice as long.
+    fn gpu_again(&mut self, report: &mut dyn FnMut(&str)) {
+        // A card that would not let the GPU's buffer go when the GPU was
+        // given up -- a stalled one -- is asked again each frame: until it
+        // does, the software frames are drawn where it does not look.
+        if self.gpu.is_none() && self.backend.adopted() && self.backend.forsake().is_ok() {
+            self.watch = crate::damage::Watch::default();
+        }
+        let Some((at, waited)) = self.gpu_again else {
+            return;
+        };
+        if self.gpu.is_some() || self.backend.lost() || Instant::now() < at {
+            return;
+        }
+        let size = self.transform.size(self.backend.size());
+        match gpu_for(crate::options::Renderer::Auto, &self.name, size, report) {
+            Ok(Some(mut gpu)) => {
+                if self.transform == Transform::Normal {
+                    adopt(&mut gpu, self.backend.as_mut(), size, &self.name, report);
+                }
+                self.gpu = Some(gpu);
+                self.gpu_again = None;
+                self.watch = crate::damage::Watch::default();
+            }
+            Ok(None) | Err(_) => {
+                let next = waited.saturating_mul(2).min(GPU_AGAIN_MOST);
+                self.gpu_again = Some((Instant::now() + next, next));
+            }
         }
     }
 
@@ -2695,6 +2792,8 @@ impl Screen {
                 plane: crate::plane::Plane::default(),
                 said_gone: false,
                 said_dropped: false,
+                gpu_failures: 0,
+                gpu_again: None,
             });
         }
         if screens.is_empty() {

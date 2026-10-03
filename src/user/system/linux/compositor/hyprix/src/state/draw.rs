@@ -84,6 +84,16 @@ impl Compositor<'_> {
             self.held_until = None;
             self.owed = true;
         }
+        // And a screen whose look for its GPU is due draws the frame it
+        // looks on.
+        if self
+            .screens
+            .iter()
+            .filter(|screen| !screen.backend.lost())
+            .any(|screen| screen.gpu_again.is_some_and(|(at, _)| Instant::now() >= at))
+        {
+            self.owed = true;
+        }
         if (self.owed || self.tally.drawn == 0 || animating || self.settling)
             && self.pace.due(Instant::now(), refresh_ns(&self.screens))
         {
@@ -253,7 +263,14 @@ impl Compositor<'_> {
                 screen.name
             ));
             screen.said_gone = false;
-            screen.gpu = None;
+            // The GPU drew for the card that went, and the new card is
+            // drawn on in software until the GPU is looked for again.
+            if screen.gpu.take().is_some() {
+                screen.gpu_again = Some((
+                    Instant::now() + super::GPU_AGAIN_FIRST,
+                    super::GPU_AGAIN_FIRST,
+                ));
+            }
             screen.watch = crate::damage::Watch::default();
             screen.plane.forget();
         }
@@ -313,6 +330,9 @@ impl Compositor<'_> {
         if !self.screen_back(which) {
             drew.waiting = true;
             return Ok(());
+        }
+        if let Some(screen) = self.screens.get_mut(which) {
+            screen.gpu_again(self.report);
         }
         let Some(screen) = self.screens.get(which) else {
             return Ok(());
@@ -559,20 +579,23 @@ impl Compositor<'_> {
                 screen.say_gone(self.report);
                 drew.waiting = true;
             }
-            Ok(()) => {}
-            // A GPU that has gone is not a screen that has. The
-            // software canvas has drawn nothing while the GPU was
-            // drawing, so what it is owed is everything: the watch
-            // forgets what it saw, which makes the next frame a
-            // whole one, and that frame is owed now.
+            Ok(()) => screen.gpu_failures = 0,
+            // A GPU that failed a frame is not a screen that has, and
+            // usually not a GPU that has either: a stall drops the frame
+            // and the next is drawn on the GPU, whole. Failing
+            // `GPU_TRIES` frames running gives it up for software,
+            // which has drawn nothing while the GPU was drawing, so
+            // that frame is whole too, and owed now; a dropped one
+            // waits out the hold first, as a refused flip does.
             Err(why) if screen.gpu.is_some() && why.starts_with(crate::frame::GPU_FAILED) => {
-                (self.report)(&format!(
-                    "hyprix: {}: {why}; drawing in software from here on",
-                    screen.name
-                ));
-                screen.gpu = None;
-                screen.watch = crate::damage::Watch::default();
-                self.owed = true;
+                screen.gpu_failures = screen.gpu_failures.saturating_add(1);
+                if screen.gpu_failures >= super::GPU_TRIES {
+                    screen.give_up_gpu(&why, self.options.renderer, self.report);
+                    self.owed = true;
+                } else {
+                    screen.drop_frame(&why, self.report);
+                    self.held_until = Some(Instant::now() + super::HOLD);
+                }
             }
             // Anything else this frame could not draw is the frame's, and
             // the next is drawn whole, as after a flip the card refused.

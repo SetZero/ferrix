@@ -99,6 +99,18 @@ pub trait Backend: core::fmt::Debug {
         false
     }
 
+    /// Show this backend's own buffer again rather than the one
+    /// [`Backend::adopt`] took: what a screen that has given its GPU up
+    /// needs, or the card goes on showing the GPU's last frame while the
+    /// software frames go where nothing reads them.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said; it is then still adopted.
+    fn forsake(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
     /// How many frames old the buffer [`Backend::buffer`] gives is: one for
     /// a screen with one buffer, two for one that draws into two in turn.
     ///
@@ -569,6 +581,27 @@ impl Backend for Drm {
 
     fn adopted(&self) -> bool {
         self.adopted.is_some()
+    }
+
+    fn forsake(&mut self) -> io::Result<()> {
+        if self.adopted.is_none() {
+            return Ok(());
+        }
+        // The buffer the next frame is not drawn into: one buffer copied
+        // into is the only one, and of two flipped between, the front.
+        let front = if self.copied {
+            self.back
+        } else {
+            1 - self.back
+        };
+        let Some(buffer) = self.buffers.get(front) else {
+            return Ok(());
+        };
+        // Shown before the adopted one is let go, as `resize` does.
+        let _ = self.card.set_mode(&self.plan, buffer)?;
+        self.flushing = None;
+        self.adopted = None;
+        Ok(())
     }
 
     fn cursor_plane(&self) -> Option<(u32, u32)> {
