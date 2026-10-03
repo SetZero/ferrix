@@ -442,7 +442,11 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
     // said again after the configuration, whose own catch-all `monitor =`
     // line -- a desktop's, at its own scale -- would otherwise win over the
     // one `desktop` put first: a phone's screen at a monitor's scale is
-    // text a few millimetres high.
+    // text a few millimetres high. A board boots with no root disk, and the
+    // kernel's committer, which commits `/home` and `/data` every 30 s, runs
+    // only beside one: without a `sync` of its own, the seeded home and
+    // every edit there would stay in memory, and a VM stopped from outside
+    // -- the Pixel 7 app's `crosvm stop` -- would leave the disk empty.
     let config = if args.session_user.is_some() {
         println!(
             "  session: the desktop runs as {}, started by sessiond",
@@ -453,7 +457,9 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
         format!(
             "{config}# The board's screen, over the configuration's own monitor lines \
              (`cargo xtask flash --compositor --session`).\n\
-             monitor = , {}x{}@60, auto, {scale}\n",
+             monitor = , {}x{}@60, auto, {scale}\n\
+             # /home and /data committed every 30 s, as a root disk's committer would.\n\
+             exec-once = /bin/busybox sh -c 'while /bin/busybox sleep 30; do /bin/busybox sync; done'\n",
             size.0, size.1
         )
     } else {

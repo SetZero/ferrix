@@ -128,7 +128,10 @@ also makes `home.img` on the phone, an empty 8 GiB sparse `ferrix-home`
 volume, when there is none. The first boot seeds it from the dotfiles, and
 what is changed there afterwards is kept: a new `desktop.Image` never
 replaces it, and neither does a later `--push`. `--reset-home` makes it
-again, empty, so that the next boot seeds it anew.
+again, empty, so that the next boot seeds it anew. The desktop commits
+`/home` and `/data` every 30 seconds, since the VM has no root disk whose
+committer would: what was changed in the last half-minute before "Stop" is
+lost.
 
 **Updates.** The app keeps `desktop.Image` on the newest GitHub release
 that carries it, with no PC (below, "Updates").
