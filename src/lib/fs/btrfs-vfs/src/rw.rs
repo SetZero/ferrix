@@ -93,14 +93,14 @@ use ferrix_btrfs::BtrfsError;
 use ferrix_btrfs::items::Timespec as BtrfsTime;
 use ferrix_btrfs_write::fs::NewInode;
 use ferrix_btrfs_write::{Error as WriteError, Unsupported, WriteDevice, WriteVolume};
-use ferrix_sync::{Parker, SleepLock, SleepLockGuard, SpinLock};
+use ferrix_sync::{Parker, SleepLock, SleepLockGuard};
 use ferrix_vfs::tmpfs::{PAGE_SIZE, PageSource, Pages, Storage};
 use ferrix_vfs::{
     Clock, DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Result,
     SetAttributes, StatFs, Timespec,
 };
 
-use crate::{BTRFS_SUPER_MAGIC, NAME_MAX};
+use crate::{BTRFS_SUPER_MAGIC, NAME_MAX, SpinLock};
 
 /// Pages a writeback turns into extents at a time: 256, a mebibyte, which
 /// bounds the buffer it copies them through. More would be fewer, larger
@@ -470,7 +470,12 @@ impl<D: WriteHandle> Node<D> {
         let made: Arc<dyn Pages> = Arc::from(self.shared.storage.allocate_with(source)?);
         made.resize(self.meta.lock().size);
         let mut slot = self.pages.lock();
-        Ok(Arc::clone(slot.get_or_insert(made)))
+        let pages = Arc::clone(slot.get_or_insert_with(|| Arc::clone(&made)));
+        drop(slot);
+        // A loser's store goes after the lock, which keeps its holder on its
+        // processor and so runs no filesystem's or page cache's `Drop`.
+        drop(made);
+        Ok(pages)
     }
 
     fn require_dir(&self) -> Result<()> {
@@ -868,6 +873,8 @@ impl<D: WriteHandle> Inode for Node<D> {
         let end = at.saturating_add(data.len() as u64);
         pages.write(at, data)?;
         {
+            // The clock and the store's length are words the kernel reads
+            // and stores; neither may block or cut a mapping under this lock.
             let mut meta = self.meta.lock();
             meta.size = meta.size.max(end);
             meta.mtime = self.shared.clock.now();

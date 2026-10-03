@@ -50,9 +50,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_kmem::{Charge, arc_footprint, footprint};
 use ferrix_linux_abi::errno::Errno;
-use ferrix_sync::{SpinLock, SpinLockGuard};
 
 use crate::Result;
+use crate::SpinLock;
 use crate::node::{
     Clock, DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, SetAttributes,
     StatFs, Timespec,
@@ -667,7 +667,14 @@ pub struct Node {
     /// Itself, for a directory created in it to name as its parent.
     me: Weak<Node>,
     shared: Arc<Shared>,
-    state: SpinLock<State>,
+    /// A plain ticket lock, unlike the crate's others, whose holder may be
+    /// switched out: a shrinking `set_len` cuts the file's mappings under it,
+    /// which shoots down other processors' TLBs, and that is not asked with a
+    /// preemption-disabling lock held. It is held because it is what
+    /// serialises the cut against `write_at`, which `discard_from` relies on.
+    /// Keeping the holder here needs that serialisation from a lock a
+    /// shrink may sleep under instead.
+    state: ferrix_sync::SpinLock<State>,
     /// The kernel heap the inode holds -- itself, and a symbolic link's
     /// target -- charged to the job that made it for as long as it exists,
     /// linked or open (F-37). Its pages are charged as they are written, to
@@ -876,7 +883,7 @@ impl Dir {
 
 /// Several inode locks, taken in ascending inode number.
 struct Locked<'a> {
-    guards: Vec<(u64, SpinLockGuard<'a, State>)>,
+    guards: Vec<(u64, ferrix_sync::SpinLockGuard<'a, State>)>,
 }
 
 impl<'a> Locked<'a> {
@@ -928,7 +935,7 @@ impl Node {
             ino: shared.next_ino.fetch_add(1, Ordering::Relaxed),
             me: Weak::clone(me),
             shared: Arc::clone(shared),
-            state: SpinLock::new(State {
+            state: ferrix_sync::SpinLock::new(State {
                 seals: SEAL_SEAL,
                 permissions: permissions & 0o7777,
                 uid: 0,

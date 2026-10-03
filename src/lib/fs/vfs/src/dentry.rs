@@ -53,9 +53,9 @@ use core::fmt;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use ferrix_kmem::{Charge, arc_footprint, footprint};
-use ferrix_sync::SpinLock;
 
 use crate::Result;
+use crate::SpinLock;
 use crate::node::Inode;
 
 /// Source of dentry identifiers, which the mount table keys on.
@@ -279,31 +279,47 @@ impl Dentry {
         walked: &Arc<Dentry>,
         inode: Arc<dyn Inode>,
     ) -> Arc<Dentry> {
-        let mut children = self.children.lock();
-        let target = children
-            .get(name)
-            .and_then(Weak::upgrade)
-            .unwrap_or_else(|| Arc::clone(walked));
-        {
-            let mut state = target.state.lock();
-            state.inode = Some(Arc::clone(&inode));
-            state.unhashed = false;
-        }
-        if !Arc::ptr_eq(&target, walked) {
-            walked.state.lock().inode = Some(inode);
-        }
-        let _ = children.insert(Box::from(name), Arc::downgrade(&target));
-        let _ = self.generation.fetch_add(1, Ordering::Relaxed);
+        // Whatever the two dentries held before, dropped after the locks: an
+        // inode's last reference may run a filesystem's `Drop`, which these
+        // locks, keeping their holder on its processor, must not wait for.
+        let (target, replaced) = {
+            let mut children = self.children.lock();
+            let target = children
+                .get(name)
+                .and_then(Weak::upgrade)
+                .unwrap_or_else(|| Arc::clone(walked));
+            let first = {
+                let mut state = target.state.lock();
+                state.unhashed = false;
+                state.inode.replace(Arc::clone(&inode))
+            };
+            let second = if Arc::ptr_eq(&target, walked) {
+                None
+            } else {
+                walked.state.lock().inode.replace(inode)
+            };
+            let _ = children.insert(Box::from(name), Arc::downgrade(&target));
+            let _ = self.generation.fetch_add(1, Ordering::Relaxed);
+            (target, [first, second])
+        };
+        drop(replaced);
         target
     }
 
     /// A name was removed from this directory: unhash whatever held it.
     pub(crate) fn remove_name(&self, name: &[u8]) {
-        let mut children = self.children.lock();
-        if let Some(child) = children.remove(name).and_then(|weak| weak.upgrade()) {
-            child.state.lock().unhashed = true;
-        }
+        // Dropped after the lock, for the reason `fill` gives: this may be the
+        // child's last reference.
+        let removed = {
+            let mut children = self.children.lock();
+            let child = children.remove(name).and_then(|weak| weak.upgrade());
+            if let Some(child) = &child {
+                child.state.lock().unhashed = true;
+            }
+            child
+        };
         let _ = self.generation.fetch_add(1, Ordering::Relaxed);
+        drop(removed);
     }
 
     /// Move `child` from this directory to `new_parent` under `new_name`.

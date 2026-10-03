@@ -63,6 +63,16 @@
 //!
 //! A filesystem's own locks are its own business, except that it must not
 //! hold a spin lock across I/O either.
+//!
+//! **A spin lock's holder stays on its processor.** Every spin lock here but
+//! a tmpfs inode's (`tmpfs.rs` says why) is the crate's `SpinLock`, a
+//! `ferrix_sync::PreemptSpinLock` over [`ferrix_sync::HookedPreempt`]: the
+//! kernel installs its preemption count behind it at boot, so neither a
+//! holder nor a task waiting for its ticket is switched out. A plain ticket
+//! lock let both happen, and every walk through a busy dentry queued behind
+//! a task that was not running: on 2026-10-03 all four processors of a
+//! desktop spun in `Dentry::inode` until the queue drained, minutes later.
+//! On the host nothing is installed and they are plain ticket locks.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -87,6 +97,10 @@ mod walk;
 
 #[cfg(test)]
 mod tests;
+
+/// This crate's spin lock: its holder is kept on its processor (see the
+/// crate documentation).
+pub(crate) type SpinLock<T> = ferrix_sync::PreemptSpinLock<T, ferrix_sync::HookedPreempt>;
 
 pub use access::Access;
 pub use dentry::Dentry;

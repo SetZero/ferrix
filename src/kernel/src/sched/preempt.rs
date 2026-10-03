@@ -198,6 +198,7 @@ pub(super) fn start_counting() {
              per-CPU record"
         );
     }
+    install_library_hooks();
     COUNTING.store(true, Ordering::Release);
 }
 
@@ -278,6 +279,37 @@ unsafe impl ferrix_sync::PreemptControl for Preempt {
     fn enable() {
         enable_from(true);
     }
+}
+
+/// [`Preempt`]'s two halves as functions, for the locks of the libraries
+/// below the kernel, which cannot name it: `ferrix_sync::HookedPreempt`.
+static HOOKS: ferrix_sync::PreemptHooks = ferrix_sync::PreemptHooks {
+    disable: |site| {
+        let _ = raise(ONE_LOCK, site);
+    },
+    enable: || enable_from(true),
+};
+
+/// Put this processor's count behind every `ferrix_sync::HookedPreempt`
+/// lock: the VFS's dentries, mounts, open files and tmpfs renames, and
+/// btrfs's inodes and caches. Until then they are plain ticket locks, whose
+/// holders and waiters a timer interrupt switches out; on 2026-10-03 that
+/// convoyed all four processors of a desktop, on a dentry and then on the
+/// btrfs root's metadata, for minutes at a time.
+///
+/// Once, from [`start_counting`], just before the count is kept: until
+/// then both halves do nothing anyway, so the libraries' locks are matched
+/// exactly as the kernel's own `Preempt` locks are.
+fn install_library_hooks() {
+    // SAFETY: (SHARED) `HOOKS` are `Preempt`'s own `disable` and `enable`,
+    // which keep `PreemptControl`'s promises (see its `unsafe impl`), and a
+    // `'static` published once. They are installed by `start_counting`,
+    // once, while neither half does anything yet: a library lock taken
+    // before is released through an `enable` that, like its `disable`, does
+    // nothing, under the same condition the kernel's own locks rely on --
+    // that no guard is held across the count's start.
+    let installed = unsafe { ferrix_sync::install_preempt_hooks(&HOOKS) };
+    debug_assert!(installed, "the library hooks are installed once");
 }
 
 /// Keep the running context on this processor until the matching

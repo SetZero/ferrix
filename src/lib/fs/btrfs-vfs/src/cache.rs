@@ -23,7 +23,8 @@ use core::fmt;
 
 use ferrix_btrfs::BtrfsError;
 use ferrix_btrfs::volume::{Device, ReadKind};
-use ferrix_sync::SpinLock;
+
+use crate::SpinLock;
 
 /// How many metadata reads a mount keeps: 4 to 16 MiB at 4 to 16 KiB a node.
 pub(crate) const ENTRIES: usize = 1024;

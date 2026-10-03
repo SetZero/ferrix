@@ -22,8 +22,9 @@ use std::vec;
 use std::vec::Vec;
 
 use super::{
-    IrqControl, IrqSpinLock, Once, Parker, Parking, PreemptControl, PreemptSpinLock, RwSpinLock,
-    SleepLock, SpinLock, SpinLockedCell, SpinParker,
+    HookedPreempt, IrqControl, IrqSpinLock, Once, Parker, Parking, PreemptControl, PreemptHooks,
+    PreemptSpinLock, RwSpinLock, SleepLock, SpinLock, SpinLockedCell, SpinParker,
+    install_preempt_hooks,
 };
 
 // ---------------------------------------------------------------------------
@@ -929,4 +930,49 @@ fn a_lock_whose_parking_could_not_be_made_still_excludes() {
         thread.join().unwrap();
     }
     assert_eq!(*lock.lock(), 4000);
+}
+
+/// What the hooks below saw: the count, and the line of the last disable.
+static HOOKED_DEPTH: AtomicUsize = AtomicUsize::new(0);
+static HOOKED_LINE: AtomicUsize = AtomicUsize::new(0);
+
+static RECORDING_HOOKS: PreemptHooks = PreemptHooks {
+    disable: |site| {
+        let _ = HOOKED_DEPTH.fetch_add(1, Ordering::SeqCst);
+        HOOKED_LINE.store(site.line() as usize, Ordering::SeqCst);
+    },
+    enable: || {
+        let _ = HOOKED_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    },
+};
+
+/// The one test that installs hooks: they are the process's, once.
+#[test]
+fn a_hooked_lock_raises_the_installed_count_with_the_line_that_took_it() {
+    static LOCK: PreemptSpinLock<u32, HookedPreempt> = PreemptSpinLock::new(0);
+    // SAFETY: the hooks only count, and no other test takes a `HookedPreempt`
+    // lock, so none is held across the install.
+    let first = unsafe { install_preempt_hooks(&RECORDING_HOOKS) };
+    // SAFETY: as above; this one is refused.
+    let second = unsafe { install_preempt_hooks(&RECORDING_HOOKS) };
+    assert!(first, "the first install takes");
+    assert!(!second, "a second is refused");
+    {
+        let line = line!() + 1;
+        let mut guard = LOCK.lock();
+        *guard += 1;
+        assert_eq!(HOOKED_DEPTH.load(Ordering::SeqCst), 1, "raised while held");
+        assert_eq!(
+            HOOKED_LINE.load(Ordering::SeqCst),
+            line as usize,
+            "the hook is told the line that took the lock"
+        );
+    }
+    assert_eq!(HOOKED_DEPTH.load(Ordering::SeqCst), 0, "lowered on release");
+    assert!(LOCK.try_lock().is_some());
+    assert_eq!(
+        HOOKED_DEPTH.load(Ordering::SeqCst),
+        0,
+        "and after a try_lock's guard"
+    );
 }

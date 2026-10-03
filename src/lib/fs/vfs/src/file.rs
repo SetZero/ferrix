@@ -37,9 +37,10 @@ use core::fmt;
 
 use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::errno::Errno;
-use ferrix_sync::{SleepLock, SpinLock};
+use ferrix_sync::SleepLock;
 
 use crate::Result;
+use crate::SpinLock;
 use crate::namespace::Location;
 use crate::node::{DirEntry, FIRST_CURSOR, FileType, Inode, Readiness};
 

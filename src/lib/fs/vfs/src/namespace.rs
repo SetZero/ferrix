@@ -9,9 +9,10 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::errno::Errno;
-use ferrix_sync::{Parker, SleepLock, SpinLock};
+use ferrix_sync::{Parker, SleepLock};
 
 use crate::Result;
+use crate::SpinLock;
 use crate::access::{Access, MAY_READ, MAY_WRITE};
 use crate::bottom::Bottom;
 use crate::dentry::Dentry;

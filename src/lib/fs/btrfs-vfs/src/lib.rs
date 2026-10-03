@@ -83,7 +83,6 @@ use ferrix_btrfs::fs::{ExtentBuffers, ReadBuffers, Subvolume, Target};
 use ferrix_btrfs::items::{self, InodeItem};
 use ferrix_btrfs::tree::MAX_NODE_SIZE;
 use ferrix_btrfs::volume::{Device, Volume};
-use ferrix_sync::SpinLock;
 use ferrix_vfs::tmpfs::{PAGE_SIZE, PageSource, Pages, Storage};
 use ferrix_vfs::{
     DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Result,
@@ -92,6 +91,12 @@ use ferrix_vfs::{
 
 mod cache;
 pub mod rw;
+
+/// This crate's spin lock: its holder, and a task waiting for its ticket,
+/// stay on their processor, as `ferrix_vfs`'s do. Every walk on a btrfs root
+/// reads `/`'s metadata under one of these, and on 2026-10-03 a plain ticket
+/// lock there convoyed all four processors of a desktop.
+pub(crate) type SpinLock<T> = ferrix_sync::PreemptSpinLock<T, ferrix_sync::HookedPreempt>;
 
 use cache::{Cached, NodeCache};
 
@@ -390,7 +395,12 @@ impl<D: BlockHandle> Node<D> {
         });
         let made: Arc<dyn Pages> = Arc::from(self.shared.storage.allocate_with(source)?);
         let mut slot = self.pages.lock();
-        Ok(Arc::clone(slot.get_or_insert(made)))
+        let pages = Arc::clone(slot.get_or_insert_with(|| Arc::clone(&made)));
+        drop(slot);
+        // A loser's store goes after the lock, which keeps its holder on its
+        // processor and so runs no filesystem's or page cache's `Drop`.
+        drop(made);
+        Ok(pages)
     }
 
     fn require_dir(&self) -> Result<()> {

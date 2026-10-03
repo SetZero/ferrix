@@ -42,7 +42,9 @@
 //! # What is here
 //!
 //! * [`SpinLock`] — mutual exclusion, first come first served.
-//! * [`PreemptSpinLock`] — the same, with the holder kept on its CPU.
+//! * [`PreemptSpinLock`] — the same, with the holder kept on its CPU;
+//!   [`HookedPreempt`] keeps it there for a library that cannot name the
+//!   kernel, through the [`PreemptHooks`] the kernel installs.
 //! * [`IrqSpinLock`] — the same, with interrupts masked for the duration.
 //! * [`Once`] — run an initialiser exactly once, for globals set up at boot.
 //! * [`RwSpinLock`] — many readers or one writer, writer-preferring.
@@ -77,7 +79,7 @@ use core::hint::spin_loop;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------------------
 // SpinLock
@@ -623,6 +625,86 @@ impl<T: ?Sized + fmt::Debug, P: PreemptControl> fmt::Debug for PreemptSpinLockGu
 impl<T: ?Sized + fmt::Display, P: PreemptControl> fmt::Display for PreemptSpinLockGuard<'_, T, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HookedPreempt
+// ---------------------------------------------------------------------------
+
+/// The kernel's two halves of [`PreemptControl`], as plain functions, for the
+/// libraries that cannot name the kernel's type.
+///
+/// `disable` is handed the line that took the lock, which
+/// `#[track_caller]` cannot carry through a function pointer by itself.
+#[derive(Debug)]
+pub struct PreemptHooks {
+    /// [`PreemptControl::disable`], told where it was called from.
+    pub disable: fn(&'static core::panic::Location<'static>),
+    /// [`PreemptControl::enable`].
+    pub enable: fn(),
+}
+
+/// The hooks [`install_preempt_hooks`] installed; null until then.
+static PREEMPT_HOOKS: AtomicPtr<PreemptHooks> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Make every [`HookedPreempt`] lock keep its holder on its CPU through
+/// `hooks`.
+///
+/// Returns `false`, and changes nothing, if hooks were installed before.
+///
+/// # Safety
+///
+/// `hooks` must keep the promises of [`PreemptControl`]'s two methods. It
+/// must be installed before any context that takes a [`HookedPreempt`] lock
+/// can be switched out, and while no such guard is alive: a guard taken
+/// before would be released through an `enable` no `disable` matched.
+pub unsafe fn install_preempt_hooks(hooks: &'static PreemptHooks) -> bool {
+    // Release: pairs with the Acquire load in `preempt_hooks`, so a lock that
+    // sees the pointer sees the functions behind it.
+    PREEMPT_HOOKS
+        .compare_exchange(
+            core::ptr::null_mut(),
+            core::ptr::from_ref(hooks).cast_mut(),
+            Ordering::Release,
+            Ordering::Relaxed,
+        )
+        .is_ok()
+}
+
+/// The installed hooks, if any.
+fn preempt_hooks() -> Option<&'static PreemptHooks> {
+    // SAFETY: the pointer is null or came from the `&'static PreemptHooks`
+    // `install_preempt_hooks` was given, and it is never changed after.
+    unsafe { PREEMPT_HOOKS.load(Ordering::Acquire).as_ref() }
+}
+
+/// A [`PreemptControl`] for the libraries below the kernel: whatever the
+/// kernel installed with [`install_preempt_hooks`], and nothing before that.
+///
+/// A library's own locks are `PreemptSpinLock<T, HookedPreempt>`, and the
+/// kernel makes them keep their holders on their CPUs exactly as its own
+/// locks do. On the host, where nothing is installed, they are plain ticket
+/// locks.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HookedPreempt;
+
+// SAFETY: once hooks are installed, both methods are the kernel's, which
+// `install_preempt_hooks`'s caller promised keep `PreemptControl`'s promises.
+// Before that, its caller promised nothing taking one of these locks can be
+// switched out, so doing nothing keeps the task where it is.
+unsafe impl PreemptControl for HookedPreempt {
+    #[track_caller]
+    fn disable() {
+        if let Some(hooks) = preempt_hooks() {
+            (hooks.disable)(core::panic::Location::caller());
+        }
+    }
+
+    fn enable() {
+        if let Some(hooks) = preempt_hooks() {
+            (hooks.enable)();
+        }
     }
 }
 
