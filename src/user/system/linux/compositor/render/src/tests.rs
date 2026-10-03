@@ -647,6 +647,55 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
     canvas.data().to_vec()
 }
 
+/// A layer client the compositor has not told the screen's scale draws at
+/// 1: on a screen at 2 its buffer is half its rectangle each way. It is
+/// stretched over the rectangle, as a window is, and not drawn pixel for
+/// pixel into its top-left quarter under a reserved zone of the whole.
+#[test]
+fn a_layer_drawn_at_half_its_rectangles_size_is_stretched_over_it() {
+    let mut state = State::new(Settings::default());
+    let _ = state
+        .add_monitor(Monitor {
+            scale: 1.0,
+            transform: Default::default(),
+            name: "Virtual-1".to_owned(),
+            id: MonitorId(1),
+            rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
+            reserved: Gaps::all(0),
+            description: String::new(),
+            made: <(String, String, String)>::default(),
+        })
+        .unwrap();
+    let layout = state.layout().remove(0);
+    let pixels = [0x10_u8, 0x80, 0xf0, 0xff].repeat(100 * 30);
+    let surface = Surface::new(&pixels, 100, 30, 400, Format::Xrgb8888).unwrap();
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let layers = [LayerFrame {
+        rect: Rect::new(0, 0, 200, 60),
+        above: true,
+        surface: Some(surface),
+        dim_around: false,
+        blur: false,
+        xray: false,
+    }];
+    let _ = render_with_layers(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Styles::plain(&plain_style()),
+        &BTreeMap::new(),
+        &layers,
+        &full,
+    );
+    let at = |x: usize, y: usize| {
+        let i = (y * WIDTH as usize + x) * 4;
+        canvas.data()[i..i + 4].to_vec()
+    };
+    assert_eq!(at(199, 59), at(0, 0), "the far corner is the layer's");
+    assert_ne!(at(199, 59), at(300, 300), "and not the background");
+}
+
 #[test]
 fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
     let frame = bar_and_two_clients_frame();

@@ -744,7 +744,12 @@ fn draw_layer<P: Painter>(
             None => canvas.blur(rect, Rounding::none(), &blur, damage),
         }
     }
-    canvas.composite(surface, rect, damage);
+    // Stretched to its rectangle, as a window is: a client that drew at
+    // scale 1 on a screen at scale 2 -- every one the compositor has not
+    // told its scale -- has a buffer half the rectangle's size, and drawn
+    // pixel for pixel it covered a quarter of it, under a reserved zone of
+    // the whole. The exact path when the sizes agree.
+    canvas.composite_scaled(surface, rect, Rounding::none(), 1.0, false, damage);
 }
 
 /// One window: its shadow, its border, the blur behind it, its own pixels
